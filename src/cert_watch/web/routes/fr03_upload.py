@@ -10,19 +10,19 @@ This module provides the certificate upload functionality.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 
-from ..deps import get_repo
+from ...core.exceptions import CertificateParseError
 from ...core.formatters import (
+    compute_thumbprint,
     format_issuer,
     format_subject,
-    compute_thumbprint,
     parse_certificate_file,
     serialize_certificate,
 )
-from ...core.exceptions import CertificateParseError
 from ...models.certificate import Certificate, CertificateSource, CertificateType
 from ...repositories.base import CertificateRepository
+from ..deps import get_repo
 
 router = APIRouter()
 

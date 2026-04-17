@@ -74,7 +74,7 @@ def _register_routes(app: FastAPI) -> None:
 
         # Look for 'router' attribute (APIRouter instance)
         if hasattr(module, "router"):
-            router = getattr(module, "router")
+            router = module.router
             app.include_router(router)
 
 

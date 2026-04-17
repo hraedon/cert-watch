@@ -6,7 +6,6 @@ between scanned and uploaded certificates.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -190,7 +189,7 @@ def _parse_pem_data(data: bytes) -> tuple[x509.Certificate, list[x509.Certificat
             )
             cert = x509.load_pem_x509_certificate(cert_bytes)
             certificates.append(cert)
-        except Exception as e:
+        except Exception:
             # Skip invalid certificates but continue processing
             continue
 

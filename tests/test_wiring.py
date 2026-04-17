@@ -6,11 +6,10 @@ This catches "orphan services" that pass their own tests but are never
 invoked in production code.
 """
 
-import pytest
-import inspect
 from unittest.mock import MagicMock, patch
-from fastapi.testclient import TestClient
 
+import pytest
+from fastapi.testclient import TestClient
 
 # =============================================================================
 # Certificate Service Wiring Tests
@@ -106,9 +105,10 @@ class TestCertificateServiceWiring:
             pytest.skip("CertificateService ABC not found")
 
         # Check if any route file imports the service
-        import cert_watch.web.routes as routes_pkg
-        from pathlib import Path
         import ast
+        from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
         service_imported = False
@@ -171,8 +171,8 @@ class TestRepositoryWiring:
 
         Verifies the concrete implementation is wired.
         """
-        from cert_watch.web.deps import get_repo
         from cert_watch.repositories.sqlite import SQLiteCertificateRepository
+        from cert_watch.web.deps import get_repo
 
         repo = get_repo()
 
@@ -188,8 +188,8 @@ class TestRepositoryWiring:
 
         Verifies connection management is centralized.
         """
-        from cert_watch.web.deps import get_repo, _get_connection_pool
         from cert_watch.repositories.sqlite import SQLiteConnectionPool
+        from cert_watch.web.deps import _get_connection_pool
 
         # Get pool
         pool = _get_connection_pool()
@@ -217,9 +217,9 @@ class TestFormatterWiring:
         Per convention: "MUST USE core/formatters.py for all certificate
         field formatting."
         """
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
-        import ast
+
+        import cert_watch.web.routes as routes_pkg
 
         required_functions = [
             "format_subject",
@@ -241,11 +241,10 @@ class TestFormatterWiring:
 
                 content = route_file.read_text()
 
-                if f"from cert_watch.core.formatters import" in content:
-                    if func_name in content:
-                        func_imported = True
-                        break
-                elif f"from ..core.formatters import" in content:
+                if (
+                    "from cert_watch.core.formatters import" in content
+                    or "from ..core.formatters import" in content
+                ):
                     if func_name in content:
                         func_imported = True
                         break
@@ -262,8 +261,9 @@ class TestFormatterWiring:
 
         Ensures no module uses a different import style.
         """
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -301,8 +301,9 @@ class TestRouteAutoDiscovery:
         self,
     ):
         """FR-01 dashboard route module exists."""
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -318,8 +319,9 @@ class TestRouteAutoDiscovery:
         self,
     ):
         """FR-02 scan route module exists."""
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -332,8 +334,9 @@ class TestRouteAutoDiscovery:
         self,
     ):
         """FR-03 upload route module exists."""
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -349,9 +352,10 @@ class TestRouteAutoDiscovery:
 
         Per convention: "Export an APIRouter named 'router' from your file"
         """
-        import cert_watch.web.routes as routes_pkg
-        from pathlib import Path
         import importlib
+        from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -393,9 +397,10 @@ class TestRoutePrefixWiring:
         self,
     ):
         """Route modules don't set explicit prefix (auto-discovery handles it)."""
-        import cert_watch.web.routes as routes_pkg
-        from pathlib import Path
         import ast
+        from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -439,8 +444,9 @@ class TestDatabaseWiring:
         Per convention: "MUST NOT import sqlite3 or any database driver
         directly in route files"
         """
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 
@@ -468,8 +474,9 @@ class TestDatabaseWiring:
 
         Per convention: "MUST NOT hardcode database paths"
         """
-        import cert_watch.web.routes as routes_pkg
         from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
 

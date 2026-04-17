@@ -10,16 +10,14 @@ Flows:
 3. "Mixed: scanned + uploaded certs in same dashboard sorted by urgency"
 """
 
+from unittest.mock import patch
+
 import pytest
-from datetime import datetime, timedelta
-from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
 from cryptography.hazmat.primitives import serialization
+from fastapi.testclient import TestClient
 
-from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
+from cert_watch.models.certificate import CertificateSource, CertificateType
 from cert_watch.repositories.base import CertificateRepository
-from cert_watch.core.formatters import format_subject, format_issuer, compute_thumbprint
-
 
 # =============================================================================
 # End-to-End Flow Test 1: Add Host → Scan → Chain → Dashboard
@@ -122,7 +120,7 @@ class TestFlow1ScanToDashboard:
             for indicator in ["status-red", "red", "danger", "critical", "bg-red", "text-red"]
         )
 
-        assert has_red_indicator, f"Certificate with 3 days remaining should show RED status"
+        assert has_red_indicator, "Certificate with 3 days remaining should show RED status"
 
         # ASSERT: Chain was extracted and stored
         if stored_leaf.fingerprint:
@@ -284,7 +282,7 @@ class TestFlow2UploadToDashboard:
             for indicator in ["status-green", "green", "success", "bg-green", "text-green", "ok"]
         )
 
-        assert has_green_indicator, f"Certificate with 60 days should show GREEN status"
+        assert has_green_indicator, "Certificate with 60 days should show GREEN status"
 
     async def test_flow_upload_with_chain_displays_all_in_dashboard(
         self,
@@ -385,8 +383,6 @@ class TestFlow3MixedScenarios:
         - Critical (3 days) appears before Green (60 days)
         - Correct color coding for each
         """
-        from tests.conftest import cert_to_model
-
         # ACT 1: Upload certificate (60 days = green)
         uploaded_cert = test_certificates["good"]
         pem_data = uploaded_cert.public_bytes(serialization.Encoding.PEM)
@@ -549,8 +545,8 @@ class TestFlowErrorHandling:
         - Existing certificates still visible
         - Dashboard functional
         """
-        from tests.conftest import cert_to_model
         from cert_watch.core.exceptions import TLSConnectionError
+        from tests.conftest import cert_to_model
 
         # Arrange: Existing certificate
         existing = cert_to_model(

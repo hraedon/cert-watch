@@ -8,12 +8,11 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
-from ..models.certificate import Certificate, CertificateSource, CertificateType
-from ..models.alert import Alert, AlertStatus, AlertType
-from ..models.scan_history import ScanHistory, ScanStatus
 from ..core.config import Settings
+from ..models.alert import Alert
+from ..models.certificate import Certificate, CertificateSource, CertificateType
+from ..models.scan_history import ScanHistory, ScanStatus
 from .base import AlertRepository, CertificateRepository, ScanHistoryRepository
 
 
@@ -137,12 +136,12 @@ class SQLiteCertificateRepository(CertificateRepository):
     def __init__(self, pool: SQLiteConnectionPool):
         self._pool = pool
 
-    async def get_by_id(self, cert_id: int) -> Optional[Certificate]:
+    async def get_by_id(self, cert_id: int) -> Certificate | None:
         """Get certificate by ID."""
         # Implementing agent will fill in
         raise NotImplementedError
 
-    async def get_by_fingerprint(self, fingerprint: str) -> Optional[Certificate]:
+    async def get_by_fingerprint(self, fingerprint: str) -> Certificate | None:
         """Get certificate by fingerprint."""
         raise NotImplementedError
 
@@ -185,7 +184,7 @@ class SQLiteCertificateRepository(CertificateRepository):
             source_port=row["source_port"],
         )
 
-    async def get_by_hostname(self, hostname: str, port: Optional[int] = None) -> list[Certificate]:
+    async def get_by_hostname(self, hostname: str, port: int | None = None) -> list[Certificate]:
         """Get certificates by hostname."""
         raise NotImplementedError
 
@@ -242,7 +241,7 @@ class SQLiteAlertRepository(AlertRepository):
     def __init__(self, pool: SQLiteConnectionPool):
         self._pool = pool
 
-    async def get_by_id(self, alert_id: int) -> Optional[Alert]:
+    async def get_by_id(self, alert_id: int) -> Alert | None:
         """Get alert by ID."""
         raise NotImplementedError
 
@@ -273,7 +272,7 @@ class SQLiteScanHistoryRepository(ScanHistoryRepository):
     def __init__(self, pool: SQLiteConnectionPool):
         self._pool = pool
 
-    async def get_by_id(self, scan_id: int) -> Optional[ScanHistory]:
+    async def get_by_id(self, scan_id: int) -> ScanHistory | None:
         """Get scan history by ID."""
         raise NotImplementedError
 
@@ -290,7 +289,7 @@ class SQLiteScanHistoryRepository(ScanHistoryRepository):
         raise NotImplementedError
 
 
-def create_pool(settings: Optional[Settings] = None) -> SQLiteConnectionPool:
+def create_pool(settings: Settings | None = None) -> SQLiteConnectionPool:
     """Factory function to create connection pool."""
     if settings is None:
         settings = Settings.get()

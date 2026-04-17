@@ -6,13 +6,13 @@ Acceptance Criteria:
 - Sorted by days remaining ascending
 """
 
+from datetime import datetime
+
 import pytest
-from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 
-from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
+from cert_watch.models.certificate import CertificateSource, CertificateType
 from cert_watch.repositories.base import CertificateRepository
-
 
 # =============================================================================
 # FR-01 AC-01: Dashboard Display Tests
@@ -77,8 +77,8 @@ class TestDashboardDisplay:
         Then: All required fields are visible
         """
         # Arrange: Create a certificate with specific fields
-        from tests.conftest import cert_to_model
         from cert_watch.core.formatters import format_datetime
+        from tests.conftest import cert_to_model
 
         cert = test_certificates["good"]
         model = cert_to_model(
