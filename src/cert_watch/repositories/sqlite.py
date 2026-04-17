@@ -174,6 +174,11 @@ class SQLiteCertificateRepository(CertificateRepository):
                 return self._row_to_cert(row)
             return None
 
+    async def get_by_id(self, cert_id: int) -> Certificate | None:
+        """Get certificate by ID."""
+        # Implementing agent will fill in
+        raise NotImplementedError
+
     async def get_by_fingerprint(self, fingerprint: str) -> Certificate | None:
         """Get certificate by fingerprint."""
         with self._pool.get_connection() as conn:
@@ -207,6 +212,44 @@ class SQLiteCertificateRepository(CertificateRepository):
                 "SELECT * FROM certificates ORDER BY not_after ASC LIMIT ?", (limit,)
             )
             return [self._row_to_cert(row) for row in cursor.fetchall()]
+
+        """Get all certificates, sorted by urgency (days remaining ascending)."""
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT * FROM certificates
+                ORDER BY not_after ASC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_certificate(row) for row in rows]
+
+    def _row_to_certificate(self, row: sqlite3.Row) -> Certificate:
+        """Convert a database row to a Certificate model."""
+        return Certificate(
+            id=row["id"],
+            certificate_type=CertificateType[row["certificate_type"].upper()],
+            source=CertificateSource[row["source"].upper()],
+            hostname=row["hostname"],
+            port=row["port"],
+            label=row["label"],
+            subject=row["subject"],
+            issuer=row["issuer"],
+            not_before=row["not_before"],
+            not_after=row["not_after"],
+            fingerprint=row["fingerprint"],
+            serial_number=row["serial_number"],
+            chain_fingerprint=row["chain_fingerprint"],
+            chain_position=row["chain_position"] or 0,
+            pem_data=row["pem_data"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            last_scanned_at=row["last_scanned_at"],
+            source_hostname=row["source_hostname"],
+            source_port=row["source_port"],
+        )
 
     async def get_by_hostname(self, hostname: str, port: int | None = None) -> list[Certificate]:
         """Get certificates by hostname."""
@@ -245,6 +288,13 @@ class SQLiteCertificateRepository(CertificateRepository):
                     chain_position, pem_data, created_at, updated_at, last_scanned_at,
                     source_hostname, source_port
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                INSERT INTO certificates (
+                    certificate_type, source, hostname, port, label,
+                    subject, issuer, not_before, not_after, fingerprint,
+                    serial_number, chain_fingerprint, chain_position, pem_data,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert.certificate_type.name.lower(),
@@ -270,6 +320,10 @@ class SQLiteCertificateRepository(CertificateRepository):
             )
             cert.id = cursor.lastrowid
             return cert
+                ),
+            )
+            cert.id = cursor.lastrowid
+        return cert
 
     async def update(self, cert: Certificate) -> Certificate:
         """Update existing certificate."""

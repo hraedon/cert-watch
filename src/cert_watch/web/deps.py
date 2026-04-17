@@ -22,6 +22,9 @@ from ..repositories.base import AlertRepository, CertificateRepository, ScanHist
 from functools import lru_cache
 
 from ..core.config import Settings
+
+from ..core.config import Settings
+from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
 from ..repositories.sqlite import (
     SQLiteAlertRepository,
     SQLiteCertificateRepository,
@@ -34,6 +37,13 @@ _current_db_path: str | None = None
 def _get_connection_pool(settings: Settings | None = None) -> SQLiteConnectionPool:
     """Get the connection pool for the given settings."""
     settings = Settings.get(settings)
+def _get_connection_pool(request: Request) -> SQLiteConnectionPool:
+    """Get the connection pool using settings from the request app state.
+
+    This ensures tests use the test-specific database path instead of
+    the default Settings.get() path.
+    """
+    settings: Settings = request.app.state.settings
     return SQLiteConnectionPool(settings.database_path)
 
 @lru_cache(maxsize=128)
@@ -66,13 +76,14 @@ def _clear_settings_cache():
     Settings.get.cache_clear()
 
 
-async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
+async def get_db(request: Request) -> AsyncGenerator[SQLiteConnectionPool, None]:
     """Get database connection pool dependency.
 
     Yields the connection pool for use in route handlers.
     """
     settings = Settings.get()
     pool = _get_connection_pool(str(settings.database_path))
+    pool = _get_connection_pool(request)
     try:
         yield pool
     finally:
@@ -80,11 +91,10 @@ async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
         pass
 
 
-def get_repo():
-    """Create repository dependency factory.
+def get_repo(request: Request) -> CertificateRepository:
+    """Create repository dependency.
 
-    Returns a dependency function that provides the requested repository type.
-    Usage: Depends(get_repo()) provides CertificateRepository
+    Usage: repo: CertificateRepository = Depends(get_repo)
     """
 
     def _get_repo(request: Request) -> CertificateRepository:
@@ -105,10 +115,11 @@ def get_repo():
     _current_db_path = db_path
 
     pool = _get_connection_pool(db_path)
+    pool = _get_connection_pool(request)
     return SQLiteCertificateRepository(pool)
 
 
-def get_alert_repo():
+def get_alert_repo(request: Request) -> AlertRepository:
     """Get AlertRepository dependency."""
 
     def _get_alert_repo(request: Request) -> AlertRepository:
@@ -126,10 +137,11 @@ def get_alert_repo():
     _current_db_path = db_path
 
     pool = _get_connection_pool(db_path)
+    pool = _get_connection_pool(request)
     return SQLiteAlertRepository(pool)
 
 
-def get_scan_repo():
+def get_scan_repo(request: Request) -> ScanHistoryRepository:
     """Get ScanHistoryRepository dependency."""
 
     def _get_scan_repo(request: Request) -> ScanHistoryRepository:
@@ -147,4 +159,5 @@ def get_scan_repo():
     _current_db_path = db_path
 
     pool = _get_connection_pool(db_path)
+    pool = _get_connection_pool(request)
     return SQLiteScanHistoryRepository(pool)

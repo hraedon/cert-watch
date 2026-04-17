@@ -10,6 +10,8 @@ from datetime import datetime
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 
+from ..core.exceptions import CertificateParseError
+
 
 def format_subject(cert: x509.Certificate) -> str:
     """Format certificate subject as a canonical string.
@@ -137,8 +139,68 @@ def parse_certificate_file(data: bytes) -> tuple[x509.Certificate, list[x509.Cer
     Raises:
         CertificateParseError: If parsing fails
     """
-    # Stub implementation - agents will fill in
-    raise NotImplementedError("Implement in cert-parser work unit")
+    if not data or len(data) == 0:
+        raise CertificateParseError("Empty certificate data")
+
+    # Try PEM format first (most common)
+    if b"-----BEGIN CERTIFICATE-----" in data:
+        return _parse_pem_data(data)
+
+    # Try DER format (binary)
+    try:
+        cert = x509.load_der_x509_certificate(data)
+        return (cert, [])
+    except Exception:
+        pass  # Not DER, will raise error below
+
+    raise CertificateParseError("Unable to parse certificate file. Must be PEM or DER format.")
+
+
+def _parse_pem_data(data: bytes) -> tuple[x509.Certificate, list[x509.Certificate]]:
+    """Parse PEM-encoded certificate data.
+
+    Args:
+        data: PEM-encoded certificate bytes
+
+    Returns:
+        Tuple of (leaf certificate, list of chain certificates)
+
+    Raises:
+        CertificateParseError: If parsing fails
+    """
+    certificates = []
+
+    # Split on certificate boundaries and parse each
+    import re
+
+    # Find all PEM blocks
+    pem_pattern = rb"-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----"
+    matches = re.findall(pem_pattern, data, re.DOTALL)
+
+    if not matches:
+        raise CertificateParseError("No valid PEM certificates found")
+
+    for match in matches:
+        try:
+            # Clean up the base64 data (remove newlines/spaces)
+            cert_data = re.sub(rb"\s+", b"", match)
+            cert_bytes = (
+                b"-----BEGIN CERTIFICATE-----\n" + cert_data + b"\n-----END CERTIFICATE-----\n"
+            )
+            cert = x509.load_pem_x509_certificate(cert_bytes)
+            certificates.append(cert)
+        except Exception:
+            # Skip invalid certificates but continue processing
+            continue
+
+    if not certificates:
+        raise CertificateParseError("No valid certificates could be parsed from PEM data")
+
+    # First certificate is the leaf, rest are chain
+    leaf = certificates[0]
+    chain = certificates[1:] if len(certificates) > 1 else []
+
+    return (leaf, chain)
 
 
 async def extract_certificate_from_tls(

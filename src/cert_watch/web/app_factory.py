@@ -37,6 +37,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         debug=settings.debug,
     )
 
+    # Store settings in app state for dependency injection
+    app.state.settings = settings
+
     # Auto-discover and register routes
     _register_routes(app)
 
