@@ -28,11 +28,25 @@ from ..repositories.sqlite import (
 )
 
 
-@lru_cache(maxsize=1)
-def _get_connection_pool() -> SQLiteConnectionPool:
-    """Get the singleton connection pool."""
-    settings = Settings.get()
-    return SQLiteConnectionPool(settings.database_path)
+@lru_cache(maxsize=128)
+def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
+    """Get the connection pool for a specific database path.
+
+    The pool is cached per database path to support both production
+    and testing scenarios where different databases are used.
+    """
+    from pathlib import Path
+
+    return SQLiteConnectionPool(Path(db_path))
+
+
+def _clear_connection_pool_cache():
+    """Clear the connection pool cache.
+
+    This is used primarily for testing to ensure database isolation
+    between test cases.
+    """
+    _get_connection_pool.cache_clear()
 
 
 async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
@@ -40,7 +54,8 @@ async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
 
     Yields the connection pool for use in route handlers.
     """
-    pool = _get_connection_pool()
+    settings = Settings.get()
+    pool = _get_connection_pool(str(settings.database_path))
     try:
         yield pool
     finally:
@@ -54,17 +69,20 @@ def get_repo():
     Returns a dependency function that provides the requested repository type.
     Usage: Depends(get_repo()) provides CertificateRepository
     """
-    pool = _get_connection_pool()
+    settings = Settings.get()
+    pool = _get_connection_pool(str(settings.database_path))
     return SQLiteCertificateRepository(pool)
 
 
 def get_alert_repo():
     """Get AlertRepository dependency."""
-    pool = _get_connection_pool()
+    settings = Settings.get()
+    pool = _get_connection_pool(str(settings.database_path))
     return SQLiteAlertRepository(pool)
 
 
 def get_scan_repo():
     """Get ScanHistoryRepository dependency."""
-    pool = _get_connection_pool()
+    settings = Settings.get()
+    pool = _get_connection_pool(str(settings.database_path))
     return SQLiteScanHistoryRepository(pool)
