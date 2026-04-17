@@ -37,7 +37,7 @@ async def upload_certificate(
     certificate: UploadFile = File(...),
     label: str = Form(""),
     repo: CertificateRepository = Depends(get_repo),
-) -> JSONResponse:
+) -> HTMLResponse:
     """Handle certificate file upload.
 
     Accepts .cer, .pem, and .crt files. Parses the certificate(s),
@@ -127,22 +127,27 @@ async def upload_certificate(
             # Continue storing other chain certs even if one fails
             pass
 
-    # Return success response
-    from fastapi.responses import JSONResponse
+    # Return HTML result page with certificate details
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Certificate Uploaded</title>
+</head>
+<body>
+    <h1>Certificate Uploaded Successfully</h1>
+    <div class="certificate-details">
+        <h2>Certificate Details</h2>
+        <p><strong>Subject:</strong> {leaf_model.subject}</p>
+        <p><strong>Issuer:</strong> {leaf_model.issuer}</p>
+        <p><strong>Expiry:</strong> {leaf_model.not_after.strftime("%Y-%m-%d %H:%M:%S UTC")}</p>
+        <p><strong>Fingerprint:</strong> {leaf_fingerprint}</p>
+        <p><strong>Chain Count:</strong> {len(chain_certs)}</p>
+    </div>
+    <a href="/">Back to Dashboard</a>
+</body>
+</html>"""
 
-    return JSONResponse(
-        status_code=201,
-        content={
-            "status": "success",
-            "message": "Certificate uploaded successfully",
-            "certificate": {
-                "id": leaf_model.id,
-                "label": display_label,
-                "subject": leaf_model.subject,
-                "issuer": leaf_model.issuer,
-                "fingerprint": leaf_fingerprint,
-                "not_after": leaf_model.not_after.isoformat(),
-                "chain_count": len(chain_certs),
-            },
-        },
+    return HTMLResponse(
+        status_code=200,
+        content=html_content,
     )
