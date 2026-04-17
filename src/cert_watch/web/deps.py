@@ -28,10 +28,9 @@ from ..repositories.sqlite import (
 )
 
 
-@lru_cache(maxsize=1)
-def _get_connection_pool() -> SQLiteConnectionPool:
-    """Get the singleton connection pool."""
-    settings = Settings.get()
+def _get_connection_pool(settings: Settings | None = None) -> SQLiteConnectionPool:
+    """Get the connection pool for the given settings."""
+    settings = Settings.get(settings)
     return SQLiteConnectionPool(settings.database_path)
 
 
@@ -54,17 +53,33 @@ def get_repo():
     Returns a dependency function that provides the requested repository type.
     Usage: Depends(get_repo()) provides CertificateRepository
     """
-    pool = _get_connection_pool()
-    return SQLiteCertificateRepository(pool)
+
+    def _get_repo(request: Request) -> CertificateRepository:
+        # Try to get settings from app state (set during testing)
+        settings = getattr(request.app.state, "settings", None)
+        pool = _get_connection_pool(settings)
+        return SQLiteCertificateRepository(pool)
+
+    return _get_repo
 
 
 def get_alert_repo():
     """Get AlertRepository dependency."""
-    pool = _get_connection_pool()
-    return SQLiteAlertRepository(pool)
+
+    def _get_alert_repo(request: Request) -> AlertRepository:
+        settings = getattr(request.app.state, "settings", None)
+        pool = _get_connection_pool(settings)
+        return SQLiteAlertRepository(pool)
+
+    return _get_alert_repo
 
 
 def get_scan_repo():
     """Get ScanHistoryRepository dependency."""
-    pool = _get_connection_pool()
-    return SQLiteScanHistoryRepository(pool)
+
+    def _get_scan_repo(request: Request) -> ScanHistoryRepository:
+        settings = getattr(request.app.state, "settings", None)
+        pool = _get_connection_pool(settings)
+        return SQLiteScanHistoryRepository(pool)
+
+    return _get_scan_repo

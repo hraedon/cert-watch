@@ -23,7 +23,7 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
-    repo: CertificateRepository = Depends(get_repo),
+    repo: CertificateRepository = Depends(get_repo()),
 ):
     """Main dashboard displaying all certificates.
 
@@ -80,4 +80,4 @@ async def dashboard(
         "has_certificates": len(cert_data) > 0,
     }
 
-    return templates.TemplateResponse("dashboard.html", context)
+    return templates.TemplateResponse(request, "dashboard.html", context)

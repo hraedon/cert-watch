@@ -384,7 +384,20 @@ def sample_scan_history():
 @pytest.fixture
 def app(settings):
     """Create test FastAPI application."""
-    return create_app(settings)
+    from cert_watch.web.app_factory import create_app
+
+    # Clear caches to ensure test settings are used
+    from cert_watch.core.config import _get_cached_settings
+    from cert_watch.web import deps
+
+    _get_cached_settings.cache_clear()
+
+    app = create_app(settings)
+
+    # Store test settings in app state for deps.py to access
+    app.state.settings = settings
+
+    return app
 
 
 @pytest.fixture

@@ -55,14 +55,22 @@ class Settings(BaseSettings):
         return Path("./cert_watch.db")
 
     @classmethod
-    @lru_cache(maxsize=1)
-    def get(cls) -> "Settings":
+    def get(cls, settings: Optional["Settings"] = None) -> "Settings":
         """Get the singleton settings instance.
 
         This is the ONLY way to access settings in the application.
+        In tests, pass a settings instance to use that instead of the singleton.
         """
-        return cls()
+        if settings is not None:
+            return settings
+        return _get_cached_settings()
 
     def ensure_data_dirs(self) -> None:
         """Create data directories if they don't exist."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=1)
+def _get_cached_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
