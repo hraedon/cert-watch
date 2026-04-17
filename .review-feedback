@@ -1,0 +1,12 @@
+
+=== REVIEW FEEDBACK (must address before merge) ===
+
+A correctness review of your implementation found the following issues.
+Fix ONLY these specific problems. Do not add new features or change unrelated code.
+After each fix, commit it with: git add -A && git commit -m '<fr>: fix <issue>'
+Re-run pytest after all fixes to verify nothing regressed.
+
+
+CRITICAL (must fix — silent failure or data loss):
+  [src/cert_watch/web/routes/fr03_upload.py:56] certificate.filename can be None (per FastAPI UploadFile type), causing Path() to raise TypeError at runtime. This is a type contract violation that will crash on file uploads without a filename.
+    → Fix: Add None check before creating Path: 'if not certificate.filename: raise HTTPException(400, "Filename is required")' or handle gracefully with a default.

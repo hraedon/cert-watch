@@ -52,6 +52,10 @@ async def upload_certificate(
     Returns:
         Redirect to result page or error response
     """
+    # Validate filename present
+    if not certificate.filename:
+        raise HTTPException(status_code=400, detail="Filename is required")
+
     # Validate file extension
     file_ext = Path(certificate.filename).suffix.lower()
     if file_ext not in ALLOWED_EXTENSIONS:
