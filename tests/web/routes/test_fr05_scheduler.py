@@ -14,7 +14,7 @@ Per spec:
 """
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -138,7 +138,7 @@ class TestSchedulerService:
             assert hasattr(service, "start_scheduler"), (
                 "ScanSchedulerService must have start_scheduler method"
             )
-            assert callable(getattr(service, "start_scheduler")), "start_scheduler must be callable"
+            assert callable(service.start_scheduler), "start_scheduler must be callable"
 
         except (ImportError, AttributeError, NotImplementedError):
             pytest.skip("ScanSchedulerService not yet implemented")
@@ -161,7 +161,7 @@ class TestSchedulerService:
             assert hasattr(service, "stop_scheduler"), (
                 "ScanSchedulerService must have stop_scheduler method"
             )
-            assert callable(getattr(service, "stop_scheduler")), "stop_scheduler must be callable"
+            assert callable(service.stop_scheduler), "stop_scheduler must be callable"
 
         except (ImportError, AttributeError, NotImplementedError):
             pytest.skip("ScanSchedulerService not yet implemented")
@@ -176,17 +176,17 @@ class TestSchedulerService:
         Then: run_daily_scan exists and is async
         """
         try:
+            import inspect
+
             from cert_watch.services.base import ScanSchedulerService
             from cert_watch.web.deps import get_scheduler_service
-
-            import inspect
 
             service = get_scheduler_service()
 
             assert hasattr(service, "run_daily_scan"), (
                 "ScanSchedulerService must have run_daily_scan method"
             )
-            assert callable(getattr(service, "run_daily_scan")), "run_daily_scan must be callable"
+            assert callable(service.run_daily_scan), "run_daily_scan must be callable"
             assert inspect.iscoroutinefunction(service.run_daily_scan), (
                 "run_daily_scan must be async"
             )
@@ -752,11 +752,12 @@ class TestScanHistoryTracking:
         When: Scan completes
         Then: Host counts are recorded
         """
+        from datetime import datetime, timedelta
+
         from cryptography import x509
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
-        from datetime import datetime, timedelta
 
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model

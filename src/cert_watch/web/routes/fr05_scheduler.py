@@ -9,7 +9,6 @@ Provides web endpoints for:
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from cert_watch.models.scan_history import ScanStatus
 from cert_watch.repositories.base import ScanHistoryRepository
 from cert_watch.services.base import ScanSchedulerService
 from cert_watch.web.deps import get_scan_repo
