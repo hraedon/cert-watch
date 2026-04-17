@@ -752,12 +752,35 @@ class TestScanHistoryTracking:
         When: Scan completes
         Then: Host counts are recorded
         """
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+        from datetime import datetime, timedelta
+
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model
 
-        # Create multiple certificates
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        # Create multiple certificates with unique fingerprints
         for i, hostname in enumerate(["host1.example.com", "host2.example.com"]):
-            cert = test_certificates["good"]
+            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+            issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+            # Create unique cert for each host
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .not_valid_before(now)
+                .not_valid_after(now + timedelta(days=60 + i))  # Different expiry = different cert
+                .serial_number(100000 + i)  # Different serial = different fingerprint
+                .public_key(private_key.public_key())
+                .sign(private_key, hashes.SHA256())
+            )
+
             model = cert_to_model(
                 cert,
                 certificate_type=CertificateType.LEAF,
@@ -1034,6 +1057,8 @@ class TestSchedulerLifecycle:
             pytest.skip("ScanSchedulerService not yet implemented")
 
     async def test_scheduler_starts_with_application(
+        self,
+        client: TestClient,
         app,
     ):
         """AC-05.24: Scheduler starts when application starts.
