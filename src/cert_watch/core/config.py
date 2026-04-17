@@ -6,7 +6,6 @@ Use Settings.get() to access configuration values.
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -30,12 +29,12 @@ class Settings(BaseSettings):
     data_dir: Path = Field(default=Path("./data"))
 
     # SMTP / Email Alerts
-    smtp_host: Optional[str] = Field(default=None)
+    smtp_host: str | None = Field(default=None)
     smtp_port: int = Field(default=587)
-    smtp_user: Optional[str] = Field(default=None)
-    smtp_password: Optional[str] = Field(default=None)
+    smtp_user: str | None = Field(default=None)
+    smtp_password: str | None = Field(default=None)
     smtp_use_tls: bool = Field(default=True)
-    smtp_from_addr: Optional[str] = Field(default=None)
+    smtp_from_addr: str | None = Field(default=None)
     alert_recipients: list[str] = Field(default_factory=list)
 
     # Alert Thresholds (days before expiry)

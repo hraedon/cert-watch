@@ -2,11 +2,11 @@
 
 from .base import (
     AlertService,
-    CertificateService,
-    ScanSchedulerService,
     # Stub implementations for parallel development
     AlertServiceStub,
+    CertificateService,
     CertificateServiceStub,
+    ScanSchedulerService,
     ScanSchedulerServiceStub,
 )
 

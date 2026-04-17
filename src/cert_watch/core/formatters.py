@@ -6,7 +6,6 @@ between scanned and uploaded certificates.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -158,8 +157,9 @@ async def extract_certificate_from_tls(
         TLSConnectionError: If connection fails
         TLSHandshakeError: If handshake fails
     """
-    import ssl
     import socket
+    import ssl
+
     from ..core.exceptions import TLSConnectionError, TLSHandshakeError
 
     context = ssl.create_default_context()
@@ -198,7 +198,7 @@ async def extract_certificate_from_tls(
 
                 return (leaf_cert, chain_certs)
 
-    except socket.timeout:
+    except TimeoutError:
         raise TLSConnectionError(f"Connection to {hostname}:{port} timed out")
     except socket.gaierror:
         raise TLSConnectionError(f"Could not resolve hostname: {hostname}")

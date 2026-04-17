@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Optional
 
 
 class CertificateType(Enum):
@@ -26,14 +25,14 @@ class Certificate:
     """Certificate model representing a monitored certificate."""
 
     # Identification
-    id: Optional[int] = None
+    id: int | None = None
     certificate_type: CertificateType = CertificateType.LEAF
     source: CertificateSource = CertificateSource.SCANNED
 
     # Location/Label
-    hostname: Optional[str] = None  # For scanned entries
-    port: Optional[int] = None  # For scanned entries
-    label: Optional[str] = None  # User-defined label
+    hostname: str | None = None  # For scanned entries
+    port: int | None = None  # For scanned entries
+    label: str | None = None  # User-defined label
 
     # Certificate fields
     subject: str = ""
@@ -44,20 +43,20 @@ class Certificate:
     serial_number: str = ""
 
     # Chain relationship
-    chain_fingerprint: Optional[str] = None  # Fingerprint of parent chain cert
+    chain_fingerprint: str | None = None  # Fingerprint of parent chain cert
     chain_position: int = 0  # Position in chain (0 = leaf)
 
     # Storage
-    pem_data: Optional[bytes] = None  # PEM-encoded certificate
+    pem_data: bytes | None = None  # PEM-encoded certificate
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
-    last_scanned_at: Optional[datetime] = None
+    last_scanned_at: datetime | None = None
 
     # Source tracking
-    source_hostname: Optional[str] = None  # For chain certs - where they came from
-    source_port: Optional[int] = None
+    source_hostname: str | None = None  # For chain certs - where they came from
+    source_port: int | None = None
 
     @property
     def is_expired(self) -> bool:

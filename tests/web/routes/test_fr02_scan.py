@@ -7,17 +7,16 @@ Acceptance Criteria:
 - Error handling for unreachable hosts
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from datetime import datetime
-from fastapi.testclient import TestClient
-from unittest.mock import MagicMock, patch, AsyncMock
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from fastapi.testclient import TestClient
 
-from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
-from cert_watch.repositories.base import CertificateRepository
 from cert_watch.core.exceptions import TLSConnectionError, TLSHandshakeError
-
+from cert_watch.models.certificate import CertificateSource, CertificateType
+from cert_watch.repositories.base import CertificateRepository
 
 # =============================================================================
 # FR-02 AC-02: TLS Scanning Tests

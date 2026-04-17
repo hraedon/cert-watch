@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Optional
 
 
 class AlertType(Enum):
@@ -26,7 +25,7 @@ class AlertStatus(Enum):
 class Alert:
     """Alert model representing a sent or pending alert."""
 
-    id: Optional[int] = None
+    id: int | None = None
 
     # Reference
     certificate_id: int = 0
@@ -40,8 +39,8 @@ class Alert:
     recipient: str = ""
     subject: str = ""
     body: str = ""
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     # Timestamps
     created_at: datetime = field(default_factory=datetime.utcnow)
-    sent_at: Optional[datetime] = None
+    sent_at: datetime | None = None

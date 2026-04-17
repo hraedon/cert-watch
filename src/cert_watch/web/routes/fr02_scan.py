@@ -6,12 +6,10 @@ Provides endpoints for:
 """
 
 from datetime import datetime
-from typing import Optional
 
-from fastapi import APIRouter, Form, HTTPException, Request, Depends
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ..deps import get_repo
 from ...core.exceptions import TLSConnectionError, TLSHandshakeError
 from ...core.formatters import (
     compute_thumbprint,
@@ -22,11 +20,12 @@ from ...core.formatters import (
 )
 from ...models.certificate import Certificate, CertificateSource, CertificateType
 from ...repositories.base import CertificateRepository
+from ..deps import get_repo
 
 router = APIRouter()
 
 
-def _validate_hostname(hostname: Optional[str]) -> str:
+def _validate_hostname(hostname: str | None) -> str:
     """Validate hostname format."""
     if not hostname or not hostname.strip():
         raise HTTPException(status_code=422, detail="Hostname is required")
@@ -36,7 +35,7 @@ def _validate_hostname(hostname: Optional[str]) -> str:
     return hostname
 
 
-def _validate_port(port: Optional[str]) -> int:
+def _validate_port(port: str | None) -> int:
     """Validate and parse port number."""
     if port is None or port == "":
         return 443
@@ -52,8 +51,8 @@ def _validate_port(port: Optional[str]) -> int:
 @router.post("/scan/add-host")
 async def add_host(
     request: Request,
-    hostname: Optional[str] = Form(None),
-    port: Optional[str] = Form(None),
+    hostname: str | None = Form(None),
+    port: str | None = Form(None),
     repo: CertificateRepository = Depends(get_repo),
 ):
     """Add a host for TLS scanning.

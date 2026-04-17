@@ -3,23 +3,21 @@
 This module provides comprehensive fixtures for all FR-01, FR-02, FR-03 tests.
 """
 
-import asyncio
 import tempfile
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncGenerator, Generator
 from unittest.mock import MagicMock, patch
 
-import aiosqlite
 import pytest
 import pytest_asyncio
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from cert_watch.core.config import Settings
 
 # Import models
 from cert_watch.models.alert import Alert, AlertStatus, AlertType
@@ -37,8 +35,6 @@ from cert_watch.repositories.sqlite import (
     SQLiteScanHistoryRepository,
 )
 from cert_watch.web.app_factory import create_app
-from cert_watch.core.config import Settings
-
 
 # =============================================================================
 # Settings Fixtures
@@ -477,7 +473,7 @@ def mock_tls_connection():
 
 def cert_to_model(cert: x509.Certificate, **kwargs) -> Certificate:
     """Convert an X.509 certificate to a Certificate model."""
-    from cert_watch.core.formatters import format_subject, format_issuer, compute_thumbprint
+    from cert_watch.core.formatters import compute_thumbprint, format_issuer, format_subject
 
     now = datetime.utcnow()
     return Certificate(
