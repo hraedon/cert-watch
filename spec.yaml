@@ -1,0 +1,189 @@
+project:
+  name: cert-watch
+  description: TLS certificate monitoring dashboard with automatic scanning and email alerts
+  language: python
+  framework: fastapi
+
+meta:
+  name: cert-watch
+  spec_level: 1
+  desired_level: 1
+  date: "2026-04-17"
+
+mvp:
+  description: "Web dashboard showing monitored certificates with expiry status, automatic TLS scanning, manual upload, and email alerts."
+  fr_ids: [FR-01, FR-02, FR-03, FR-04, FR-05]
+  rationale: "Dashboard is core value — single pane of glass. Scanning and upload are intake paths. Alerts close the loop."
+
+functional_requirements:
+  - id: FR-01
+    mvp: true
+    text: "The dashboard displays all monitored certificates showing hostname/label, issuer, expiry date, days remaining, and color-coded status (red <7 days, yellow <30 days, green >30 days). Sorted by urgency."
+    acceptance_criteria:
+      - "List view shows hostname, issuer, expiry date, days remaining"
+      - "Color coding: red <7 days, yellow <30 days, green >30 days"
+      - "Sorted by days remaining ascending"
+  
+  - id: FR-02
+    mvp: true
+    text: "User can add a host by providing hostname and port. System performs TLS handshake, extracts leaf certificate and chain, creates monitored entries."
+    acceptance_criteria:
+      - "Input form accepts hostname and port"
+      - "TLS handshake extracts certificate"
+      - "Leaf and chain certificates stored separately"
+      - "Error handling for unreachable hosts"
+  
+  - id: FR-03
+    mvp: true
+    text: "User can upload a certificate file (.cer/.pem/.crt). System parses file, extracts expiry and chain, creates monitored entry."
+    acceptance_criteria:
+      - "File upload accepts .cer, .pem, .crt formats"
+      - "Parses expiry date from certificate"
+      - "Extracts chain certificates if present"
+      - "Validates file format and content"
+  
+  - id: FR-04
+    mvp: true
+    text: "System sends email alerts at configured thresholds before expiry (14/7/3/1 days for leaf, 30/14/7 days for chain)."
+    acceptance_criteria:
+      - "SMTP configuration (host, port, user, password, from_addr)"
+      - "Alert recipients configurable"
+      - "Alerts sent at configured thresholds"
+      - "Alert history tracked per certificate"
+  
+  - id: FR-05
+    mvp: true
+    text: "Built-in scheduler runs daily scan cycle, refreshing all scanned certificates and sending alerts for newly detected issues."
+    acceptance_criteria:
+      - "Daily scan at configurable time (default 06:00)"
+      - "Updates expiry dates for all scanned entries"
+      - "Triggers alerts for new issues"
+      - "Scan history logged with timestamp"
+
+acceptance_criteria:
+  - id: AC-01
+    fr_ids: [FR-01]
+    condition: "Given certificates with various expiry dates, when viewing dashboard, then color coding matches thresholds"
+  - id: AC-02
+    fr_ids: [FR-02]
+    condition: "Given a hostname and port with TLS, when added, then certificate is extracted and stored"
+  - id: AC-03
+    fr_ids: [FR-03]
+    condition: "Given a valid certificate file, when uploaded, then entry is created with correct expiry"
+  - id: AC-04
+    fr_ids: [FR-04]
+    condition: "Given a certificate nearing expiry, when threshold reached, then email alert is sent"
+  - id: AC-05
+    fr_ids: [FR-05]
+    condition: "Given configured scan time, when time reached, then all scanned certificates are refreshed"
+
+work_decomposition:
+  value_phases:
+    - phase: 1
+      label: "MVP"
+      fr_ids: [FR-01, FR-02, FR-03, FR-04, FR-05]
+      rationale: "All five FRs form a complete product: intake (scan/upload), display, alerting, automation."
+  dependencies:
+    - fr_id: "FR-04"
+      requires: ["FR-01", "FR-02", "FR-03"]
+    - fr_id: "FR-05"
+      requires: ["FR-02", "FR-04"]
+
+quality:
+  mutation_testing: true
+  integration_review: true
+  min_test_coverage: 0.8
+
+agents:
+  roles:
+    architect:
+      provider: opencode
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      base_url: https://api.fireworks.ai/inference/v1
+    implementer:
+      provider: opencode
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      base_url: https://api.fireworks.ai/inference/v1
+    reviewer:
+      provider: opencode
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      base_url: https://api.fireworks.ai/inference/v1
+
+phases:
+  - number: 1
+    name: "Certificate Core"
+    execution_mode: concurrent
+    work_units:
+      - id: database-layer
+        name: "Database Abstraction Layer"
+        description: "Repository pattern for certificate entries. SQLite for v1 with abstraction for future MSSQL. Schema: certificates (id, type, source, hostname, port, subject, issuer, not_before, not_after, fingerprint, chain_fingerprint, created_at, updated_at), certificate_chains, alerts, scan_history."
+        fr_ids: []
+        acceptance_criteria:
+          - "Repository ABC for certificate CRUD"
+          - "SQLite implementation with proper datetime handling"
+          - "Repository for alerts and scan history"
+        dependencies: []
+
+      - id: cert-parser
+        name: "Certificate Parser Module"
+        description: "Certificate file parsing (.cer/.pem/.crt) and chain extraction using cryptography library. Also TLS handshake extraction."
+        fr_ids: []
+        acceptance_criteria:
+          - "Parse X.509 certificates from files"
+          - "Extract chain from certificate files"
+          - "Extract certificate from TLS handshake"
+          - "Handle various certificate encodings"
+        dependencies: []
+
+      - id: fr-01-dashboard
+        name: "FR-01 Dashboard"
+        description: "Dashboard list view with color-coded status. FastAPI route + Jinja2 template. HTMX for interactivity."
+        fr_ids: [FR-01]
+        acceptance_criteria:
+          - "GET / shows dashboard with all certificates"
+          - "Color coding based on days remaining"
+          - "Sorting by urgency"
+        dependencies: [database-layer]
+
+      - id: fr-02-scan
+        name: "FR-02 TLS Scanning"
+        description: "Add host form and TLS scanning. Background worker pattern for scanning to avoid blocking."
+        fr_ids: [FR-02]
+        acceptance_criteria:
+          - "POST endpoint to add host for scanning"
+          - "TLS handshake extracts certificate"
+          - "Stores leaf and chain separately"
+          - "Error handling for failures"
+        dependencies: [database-layer, cert-parser]
+
+      - id: fr-03-upload
+        name: "FR-03 Certificate Upload"
+        description: "File upload form and certificate parsing. Upload to temporary storage, parse, create entries."
+        fr_ids: [FR-03]
+        acceptance_criteria:
+          - "File upload endpoint with validation"
+          - "Parse uploaded certificate"
+          - "Create entries for leaf and chain"
+        dependencies: [database-layer, cert-parser]
+
+      - id: fr-04-alerts
+        name: "FR-04 Email Alerts"
+        description: "Email alert system with SMTP configuration. Threshold evaluation logic. Alert queue/history."
+        fr_ids: [FR-04]
+        acceptance_criteria:
+          - "SMTP configuration in settings"
+          - "Alert evaluation at thresholds"
+          - "Email sending with proper formatting"
+          - "Alert history tracking"
+        dependencies: [database-layer]
+
+      - id: fr-05-scheduler
+        name: "FR-05 Daily Scheduler"
+        description: "Built-in scheduler (APScheduler or similar) for daily scan cycle. Configurable time. Triggers refresh and alerts."
+        fr_ids: [FR-05]
+        acceptance_criteria:
+          - "Scheduler starts with application"
+          - "Daily scan at configured time"
+          - "Refreshes all scanned certificates"
+          - "Triggers alert evaluation"
+        dependencies: [fr-02-scan, fr-04-alerts]
