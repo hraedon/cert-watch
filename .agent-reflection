@@ -1,0 +1,11 @@
+# Agent Reflection — FR-01 Fix
+
+## Reasoning Log
+No reasoning.log found in worktree. Proceeding based on review feedback only.
+
+## Constraints Applied
+- [FR-01 Spec] Color coding: red <7 days, yellow <30 days, green >30 days. Exactly 30 days must be yellow (not green) since green requires strictly >30 days.
+- [Conventions] Shared formatters in core/formatters.py — only file relevant to this fix.
+
+## Review Feedback
+- Boundary at 30 days: `< 30` excludes day 30, but spec says green is >30, so day 30 is yellow. Fixed by changing to `<= 30`.

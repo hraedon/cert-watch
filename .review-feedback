@@ -1,0 +1,13 @@
+
+=== REVIEW FEEDBACK (must address before merge) ===
+
+A correctness review of your implementation found the following issues.
+Fix ONLY these specific problems. Do not add new features or change unrelated code.
+After each fix, commit it with: git add -A && git commit -m '<fr>: fix <issue>'
+Re-run pytest after all fixes to verify nothing regressed.
+
+
+
+MAJOR (must fix — incorrect behavior):
+  [src/cert_watch/core/formatters.py:120] Logic bug: Boundary condition at 30 days is incorrect. The code checks 'days_remaining < 30' for yellow, and 'else' returns green. This means exactly 30 days returns 'green', but per FR-01 spec (green >30 days), 30 days should be 'yellow'. The test test_dashboard_color_boundary_yellow_at_30_days expects yellow at 30 days but gets green.
+    → Fix: Change 'elif days_remaining < 30:' to 'elif days_remaining <= 30:' so that 30 days falls into the yellow category, matching the FR-01 specification.
