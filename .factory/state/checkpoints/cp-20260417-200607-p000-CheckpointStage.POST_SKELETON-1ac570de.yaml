@@ -1,0 +1,21 @@
+budget:
+  remaining: 0.0
+  spent_per_fr: {}
+  total_allocated: 0.0
+checkpoint_id: cp-20260417-200607-p000-CheckpointStage.POST_SKELETON-1ac570de
+checkpoint_type: post-skeleton
+created_at: '2026-04-17T20:06:07.735547+00:00'
+metadata:
+  fixes: 0
+  gate: skeleton_completeness
+phase: 0
+preserved:
+  interface_manifest_hash: null
+  merged_frs: []
+  tests_hash: fa17d59b64abd4b3
+  work_units: []
+resettable:
+  failed_frs: []
+  open_frs: []
+  worktrees: []
+scope: full

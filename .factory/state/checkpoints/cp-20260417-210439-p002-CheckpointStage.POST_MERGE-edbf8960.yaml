@@ -1,0 +1,21 @@
+budget:
+  remaining: 0.0
+  spent_per_fr: {}
+  total_allocated: 0.0
+checkpoint_id: cp-20260417-210439-p002-CheckpointStage.POST_MERGE-edbf8960
+checkpoint_type: post-merge
+created_at: '2026-04-17T21:04:39.701658+00:00'
+metadata:
+  merge_conflicts: 0
+  successful_merges: 1
+phase: 2
+preserved:
+  interface_manifest_hash: null
+  merged_frs: []
+  tests_hash: 4f106c7f6abe08c4
+  work_units: []
+resettable:
+  failed_frs: []
+  open_frs: []
+  worktrees: []
+scope: full

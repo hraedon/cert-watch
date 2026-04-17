@@ -1,0 +1,22 @@
+budget:
+  remaining: 0.0
+  spent_per_fr: {}
+  total_allocated: 0.0
+checkpoint_id: cp-20260417-211700-p003-CheckpointStage.POST_ATTEMPT-283d8f0b
+checkpoint_type: post-attempt
+created_at: '2026-04-17T21:17:00.873125+00:00'
+metadata:
+  completed_frs: []
+  execution_mode: concurrent
+  failed_frs: []
+phase: 3
+preserved:
+  interface_manifest_hash: null
+  merged_frs: []
+  tests_hash: 4f106c7f6abe08c4
+  work_units: []
+resettable:
+  failed_frs: []
+  open_frs: []
+  worktrees: []
+scope: full

@@ -1,0 +1,15 @@
+{
+  "gate_passed": true,
+  "results": [
+    "SecurityScanResult(worktree_name='fr-05', findings=[], files_scanned=44, files_with_findings=0, scan_duration_seconds=0.04517245292663574)"
+  ],
+  "summary": {
+    "total_findings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "blockers": 0
+  },
+  "message": "Adversarial security review passed"
+}

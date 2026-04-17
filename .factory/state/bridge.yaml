@@ -1,0 +1,133 @@
+current_phase: 3
+documentation_cost_usd: 0.0
+documentation_status: pending
+factory_state: started
+integration_review_phase_1: []
+phases:
+- agents:
+    fr-01:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.11086082000000001
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 208838
+      provider: opencode
+      status: done
+    fr-02:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.08782522000000001
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 208852
+      provider: opencode
+      status: done
+    fr-03:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.079667
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 208814
+      provider: opencode
+      status: done
+    stub-generator-phase-1:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.0
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 208276
+      provider: opencode
+      status: running
+    test-architect-phase-1:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.0
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 207071
+      provider: opencode
+      status: running
+  completed_at: '2026-04-17T20:43:43Z'
+  merge_results:
+    fr-01: merged
+    fr-02: merged
+    fr-03: merged
+  name: 'MVP FRs: FR-01, FR-02, FR-03'
+  number: 1
+  review_findings: []
+  review_run: true
+  smoke_test_status: missing_config
+  status: complete
+  stub_generator_status: done
+  test_architect_cost_usd: 0.018907280000000002
+  test_architect_status: done
+- agents:
+    fr-04:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.03892644
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 219264
+      provider: opencode
+      status: done
+    test-architect-phase-2:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.0
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 218133
+      provider: opencode
+      status: running
+  completed_at: '2026-04-17T21:04:40Z'
+  merge_results:
+    fr-04: merged
+  name: 'MVP FRs: FR-04'
+  number: 2
+  review_findings: []
+  review_run: true
+  smoke_test_status: missing_config
+  status: complete
+  test_architect_cost_usd: 0.0659946
+  test_architect_status: done
+- agents:
+    fr-05:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.08921639999999999
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 223264
+      provider: opencode
+      status: done
+    test-architect-phase-3:
+      attempts: 1
+      content_hash: null
+      cost_usd: 0.0
+      error: null
+      model: accounts/fireworks/routers/kimi-k2p5-turbo
+      pid: 222731
+      provider: opencode
+      status: running
+  completed_at: '2026-04-17T21:17:24Z'
+  merge_results:
+    fr-05: merged
+  name: 'MVP FRs: FR-05'
+  number: 3
+  review_findings: []
+  review_run: true
+  smoke_test_status: missing_config
+  status: complete
+  test_architect_cost_usd: 0.019402040000000002
+  test_architect_status: done
+project: /projects/software-factory/projects/cert-watch
+skeleton_cost_usd: 0.005562060000000001
+skeleton_status: done
+test_gate_fix_costs:
+- cost_usd: 0.80202
+  loop: 1
+total_cost_usd: 0.0
