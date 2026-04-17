@@ -65,7 +65,7 @@ class TestFlow1ScanToDashboard:
         intermediate = test_certificates["intermediate"]
 
         # ACT 1: Submit add-host form
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             # Mock returns leaf + chain
             mock_extract.return_value = (leaf, [intermediate])
 
@@ -173,7 +173,7 @@ class TestFlow1ScanToDashboard:
         # ACT: Rescan with different certificate (simulating renewal)
         renewed_cert = test_certificates["warning"]  # Different expiry
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (renewed_cert, [])
 
             rescan_response = client.post(
@@ -404,7 +404,7 @@ class TestFlow3MixedScenarios:
         # ACT 2: Scan host (3 days = red, critical)
         scanned_cert = test_certificates["critical"]
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (scanned_cert, [])
 
             scan_response = client.post(
@@ -483,7 +483,7 @@ class TestFlow3MixedScenarios:
         # ACT 1: Initial scan
         cert1 = test_certificates["warning"]  # 15 days
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (cert1, [])
 
             response1 = client.post(
@@ -501,7 +501,7 @@ class TestFlow3MixedScenarios:
         # ACT 2: Second scan (simulating update)
         cert2 = test_certificates["critical"]  # 3 days
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (cert2, [])
 
             response2 = client.post(
@@ -655,6 +655,7 @@ class TestFlow4AlertLifecycle:
         cert_repo: CertificateRepository,
         alert_repo: AlertRepository,
         test_certificates,
+        settings,
     ):
         """E2E Flow: Cert hits threshold → alert created → email sent → history updated.
 
@@ -694,10 +695,11 @@ class TestFlow4AlertLifecycle:
         # ACT 2: Evaluate alerts (this would be done by AlertService)
         # For now, manually create what the service would create
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
 
             # Mock SMTP to capture email sending
             with patch("smtplib.SMTP") as mock_smtp_class:
@@ -744,6 +746,7 @@ class TestFlow4AlertLifecycle:
         client: TestClient,
         cert_repo: CertificateRepository,
         alert_repo: AlertRepository,
+        settings,
     ):
         """E2E Flow: Multiple thresholds evaluated correctly.
 
@@ -807,10 +810,11 @@ class TestFlow4AlertLifecycle:
 
         # ACT: Evaluate alerts
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
             alert_ids = await service.evaluate_alerts()
 
             # Precondition check
@@ -840,6 +844,7 @@ class TestFlow4AlertLifecycle:
         cert_repo: CertificateRepository,
         alert_repo: AlertRepository,
         test_certificates,
+        settings,
     ):
         """E2E Flow: Running evaluation twice doesn't create duplicates.
 
@@ -868,10 +873,11 @@ class TestFlow4AlertLifecycle:
         created = await cert_repo.create(model)
 
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
 
             # ACT 1: First evaluation
             alert_ids_1 = await service.evaluate_alerts()
@@ -923,6 +929,7 @@ class TestFlow5DailyScanWithAlerts:
         alert_repo: AlertRepository,
         scan_repo,  # ScanHistoryRepository
         test_certificates,
+        settings,
     ):
         """E2E Flow: Daily scan runs and triggers alert evaluation.
 
@@ -960,16 +967,24 @@ class TestFlow5DailyScanWithAlerts:
         initial_scans = await scan_repo.get_recent(limit=1)
 
         try:
-            from cert_watch.services.base import ScanSchedulerService
-            from cert_watch.web.deps import get_scheduler_service
+            from cert_watch.services.scheduler_impl import ScanSchedulerImpl
 
-            service = get_scheduler_service()
+            service = ScanSchedulerImpl(
+                cert_repo=cert_repo,
+                alert_repo=alert_repo,
+                scan_repo=scan_repo,
+                settings=settings,
+            )
 
             # Mock SMTP to avoid actual email sending
-            with patch("smtplib.SMTP") as mock_smtp_class:
+            with (
+                patch("smtplib.SMTP") as mock_smtp_class,
+                patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract,
+            ):
                 mock_smtp = MagicMock()
                 mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_smtp)
                 mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+                mock_extract.return_value = (cert, [])
 
                 # ACT: Run daily scan
                 await service.run_daily_scan()
@@ -1161,6 +1176,7 @@ class TestFlow6ChainCertificateAlerts:
         client: TestClient,
         cert_repo: CertificateRepository,
         alert_repo: AlertRepository,
+        settings,
     ):
         """E2E Flow: Chain cert at 30 days alerts, leaf at 60 days doesn't.
 
@@ -1234,10 +1250,11 @@ class TestFlow6ChainCertificateAlerts:
         leaf_created = await cert_repo.create(leaf_model)
 
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
 
             # ACT: Evaluate alerts
             alert_ids = await service.evaluate_alerts()

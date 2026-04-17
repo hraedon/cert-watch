@@ -954,6 +954,7 @@ class TestManualScanTrigger:
         cert_repo: CertificateRepository,
         scan_repo: ScanHistoryRepository,
         test_certificates,
+        settings,
     ):
         """AC-05.21: Manual scan runs same cycle as scheduled scan.
 
@@ -975,10 +976,13 @@ class TestManualScanTrigger:
         await cert_repo.create(model)
 
         try:
-            from cert_watch.services.base import ScanSchedulerService
-            from cert_watch.web.deps import get_scheduler_service
+            from cert_watch.services.scheduler_impl import ScanSchedulerImpl
 
-            service = get_scheduler_service()
+            service = ScanSchedulerImpl(
+                cert_repo=cert_repo,
+                scan_repo=scan_repo,
+                settings=settings,
+            )
 
             with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
                 mock_extract.return_value = (cert, [])
@@ -1206,16 +1210,16 @@ class TestSchedulerTypeContracts:
 
     async def test_run_daily_scan_returns_none(
         self,
+        settings,
     ):
         """run_daily_scan returns None.
 
         BOUNDARY: Daily scan execution → None
         """
         try:
-            from cert_watch.services.base import ScanSchedulerService
-            from cert_watch.web.deps import get_scheduler_service
+            from cert_watch.services.scheduler_impl import ScanSchedulerImpl
 
-            service = get_scheduler_service()
+            service = ScanSchedulerImpl(settings=settings)
 
             with patch("cert_watch.core.formatters.extract_certificate_from_tls"):
                 result = await service.run_daily_scan()

@@ -172,6 +172,8 @@ class TestParserTypeContracts:
         Instead of:
             x509.Certificate(...)  # ✓ Proper object
         """
+        from cryptography.hazmat.primitives import serialization
+
         try:
             from cert_watch.core.formatters import parse_certificate_file
         except ImportError:
@@ -217,6 +219,8 @@ class TestParserTypeContracts:
 
         Common bug: returning ISO string instead of datetime object.
         """
+        from cryptography.hazmat.primitives import serialization
+
         try:
             from cert_watch.core.formatters import parse_certificate_file
         except ImportError:
@@ -258,17 +262,17 @@ class TestParserTypeContracts:
         cert_der = test_certificates["good"].public_bytes(serialization.Encoding.DER)
 
         with (
-            patch("ssl.create_connection") as mock_conn,
+            patch("socket.create_connection") as mock_conn,
             patch("ssl.SSLContext.wrap_socket") as mock_wrap,
         ):
             mock_conn.return_value = MagicMock()
             mock_ssl = MagicMock()
-            mock_wrap.return_value = mock_ssl
             mock_ssl.getpeercert.return_value = cert_der
             mock_ssl.getpeercertchain.return_value = [cert_der]
+            mock_wrap.return_value.__enter__.return_value = mock_ssl
 
             # Act: Extract
-            result = extract_certificate_from_tls("test.example.com", 443)
+            result = await extract_certificate_from_tls("test.example.com", 443)
 
         # Assert: Type contract
         assert isinstance(result, tuple), f"Expected tuple, got {type(result)}"
@@ -947,16 +951,20 @@ class TestAlertServiceTypeContracts:
 
     async def test_evaluate_alerts_returns_list_of_int(
         self,
+        cert_repo,
+        alert_repo,
+        settings,
     ):
         """evaluate_alerts returns list[int].
 
         BOUNDARY: Alert evaluation → list of alert IDs
         """
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
 
             # Act: Call evaluate_alerts
             result = await service.evaluate_alerts()
@@ -977,6 +985,9 @@ class TestAlertServiceTypeContracts:
 
     async def test_send_pending_alerts_returns_tuple_of_ints(
         self,
+        cert_repo,
+        alert_repo,
+        settings,
     ):
         """send_pending_alerts returns tuple[int, int].
 
@@ -985,10 +996,11 @@ class TestAlertServiceTypeContracts:
         from unittest.mock import MagicMock, patch
 
         try:
-            from cert_watch.services.base import AlertService
-            from cert_watch.web.deps import get_alert_service
+            from cert_watch.services.alert_service_impl import AlertServiceImpl
 
-            service = get_alert_service()
+            service = AlertServiceImpl(
+                cert_repo=cert_repo, alert_repo=alert_repo, settings=settings
+            )
 
             # Mock SMTP
             with patch("smtplib.SMTP") as mock_smtp:
