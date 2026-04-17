@@ -355,10 +355,16 @@ class TestTLSScanning:
 
         # Assert: Response contains certificate details
         content = response.text
+        # Extract subject CN properly from the certificate
+        from cryptography.x509 import NameOID
+
+        subject_cn = leaf.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        subject_value = str(subject_cn[0].value) if subject_cn else "good"
+
         assert any(
             field in content
             for field in [
-                leaf.subject.rdns[0].value if hasattr(leaf.subject, "rdns") else "good",
+                subject_value,
                 "Test CA",
                 "Issuer",
                 "Subject",
@@ -461,15 +467,20 @@ class TestTLSIntegration:
             pytest.skip("extract_certificate_from_tls not implemented")
 
         # Mock the actual network call but use real certificate processing
+        # Patch at the socket/ssl module level since function imports inside
         with (
-            patch("ssl.create_connection") as mock_conn,
-            patch("ssl.SSLContext.wrap_socket") as mock_wrap,
+            patch("socket.create_connection") as mock_conn,
+            patch("ssl.create_default_context") as mock_create_context,
         ):
             mock_sock = MagicMock()
-            mock_conn.return_value = mock_sock
+            mock_conn.return_value.__enter__ = MagicMock(return_value=mock_sock)
+            mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
             mock_ssl = MagicMock()
-            mock_wrap.return_value = mock_ssl
+            mock_context = MagicMock()
+            mock_create_context.return_value = mock_context
+            mock_context.wrap_socket.return_value.__enter__ = MagicMock(return_value=mock_ssl)
+            mock_context.wrap_socket.return_value.__exit__ = MagicMock(return_value=False)
 
             # Return DER-encoded certificate
             cert_der = test_certificates["good"].public_bytes(serialization.Encoding.DER)
