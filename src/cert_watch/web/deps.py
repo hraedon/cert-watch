@@ -64,7 +64,9 @@ def _clear_settings_cache():
     This is used primarily for testing to ensure settings can be
     reconfigured between test cases.
     """
-    Settings.get.cache_clear()
+    from ..core.config import _get_cached_settings
+
+    _get_cached_settings.cache_clear()
 
 
 async def get_db(request: Request) -> AsyncGenerator[SQLiteConnectionPool, None]:

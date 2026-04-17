@@ -19,7 +19,11 @@ from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
 
 from cert_watch.models.certificate import CertificateSource, CertificateType
-from cert_watch.repositories.base import CertificateRepository
+from cert_watch.repositories.base import (
+    AlertRepository,
+    CertificateRepository,
+    ScanHistoryRepository,
+)
 
 # =============================================================================
 # End-to-End Flow Test 1: Add Host → Scan → Chain → Dashboard

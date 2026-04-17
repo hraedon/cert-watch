@@ -45,10 +45,9 @@ from cert_watch.web.app_factory import create_app
 def settings():
     """Create test settings with temporary database."""
     # Clear singleton caches to ensure test isolation
-    from cert_watch.web.deps import _clear_connection_pool_cache, _clear_settings_cache
+    from cert_watch.core.config import _get_cached_settings
 
-    _clear_settings_cache()
-    _clear_connection_pool_cache()
+    _get_cached_settings.cache_clear()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
