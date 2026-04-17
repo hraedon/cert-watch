@@ -11,16 +11,15 @@ of typed model instances - tests that mock the database layer never see
 the type mismatch, but production crashes with AttributeError.
 """
 
-import pytest
 from datetime import datetime
-from typing import get_type_hints
-from unittest.mock import AsyncMock, MagicMock, patch
-from fastapi.testclient import TestClient
+from unittest.mock import MagicMock, patch
+
+import pytest
 from cryptography import x509
+from fastapi.testclient import TestClient
 
-from cert_watch.models.certificate import Certificate, CertificateType, CertificateSource
+from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
 from cert_watch.repositories.base import CertificateRepository
-
 
 # =============================================================================
 # Route → Repository Type Contracts
@@ -251,7 +250,8 @@ class TestParserTypeContracts:
         except ImportError:
             pytest.skip("extract_certificate_from_tls not implemented")
 
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
+
         from cryptography.hazmat.primitives import serialization
 
         # Mock SSL to return our test certificate
@@ -343,7 +343,7 @@ class TestRepositoryReturnTypeContracts:
         cert_repo: CertificateRepository,
         sample_certificate,
     ):
-        """create returns Certificate with id populated.
+        """Create returns Certificate with id populated.
 
         BOUNDARY: Insert → Certificate model with generated id
         """
@@ -388,9 +388,9 @@ class TestRepositoryReturnTypeContracts:
                 f"Must be naive UTC datetime!"
             )
 
-            assert retrieved.not_before.tzinfo is None, f"not_before must be naive datetime"
+            assert retrieved.not_before.tzinfo is None, "not_before must be naive datetime"
 
-            assert retrieved.created_at.tzinfo is None, f"created_at must be naive datetime"
+            assert retrieved.created_at.tzinfo is None, "created_at must be naive datetime"
 
 
 # =============================================================================

@@ -6,7 +6,6 @@ between scanned and uploaded certificates.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
@@ -118,7 +117,7 @@ def get_status_color(days_remaining: int) -> str:
     """
     if days_remaining < 7:
         return "red"
-    elif days_remaining < 30:
+    elif days_remaining <= 30:
         return "yellow"
     else:
         return "green"
