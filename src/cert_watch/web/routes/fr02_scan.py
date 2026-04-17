@@ -260,11 +260,11 @@ async def rescan_certificate(
         now = datetime.utcnow()
 
         # Update the existing certificate
+        # Note: We don't update fingerprint as it's a unique identifier
         existing_cert.subject = format_subject(leaf_cert)
         existing_cert.issuer = format_issuer(leaf_cert)
         existing_cert.not_before = leaf_cert.not_valid_before
         existing_cert.not_after = leaf_cert.not_valid_after
-        existing_cert.fingerprint = compute_thumbprint(leaf_cert)
         existing_cert.serial_number = str(leaf_cert.serial_number)
         existing_cert.pem_data = serialize_certificate(leaf_cert)
         existing_cert.updated_at = now
