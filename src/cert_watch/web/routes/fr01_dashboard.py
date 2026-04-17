@@ -24,7 +24,7 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(
     request: Request,
-    repo: CertificateRepository = Depends(get_repo()),
+    repo: CertificateRepository = Depends(get_repo),
 ):
     """Main dashboard displaying all certificates.
 

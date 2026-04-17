@@ -28,15 +28,30 @@ from ..repositories.sqlite import (
     SQLiteScanHistoryRepository,
 )
 
-# Service stubs for parallel development
+# Service implementations for parallel development
+# Each service is imported separately so they can be available independently
+
+# AlertService (FR-04)
 try:
-    from ..services.base import AlertService, ScanSchedulerService
+    from ..services.base import AlertService
     from ..services.alert_service_impl import AlertServiceImpl
+
+    ALERT_SERVICE_AVAILABLE = True
+except ImportError:
+    ALERT_SERVICE_AVAILABLE = False
+    AlertService = None  # type: ignore
+    AlertServiceImpl = None  # type: ignore
+
+# ScanSchedulerService (FR-05)
+try:
+    from ..services.base import ScanSchedulerService
     from ..services.scheduler_impl import ScanSchedulerImpl
 
-    SERVICES_AVAILABLE = True
+    SCHEDULER_SERVICE_AVAILABLE = True
 except ImportError:
-    SERVICES_AVAILABLE = False
+    SCHEDULER_SERVICE_AVAILABLE = False
+    ScanSchedulerService = None  # type: ignore
+    ScanSchedulerImpl = None  # type: ignore
 
 
 @lru_cache(maxsize=128)
@@ -126,7 +141,7 @@ def get_alert_service() -> "AlertService":
 
     Returns the concrete AlertService implementation for sending email alerts.
     """
-    if not SERVICES_AVAILABLE:
+    if not ALERT_SERVICE_AVAILABLE:
         raise NotImplementedError("AlertService not yet implemented")
     return AlertServiceImpl()
 
@@ -136,6 +151,6 @@ def get_scheduler_service() -> "ScanSchedulerService":
 
     Returns the concrete ScanSchedulerService for daily scans.
     """
-    if not SERVICES_AVAILABLE:
+    if not SCHEDULER_SERVICE_AVAILABLE:
         raise NotImplementedError("ScanSchedulerService not yet implemented")
     return ScanSchedulerImpl()
