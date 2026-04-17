@@ -22,7 +22,6 @@ from cert_watch.models.certificate import CertificateSource, CertificateType
 from cert_watch.repositories.base import (
     AlertRepository,
     CertificateRepository,
-    ScanHistoryRepository,
 )
 
 # =============================================================================
@@ -672,10 +671,9 @@ class TestFlow4AlertLifecycle:
         - Alert status updated to SENT with timestamp
         - Alert appears in certificate's alert history
         """
-        from datetime import datetime, timedelta
         from unittest.mock import MagicMock, patch
 
-        from cert_watch.models.alert import AlertStatus, AlertType
+        from cert_watch.models.alert import AlertStatus
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model
 
@@ -855,7 +853,6 @@ class TestFlow4AlertLifecycle:
         - Only one alert exists for the 7-day threshold
         - Second evaluation is idempotent
         """
-        from cert_watch.models.alert import AlertStatus
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model
 
@@ -942,7 +939,6 @@ class TestFlow5DailyScanWithAlerts:
         - Email sent
         - Scan status updated to SUCCESS
         """
-        from datetime import datetime
         from unittest.mock import MagicMock, patch
 
         from cert_watch.models.certificate import CertificateSource, CertificateType
@@ -1018,7 +1014,6 @@ class TestFlow5DailyScanWithAlerts:
         - New alert created (wasn't there before)
         - Alert has correct days_remaining
         """
-        from datetime import datetime, timedelta
         from unittest.mock import patch
 
         from cert_watch.models.certificate import CertificateSource, CertificateType
