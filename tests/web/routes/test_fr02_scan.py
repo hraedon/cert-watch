@@ -380,6 +380,7 @@ class TestManualScan:
         client: TestClient,
         cert_repo: CertificateRepository,
         sample_certificate,
+        test_certificates,
     ):
         """Manual scan endpoint is accessible.
 
@@ -390,8 +391,10 @@ class TestManualScan:
         # Arrange: Create certificate entry
         cert = await cert_repo.create(sample_certificate)
 
-        # Act: Trigger manual scan
-        response = client.post(f"/scan/{cert.id}/rescan")
+        # Act: Trigger manual scan with mocked TLS
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
+            mock_extract.return_value = (test_certificates["good"], [])
+            response = client.post(f"/scan/{cert.id}/rescan")
 
         # Assert: Endpoint exists and processes request
         assert response.status_code in [200, 201, 202, 302, 404], (
