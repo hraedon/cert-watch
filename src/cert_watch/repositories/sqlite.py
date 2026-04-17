@@ -137,38 +137,182 @@ class SQLiteCertificateRepository(CertificateRepository):
     def __init__(self, pool: SQLiteConnectionPool):
         self._pool = pool
 
+    def _row_to_certificate(self, row: sqlite3.Row) -> Certificate:
+        """Convert a database row to a Certificate model."""
+        return Certificate(
+            id=row["id"],
+            certificate_type=CertificateType[row["certificate_type"].upper()],
+            source=CertificateSource[row["source"].upper()],
+            hostname=row["hostname"],
+            port=row["port"],
+            label=row["label"],
+            subject=row["subject"],
+            issuer=row["issuer"],
+            not_before=row["not_before"],
+            not_after=row["not_after"],
+            fingerprint=row["fingerprint"],
+            serial_number=row["serial_number"],
+            chain_fingerprint=row["chain_fingerprint"],
+            chain_position=row["chain_position"],
+            pem_data=row["pem_data"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            last_scanned_at=row["last_scanned_at"],
+            source_hostname=row["source_hostname"],
+            source_port=row["source_port"],
+        )
+
     async def get_by_id(self, cert_id: int) -> Optional[Certificate]:
         """Get certificate by ID."""
-        # Implementing agent will fill in
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute("SELECT * FROM certificates WHERE id = ?", (cert_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_certificate(row)
 
     async def get_by_fingerprint(self, fingerprint: str) -> Optional[Certificate]:
         """Get certificate by fingerprint."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM certificates WHERE fingerprint = ?", (fingerprint,)
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_certificate(row)
 
     async def get_all(self, limit: int = 1000) -> list[Certificate]:
-        """Get all certificates, sorted by urgency."""
-        raise NotImplementedError
+        """Get all certificates, sorted by urgency (days remaining ascending)."""
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                """SELECT * FROM certificates 
+                   ORDER BY not_after ASC 
+                   LIMIT ?""",
+                (limit,),
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_certificate(row) for row in rows]
 
     async def get_by_hostname(self, hostname: str, port: Optional[int] = None) -> list[Certificate]:
         """Get certificates by hostname."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            if port is not None:
+                cursor = conn.execute(
+                    "SELECT * FROM certificates WHERE hostname = ? AND port = ? ORDER BY not_after ASC",
+                    (hostname, port),
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM certificates WHERE hostname = ? ORDER BY not_after ASC",
+                    (hostname,),
+                )
+            rows = cursor.fetchall()
+            return [self._row_to_certificate(row) for row in rows]
 
     async def create(self, cert: Certificate) -> Certificate:
         """Create new certificate entry."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO certificates (
+                    certificate_type, source, hostname, port, label,
+                    subject, issuer, not_before, not_after, fingerprint,
+                    serial_number, chain_fingerprint, chain_position, pem_data,
+                    created_at, updated_at, last_scanned_at,
+                    source_hostname, source_port
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cert.certificate_type.name.lower(),
+                    cert.source.name.lower(),
+                    cert.hostname,
+                    cert.port,
+                    cert.label,
+                    cert.subject,
+                    cert.issuer,
+                    cert.not_before,
+                    cert.not_after,
+                    cert.fingerprint,
+                    cert.serial_number,
+                    cert.chain_fingerprint,
+                    cert.chain_position,
+                    cert.pem_data,
+                    cert.created_at,
+                    cert.updated_at,
+                    cert.last_scanned_at,
+                    cert.source_hostname,
+                    cert.source_port,
+                ),
+            )
+            cert.id = cursor.lastrowid
+            return cert
 
     async def update(self, cert: Certificate) -> Certificate:
         """Update existing certificate."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            conn.execute(
+                """UPDATE certificates SET
+                    certificate_type = ?,
+                    source = ?,
+                    hostname = ?,
+                    port = ?,
+                    label = ?,
+                    subject = ?,
+                    issuer = ?,
+                    not_before = ?,
+                    not_after = ?,
+                    fingerprint = ?,
+                    serial_number = ?,
+                    chain_fingerprint = ?,
+                    chain_position = ?,
+                    pem_data = ?,
+                    updated_at = ?,
+                    last_scanned_at = ?,
+                    source_hostname = ?,
+                    source_port = ?
+                WHERE id = ?
+                """,
+                (
+                    cert.certificate_type.name.lower(),
+                    cert.source.name.lower(),
+                    cert.hostname,
+                    cert.port,
+                    cert.label,
+                    cert.subject,
+                    cert.issuer,
+                    cert.not_before,
+                    cert.not_after,
+                    cert.fingerprint,
+                    cert.serial_number,
+                    cert.chain_fingerprint,
+                    cert.chain_position,
+                    cert.pem_data,
+                    datetime.utcnow(),
+                    cert.last_scanned_at,
+                    cert.source_hostname,
+                    cert.source_port,
+                    cert.id,
+                ),
+            )
+            return cert
 
     async def delete(self, cert_id: int) -> bool:
         """Delete certificate by ID."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
+            return cursor.rowcount > 0
 
     async def get_chain_for_leaf(self, leaf_fingerprint: str) -> list[Certificate]:
         """Get chain certificates for a given leaf."""
-        raise NotImplementedError
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                """SELECT * FROM certificates 
+                   WHERE chain_fingerprint = ? 
+                   ORDER BY chain_position ASC""",
+                (leaf_fingerprint,),
+            )
+            rows = cursor.fetchall()
+            return [self._row_to_certificate(row) for row in rows]
 
 
 class SQLiteAlertRepository(AlertRepository):
