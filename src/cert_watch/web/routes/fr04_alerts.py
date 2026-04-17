@@ -27,22 +27,21 @@ async def alerts_page(
 
     Shows all alerts with their status, linked to certificates.
     """
-    # Get recent alerts
-    recent_alerts = await alert_repo.get_pending()
+    # Get all certificates first
+    certificates = await cert_repo.get_all(limit=1000)
 
-    # Also get sent alerts for history
-    # Note: In a real implementation, we'd want a method to get all alerts
-    # For now, we'll show pending and query for certificate info
+    # Get alerts for all certificates
+    all_alerts = []
+    for cert in certificates:
+        cert_alerts = await alert_repo.get_for_certificate(cert.id, limit=10)
+        for alert in cert_alerts:
+            all_alerts.append((alert, cert))
 
-    alerts_with_certs = []
-    for alert in recent_alerts[:50]:  # Limit to 50 recent
-        cert = await cert_repo.get_by_id(alert.certificate_id)
-        alerts_with_certs.append(
-            {
-                "alert": alert,
-                "certificate": cert,
-            }
-        )
+    # Sort by created_at descending (most recent first)
+    all_alerts.sort(key=lambda x: x[0].created_at, reverse=True)
+
+    # Limit to 50 most recent
+    alerts_with_certs = all_alerts[:50]
 
     # Simple HTML response
     html_content = f"""<!DOCTYPE html>
@@ -67,7 +66,7 @@ async def alerts_page(
         <a href="/alerts/config">Configuration</a>
     </div>
     <h1>Certificate Alerts</h1>
-    <h2>Pending Alerts ({len(alerts_with_certs)})</h2>
+    <h2>Alert History ({len(alerts_with_certs)} recent)</h2>
     <table>
         <tr>
             <th>Certificate</th>
@@ -79,9 +78,7 @@ async def alerts_page(
         </tr>
 """
 
-    for item in alerts_with_certs:
-        alert = item["alert"]
-        cert = item["certificate"]
+    for alert, cert in alerts_with_certs:
         cert_name = cert.display_name if cert else f"Cert #{alert.certificate_id}"
 
         status_class = f"status-{alert.status.name.lower()}"
