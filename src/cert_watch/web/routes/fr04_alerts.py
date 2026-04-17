@@ -9,9 +9,7 @@ Provides endpoints for:
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ...models.alert import AlertStatus
 from ...repositories.base import AlertRepository, CertificateRepository
-from ...services.base import AlertService
 from ..deps import get_alert_repo, get_alert_service, get_repo
 
 router = APIRouter()

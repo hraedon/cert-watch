@@ -4,16 +4,15 @@ Provides business logic for email alerts at configured thresholds.
 """
 
 import smtplib
-from datetime import datetime
 from email.mime.text import MIMEText
 
 from ..core.config import Settings
-from ..core.exceptions import SMTPConfigurationError, AlertSendError
+from ..core.exceptions import AlertSendError, SMTPConfigurationError
 from ..core.formatters import format_datetime
 from ..models.alert import Alert, AlertStatus, AlertType
 from ..models.certificate import CertificateType
 from ..repositories.base import AlertRepository, CertificateRepository
-from ..repositories.sqlite import SQLiteAlertRepository, SQLiteConnectionPool
+from ..repositories.sqlite import SQLiteConnectionPool
 from .base import AlertService
 
 

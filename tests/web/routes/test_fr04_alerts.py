@@ -15,7 +15,6 @@ from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from cryptography.hazmat.primitives import serialization
 from fastapi.testclient import TestClient
 
 from cert_watch.models.alert import Alert, AlertStatus, AlertType
@@ -61,8 +60,6 @@ class TestSMTPConfiguration:
         When: Attempting to send alert
         Then: SMTPConfigurationError is raised
         """
-        from cert_watch.core.exceptions import SMTPConfigurationError
-
         # Arrange: Create certificate nearing expiry
         from tests.conftest import cert_to_model
 
@@ -191,9 +188,9 @@ class TestAlertThresholds:
         now = datetime.utcnow()
         # Create cert expiring in exactly 14 days
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
 
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
         subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "14days.example.com")])
@@ -247,11 +244,12 @@ class TestAlertThresholds:
         When: Alert evaluation runs
         Then: Alert is created for 7-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -303,11 +301,12 @@ class TestAlertThresholds:
         When: Alert evaluation runs
         Then: Alert is created for 3-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -359,11 +358,12 @@ class TestAlertThresholds:
         When: Alert evaluation runs
         Then: Alert is created for 1-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -415,11 +415,12 @@ class TestAlertThresholds:
         When: Alert evaluation runs
         Then: Alert is created for 30-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -582,12 +583,13 @@ class TestEmailSending:
         When: Email is composed
         Then: Email contains hostname, expiry date, days remaining
         """
-        from tests.conftest import cert_to_model
-        from cert_watch.core.formatters import format_datetime
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from cert_watch.core.formatters import format_datetime
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -734,11 +736,12 @@ class TestAlertHistory:
         When: Email successfully sent
         Then: Alert status updated to SENT with timestamp
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -797,11 +800,12 @@ class TestAlertHistory:
         When: Email sending fails
         Then: Alert status updated to FAILED with error message
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -863,11 +867,12 @@ class TestAlertHistory:
         When: Getting pending alerts
         Then: Only pending alerts returned
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -941,11 +946,12 @@ class TestAlertIntegration:
 
         This catches type mismatches that mocked tests miss.
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -1003,11 +1009,12 @@ class TestAlertIntegration:
         alert_repo: AlertRepository,
     ):
         """get_for_certificate returns list[Alert]."""
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -1075,11 +1082,12 @@ class TestAlertServiceIntegration:
         When: evaluate_alerts() is called
         Then: Alerts created for certificates hitting thresholds
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -1197,11 +1205,12 @@ class TestAlertWebRoutes:
         When: User accesses alerts page
         Then: Alert history is displayed
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -1376,11 +1385,12 @@ class TestChainCertificateAlerts:
         When: Alert evaluation runs
         Then: Alert created with 30-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 
@@ -1433,11 +1443,12 @@ class TestChainCertificateAlerts:
         When: Alert evaluation runs
         Then: Alert created with 30-day threshold
         """
-        from tests.conftest import cert_to_model
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from tests.conftest import cert_to_model
 
         now = datetime.utcnow()
 

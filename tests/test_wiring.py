@@ -535,8 +535,8 @@ class TestAlertServiceWiring:
         import ast
         from pathlib import Path
 
-        import cert_watch.web.routes as routes_pkg
         import cert_watch.services as services_pkg
+        import cert_watch.web.routes as routes_pkg
 
         routes_dir = Path(routes_pkg.__file__).parent
         services_dir = Path(services_pkg.__file__).parent
@@ -707,11 +707,10 @@ class TestSchedulerServiceWiring:
         except ImportError:
             pytest.skip("ScanSchedulerService ABC not found")
 
-        import ast
         from pathlib import Path
 
-        import cert_watch.web as web_pkg
         import cert_watch.services as services_pkg
+        import cert_watch.web as web_pkg
 
         web_dir = Path(web_pkg.__file__).parent
         services_dir = Path(services_pkg.__file__).parent

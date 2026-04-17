@@ -33,8 +33,8 @@ from ..repositories.sqlite import (
 
 # AlertService (FR-04)
 try:
-    from ..services.base import AlertService
     from ..services.alert_service_impl import AlertServiceImpl
+    from ..services.base import AlertService
 
     ALERT_SERVICE_AVAILABLE = True
 except ImportError:

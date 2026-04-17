@@ -669,13 +669,15 @@ class TestAlertRepositoryTypeContracts:
 
         BOUNDARY: Database row → Alert model
         """
-        from cert_watch.models.certificate import CertificateSource, CertificateType
-        from tests.conftest import cert_to_model
+        from datetime import datetime, timedelta
+
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from datetime import datetime, timedelta
+        from cryptography.x509.oid import NameOID
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
 
         # Create certificate for alert
         now = datetime.utcnow()
@@ -749,13 +751,15 @@ class TestAlertRepositoryTypeContracts:
 
         BOUNDARY: Database query → List[Alert model]
         """
-        from cert_watch.models.certificate import CertificateSource, CertificateType
-        from tests.conftest import cert_to_model
+        from datetime import datetime, timedelta
+
         from cryptography import x509
-        from cryptography.x509.oid import NameOID
         from cryptography.hazmat.primitives import hashes
         from cryptography.hazmat.primitives.asymmetric import rsa
-        from datetime import datetime, timedelta
+        from cryptography.x509.oid import NameOID
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
 
         # Create certificate
         now = datetime.utcnow()
@@ -802,18 +806,20 @@ class TestAlertRepositoryTypeContracts:
         alert_repo,
         cert_repo,
     ):
-        """create returns Alert with id populated.
+        """Create returns Alert with id populated.
 
         BOUNDARY: Insert → Alert model with generated id
         """
+        from datetime import datetime, timedelta
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
         from cert_watch.models.alert import Alert, AlertStatus, AlertType
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        from datetime import datetime, timedelta
 
         # Create certificate for alert
         now = datetime.utcnow()
@@ -875,14 +881,16 @@ class TestAlertRepositoryTypeContracts:
 
         BOUNDARY: SQLite timestamp → Python datetime
         """
+        from datetime import datetime, timedelta
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
         from cert_watch.models.alert import Alert, AlertStatus, AlertType
         from cert_watch.models.certificate import CertificateSource, CertificateType
         from tests.conftest import cert_to_model
-        from cryptography import x509
-        from cryptography.x509.oid import NameOID
-        from cryptography.hazmat.primitives import hashes
-        from cryptography.hazmat.primitives.asymmetric import rsa
-        from datetime import datetime, timedelta
 
         # Create certificate
         now = datetime.utcnow()
