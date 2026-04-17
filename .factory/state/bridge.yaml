@@ -130,4 +130,6 @@ skeleton_status: done
 test_gate_fix_costs:
 - cost_usd: 0.80202
   loop: 1
+- cost_usd: 2.55516
+  loop: 2
 total_cost_usd: 0.0
