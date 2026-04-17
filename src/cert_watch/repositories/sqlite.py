@@ -46,26 +46,26 @@ class SQLiteConnectionPool:
             conn.executescript(_SCHEMA_SQL)
 
     @contextmanager
-def get_connection(self):
-    """Get a database connection as a context manager.
+    def get_connection(self):
+        """Get a database connection as a context manager.
 
-    Yields:
-        sqlite3.Connection: Database connection
-    """
-    conn = sqlite3.connect(
-        self.db_path,
-        detect_types=sqlite3.PARSE_DECLTYPES,
-        check_same_thread=False,  # FastAPI handles thread safety
-    )
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
+        Yields:
+            sqlite3.Connection: Database connection
+        """
+        conn = sqlite3.connect(
+            self.db_path,
+            detect_types=sqlite3.PARSE_DECLTYPES,
+            check_same_thread=False,  # FastAPI handles thread safety
+        )
+        conn.row_factory = sqlite3.Row
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
 
 # Database schema - agents should NOT modify this file

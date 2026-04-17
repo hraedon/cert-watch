@@ -8,7 +8,7 @@ from typing import Optional
 
 from ..models.certificate import Certificate
 from ..models.alert import Alert
-from ..models.scan_history import ScanHistory
+from ..models.scan_history import ScanHistory, ScanStatus
 
 
 class CertificateRepository(ABC):
