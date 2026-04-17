@@ -104,8 +104,8 @@ class AlertServiceImpl(AlertService):
                     created_alert_ids.append(created.id)
                 continue
 
-            # Check each threshold
-            for threshold in thresholds:
+            # Check each threshold (ascending order so smallest applicable threshold matches first)
+            for threshold in sorted(thresholds):
                 if days_remaining <= threshold:
                     # Check if alert already sent for this threshold
                     existing_alerts = await alert_repo.get_for_certificate(cert.id)

@@ -7,10 +7,6 @@ After each fix, commit it with: git add -A && git commit -m '<fr>: fix <issue>'
 Re-run pytest after all fixes to verify nothing regressed.
 
 
-
-MAJOR (must fix — incorrect behavior):
-  [src/cert_watch/core/formatters.py:120] Logic bug: Boundary condition at 30 days is incorrect. The code checks 'days_remaining < 30' for yellow, and 'else' returns green. This means exactly 30 days returns 'green', but per FR-01 spec (green >30 days), 30 days should be 'yellow'. The test test_dashboard_color_boundary_yellow_at_30_days expects yellow at 30 days but gets green.
-    → Fix: Change 'elif days_remaining < 30:' to 'elif days_remaining <= 30:' so that 30 days falls into the yellow category, matching the FR-01 specification.
 CRITICAL (must fix — silent failure or data loss):
-  [src/cert_watch/web/routes/fr03_upload.py:56] certificate.filename can be None (per FastAPI UploadFile type), causing Path() to raise TypeError at runtime. This is a type contract violation that will crash on file uploads without a filename.
-    → Fix: Add None check before creating Path: 'if not certificate.filename: raise HTTPException(400, "Filename is required")' or handle gracefully with a default.
+  [src/cert_watch/services/alert_service_impl.py:108] Logic bug in threshold evaluation: thresholds are checked in ascending order [14, 7, 3, 1] with 'days_remaining <= threshold'. A certificate with 2 days remaining triggers the 14-day threshold (2 <= 14) instead of the 3-day threshold. The loop breaks after first match, creating wrong-threshold alerts.
+    → Fix: Reverse the threshold order to check [1, 3, 7, 14, 30] or use 'days_remaining >= threshold' logic to find the appropriate threshold. For 2 days remaining, should trigger 3-day threshold, not 14-day.

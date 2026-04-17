@@ -1,3 +1,17 @@
+# Agent Reflection — FR-04 Fix (Threshold Evaluation Bug)
+
+## Reasoning Log
+No reasoning.log found in worktree. Proceeding based on review feedback only.
+
+## Constraints Applied
+- [FR-04 Spec] Alert thresholds: leaf [14,7,3,1], chain [30,14,7]. A cert with 2 days remaining must trigger the 3-day threshold, not 14-day.
+- [Conventions] Only modify alert_service_impl.py — do not touch shared files.
+
+## Review Feedback
+- Threshold evaluation iterated [14,7,3,1] ascending with `days_remaining <= threshold` + break, causing 2-day cert to match 14-day threshold. Fixed by sorting thresholds ascending ([1,3,7,14]) so smallest applicable threshold matches first.
+
+---
+
 # Agent Reflection — FR-01 Fix
 
 ## Reasoning Log
