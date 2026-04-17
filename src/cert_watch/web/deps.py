@@ -13,17 +13,16 @@ Usage in route files:
         pass
 """
 
-from functools import lru_cache
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
-from fastapi import Depends, Request
+from fastapi import Request
 
 from ..core.config import Settings
-from ..repositories.base import CertificateRepository, AlertRepository, ScanHistoryRepository
+from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
 from ..repositories.sqlite import (
-    SQLiteConnectionPool,
-    SQLiteCertificateRepository,
     SQLiteAlertRepository,
+    SQLiteCertificateRepository,
+    SQLiteConnectionPool,
     SQLiteScanHistoryRepository,
 )
 

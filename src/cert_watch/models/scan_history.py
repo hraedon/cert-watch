@@ -3,7 +3,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, auto
-from typing import Optional
 
 
 class ScanStatus(Enum):
@@ -18,11 +17,11 @@ class ScanStatus(Enum):
 class ScanHistory:
     """Scan history model representing a scan cycle."""
 
-    id: Optional[int] = None
+    id: int | None = None
 
     # Scan details
     started_at: datetime = field(default_factory=datetime.utcnow)
-    completed_at: Optional[datetime] = None
+    completed_at: datetime | None = None
     status: ScanStatus = ScanStatus.SUCCESS
 
     # Results summary
@@ -32,4 +31,4 @@ class ScanHistory:
     updated_certificates: int = 0
 
     # Error tracking
-    error_message: Optional[str] = None
+    error_message: str | None = None

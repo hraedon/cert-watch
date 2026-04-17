@@ -4,7 +4,6 @@ Services contain business logic and orchestrate repositories.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from ..models.certificate import Certificate
 
@@ -24,7 +23,7 @@ class CertificateService(ABC):
         pass
 
     @abstractmethod
-    async def upload_certificate(self, data: bytes, label: Optional[str] = None) -> Certificate:
+    async def upload_certificate(self, data: bytes, label: str | None = None) -> Certificate:
         """Upload and parse certificate file.
 
         Args:
@@ -96,7 +95,7 @@ class CertificateServiceStub(CertificateService):
         """Stub - raises NotImplementedError."""
         raise NotImplementedError("CertificateServiceStub.scan_host is not yet implemented")
 
-    async def upload_certificate(self, data: bytes, label: Optional[str] = None) -> Certificate:
+    async def upload_certificate(self, data: bytes, label: str | None = None) -> Certificate:
         """Stub - raises NotImplementedError."""
         raise NotImplementedError(
             "CertificateServiceStub.upload_certificate is not yet implemented"

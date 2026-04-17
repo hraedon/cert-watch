@@ -7,18 +7,17 @@ Acceptance Criteria:
 - Validates file format and content
 """
 
-import pytest
 from datetime import datetime
-from fastapi.testclient import TestClient
-from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
+from fastapi.testclient import TestClient
 
+from cert_watch.core.exceptions import CertificateParseError
 from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
 from cert_watch.repositories.base import CertificateRepository
-from cert_watch.core.exceptions import CertificateParseError
-
 
 # =============================================================================
 # FR-03 AC-03: Certificate Upload Tests
@@ -546,8 +545,6 @@ class TestUploadTypeContracts:
         This test verifies the type contract between the route handler
         and repository layer.
         """
-        from unittest.mock import AsyncMock, patch
-
         cert = test_certificates["good"]
         pem_data = cert.public_bytes(serialization.Encoding.PEM)
 

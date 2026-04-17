@@ -4,10 +4,9 @@ All database access MUST go through these repository interfaces.
 """
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
-from ..models.certificate import Certificate
 from ..models.alert import Alert
+from ..models.certificate import Certificate
 from ..models.scan_history import ScanHistory, ScanStatus
 
 
@@ -15,12 +14,12 @@ class CertificateRepository(ABC):
     """Repository for certificate CRUD operations."""
 
     @abstractmethod
-    async def get_by_id(self, cert_id: int) -> Optional[Certificate]:
+    async def get_by_id(self, cert_id: int) -> Certificate | None:
         """Get certificate by ID."""
         pass
 
     @abstractmethod
-    async def get_by_fingerprint(self, fingerprint: str) -> Optional[Certificate]:
+    async def get_by_fingerprint(self, fingerprint: str) -> Certificate | None:
         """Get certificate by fingerprint."""
         pass
 
@@ -30,7 +29,7 @@ class CertificateRepository(ABC):
         pass
 
     @abstractmethod
-    async def get_by_hostname(self, hostname: str, port: Optional[int] = None) -> list[Certificate]:
+    async def get_by_hostname(self, hostname: str, port: int | None = None) -> list[Certificate]:
         """Get certificates by hostname."""
         pass
 
@@ -59,7 +58,7 @@ class AlertRepository(ABC):
     """Repository for alert CRUD operations."""
 
     @abstractmethod
-    async def get_by_id(self, alert_id: int) -> Optional[Alert]:
+    async def get_by_id(self, alert_id: int) -> Alert | None:
         """Get alert by ID."""
         pass
 
@@ -93,7 +92,7 @@ class ScanHistoryRepository(ABC):
     """Repository for scan history operations."""
 
     @abstractmethod
-    async def get_by_id(self, scan_id: int) -> Optional[ScanHistory]:
+    async def get_by_id(self, scan_id: int) -> ScanHistory | None:
         """Get scan history by ID."""
         pass
 

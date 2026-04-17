@@ -6,7 +6,6 @@ between scanned and uploaded certificates.
 """
 
 from datetime import datetime
-from typing import Optional
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization

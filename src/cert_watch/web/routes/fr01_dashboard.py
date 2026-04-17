@@ -3,14 +3,15 @@
 Dashboard display for monitored certificates with color-coded status.
 """
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from pathlib import Path
 
-from ..deps import get_repo
+from ...core.formatters import format_datetime
 from ...repositories.base import CertificateRepository
-from ...core.formatters import format_datetime, get_status_color
+from ..deps import get_repo
 
 # Setup templates
 BASE_DIR = Path(__file__).parent.parent
