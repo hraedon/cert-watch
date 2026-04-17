@@ -19,6 +19,9 @@ from fastapi import Request
 
 from ..core.config import Settings
 from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
+from functools import lru_cache
+
+from ..core.config import Settings
 from ..repositories.sqlite import (
     SQLiteAlertRepository,
     SQLiteCertificateRepository,
@@ -26,11 +29,41 @@ from ..repositories.sqlite import (
     SQLiteScanHistoryRepository,
 )
 
+_current_db_path: str | None = None
 
 def _get_connection_pool(settings: Settings | None = None) -> SQLiteConnectionPool:
     """Get the connection pool for the given settings."""
     settings = Settings.get(settings)
     return SQLiteConnectionPool(settings.database_path)
+
+@lru_cache(maxsize=128)
+def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
+    """Get the connection pool for a specific database path.
+
+    The pool is cached per database path to support both production
+    and testing scenarios where different databases are used.
+    """
+    from pathlib import Path
+
+    return SQLiteConnectionPool(Path(db_path))
+
+
+def _clear_connection_pool_cache():
+    """Clear the connection pool cache.
+
+    This is used primarily for testing to ensure database isolation
+    between test cases.
+    """
+    _get_connection_pool.cache_clear()
+
+
+def _clear_settings_cache():
+    """Clear the Settings singleton cache.
+
+    This is used primarily for testing to ensure settings can be
+    reconfigured between test cases.
+    """
+    Settings.get.cache_clear()
 
 
 async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
@@ -38,7 +71,8 @@ async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
 
     Yields the connection pool for use in route handlers.
     """
-    pool = _get_connection_pool()
+    settings = Settings.get()
+    pool = _get_connection_pool(str(settings.database_path))
     try:
         yield pool
     finally:
@@ -60,6 +94,18 @@ def get_repo():
         return SQLiteCertificateRepository(pool)
 
     return _get_repo
+    global _current_db_path
+    settings = Settings.get()
+    db_path = str(settings.database_path)
+
+    # Check if database path has changed (for testing scenarios)
+    if _current_db_path is not None and _current_db_path != db_path:
+        # Clear caches to ensure we use the new database
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
+    return SQLiteCertificateRepository(pool)
 
 
 def get_alert_repo():
@@ -71,6 +117,16 @@ def get_alert_repo():
         return SQLiteAlertRepository(pool)
 
     return _get_alert_repo
+    global _current_db_path
+    settings = Settings.get()
+    db_path = str(settings.database_path)
+
+    if _current_db_path is not None and _current_db_path != db_path:
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
+    return SQLiteAlertRepository(pool)
 
 
 def get_scan_repo():
@@ -82,3 +138,13 @@ def get_scan_repo():
         return SQLiteScanHistoryRepository(pool)
 
     return _get_scan_repo
+    global _current_db_path
+    settings = Settings.get()
+    db_path = str(settings.database_path)
+
+    if _current_db_path is not None and _current_db_path != db_path:
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
+    return SQLiteScanHistoryRepository(pool)

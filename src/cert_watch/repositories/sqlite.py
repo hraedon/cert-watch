@@ -137,6 +137,7 @@ class SQLiteCertificateRepository(CertificateRepository):
         self._pool = pool
 
     def _row_to_certificate(self, row: sqlite3.Row) -> Certificate:
+    def _row_to_cert(self, row: sqlite3.Row) -> Certificate:
         """Convert a database row to a Certificate model."""
         return Certificate(
             id=row["id"],
@@ -169,6 +170,9 @@ class SQLiteCertificateRepository(CertificateRepository):
             if row is None:
                 return None
             return self._row_to_certificate(row)
+            if row:
+                return self._row_to_cert(row)
+            return None
 
     async def get_by_fingerprint(self, fingerprint: str) -> Certificate | None:
         """Get certificate by fingerprint."""
@@ -192,6 +196,17 @@ class SQLiteCertificateRepository(CertificateRepository):
             )
             rows = cursor.fetchall()
             return [self._row_to_certificate(row) for row in rows]
+            if row:
+                return self._row_to_cert(row)
+            return None
+
+    async def get_all(self, limit: int = 1000) -> list[Certificate]:
+        """Get all certificates, sorted by urgency."""
+        with self._pool.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM certificates ORDER BY not_after ASC LIMIT ?", (limit,)
+            )
+            return [self._row_to_cert(row) for row in cursor.fetchall()]
 
     async def get_by_hostname(self, hostname: str, port: int | None = None) -> list[Certificate]:
         """Get certificates by hostname."""
@@ -208,6 +223,11 @@ class SQLiteCertificateRepository(CertificateRepository):
                 )
             rows = cursor.fetchall()
             return [self._row_to_certificate(row) for row in rows]
+                    "SELECT * FROM certificates WHERE hostname = ? AND port = ?", (hostname, port)
+                )
+            else:
+                cursor = conn.execute("SELECT * FROM certificates WHERE hostname = ?", (hostname,))
+            return [self._row_to_cert(row) for row in cursor.fetchall()]
 
     async def create(self, cert: Certificate) -> Certificate:
         """Create new certificate entry."""
@@ -218,6 +238,11 @@ class SQLiteCertificateRepository(CertificateRepository):
                     subject, issuer, not_before, not_after, fingerprint,
                     serial_number, chain_fingerprint, chain_position, pem_data,
                     created_at, updated_at, last_scanned_at,
+                """
+                INSERT INTO certificates (
+                    certificate_type, source, hostname, port, label, subject, issuer,
+                    not_before, not_after, fingerprint, serial_number, chain_fingerprint,
+                    chain_position, pem_data, created_at, updated_at, last_scanned_at,
                     source_hostname, source_port
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -269,6 +294,15 @@ class SQLiteCertificateRepository(CertificateRepository):
                     last_scanned_at = ?,
                     source_hostname = ?,
                     source_port = ?
+        cert.updated_at = datetime.utcnow()
+        with self._pool.get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE certificates SET
+                    certificate_type = ?, source = ?, hostname = ?, port = ?, label = ?,
+                    subject = ?, issuer = ?, not_before = ?, not_after = ?, fingerprint = ?,
+                    serial_number = ?, chain_fingerprint = ?, chain_position = ?, pem_data = ?,
+                    updated_at = ?, last_scanned_at = ?, source_hostname = ?, source_port = ?
                 WHERE id = ?
                 """,
                 (
@@ -287,6 +321,7 @@ class SQLiteCertificateRepository(CertificateRepository):
                     cert.chain_position,
                     cert.pem_data,
                     datetime.utcnow(),
+                    cert.updated_at,
                     cert.last_scanned_at,
                     cert.source_hostname,
                     cert.source_port,
@@ -312,6 +347,10 @@ class SQLiteCertificateRepository(CertificateRepository):
             )
             rows = cursor.fetchall()
             return [self._row_to_certificate(row) for row in rows]
+                "SELECT * FROM certificates WHERE chain_fingerprint = ? ORDER BY chain_position ASC",
+                (leaf_fingerprint,),
+            )
+            return [self._row_to_cert(row) for row in cursor.fetchall()]
 
 
 class SQLiteAlertRepository(AlertRepository):

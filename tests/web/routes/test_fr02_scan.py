@@ -120,7 +120,7 @@ class TestTLSScanning:
         }
 
         # Act: Submit scan request
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             # Return a tuple of (leaf, chain)
             mock_extract.return_value = (cert, [test_certificates["intermediate"]])
 
@@ -156,7 +156,7 @@ class TestTLSScanning:
         intermediate = test_certificates["intermediate"]
         root = test_certificates["root_ca"]
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (leaf, [intermediate, root])
 
             # Act: Submit scan request
@@ -193,7 +193,7 @@ class TestTLSScanning:
         leaf = test_certificates["good"]
         intermediate = test_certificates["intermediate"]
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (leaf, [intermediate])
 
             # Act: Submit scan request
@@ -231,7 +231,7 @@ class TestTLSScanning:
         Then: User-friendly error message displayed
         """
         # Act: Submit request for unreachable host
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.side_effect = TLSConnectionError("Connection refused")
 
             response = client.post(
@@ -265,7 +265,7 @@ class TestTLSScanning:
         When: Attempting to scan
         Then: TLS error is handled gracefully
         """
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.side_effect = TLSHandshakeError("SSL handshake failed")
 
             response = client.post(
@@ -340,7 +340,7 @@ class TestTLSScanning:
         """
         leaf = test_certificates["good"]
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (leaf, [])
 
             response = client.post(
@@ -354,10 +354,16 @@ class TestTLSScanning:
 
         # Assert: Response contains certificate details
         content = response.text
+        # Extract subject CN properly from the certificate
+        from cryptography.x509 import NameOID
+
+        subject_cn = leaf.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+        subject_value = str(subject_cn[0].value) if subject_cn else "good"
+
         assert any(
             field in content
             for field in [
-                leaf.subject.rdns[0].value if hasattr(leaf.subject, "rdns") else "good",
+                subject_value,
                 "Test CA",
                 "Issuer",
                 "Subject",
@@ -379,6 +385,7 @@ class TestManualScan:
         client: TestClient,
         cert_repo: CertificateRepository,
         sample_certificate,
+        test_certificates,
     ):
         """Manual scan endpoint is accessible.
 
@@ -389,8 +396,10 @@ class TestManualScan:
         # Arrange: Create certificate entry
         cert = await cert_repo.create(sample_certificate)
 
-        # Act: Trigger manual scan
-        response = client.post(f"/scan/{cert.id}/rescan")
+        # Act: Trigger manual scan with mocked TLS
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
+            mock_extract.return_value = (test_certificates["good"], [])
+            response = client.post(f"/scan/{cert.id}/rescan")
 
         # Assert: Endpoint exists and processes request
         assert response.status_code in [200, 201, 202, 302, 404], (
@@ -417,7 +426,7 @@ class TestManualScan:
         # Act: Trigger manual scan with new certificate data
         new_cert = test_certificates["warning"]  # Different expiry
 
-        with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+        with patch("cert_watch.web.routes.fr02_scan.extract_certificate_from_tls") as mock_extract:
             mock_extract.return_value = (new_cert, [])
 
             response = client.post(f"/scan/{cert.id}/rescan")
@@ -457,15 +466,20 @@ class TestTLSIntegration:
             pytest.skip("extract_certificate_from_tls not implemented")
 
         # Mock the actual network call but use real certificate processing
+        # Patch at the socket/ssl module level since function imports inside
         with (
-            patch("ssl.create_connection") as mock_conn,
-            patch("ssl.SSLContext.wrap_socket") as mock_wrap,
+            patch("socket.create_connection") as mock_conn,
+            patch("ssl.create_default_context") as mock_create_context,
         ):
             mock_sock = MagicMock()
-            mock_conn.return_value = mock_sock
+            mock_conn.return_value.__enter__ = MagicMock(return_value=mock_sock)
+            mock_conn.return_value.__exit__ = MagicMock(return_value=False)
 
             mock_ssl = MagicMock()
-            mock_wrap.return_value = mock_ssl
+            mock_context = MagicMock()
+            mock_create_context.return_value = mock_context
+            mock_context.wrap_socket.return_value.__enter__ = MagicMock(return_value=mock_ssl)
+            mock_context.wrap_socket.return_value.__exit__ = MagicMock(return_value=False)
 
             # Return DER-encoded certificate
             cert_der = test_certificates["good"].public_bytes(serialization.Encoding.DER)

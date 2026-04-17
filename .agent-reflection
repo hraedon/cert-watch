@@ -9,3 +9,65 @@ No reasoning.log found in worktree. Proceeding based on review feedback only.
 
 ## Review Feedback
 - Boundary at 30 days: `< 30` excludes day 30, but spec says green is >30, so day 30 is yellow. Fixed by changing to `<= 30`.
+# Agent Reflection for FR-02 Implementation
+
+## Task Summary
+Implement FR-02: TLS Scanning feature that allows users to add a host by hostname and port, performs TLS handshake, extracts leaf certificate and chain, and creates monitored entries.
+
+## Constraints from Conventions (No reasoning.log found, using CONVENTIONS.md)
+
+### Critical Patterns
+1. **Route Registration - Auto-Discovery Prefix Conflict**: 
+   - When using auto-discovery (filename = `frNN_*.py`): NEVER set explicit `prefix=` in `create_router()`
+   - Auto-discovery extracts prefix from filename automatically
+   - Reference: Factory Pattern Library section on double-prefix bug
+
+2. **Database Access Patterns (MUST/MUST NOT)**:
+   - MUST use `Depends(get_repo())` from `web/deps.py` for all database access in route handlers
+   - MUST NOT import `sqlite3` or any database driver directly in route files
+   - MUST NOT open database connections outside of dependency injection context
+   - MUST NOT hardcode database paths
+   - Reference: Factory Pattern Library - Database Idempotency section
+
+3. **Datetime Convention**:
+   - MUST USE naive UTC datetimes throughout the codebase
+   - Use `datetime.utcnow()` for current time
+   - Reference: Project Overview section
+
+4. **Certificate Formatting**:
+   - MUST USE `core/formatters.py` for all certificate field formatting
+   - `extract_certificate_from_tls` function must be implemented to return `(x509.Certificate, list[x509.Certificate])`
+   - Reference: Conventions section 3
+
+## Required Implementation
+
+### Files to Create
+1. `src/cert_watch/web/routes/fr02_scan.py` - Route handlers for TLS scanning
+
+### Files to Modify
+1. `src/cert_watch/core/formatters.py` - Implement `extract_certificate_from_tls`
+2. `src/cert_watch/repositories/sqlite.py` - Implement repository methods needed for tests
+
+## Test Requirements (from test_fr02_scan.py)
+
+### Endpoints Required
+1. `POST /scan/add-host` - Accepts form data (hostname, port), performs TLS scan, stores certificates
+2. `POST /scan/{cert_id}/rescan` - Manual rescan of existing certificate
+
+### Repository Methods Required
+1. `get_by_hostname(hostname, port=None)` - Get certificates by hostname
+2. `create(cert)` - Create new certificate entry
+3. `get_by_id(cert_id)` - Get certificate by ID
+4. `get_chain_for_leaf(leaf_fingerprint)` - Get chain certificates for a leaf
+
+### Formatter Function Required
+1. `extract_certificate_from_tls(hostname, port)` - Returns `(x509.Certificate, list[x509.Certificate])`
+   - Raises `TLSConnectionError` for connection failures
+   - Raises `TLSHandshakeError` for handshake failures
+
+### Validation Requirements
+1. Hostname is required
+2. Port defaults to 443 if not specified
+3. Port validation (1-65535)
+4. Hostname validation (non-empty, reasonable length)
+5. Error handling for unreachable hosts and TLS handshake failures

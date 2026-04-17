@@ -141,7 +141,7 @@ def parse_certificate_file(data: bytes) -> tuple[x509.Certificate, list[x509.Cer
     raise NotImplementedError("Implement in cert-parser work unit")
 
 
-def extract_certificate_from_tls(
+async def extract_certificate_from_tls(
     hostname: str, port: int
 ) -> tuple[x509.Certificate, list[x509.Certificate]]:
     """Extract certificate via TLS handshake.
@@ -157,8 +157,55 @@ def extract_certificate_from_tls(
         TLSConnectionError: If connection fails
         TLSHandshakeError: If handshake fails
     """
-    # Stub implementation - agents will fill in
-    raise NotImplementedError("Implement in TLS scanning work unit")
+    import socket
+    import ssl
+
+    from ..core.exceptions import TLSConnectionError, TLSHandshakeError
+
+    context = ssl.create_default_context()
+
+    try:
+        with socket.create_connection((hostname, port), timeout=10) as sock:
+            with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+                # Get peer certificate in DER format
+                cert_der = ssock.getpeercert(binary_form=True)
+                if not cert_der:
+                    raise TLSHandshakeError("No certificate received from server")
+
+                # Parse leaf certificate
+                leaf_cert = x509.load_der_x509_certificate(cert_der)
+
+                # Get certificate chain if available
+                chain_certs = []
+
+                # Try to get the full chain using getpeercertchain (Python 3.10+)
+                try:
+                    chain_der = ssock.getpeercertchain()
+                    if chain_der:
+                        for i, cert_bytes in enumerate(chain_der):
+                            if i == 0:
+                                # First cert is the leaf, skip it
+                                continue
+                            try:
+                                chain_cert = x509.load_der_x509_certificate(cert_bytes)
+                                chain_certs.append(chain_cert)
+                            except Exception:
+                                # Skip certs we can't parse
+                                pass
+                except AttributeError:
+                    # getpeercertchain not available in this Python version
+                    pass
+
+                return (leaf_cert, chain_certs)
+
+    except TimeoutError:
+        raise TLSConnectionError(f"Connection to {hostname}:{port} timed out")
+    except socket.gaierror:
+        raise TLSConnectionError(f"Could not resolve hostname: {hostname}")
+    except ssl.SSLError as e:
+        raise TLSHandshakeError(f"SSL handshake failed: {str(e)}")
+    except OSError as e:
+        raise TLSConnectionError(f"Connection failed: {str(e)}")
 
 
 def serialize_certificate(cert: x509.Certificate) -> bytes:

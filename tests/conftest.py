@@ -44,9 +44,17 @@ from cert_watch.web.app_factory import create_app
 @pytest.fixture
 def settings():
     """Create test settings with temporary database."""
+    # Clear singleton caches to ensure test isolation
+    from cert_watch.web.deps import _clear_connection_pool_cache, _clear_settings_cache
+
+    _clear_settings_cache()
+    _clear_connection_pool_cache()
+
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        yield Settings(
+        # Create settings and update the singleton's database_url
+        # so that Settings.get() returns consistent values
+        test_settings = Settings(
             database_url=f"sqlite:///{db_path}",
             debug=True,
             smtp_host="localhost",
@@ -56,6 +64,9 @@ def settings():
             smtp_from_addr="alerts@test.com",
             alert_recipients=["admin@test.com", "ops@test.com"],
         )
+        # Force the singleton to use our test database
+        Settings.get().database_url = f"sqlite:///{db_path}"
+        yield test_settings
 
 
 # =============================================================================
