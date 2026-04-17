@@ -14,14 +14,10 @@ Usage in route files:
 """
 
 from collections.abc import AsyncGenerator
+from functools import lru_cache
+from pathlib import Path
 
 from fastapi import Request
-
-from ..core.config import Settings
-from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
-from functools import lru_cache
-
-from ..core.config import Settings
 
 from ..core.config import Settings
 from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
@@ -32,19 +28,16 @@ from ..repositories.sqlite import (
     SQLiteScanHistoryRepository,
 )
 
-_current_db_path: str | None = None
+# Service stubs for parallel development
+try:
+    from ..services.base import AlertService, ScanSchedulerService
+    from ..services.alert_service_impl import AlertServiceImpl
+    from ..services.scheduler_impl import ScanSchedulerImpl
 
-def _get_connection_pool(settings: Settings | None = None) -> SQLiteConnectionPool:
-    """Get the connection pool for the given settings."""
-    settings = Settings.get(settings)
-def _get_connection_pool(request: Request) -> SQLiteConnectionPool:
-    """Get the connection pool using settings from the request app state.
+    SERVICES_AVAILABLE = True
+except ImportError:
+    SERVICES_AVAILABLE = False
 
-    This ensures tests use the test-specific database path instead of
-    the default Settings.get() path.
-    """
-    settings: Settings = request.app.state.settings
-    return SQLiteConnectionPool(settings.database_path)
 
 @lru_cache(maxsize=128)
 def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
@@ -53,8 +46,6 @@ def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
     The pool is cached per database path to support both production
     and testing scenarios where different databases are used.
     """
-    from pathlib import Path
-
     return SQLiteConnectionPool(Path(db_path))
 
 
@@ -73,7 +64,9 @@ def _clear_settings_cache():
     This is used primarily for testing to ensure settings can be
     reconfigured between test cases.
     """
-    Settings.get.cache_clear()
+    from ..core.config import _get_cached_settings
+
+    _get_cached_settings.cache_clear()
 
 
 async def get_db(request: Request) -> AsyncGenerator[SQLiteConnectionPool, None]:
@@ -81,9 +74,8 @@ async def get_db(request: Request) -> AsyncGenerator[SQLiteConnectionPool, None]
 
     Yields the connection pool for use in route handlers.
     """
-    settings = Settings.get()
+    settings = getattr(request.app.state, "settings", None) or Settings.get()
     pool = _get_connection_pool(str(settings.database_path))
-    pool = _get_connection_pool(request)
     try:
         yield pool
     finally:
@@ -96,68 +88,54 @@ def get_repo(request: Request) -> CertificateRepository:
 
     Usage: repo: CertificateRepository = Depends(get_repo)
     """
-
-    def _get_repo(request: Request) -> CertificateRepository:
-        # Try to get settings from app state (set during testing)
-        settings = getattr(request.app.state, "settings", None)
-        pool = _get_connection_pool(settings)
-        return SQLiteCertificateRepository(pool)
-
-    return _get_repo
-    global _current_db_path
-    settings = Settings.get()
-    db_path = str(settings.database_path)
-
-    # Check if database path has changed (for testing scenarios)
-    if _current_db_path is not None and _current_db_path != db_path:
-        # Clear caches to ensure we use the new database
-        _clear_connection_pool_cache()
-    _current_db_path = db_path
-
-    pool = _get_connection_pool(db_path)
-    pool = _get_connection_pool(request)
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        pool = _get_connection_pool(str(settings.database_path))
+    else:
+        pool = _get_connection_pool(str(Settings.get().database_path))
     return SQLiteCertificateRepository(pool)
 
 
 def get_alert_repo(request: Request) -> AlertRepository:
     """Get AlertRepository dependency."""
-
-    def _get_alert_repo(request: Request) -> AlertRepository:
-        settings = getattr(request.app.state, "settings", None)
-        pool = _get_connection_pool(settings)
-        return SQLiteAlertRepository(pool)
-
-    return _get_alert_repo
-    global _current_db_path
-    settings = Settings.get()
-    db_path = str(settings.database_path)
-
-    if _current_db_path is not None and _current_db_path != db_path:
-        _clear_connection_pool_cache()
-    _current_db_path = db_path
-
-    pool = _get_connection_pool(db_path)
-    pool = _get_connection_pool(request)
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        pool = _get_connection_pool(str(settings.database_path))
+    else:
+        pool = _get_connection_pool(str(Settings.get().database_path))
     return SQLiteAlertRepository(pool)
 
 
 def get_scan_repo(request: Request) -> ScanHistoryRepository:
     """Get ScanHistoryRepository dependency."""
-
-    def _get_scan_repo(request: Request) -> ScanHistoryRepository:
-        settings = getattr(request.app.state, "settings", None)
-        pool = _get_connection_pool(settings)
-        return SQLiteScanHistoryRepository(pool)
-
-    return _get_scan_repo
-    global _current_db_path
-    settings = Settings.get()
-    db_path = str(settings.database_path)
-
-    if _current_db_path is not None and _current_db_path != db_path:
-        _clear_connection_pool_cache()
-    _current_db_path = db_path
-
-    pool = _get_connection_pool(db_path)
-    pool = _get_connection_pool(request)
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        pool = _get_connection_pool(str(settings.database_path))
+    else:
+        pool = _get_connection_pool(str(Settings.get().database_path))
     return SQLiteScanHistoryRepository(pool)
+
+
+# =============================================================================
+# Service Dependencies (for FR-04, FR-05)
+# =============================================================================
+
+
+def get_alert_service() -> "AlertService":
+    """Get AlertService implementation.
+
+    Returns the concrete AlertService implementation for sending email alerts.
+    """
+    if not SERVICES_AVAILABLE:
+        raise NotImplementedError("AlertService not yet implemented")
+    return AlertServiceImpl()
+
+
+def get_scheduler_service() -> "ScanSchedulerService":
+    """Get ScanSchedulerService implementation.
+
+    Returns the concrete ScanSchedulerService for daily scans.
+    """
+    if not SERVICES_AVAILABLE:
+        raise NotImplementedError("ScanSchedulerService not yet implemented")
+    return ScanSchedulerImpl()

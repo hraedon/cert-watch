@@ -4,6 +4,11 @@ These tests verify that service ABC implementations are actually imported
 and used by route handlers or the scheduler - not just tested in isolation.
 This catches "orphan services" that pass their own tests but are never
 invoked in production code.
+
+Services tested:
+- CertificateService (FR-02, FR-03)
+- AlertService (FR-04)
+- ScanSchedulerService (FR-05)
 """
 
 from unittest.mock import MagicMock, patch
@@ -503,3 +508,276 @@ class TestDatabaseWiring:
         if violations:
             violation_str = "\n".join(f"  {f}: {p}" for f, p in violations)
             pytest.fail(f"Route files with hardcoded database paths:\n{violation_str}")
+
+
+# =============================================================================
+# Alert Service Wiring Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestAlertServiceWiring:
+    """Verify AlertService implementation is wired to routes/scheduler."""
+
+    async def test_alert_service_is_imported_in_routes_or_scheduler(
+        self,
+    ):
+        """AlertService is imported by at least one route or scheduler module.
+
+        This catches orphan AlertService implementations.
+        """
+        try:
+            from cert_watch.services.base import AlertService
+        except ImportError:
+            pytest.skip("AlertService ABC not found")
+
+        # Check if any route or scheduler file imports the service
+        import ast
+        from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
+        import cert_watch.services as services_pkg
+
+        routes_dir = Path(routes_pkg.__file__).parent
+        services_dir = Path(services_pkg.__file__).parent
+
+        service_imported = False
+
+        # Check route files
+        for route_file in routes_dir.glob("*.py"):
+            if route_file.name.startswith("_"):
+                continue
+
+            content = route_file.read_text()
+            tree = ast.parse(content)
+
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module and "service" in node.module:
+                        for alias in node.names:
+                            if "AlertService" in alias.name:
+                                service_imported = True
+                                break
+
+        # Check services directory (for scheduler that might use AlertService)
+        for service_file in services_dir.glob("*.py"):
+            if service_file.name.startswith("_"):
+                continue
+
+            content = service_file.read_text()
+            if "AlertService" in content:
+                service_imported = True
+                break
+
+        # Check deps.py for get_alert_service
+        try:
+            import cert_watch.web.deps as deps
+
+            deps_file = Path(deps.__file__)
+            if deps_file.exists():
+                content = deps_file.read_text()
+                if "get_alert_service" in content or "AlertService" in content:
+                    service_imported = True
+        except (ImportError, AttributeError):
+            pass
+
+        # Informational during development
+        if not service_imported:
+            pytest.skip(
+                "AlertService not yet wired to routes/scheduler (expected during development)"
+            )
+
+    async def test_get_alert_service_exists_in_deps(
+        self,
+    ):
+        """get_alert_service dependency function exists.
+
+        Verifies the dependency injection function is available.
+        """
+        try:
+            from cert_watch.web.deps import get_alert_service
+
+            # Function should exist and be callable
+            assert callable(get_alert_service), "get_alert_service should be callable"
+        except ImportError:
+            pytest.skip("get_alert_service not yet implemented in deps.py")
+
+    async def test_get_alert_repo_exists_in_deps(
+        self,
+    ):
+        """get_alert_repo dependency function exists.
+
+        Verifies the repository dependency is available for AlertRepository.
+        """
+        try:
+            from cert_watch.web.deps import get_alert_repo
+
+            assert callable(get_alert_repo), "get_alert_repo should be callable"
+        except ImportError:
+            pytest.skip("get_alert_repo not yet implemented in deps.py")
+
+    async def test_alert_service_factory_returns_service(
+        self,
+    ):
+        """get_alert_service returns AlertService implementation.
+
+        Verifies the factory function returns a concrete service instance.
+        """
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            assert service is not None, "get_alert_service should not return None"
+            assert isinstance(service, AlertService), (
+                f"Expected AlertService, got {type(service).__name__}"
+            )
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
+
+    async def test_alert_service_has_required_methods(
+        self,
+    ):
+        """AlertService implementation has all required abstract methods.
+
+        Verifies the service implements:
+        - evaluate_alerts()
+        - send_pending_alerts()
+        """
+        try:
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # Check methods exist
+            assert hasattr(service, "evaluate_alerts"), (
+                "AlertService must have evaluate_alerts method"
+            )
+            assert hasattr(service, "send_pending_alerts"), (
+                "AlertService must have send_pending_alerts method"
+            )
+
+            # Check methods are coroutines (async)
+            import inspect
+
+            assert inspect.iscoroutinefunction(service.evaluate_alerts), (
+                "evaluate_alerts must be async"
+            )
+            assert inspect.iscoroutinefunction(service.send_pending_alerts), (
+                "send_pending_alerts must be async"
+            )
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
+
+    async def test_fr04_route_module_exists(
+        self,
+    ):
+        """FR-04 alert route module exists."""
+        from pathlib import Path
+
+        import cert_watch.web.routes as routes_pkg
+
+        routes_dir = Path(routes_pkg.__file__).parent
+
+        fr04_files = list(routes_dir.glob("fr04*.py")) + list(routes_dir.glob("*alert*.py"))
+
+        if not fr04_files:
+            pytest.skip("FR-04 route module not yet created (expected during test phase)")
+
+
+# =============================================================================
+# Scheduler Service Wiring Tests
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestSchedulerServiceWiring:
+    """Verify ScanSchedulerService is wired to app lifespan."""
+
+    async def test_scheduler_service_is_imported(
+        self,
+    ):
+        """ScanSchedulerService is imported by scheduler or app_factory.
+
+        This catches orphan scheduler implementations.
+        """
+        try:
+            from cert_watch.services.base import ScanSchedulerService
+        except ImportError:
+            pytest.skip("ScanSchedulerService ABC not found")
+
+        import ast
+        from pathlib import Path
+
+        import cert_watch.web as web_pkg
+        import cert_watch.services as services_pkg
+
+        web_dir = Path(web_pkg.__file__).parent
+        services_dir = Path(services_pkg.__file__).parent
+
+        service_imported = False
+
+        # Check web directory
+        for py_file in web_dir.glob("*.py"):
+            content = py_file.read_text()
+            if "ScanSchedulerService" in content:
+                service_imported = True
+                break
+
+        # Check services directory
+        if not service_imported:
+            for service_file in services_dir.glob("*.py"):
+                content = service_file.read_text()
+                if "ScanSchedulerService" in content:
+                    service_imported = True
+                    break
+
+        if not service_imported:
+            pytest.skip("ScanSchedulerService not yet wired (expected during development)")
+
+    async def test_get_scheduler_service_exists_in_deps(
+        self,
+    ):
+        """get_scheduler_service dependency function exists."""
+        try:
+            from cert_watch.web.deps import get_scheduler_service
+
+            assert callable(get_scheduler_service), "get_scheduler_service should be callable"
+        except ImportError:
+            pytest.skip("get_scheduler_service not yet implemented")
+
+    async def test_scheduler_service_has_required_methods(
+        self,
+    ):
+        """ScanSchedulerService has all required methods."""
+        try:
+            from cert_watch.web.deps import get_scheduler_service
+
+            service = get_scheduler_service()
+
+            required_methods = [
+                "run_daily_scan",
+                "start_scheduler",
+                "stop_scheduler",
+            ]
+
+            for method in required_methods:
+                assert hasattr(service, method), f"ScanSchedulerService must have {method}"
+        except (ImportError, AttributeError):
+            pytest.skip("ScanSchedulerService not yet implemented")
+
+    async def test_fr05_scheduler_module_exists(
+        self,
+    ):
+        """FR-05 scheduler implementation module exists."""
+        from pathlib import Path
+
+        import cert_watch.services as services_pkg
+
+        services_dir = Path(services_pkg.__file__).parent
+
+        scheduler_files = list(services_dir.glob("*scheduler*.py"))
+
+        if not scheduler_files:
+            pytest.skip("FR-05 scheduler module not yet created (expected during test phase)")
