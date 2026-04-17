@@ -10,7 +10,7 @@ This module provides the certificate upload functionality.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from ..deps import get_repo
 from ...core.formatters import (
