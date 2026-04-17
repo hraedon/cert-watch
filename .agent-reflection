@@ -161,3 +161,48 @@ Implement FR-02: TLS Scanning feature that allows users to add a host by hostnam
 - AC-05.11: Skip uploaded certificates
 - AC-05.13: Scan creates history entry
 - AC-05.14-18: Scan history records proper status, counts, timestamps, errors
+
+---
+
+# Agent Reflection for WU-docs (Documentation Generation)
+
+## Work Unit Summary
+This work unit generates comprehensive documentation for the cert-watch project based on the implemented codebase.
+
+## Task Scope
+- Generate 6 documentation files in docs/ directory:
+  1. README.md: Quick start and overview
+  2. ARCHITECTURE.md: Design decisions and data flow
+  3. DEPENDENCIES.md: System requirements
+  4. CONFIGURATION.md: Environment variables and settings
+  5. OPERATIONS.md: Deployment and troubleshooting
+  6. API.md: API reference
+
+## Project Understanding from Code Review
+Cert-watch is a TLS certificate monitoring dashboard with:
+- **Web Framework**: FastAPI with Jinja2 templates
+- **Database**: SQLite with repository pattern (extensible to MSSQL)
+- **Scheduler**: APScheduler for daily scans
+- **Core Features**:
+  - Certificate scanning via TLS handshake (FR-02)
+  - Certificate upload (.pem, .cer, .crt) (FR-03)
+  - Color-coded dashboard (red <7d, yellow <30d, green >30d) (FR-01)
+  - Email alerts at configurable thresholds (FR-04)
+  - Daily scheduled scanning (FR-05)
+
+## Key Architectural Decisions Observed
+1. **Repository Pattern**: All DB access through ABC interfaces (SQLite impl for v1)
+2. **Route Auto-Discovery**: Files in routes/ dir automatically registered by app_factory.py
+3. **Naive UTC Datetimes**: Consistent datetime handling throughout (datetime.utcnow())
+4. **Centralized Formatters**: core/formatters.py for all cert formatting
+5. **No Prefix in Routes**: Auto-discovery extracts prefix from filename (fr01_dashboard.py -> /fr01-dashboard/)
+6. **Dependency Injection**: FastAPI Depends pattern for repos and services
+7. **Service Layer**: ABC + Concrete + Factory pattern for business logic
+
+## Documentation Structure Plan
+- README.md: Installation, quick start, basic usage
+- ARCHITECTURE.md: Component diagram, data flow, design patterns
+- DEPENDENCIES.md: Python 3.12+, all package requirements
+- CONFIGURATION.md: Environment variables, .env file format
+- OPERATIONS.md: Docker deploy, systemd service, log locations
+- API.md: REST endpoints, request/response formats
