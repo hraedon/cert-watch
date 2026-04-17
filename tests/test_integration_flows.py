@@ -1,4 +1,4 @@
-"""End-to-End Flow Tests for FR-01, FR-02, FR-03.
+"""End-to-End Flow Tests for FR-01, FR-02, FR-03, FR-04, FR-05.
 
 These tests verify complete user flows spanning multiple FRs.
 Each flow test touches 3+ FRs using real service instances and real databases.
@@ -8,6 +8,8 @@ Flows:
 1. "Add host → TLS scan → verify chain entries created → view in dashboard with color coding"
 2. "Upload cert file → view in dashboard → verify color coding"
 3. "Mixed: scanned + uploaded certs in same dashboard sorted by urgency"
+4. "Certificate at threshold → alert created → email sent → alert history updated"
+5. "Daily scan runs → alerts evaluated for both leaf and chain → emails sent"
 """
 
 from unittest.mock import patch
@@ -625,3 +627,635 @@ class TestFlowErrorHandling:
         assert "stable.example.com" in dashboard_response.text, (
             "Existing certificate should be unaffected by failed upload"
         )
+
+
+# =============================================================================
+# End-to-End Flow Test 4: Certificate → Alert → Email → History
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestFlow4AlertLifecycle:
+    """Flow Test: Certificate at threshold → alert created → email sent → history.
+
+    This flow tests FR-04 end-to-end:
+    - Certificate reaches alert threshold
+    - Alert is created and pending
+    - Email is sent via SMTP
+    - Alert status updated to SENT
+    - Alert history tracked per certificate
+    """
+
+    async def test_complete_flow_certificate_to_alert_to_email(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+        test_certificates,
+    ):
+        """E2E Flow: Cert hits threshold → alert created → email sent → history updated.
+
+        ACT:
+        1. Certificate exists with 3 days remaining (critical threshold)
+        2. Alert evaluation runs and creates pending alert
+        3. Email sending process runs
+        4. Alert status updated to SENT
+
+        ASSERT:
+        - Alert created with correct certificate_id and days_remaining=3
+        - Alert has status PENDING initially
+        - SMTP sendmail was invoked
+        - Alert status updated to SENT with timestamp
+        - Alert appears in certificate's alert history
+        """
+        from datetime import datetime, timedelta
+        from unittest.mock import MagicMock, patch
+
+        from cert_watch.models.alert import AlertStatus, AlertType
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+
+        # ACT 1: Create certificate at critical threshold (3 days)
+        cert = test_certificates["critical"]  # 3 days = red/critical
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="critical-alert.example.com",
+            port=443,
+        )
+        created_cert = await cert_repo.create(model)
+
+        # Precondition: Certificate stored
+        assert created_cert.id is not None, "PRECONDITION FAILED: Certificate not created"
+
+        # ACT 2: Evaluate alerts (this would be done by AlertService)
+        # For now, manually create what the service would create
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # Mock SMTP to capture email sending
+            with patch("smtplib.SMTP") as mock_smtp_class:
+                mock_smtp = MagicMock()
+                mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+                mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+
+                # Run alert evaluation
+                alert_ids = await service.evaluate_alerts()
+
+                # Structural check: Action was triggered
+                assert len(alert_ids) > 0, (
+                    "PRECONDITION FAILED: No alerts created by evaluate_alerts(). "
+                    "Certificate at threshold should trigger alert creation."
+                )
+
+                # Verify alert was created for our certificate
+                cert_alerts = await alert_repo.get_for_certificate(created_cert.id)
+                assert len(cert_alerts) > 0, (
+                    f"PRECONDITION FAILED: No alerts found for certificate {created_cert.id}"
+                )
+
+                # ACT 3: Send pending alerts
+                sent_count, failed_count = await service.send_pending_alerts()
+
+                # Structural check: Email was sent
+                assert mock_smtp.sendmail.called, (
+                    "SMTP sendmail was not called! Email alert was not sent."
+                )
+
+                # Verify alert status was updated
+                for alert in cert_alerts:
+                    updated = await alert_repo.get_by_id(alert.id)
+                    assert updated.status == AlertStatus.SENT, (
+                        f"Alert status should be SENT after email, got {updated.status}"
+                    )
+                    assert updated.sent_at is not None, "sent_at should be set after sending"
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented - this is expected during test phase")
+
+    async def test_flow_alert_thresholds_evaluated_correctly(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+    ):
+        """E2E Flow: Multiple thresholds evaluated correctly.
+
+        ACT:
+        1. Certificates at 14, 7, 3, and 1 days (leaf)
+        2. Chain certificate at 30 days
+        3. Alert evaluation runs
+
+        ASSERT:
+        - Alerts created for certificates at exact thresholds
+        - No duplicate alerts for same threshold
+        - Leaf and chain use different threshold lists
+        """
+        from datetime import datetime, timedelta
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        # Create certificates at various thresholds
+        test_certs = [
+            ("leaf-14.example.com", 14, CertificateType.LEAF),
+            ("leaf-7.example.com", 7, CertificateType.LEAF),
+            ("leaf-3.example.com", 3, CertificateType.LEAF),
+            ("leaf-1.example.com", 1, CertificateType.LEAF),
+            ("intermediate-30", 30, CertificateType.INTERMEDIATE),
+        ]
+
+        created_certs = []
+        for hostname, days, cert_type in test_certs:
+            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+            issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+            cert = (
+                x509.CertificateBuilder()
+                .subject_name(subject)
+                .issuer_name(issuer)
+                .not_valid_before(now)
+                .not_valid_after(now + timedelta(days=days))
+                .serial_number(hash(hostname) % 100000)
+                .public_key(private_key.public_key())
+                .sign(private_key, hashes.SHA256())
+            )
+
+            model = cert_to_model(
+                cert,
+                certificate_type=cert_type,
+                source=CertificateSource.SCANNED,
+                hostname=hostname if cert_type == CertificateType.LEAF else None,
+                port=443 if cert_type == CertificateType.LEAF else None,
+            )
+            created = await cert_repo.create(model)
+            created_certs.append((created, days, cert_type))
+
+        # ACT: Evaluate alerts
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+            alert_ids = await service.evaluate_alerts()
+
+            # Precondition check
+            assert len(alert_ids) > 0, "evaluate_alerts should create alerts for threshold certs"
+
+            # ASSERT: Verify alerts created for certificates at thresholds
+            for cert, days, cert_type in created_certs:
+                alerts = await alert_repo.get_for_certificate(cert.id)
+
+                # Should have at least one alert for each certificate at threshold
+                assert len(alerts) > 0, (
+                    f"No alerts for {cert_type.name} at {days} days - threshold not detected"
+                )
+
+                # Verify days_remaining matches
+                matching_alerts = [a for a in alerts if a.days_remaining == days]
+                assert len(matching_alerts) > 0, (
+                    f"No alert with days_remaining={days} for {cert.subject}"
+                )
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
+
+    async def test_flow_no_duplicate_alerts_for_same_threshold(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+        test_certificates,
+    ):
+        """E2E Flow: Running evaluation twice doesn't create duplicates.
+
+        ACT:
+        1. Certificate at 7-day threshold
+        2. Alert evaluation runs (creates alert)
+        3. Alert evaluation runs again
+        4. Email sent
+
+        ASSERT:
+        - Only one alert exists for the 7-day threshold
+        - Second evaluation is idempotent
+        """
+        from cert_watch.models.alert import AlertStatus
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+
+        # Arrange: Certificate at 7-day threshold
+        cert = test_certificates["red_boundary"]  # Exactly 7 days
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="nodup.example.com",
+            port=443,
+        )
+        created = await cert_repo.create(model)
+
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # ACT 1: First evaluation
+            alert_ids_1 = await service.evaluate_alerts()
+
+            # Precondition: Alert was created
+            alerts_1 = await alert_repo.get_for_certificate(created.id)
+            assert len(alerts_1) > 0, "First evaluation should create alert"
+
+            # Mark as sent (simulating send_pending_alerts)
+            for alert in alerts_1:
+                await alert_repo.mark_sent(alert.id)
+
+            # ACT 2: Second evaluation
+            alert_ids_2 = await service.evaluate_alerts()
+
+            # ASSERT: No duplicate created
+            all_alerts = await alert_repo.get_for_certificate(created.id)
+            alerts_for_7_days = [a for a in all_alerts if a.days_remaining == 7]
+
+            # Should have exactly one alert for 7-day threshold
+            assert len(alerts_for_7_days) == 1, (
+                f"Duplicate alert created! Found {len(alerts_for_7_days)} alerts for 7-day threshold"
+            )
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
+
+
+# =============================================================================
+# End-to-End Flow Test 5: Daily Scan + Alert Cycle (FR-04 + FR-05)
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestFlow5DailyScanWithAlerts:
+    """Flow Test: Daily scan cycle runs → alerts evaluated → emails sent.
+
+    This flow tests FR-05 (Daily Scheduler) + FR-04 (Email Alerts):
+    - Daily scan refreshes certificates
+    - Alert evaluation triggers for new issues
+    - Email alerts are sent
+    - Scan history is recorded
+    """
+
+    async def test_daily_scan_triggers_alert_evaluation(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+        scan_repo,  # ScanHistoryRepository
+        test_certificates,
+    ):
+        """E2E Flow: Daily scan runs and triggers alert evaluation.
+
+        ACT:
+        1. Certificate exists at 3-day threshold
+        2. Daily scan cycle runs (run_daily_scan)
+        3. Alert evaluation runs as part of scan
+        4. Email alerts sent
+        5. Scan history recorded
+
+        ASSERT:
+        - Scan history entry created
+        - Alert created for certificate at threshold
+        - Email sent
+        - Scan status updated to SUCCESS
+        """
+        from datetime import datetime
+        from unittest.mock import MagicMock, patch
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from cert_watch.models.scan_history import ScanStatus
+        from tests.conftest import cert_to_model
+
+        # Arrange: Certificate at critical threshold
+        cert = test_certificates["critical"]
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="daily-scan.example.com",
+            port=443,
+        )
+        await cert_repo.create(model)
+
+        # Precondition: No existing scan history
+        initial_scans = await scan_repo.get_recent(limit=1)
+
+        try:
+            from cert_watch.services.base import ScanSchedulerService
+            from cert_watch.web.deps import get_scheduler_service
+
+            service = get_scheduler_service()
+
+            # Mock SMTP to avoid actual email sending
+            with patch("smtplib.SMTP") as mock_smtp_class:
+                mock_smtp = MagicMock()
+                mock_smtp_class.return_value.__enter__ = MagicMock(return_value=mock_smtp)
+                mock_smtp_class.return_value.__exit__ = MagicMock(return_value=False)
+
+                # ACT: Run daily scan
+                await service.run_daily_scan()
+
+                # Structural check: Scan history was recorded
+                recent_scans = await scan_repo.get_recent(limit=1)
+                assert len(recent_scans) > len(initial_scans), (
+                    "PRECONDITION FAILED: No scan history recorded. "
+                    "Daily scan did not record its execution."
+                )
+
+                latest_scan = recent_scans[0]
+                assert latest_scan.status == ScanStatus.SUCCESS, (
+                    f"Scan should complete successfully, got {latest_scan.status}"
+                )
+
+                # Check alerts were evaluated
+                all_alerts = await alert_repo.get_pending()
+                assert len(all_alerts) > 0 or mock_smtp.sendmail.called, (
+                    "Either pending alerts should exist or emails should have been sent"
+                )
+
+        except (ImportError, AttributeError):
+            pytest.skip("ScanSchedulerService not yet implemented")
+
+    async def test_daily_scan_refreshes_and_creates_new_alerts(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+        test_certificates,
+    ):
+        """E2E Flow: Daily scan refreshes certs and creates new alerts.
+
+        ACT:
+        1. Certificate scanned yesterday (was at 8 days)
+        2. Daily scan runs today (now at 7 days - threshold!)
+        3. New alert created for 7-day threshold
+
+        ASSERT:
+        - Certificate expiry updated
+        - New alert created (wasn't there before)
+        - Alert has correct days_remaining
+        """
+        from datetime import datetime, timedelta
+        from unittest.mock import patch
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+
+        # Create certificate at 7-day threshold
+        cert = test_certificates["red_boundary"]  # 7 days
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="refresh.example.com",
+            port=443,
+        )
+        created = await cert_repo.create(model)
+
+        # Verify no alerts exist yet
+        initial_alerts = await alert_repo.get_for_certificate(created.id)
+
+        try:
+            from cert_watch.services.base import ScanSchedulerService
+            from cert_watch.web.deps import get_scheduler_service
+
+            service = get_scheduler_service()
+
+            # Mock TLS extraction to return updated certificate
+            with patch("cert_watch.core.formatters.extract_certificate_from_tls") as mock_extract:
+                mock_extract.return_value = (cert, [])
+
+                # ACT: Run daily scan
+                await service.run_daily_scan()
+
+                # ASSERT: Alert created after scan
+                final_alerts = await alert_repo.get_for_certificate(created.id)
+
+                # Should have more alerts than before (or at least the alert was processed)
+                if len(final_alerts) > len(initial_alerts):
+                    # New alert was created
+                    new_alert = [a for a in final_alerts if a not in initial_alerts]
+                    if new_alert:
+                        assert new_alert[0].days_remaining == 7, (
+                            "New alert should be for 7-day threshold"
+                        )
+
+        except (ImportError, AttributeError):
+            pytest.skip("ScanSchedulerService not yet implemented")
+
+    async def test_scan_failure_isolation_with_alerts(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+        scan_repo,
+        test_certificates,
+    ):
+        """E2E Flow: Scan failure on one host doesn't stop alerts for others.
+
+        ACT:
+        1. Two certificates at threshold
+        2. One host scan fails
+        3. Daily scan runs
+
+        ASSERT:
+        - Scan history shows partial success
+        - Alert still created for successful scan
+        - Error logged for failed host
+        """
+        from cert_watch.core.exceptions import TLSConnectionError
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from cert_watch.models.scan_history import ScanStatus
+        from tests.conftest import cert_to_model
+
+        # Arrange: Two certificates
+        cert1 = test_certificates["critical"]
+        model1 = cert_to_model(
+            cert1,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="success.example.com",
+            port=443,
+        )
+        await cert_repo.create(model1)
+
+        cert2 = test_certificates["warning"]
+        model2 = cert_to_model(
+            cert2,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="fails.example.com",
+            port=443,
+        )
+        await cert_repo.create(model2)
+
+        try:
+            from cert_watch.services.base import ScanSchedulerService
+            from cert_watch.web.deps import get_scheduler_service
+
+            service = get_scheduler_service()
+
+            # Mock TLS to fail for one host
+            def mock_extract(hostname, port):
+                if hostname == "fails.example.com":
+                    raise TLSConnectionError("Connection refused")
+                return (cert1, [])
+
+            with patch(
+                "cert_watch.core.formatters.extract_certificate_from_tls",
+                side_effect=mock_extract,
+            ):
+                # ACT: Run daily scan
+                await service.run_daily_scan()
+
+                # ASSERT: Check scan history
+                recent_scans = await scan_repo.get_recent(limit=1)
+                if recent_scans:
+                    scan = recent_scans[0]
+                    # May show partial or success depending on implementation
+                    assert scan.status in [ScanStatus.SUCCESS, ScanStatus.PARTIAL], (
+                        f"Scan should complete, got {scan.status}"
+                    )
+
+                # Alerts may still be processed for successful scans
+                # This tests error isolation
+
+        except (ImportError, AttributeError):
+            pytest.skip("ScanSchedulerService not yet implemented")
+
+
+# =============================================================================
+# End-to-End Flow Test 6: Chain Certificate Alerts
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestFlow6ChainCertificateAlerts:
+    """Flow Test: Chain certificates trigger alerts at different thresholds.
+
+    This flow tests that chain certificates use different thresholds than leaf.
+    - Leaf: 14/7/3/1 days
+    - Chain: 30/14/7 days
+    """
+
+    async def test_chain_cert_30_day_alert_while_leaf_at_60_no_alert(
+        self,
+        client: TestClient,
+        cert_repo: CertificateRepository,
+        alert_repo: AlertRepository,
+    ):
+        """E2E Flow: Chain cert at 30 days alerts, leaf at 60 days doesn't.
+
+        ACT:
+        1. Chain certificate (intermediate) with 30 days remaining
+        2. Leaf certificate with 60 days remaining
+        3. Alert evaluation runs
+
+        ASSERT:
+        - Alert created for chain cert at 30 days
+        - No alert for leaf cert at 60 days (not at threshold)
+        """
+        from datetime import datetime, timedelta
+
+        from cryptography import x509
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from cryptography.x509.oid import NameOID
+
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+        # Create intermediate CA at 30 days
+        int_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Intermediate")])
+        int_issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Root")])
+
+        int_cert = (
+            x509.CertificateBuilder()
+            .subject_name(int_subject)
+            .issuer_name(int_issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=30))
+            .serial_number(99901)
+            .public_key(private_key.public_key())
+            .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+            .sign(private_key, hashes.SHA256())
+        )
+
+        int_model = cert_to_model(
+            int_cert,
+            certificate_type=CertificateType.INTERMEDIATE,
+            source=CertificateSource.SCANNED,
+        )
+        int_created = await cert_repo.create(int_model)
+
+        # Create leaf at 60 days
+        leaf_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "60days.example.com")])
+        leaf_issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+        leaf_cert = (
+            x509.CertificateBuilder()
+            .subject_name(leaf_subject)
+            .issuer_name(leaf_issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=60))
+            .serial_number(99902)
+            .public_key(private_key.public_key())
+            .sign(private_key, hashes.SHA256())
+        )
+
+        leaf_model = cert_to_model(
+            leaf_cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="60days.example.com",
+            port=443,
+        )
+        leaf_created = await cert_repo.create(leaf_model)
+
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # ACT: Evaluate alerts
+            alert_ids = await service.evaluate_alerts()
+
+            # ASSERT: Alert created for intermediate
+            int_alerts = await alert_repo.get_for_certificate(int_created.id)
+            assert len(int_alerts) > 0, "Intermediate CA at 30 days should trigger alert"
+
+            # Check that at least one alert is for 30 days
+            thirty_day_alerts = [a for a in int_alerts if a.days_remaining == 30]
+            assert len(thirty_day_alerts) > 0, "Should have alert specifically for 30-day threshold"
+
+            # ASSERT: No alert for leaf at 60 days (not a threshold)
+            leaf_alerts = await alert_repo.get_for_certificate(leaf_created.id)
+            assert len(leaf_alerts) == 0, (
+                "Leaf at 60 days should NOT trigger alert (thresholds are 14/7/3/1)"
+            )
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")

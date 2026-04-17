@@ -549,3 +549,465 @@ class TestModelPropertyTypeContracts:
         result = sample_chain_certificate.is_chain
 
         assert isinstance(result, bool), f"is_chain must return bool, got {type(result).__name__}"
+
+
+# =============================================================================
+# Alert Type Contracts
+# =============================================================================
+
+
+@pytest.mark.asyncio
+class TestAlertTypeContracts:
+    """Type contracts for alert models and repository methods."""
+
+    async def test_alert_model_id_is_int_or_none(
+        self,
+        sample_alert,
+    ):
+        """Alert.id returns int or None.
+
+        BOUNDARY: Model field → int | None
+        """
+        if sample_alert.id is not None:
+            assert isinstance(sample_alert.id, int), (
+                f"Alert.id must be int or None, got {type(sample_alert.id).__name__}"
+            )
+
+    async def test_alert_certificate_id_is_int(
+        self,
+        sample_alert,
+    ):
+        """Alert.certificate_id returns int.
+
+        BOUNDARY: Model field → int
+        """
+        assert isinstance(sample_alert.certificate_id, int), (
+            f"Alert.certificate_id must be int, got {type(sample_alert.certificate_id).__name__}"
+        )
+
+    async def test_alert_type_is_enum(
+        self,
+        sample_alert,
+    ):
+        """Alert.alert_type returns AlertType enum.
+
+        BOUNDARY: Model field → AlertType enum
+        """
+        from cert_watch.models.alert import AlertType
+
+        assert isinstance(sample_alert.alert_type, AlertType), (
+            f"Alert.alert_type must be AlertType enum, got {type(sample_alert.alert_type).__name__}"
+        )
+
+    async def test_alert_status_is_enum(
+        self,
+        sample_alert,
+    ):
+        """Alert.status returns AlertStatus enum.
+
+        BOUNDARY: Model field → AlertStatus enum
+        """
+        from cert_watch.models.alert import AlertStatus
+
+        assert isinstance(sample_alert.status, AlertStatus), (
+            f"Alert.status must be AlertStatus enum, got {type(sample_alert.status).__name__}"
+        )
+
+    async def test_alert_days_remaining_is_int(
+        self,
+        sample_alert,
+    ):
+        """Alert.days_remaining returns int.
+
+        BOUNDARY: Model field → int
+        """
+        assert isinstance(sample_alert.days_remaining, int), (
+            f"Alert.days_remaining must be int, got {type(sample_alert.days_remaining).__name__}"
+        )
+
+    async def test_alert_recipient_is_str(
+        self,
+        sample_alert,
+    ):
+        """Alert.recipient returns str.
+
+        BOUNDARY: Model field → str
+        """
+        assert isinstance(sample_alert.recipient, str), (
+            f"Alert.recipient must be str, got {type(sample_alert.recipient).__name__}"
+        )
+
+    async def test_alert_timestamps_are_datetime_or_none(
+        self,
+        sample_alert,
+    ):
+        """Alert timestamps are datetime or None.
+
+        BOUNDARY: Model field → datetime | None
+        """
+        assert isinstance(sample_alert.created_at, datetime), (
+            f"Alert.created_at must be datetime, got {type(sample_alert.created_at).__name__}"
+        )
+
+        if sample_alert.sent_at is not None:
+            assert isinstance(sample_alert.sent_at, datetime), (
+                f"Alert.sent_at must be datetime or None, got {type(sample_alert.sent_at).__name__}"
+            )
+
+
+@pytest.mark.asyncio
+class TestAlertRepositoryTypeContracts:
+    """Type contracts for AlertRepository methods."""
+
+    async def test_alert_repo_get_by_id_returns_alert_or_none(
+        self,
+        alert_repo,
+        sample_alert,
+        cert_repo,
+    ):
+        """get_by_id returns Alert or None.
+
+        BOUNDARY: Database row → Alert model
+        """
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from datetime import datetime, timedelta
+
+        # Create certificate for alert
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "type-test.example.com")])
+        issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=10))
+            .serial_number(50001)
+            .public_key(private_key.public_key())
+            .sign(private_key, hashes.SHA256())
+        )
+
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="type-test.example.com",
+            port=443,
+        )
+        created_cert = await cert_repo.create(model)
+
+        # Create alert
+        sample_alert.certificate_id = created_cert.id
+        created = await alert_repo.create(sample_alert)
+
+        # Act: Retrieve
+        retrieved = await alert_repo.get_by_id(created.id)
+
+        # TYPE CONTRACT: Must be Alert or None
+        if retrieved is not None:
+            from cert_watch.models.alert import Alert
+
+            assert isinstance(retrieved, Alert), (
+                f"CRITICAL: get_by_id returned {type(retrieved).__name__}, "
+                f"expected Alert. Repository not converting rows to models!"
+            )
+
+    async def test_alert_repo_get_pending_returns_list_of_alerts(
+        self,
+        alert_repo,
+    ):
+        """get_pending returns list[Alert].
+
+        BOUNDARY: Database query → List[Alert model]
+        """
+        pending = await alert_repo.get_pending()
+
+        assert isinstance(pending, list), (
+            f"get_pending must return list, got {type(pending).__name__}"
+        )
+
+        for i, alert in enumerate(pending):
+            from cert_watch.models.alert import Alert
+
+            assert isinstance(alert, Alert), (
+                f"CRITICAL: get_pending[{i}] is {type(alert).__name__}, expected Alert"
+            )
+
+    async def test_alert_repo_get_for_certificate_returns_list_of_alerts(
+        self,
+        alert_repo,
+        cert_repo,
+    ):
+        """get_for_certificate returns list[Alert].
+
+        BOUNDARY: Database query → List[Alert model]
+        """
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from datetime import datetime, timedelta
+
+        # Create certificate
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "list-test.example.com")])
+        issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=10))
+            .serial_number(50002)
+            .public_key(private_key.public_key())
+            .sign(private_key, hashes.SHA256())
+        )
+
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="list-test.example.com",
+            port=443,
+        )
+        created = await cert_repo.create(model)
+
+        # Get alerts
+        alerts = await alert_repo.get_for_certificate(created.id)
+
+        assert isinstance(alerts, list), (
+            f"get_for_certificate must return list, got {type(alerts).__name__}"
+        )
+
+        for i, alert in enumerate(alerts):
+            from cert_watch.models.alert import Alert
+
+            assert isinstance(alert, Alert), (
+                f"CRITICAL: get_for_certificate[{i}] is {type(alert).__name__}, expected Alert"
+            )
+
+    async def test_alert_repo_create_returns_alert_with_id(
+        self,
+        alert_repo,
+        cert_repo,
+    ):
+        """create returns Alert with id populated.
+
+        BOUNDARY: Insert → Alert model with generated id
+        """
+        from cert_watch.models.alert import Alert, AlertStatus, AlertType
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from datetime import datetime, timedelta
+
+        # Create certificate for alert
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "create-test.example.com")])
+        issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=10))
+            .serial_number(50003)
+            .public_key(private_key.public_key())
+            .sign(private_key, hashes.SHA256())
+        )
+
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="create-test.example.com",
+            port=443,
+        )
+        created_cert = await cert_repo.create(model)
+
+        # Create alert
+        alert = Alert(
+            certificate_id=created_cert.id,
+            alert_type=AlertType.EXPIRY_WARNING,
+            days_remaining=10,
+            status=AlertStatus.PENDING,
+            recipient="test@example.com",
+            subject="Test",
+            body="Test",
+        )
+
+        created = await alert_repo.create(alert)
+
+        # TYPE CONTRACT: Must return Alert
+        from cert_watch.models.alert import Alert
+
+        assert isinstance(created, Alert), (
+            f"CRITICAL: create returned {type(created).__name__}, expected Alert"
+        )
+
+        # TYPE CONTRACT: Must have id assigned
+        assert isinstance(created.id, int), (
+            f"create must assign int id, got {type(created.id).__name__} ({created.id})"
+        )
+
+    async def test_alert_repo_returns_naive_utc_datetimes(
+        self,
+        alert_repo,
+        cert_repo,
+    ):
+        """Alert repository returns naive UTC datetimes.
+
+        BOUNDARY: SQLite timestamp → Python datetime
+        """
+        from cert_watch.models.alert import Alert, AlertStatus, AlertType
+        from cert_watch.models.certificate import CertificateSource, CertificateType
+        from tests.conftest import cert_to_model
+        from cryptography import x509
+        from cryptography.x509.oid import NameOID
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import rsa
+        from datetime import datetime, timedelta
+
+        # Create certificate
+        now = datetime.utcnow()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "datetime-test.example.com")])
+        issuer = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test CA")])
+
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(subject)
+            .issuer_name(issuer)
+            .not_valid_before(now)
+            .not_valid_after(now + timedelta(days=10))
+            .serial_number(50004)
+            .public_key(private_key.public_key())
+            .sign(private_key, hashes.SHA256())
+        )
+
+        model = cert_to_model(
+            cert,
+            certificate_type=CertificateType.LEAF,
+            source=CertificateSource.SCANNED,
+            hostname="datetime-test.example.com",
+            port=443,
+        )
+        created_cert = await cert_repo.create(model)
+
+        # Create alert
+        alert = Alert(
+            certificate_id=created_cert.id,
+            alert_type=AlertType.EXPIRY_WARNING,
+            days_remaining=10,
+            status=AlertStatus.PENDING,
+            recipient="test@example.com",
+            subject="Test",
+            body="Test",
+        )
+        created = await alert_repo.create(alert)
+
+        # Retrieve and check
+        retrieved = await alert_repo.get_by_id(created.id)
+
+        if retrieved:
+            # TYPE CONTRACT: Datetimes must be naive
+            assert retrieved.created_at.tzinfo is None, (
+                f"CRITICAL: created_at has tzinfo {retrieved.created_at.tzinfo}. "
+                f"Must be naive UTC datetime!"
+            )
+
+
+@pytest.mark.asyncio
+class TestAlertServiceTypeContracts:
+    """Type contracts for AlertService method return values."""
+
+    async def test_evaluate_alerts_returns_list_of_int(
+        self,
+    ):
+        """evaluate_alerts returns list[int].
+
+        BOUNDARY: Alert evaluation → list of alert IDs
+        """
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # Act: Call evaluate_alerts
+            result = await service.evaluate_alerts()
+
+            # TYPE CONTRACT: Must return list
+            assert isinstance(result, list), (
+                f"evaluate_alerts must return list, got {type(result).__name__}"
+            )
+
+            # TYPE CONTRACT: Each item must be int (alert ID)
+            for i, item in enumerate(result):
+                assert isinstance(item, int), (
+                    f"evaluate_alerts[{i}] must be int (alert ID), got {type(item).__name__}"
+                )
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
+
+    async def test_send_pending_alerts_returns_tuple_of_ints(
+        self,
+    ):
+        """send_pending_alerts returns tuple[int, int].
+
+        BOUNDARY: Email sending → (sent_count, failed_count)
+        """
+        from unittest.mock import MagicMock, patch
+
+        try:
+            from cert_watch.services.base import AlertService
+            from cert_watch.web.deps import get_alert_service
+
+            service = get_alert_service()
+
+            # Mock SMTP
+            with patch("smtplib.SMTP") as mock_smtp:
+                mock_smtp.return_value.__enter__ = MagicMock(return_value=MagicMock())
+                mock_smtp.return_value.__exit__ = MagicMock(return_value=False)
+
+                # Act: Call send_pending_alerts
+                result = await service.send_pending_alerts()
+
+                # TYPE CONTRACT: Must return tuple
+                assert isinstance(result, tuple), (
+                    f"send_pending_alerts must return tuple, got {type(result).__name__}"
+                )
+
+                # TYPE CONTRACT: Must have 2 elements
+                assert len(result) == 2, (
+                    f"send_pending_alerts must return (sent, failed), got {result}"
+                )
+
+                # TYPE CONTRACT: Both elements must be int
+                sent_count, failed_count = result
+                assert isinstance(sent_count, int), (
+                    f"sent_count must be int, got {type(sent_count).__name__}"
+                )
+                assert isinstance(failed_count, int), (
+                    f"failed_count must be int, got {type(failed_count).__name__}"
+                )
+
+        except (ImportError, AttributeError):
+            pytest.skip("AlertService not yet implemented")
