@@ -10,7 +10,7 @@ This module provides the certificate upload functionality.
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import JSONResponse
 
 from ..deps import get_repo
 from ...core.formatters import (
@@ -127,8 +127,22 @@ async def upload_certificate(
             # Continue storing other chain certs even if one fails
             pass
 
-    # Redirect to result page
-    return RedirectResponse(
-        url="/",
-        status_code=303,  # See Other - recommended for POST-redirect-GET
+    # Return success response
+    from fastapi.responses import JSONResponse
+
+    return JSONResponse(
+        status_code=201,
+        content={
+            "status": "success",
+            "message": "Certificate uploaded successfully",
+            "certificate": {
+                "id": leaf_model.id,
+                "label": display_label,
+                "subject": leaf_model.subject,
+                "issuer": leaf_model.issuer,
+                "fingerprint": leaf_fingerprint,
+                "not_after": leaf_model.not_after.isoformat(),
+                "chain_count": len(chain_certs),
+            },
+        },
     )
