@@ -37,7 +37,7 @@ async def upload_certificate(
     certificate: UploadFile = File(...),
     label: str = Form(""),
     repo: CertificateRepository = Depends(get_repo),
-):
+) -> JSONResponse:
     """Handle certificate file upload.
 
     Accepts .cer, .pem, and .crt files. Parses the certificate(s),
