@@ -28,6 +28,9 @@ from ..repositories.sqlite import (
 )
 
 
+_current_db_path: str | None = None
+
+
 @lru_cache(maxsize=128)
 def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
     """Get the connection pool for a specific database path.
@@ -47,6 +50,15 @@ def _clear_connection_pool_cache():
     between test cases.
     """
     _get_connection_pool.cache_clear()
+
+
+def _clear_settings_cache():
+    """Clear the Settings singleton cache.
+
+    This is used primarily for testing to ensure settings can be
+    reconfigured between test cases.
+    """
+    Settings.get.cache_clear()
 
 
 async def get_db() -> AsyncGenerator[SQLiteConnectionPool, None]:
@@ -69,20 +81,43 @@ def get_repo():
     Returns a dependency function that provides the requested repository type.
     Usage: Depends(get_repo()) provides CertificateRepository
     """
+    global _current_db_path
     settings = Settings.get()
-    pool = _get_connection_pool(str(settings.database_path))
+    db_path = str(settings.database_path)
+
+    # Check if database path has changed (for testing scenarios)
+    if _current_db_path is not None and _current_db_path != db_path:
+        # Clear caches to ensure we use the new database
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
     return SQLiteCertificateRepository(pool)
 
 
 def get_alert_repo():
     """Get AlertRepository dependency."""
+    global _current_db_path
     settings = Settings.get()
-    pool = _get_connection_pool(str(settings.database_path))
+    db_path = str(settings.database_path)
+
+    if _current_db_path is not None and _current_db_path != db_path:
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
     return SQLiteAlertRepository(pool)
 
 
 def get_scan_repo():
     """Get ScanHistoryRepository dependency."""
+    global _current_db_path
     settings = Settings.get()
-    pool = _get_connection_pool(str(settings.database_path))
+    db_path = str(settings.database_path)
+
+    if _current_db_path is not None and _current_db_path != db_path:
+        _clear_connection_pool_cache()
+    _current_db_path = db_path
+
+    pool = _get_connection_pool(db_path)
     return SQLiteScanHistoryRepository(pool)
