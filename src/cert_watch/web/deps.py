@@ -61,7 +61,10 @@ def _get_connection_pool(db_path: str) -> SQLiteConnectionPool:
     The pool is cached per database path to support both production
     and testing scenarios where different databases are used.
     """
-    return SQLiteConnectionPool(Path(db_path))
+    path = Path(db_path)
+    # Ensure parent directory exists
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return SQLiteConnectionPool(path)
 
 
 def _clear_connection_pool_cache():

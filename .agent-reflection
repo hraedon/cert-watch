@@ -85,3 +85,79 @@ Implement FR-02: TLS Scanning feature that allows users to add a host by hostnam
 3. Port validation (1-65535)
 4. Hostname validation (non-empty, reasonable length)
 5. Error handling for unreachable hosts and TLS handshake failures
+
+---
+
+# Agent Reflection for FR-05 Implementation
+
+## Work Unit
+- **ID**: fr-05
+- **Description**: FR-05 Daily Scheduler - Built-in scheduler runs daily scan cycle
+- **FR IDs**: [FR-05]
+
+## Constraints from Conventions
+
+### Datetime Convention
+- MUST USE naive UTC datetimes throughout (use `datetime.utcnow()`)
+- Reference: Project Overview section
+
+### Service Pattern
+- ABC + Concrete + Factory pattern - implement `ScanSchedulerService` ABC
+- Service implementations go in `services/` directory
+- Reference: Conventions section on Service Wiring Patterns
+
+### Repository Pattern
+- All database access MUST use repositories
+- Use `_get_cert_repo()`, `_get_alert_repo()`, `_get_scan_repo()` pattern from alert_service_impl.py
+- Reference: Factory Pattern Library - Database Access Patterns
+
+### From deps.py
+- `get_scheduler_service()` already exists and expects `ScanSchedulerImpl` from `services.scheduler_impl`
+- `SCHEDULER_SERVICE_AVAILABLE` flag will be set when implementation exists
+
+### From test_fr05_scheduler.py
+
+#### Required Methods
+1. `start_scheduler()` - returns None, starts background scheduler (APScheduler)
+2. `stop_scheduler()` - returns None, stops background scheduler
+3. `run_daily_scan()` - async, returns None, runs the daily scan cycle
+
+#### Daily Scan Behavior
+- Only refreshes SCANNED certificates (not UPLOADED)
+- Isolates errors per host (one failure doesn't stop others)
+- Records scan history with status (SUCCESS, PARTIAL, FAILURE)
+- Records counts: total_hosts, successful_hosts, failed_hosts, updated_certificates
+- Timestamps: started_at, completed_at
+- Triggers alert evaluation via AlertService
+
+#### Scheduler Configuration
+- Default scan time: "06:00" from settings
+- Timezone: UTC from settings
+- Uses APScheduler for background scheduling
+
+## Implementation Plan
+
+1. Create `src/cert_watch/services/scheduler_impl.py` with `ScanSchedulerImpl` class
+2. Implement `run_daily_scan()` to:
+   - Get all SCANNED certificates from repository
+   - For each: extract current cert via TLS, update in DB
+   - Track success/failure counts
+   - Create scan history entry
+   - Trigger alert evaluation via AlertService
+3. Implement `start_scheduler()` and `stop_scheduler()` using APScheduler
+4. Create `src/cert_watch/web/routes/fr05_scheduler.py` for web endpoints (status, manual trigger)
+
+## Required Dependencies
+- APScheduler for background scheduling
+- Use existing formatters for TLS extraction (`extract_certificate_from_tls`)
+- Use existing repositories for data access
+- Use existing AlertService for alert evaluation
+
+## Key Test Requirements
+- AC-05.1: Default scan time is 06:00
+- AC-05.8: Daily scan updates scanned certificates
+- AC-05.9: Daily scan triggers alert evaluation
+- AC-05.10: Error isolation per host
+- AC-05.11: Skip uploaded certificates
+- AC-05.13: Scan creates history entry
+- AC-05.14-18: Scan history records proper status, counts, timestamps, errors
