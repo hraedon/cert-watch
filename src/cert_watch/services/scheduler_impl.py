@@ -9,20 +9,17 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from ..core.config import Settings
-from ..core.exceptions import TLSConnectionError, TLSHandshakeError
-from ..core.formatters import (
-    compute_thumbprint,
-    extract_certificate_from_tls,
-    format_issuer,
-    format_subject,
-    serialize_certificate,
+from cert_watch.core import formatters
+from cert_watch.core.config import Settings
+from cert_watch.core.exceptions import TLSConnectionError, TLSHandshakeError
+from cert_watch.models.certificate import Certificate, CertificateSource, CertificateType
+from cert_watch.models.scan_history import ScanHistory, ScanStatus
+from cert_watch.repositories.base import (
+    AlertRepository,
+    CertificateRepository,
+    ScanHistoryRepository,
 )
-from ..models.certificate import Certificate, CertificateSource, CertificateType
-from ..models.scan_history import ScanHistory, ScanStatus
-from ..repositories.base import AlertRepository, CertificateRepository, ScanHistoryRepository
-from ..repositories.sqlite import SQLiteConnectionPool
-from .base import AlertService, ScanSchedulerService
+from cert_watch.services.base import AlertService, ScanSchedulerService
 
 logger = logging.getLogger(__name__)
 
@@ -57,27 +54,30 @@ class ScanSchedulerImpl(ScanSchedulerService):
     def _get_cert_repo(self) -> CertificateRepository:
         """Get certificate repository, creating if needed."""
         if self._cert_repo is None:
-            from ..repositories.sqlite import SQLiteCertificateRepository
+            from cert_watch.repositories.sqlite import SQLiteCertificateRepository
+            from cert_watch.web.deps import _get_connection_pool
 
-            pool = SQLiteConnectionPool(self._settings.database_path)
+            pool = _get_connection_pool(str(self._settings.database_path))
             self._cert_repo = SQLiteCertificateRepository(pool)
         return self._cert_repo
 
     def _get_alert_repo(self) -> AlertRepository:
         """Get alert repository, creating if needed."""
         if self._alert_repo is None:
-            from ..repositories.sqlite import SQLiteAlertRepository
+            from cert_watch.repositories.sqlite import SQLiteAlertRepository
+            from cert_watch.web.deps import _get_connection_pool
 
-            pool = SQLiteConnectionPool(self._settings.database_path)
+            pool = _get_connection_pool(str(self._settings.database_path))
             self._alert_repo = SQLiteAlertRepository(pool)
         return self._alert_repo
 
     def _get_scan_repo(self) -> ScanHistoryRepository:
         """Get scan history repository, creating if needed."""
         if self._scan_repo is None:
-            from ..repositories.sqlite import SQLiteScanHistoryRepository
+            from cert_watch.repositories.sqlite import SQLiteScanHistoryRepository
+            from cert_watch.web.deps import _get_connection_pool
 
-            pool = SQLiteConnectionPool(self._settings.database_path)
+            pool = _get_connection_pool(str(self._settings.database_path))
             self._scan_repo = SQLiteScanHistoryRepository(pool)
         return self._scan_repo
 
@@ -85,7 +85,7 @@ class ScanSchedulerImpl(ScanSchedulerService):
         """Get alert service, creating if needed."""
         if self._alert_service is None:
             try:
-                from .alert_service_impl import AlertServiceImpl
+                from cert_watch.services.alert_service_impl import AlertServiceImpl
 
                 self._alert_service = AlertServiceImpl(
                     cert_repo=self._get_cert_repo(),
@@ -94,7 +94,7 @@ class ScanSchedulerImpl(ScanSchedulerService):
                 )
             except ImportError:
                 # Fallback to base class if not implemented yet
-                from .base import AlertServiceStub
+                from cert_watch.services.base import AlertServiceStub
 
                 self._alert_service = AlertServiceStub()
         return self._alert_service
@@ -193,7 +193,9 @@ class ScanSchedulerImpl(ScanSchedulerService):
                 try:
                     # Perform TLS handshake to get current certificate
                     port = cert.port or 443
-                    leaf_cert, chain_certs = await extract_certificate_from_tls(cert.hostname, port)
+                    leaf_cert, chain_certs = await formatters.extract_certificate_from_tls(
+                        cert.hostname, port
+                    )
 
                     # Update the certificate entry
                     await self._update_certificate_from_scan(cert, leaf_cert, chain_certs)
@@ -218,6 +220,11 @@ class ScanSchedulerImpl(ScanSchedulerService):
             else:
                 status = ScanStatus.SUCCESS
 
+            # Build error message for failure cases
+            error_message = None
+            if status == ScanStatus.FAILURE and failed_hosts > 0:
+                error_message = f"All {failed_hosts} host(s) failed to scan"
+
             # Complete scan history
             await scan_repo.complete(
                 scan_history.id,
@@ -226,6 +233,7 @@ class ScanSchedulerImpl(ScanSchedulerService):
                 successful_hosts=successful_hosts,
                 failed_hosts=failed_hosts,
                 updated_certificates=updated_certs,
+                error_message=error_message,
             )
 
             logger.info(
@@ -270,16 +278,16 @@ class ScanSchedulerImpl(ScanSchedulerService):
         cert_repo = self._get_cert_repo()
 
         # Compute new fingerprint
-        new_fingerprint = compute_thumbprint(leaf_cert)
+        new_fingerprint = formatters.compute_thumbprint(leaf_cert)
 
         # Update certificate fields
-        existing_cert.subject = format_subject(leaf_cert)
-        existing_cert.issuer = format_issuer(leaf_cert)
+        existing_cert.subject = formatters.format_subject(leaf_cert)
+        existing_cert.issuer = formatters.format_issuer(leaf_cert)
         existing_cert.not_before = leaf_cert.not_valid_before
         existing_cert.not_after = leaf_cert.not_valid_after
         existing_cert.fingerprint = new_fingerprint
         existing_cert.serial_number = str(leaf_cert.serial_number)
-        existing_cert.pem_data = serialize_certificate(leaf_cert)
+        existing_cert.pem_data = formatters.serialize_certificate(leaf_cert)
         existing_cert.updated_at = datetime.utcnow()
         existing_cert.last_scanned_at = datetime.utcnow()
 
@@ -308,19 +316,19 @@ class ScanSchedulerImpl(ScanSchedulerService):
 
         # For simplicity, we'll create/update chain certificates
         for i, chain_cert in enumerate(chain_certs):
-            fingerprint = compute_thumbprint(chain_cert)
+            fingerprint = formatters.compute_thumbprint(chain_cert)
 
             # Check if this chain cert already exists
             existing = await cert_repo.get_by_fingerprint(fingerprint)
 
             if existing:
                 # Update existing chain cert
-                existing.subject = format_subject(chain_cert)
-                existing.issuer = format_issuer(chain_cert)
+                existing.subject = formatters.format_subject(chain_cert)
+                existing.issuer = formatters.format_issuer(chain_cert)
                 existing.not_before = chain_cert.not_valid_before
                 existing.not_after = chain_cert.not_valid_after
                 existing.serial_number = str(chain_cert.serial_number)
-                existing.pem_data = serialize_certificate(chain_cert)
+                existing.pem_data = formatters.serialize_certificate(chain_cert)
                 existing.updated_at = datetime.utcnow()
                 existing.last_scanned_at = datetime.utcnow()
                 existing.source_hostname = leaf_cert.hostname
@@ -336,15 +344,15 @@ class ScanSchedulerImpl(ScanSchedulerService):
                 new_chain_cert = Certificate(
                     certificate_type=cert_type,
                     source=CertificateSource.SCANNED,
-                    subject=format_subject(chain_cert),
-                    issuer=format_issuer(chain_cert),
+                    subject=formatters.format_subject(chain_cert),
+                    issuer=formatters.format_issuer(chain_cert),
                     not_before=chain_cert.not_valid_before,
                     not_after=chain_cert.not_valid_after,
                     fingerprint=fingerprint,
                     serial_number=str(chain_cert.serial_number),
                     chain_fingerprint=leaf_cert.fingerprint,
                     chain_position=i + 1,
-                    pem_data=serialize_certificate(chain_cert),
+                    pem_data=formatters.serialize_certificate(chain_cert),
                     source_hostname=leaf_cert.hostname,
                     source_port=leaf_cert.port,
                 )

@@ -9,10 +9,10 @@ Provides web endpoints for:
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from ...models.scan_history import ScanStatus
-from ...repositories.base import ScanHistoryRepository
-from ...services.base import ScanSchedulerService
-from ..deps import get_scan_repo
+from cert_watch.models.scan_history import ScanStatus
+from cert_watch.repositories.base import ScanHistoryRepository
+from cert_watch.services.base import ScanSchedulerService
+from cert_watch.web.deps import get_scan_repo
 
 router = APIRouter()
 
@@ -27,7 +27,7 @@ def get_scheduler_service() -> ScanSchedulerService:
         HTTPException: If scheduler service is not available
     """
     try:
-        from ...services.scheduler_impl import ScanSchedulerImpl
+        from cert_watch.services.scheduler_impl import ScanSchedulerImpl
 
         return ScanSchedulerImpl()
     except ImportError as e:
@@ -75,7 +75,7 @@ async def scheduler_status_page(
     Returns:
         HTML page with scheduler status
     """
-    from ...core.config import Settings
+    from cert_watch.core.config import Settings
 
     settings = Settings.get()
 
@@ -346,7 +346,7 @@ async def scheduler_api_status(
     Returns:
         JSON with scheduler configuration and recent scan history
     """
-    from ...core.config import Settings
+    from cert_watch.core.config import Settings
 
     settings = Settings.get()
     recent_scans = await scan_repo.get_recent(limit=5)
