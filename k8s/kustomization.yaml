@@ -1,0 +1,39 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: cert-watch
+
+resources:
+  - namespace.yaml
+  - pvc.yaml
+  - configmap.yaml
+  - deployment.yaml
+  - service.yaml
+
+commonLabels:
+  app.kubernetes.io/name: cert-watch
+  app.kubernetes.io/managed-by: kustomize
+
+# Uncomment for production image
+# images:
+#   - name: cert-watch
+#     newName: your-registry/cert-watch
+#     newTag: v0.1.0
+
+# ConfigMap override for production
+# configMapGenerator:
+#   - name: cert-watch-config
+#     behavior: merge
+#     literals:
+#       - SCAN_TIME=06:00
+#       - SCAN_TIMEZONE=America/New_York
+
+# Replica count patch for production
+# patches:
+#   - target:
+#       kind: Deployment
+#       name: cert-watch
+#     patch: |
+#       - op: replace
+#         path: /spec/replicas
+#         value: 3

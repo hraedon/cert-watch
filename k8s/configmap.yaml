@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cert-watch-config
+  namespace: cert-watch
+  labels:
+    app.kubernetes.io/name: cert-watch
+data:
+  # Application settings
+  APP_NAME: "cert-watch"
+  DEBUG: "false"
+  
+  # Database
+  DATABASE_URL: "sqlite:///./data/cert_watch.db"
+  DATA_DIR: "./data"
+  
+  # SMTP settings (non-sensitive)
+  SMTP_PORT: "587"
+  SMTP_USE_TLS: "true"
+  
+  # Alert thresholds
+  LEAF_ALERT_THRESHOLDS: "14,7,3,1"
+  CHAIN_ALERT_THRESHOLDS: "30,14,7"
+  
+  # Scheduler
+  SCAN_TIME: "06:00"
+  SCAN_TIMEZONE: "UTC"

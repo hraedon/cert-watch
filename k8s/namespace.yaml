@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-watch
+  labels:
+    app.kubernetes.io/name: cert-watch
+    app.kubernetes.io/component: monitoring
