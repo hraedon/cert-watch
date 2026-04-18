@@ -47,6 +47,14 @@ logs/
 .security-review*
 .required-deps
 .agent-pid
+.agent-reflection
+.events.jsonl
+
+# Factory generated artifacts
+INTERFACE_MANIFEST.py
+
+# Factory state (keep docs/factory/ if it exists)
+.factory/
 
 # Ruff cache
 .ruff_cache/

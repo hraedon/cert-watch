@@ -106,6 +106,8 @@ pytest
 
 ¹Required for email alerts to function. Without SMTP configuration, the app runs but cannot send notifications.
 
+**Note on database configuration:** `DATABASE_URL` controls the certificate database location (e.g., `sqlite:///./cert_watch.db`). `DATA_DIR` is used for auxiliary files. For most deployments, only `DATABASE_URL` matters — `DATA_DIR` is a legacy setting that will be removed in a future version.
+
 ## Alert Thresholds
 
 ### Leaf Certificates (End-Entity)
