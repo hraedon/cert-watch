@@ -21,6 +21,10 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
 ]
+e2e = [
+    "playwright>=1.49",
+    "pytest-playwright>=0.6",
+]
 
 [project.scripts]
 cert-watch = "cert_watch.__main__:main"
@@ -41,4 +45,6 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not e2e'"
+# E2E tests opt-in via `pytest -m e2e` (requires Playwright + browsers).
+markers = ["e2e: end-to-end tests requiring Playwright + a running app"]

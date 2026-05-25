@@ -1,0 +1,20 @@
+name: e2e
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv pip install -e ".[dev,e2e]"
+      - name: Install Playwright browsers + OS deps
+        run: .venv/bin/playwright install --with-deps chromium
+      - name: Run E2E tests
+        run: .venv/bin/pytest -m e2e tests/e2e -q
