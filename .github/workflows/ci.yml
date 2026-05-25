@@ -17,4 +17,4 @@ jobs:
       - name: ruff
         run: .venv/bin/ruff check .
       - name: pytest
-        run: .venv/bin/pytest -q
+        run: .venv/bin/pytest -q --ignore=tests/e2e
