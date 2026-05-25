@@ -12,6 +12,7 @@ from pathlib import Path
 from cert_watch.cert_chain import validate_chain_order
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import SqliteCertificateRepository, init_schema
+from cert_watch.database import _connect as _connect_db
 
 DEFAULT_TIMEOUT = 10.0
 
@@ -130,11 +131,29 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
     (so callers can pass the db path directly and we wire up source/hostname/port).
-    See AC-07.
+    Removes any previous leaf + chain certs for the same (hostname, port) first to
+    avoid accumulation on repeated scans. See AC-07.
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
         chain_valid = validate_chain_order([entry.leaf, *entry.chain])
+        with _connect_db(repo_path_or_repo) as conn:
+            old_leaves = [
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                    (entry.host, entry.port),
+                ).fetchall()
+            ]
+            for old_id in old_leaves:
+                conn.execute(
+                    "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
+                )
+            conn.execute(
+                "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                (entry.host, entry.port),
+            )
+            conn.commit()
         leaf_repo = SqliteCertificateRepository(
             repo_path_or_repo,
             source="scanned",
@@ -154,8 +173,6 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
             chain_repo.add(chain_cert)
         return leaf_id
 
-    # Treat as a CertificateRepository directly (AC-07 signature). Chain is not
-    # persisted here unless the caller-provided repo carries parent linkage.
     repo = repo_path_or_repo
     leaf_id = repo.add(entry.leaf)
     for chain_cert in entry.chain:

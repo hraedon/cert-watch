@@ -398,7 +398,7 @@ class SqliteHostRepository:
         )
 
     def delete(self, host_id: str) -> bool:
-        """Delete the host and cascade-delete its scanned certs (leaf + chain)."""
+        """Delete the host and cascade-delete its scanned certs and alerts."""
         with _connect(self.db_path) as conn:
             r = conn.execute(
                 "SELECT hostname, port FROM hosts WHERE id = ?", (host_id,)
@@ -406,7 +406,6 @@ class SqliteHostRepository:
             if not r:
                 return False
             hostname, port = r["hostname"], r["port"]
-            # Find leaf certs for this host.
             leaf_ids = [
                 row["id"]
                 for row in conn.execute(
@@ -414,9 +413,22 @@ class SqliteHostRepository:
                     (hostname, port),
                 ).fetchall()
             ]
+            all_cert_ids = [
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+                    (hostname, port),
+                ).fetchall()
+            ]
             for lid in leaf_ids:
                 conn.execute(
                     "DELETE FROM certificates WHERE parent_cert_id = ?", (lid,)
+                )
+            if all_cert_ids:
+                placeholders = ",".join("?" * len(all_cert_ids))
+                conn.execute(
+                    f"DELETE FROM alerts WHERE cert_id IN ({placeholders})",
+                    all_cert_ids,
                 )
             conn.execute(
                 "DELETE FROM certificates WHERE hostname = ? AND port = ?",
@@ -428,13 +440,24 @@ class SqliteHostRepository:
 
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
-    """Delete a leaf cert and its chain children (or any cert by id)."""
+    """Delete a leaf cert, its chain children, and associated alerts."""
     with _connect(db_path) as conn:
         r = conn.execute(
             "SELECT id FROM certificates WHERE id = ?", (cert_id,)
         ).fetchone()
         if not r:
             return False
+        child_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM certificates WHERE parent_cert_id = ?", (cert_id,)
+            ).fetchall()
+        ]
+        all_ids = [cert_id, *child_ids]
+        placeholders = ",".join("?" * len(all_ids))
+        conn.execute(
+            f"DELETE FROM alerts WHERE cert_id IN ({placeholders})", all_ids
+        )
         conn.execute("DELETE FROM certificates WHERE parent_cert_id = ?", (cert_id,))
         conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
         conn.commit()

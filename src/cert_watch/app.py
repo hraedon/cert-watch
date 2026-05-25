@@ -4,6 +4,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -28,6 +29,7 @@ from cert_watch.upload import store_uploaded, upload_certificate
 
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 def humanize_expiry(dt) -> str:
@@ -215,14 +217,21 @@ async def upload(
     db = _db_path()
     suffix = Path(file.filename or "uploaded").suffix or ".pem"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        tmp.write(await file.read())
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            tmp.close()
+            Path(tmp.name).unlink(missing_ok=True)
+            return RedirectResponse(
+                url=f"/?error={quote('file too large (max 10 MB)')}", status_code=303
+            )
+        tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
         pw_bytes = password.encode("utf-8") if password else None
         entry = upload_certificate(tmp_path, password=pw_bytes)
         if hasattr(entry, "error_message"):
             return RedirectResponse(
-                url=f"/?error={entry.error_message}", status_code=303
+                url=f"/?error={quote(entry.error_message)}", status_code=303
             )
         entry.file_name = file.filename or entry.file_name
         store_uploaded(entry, db)
