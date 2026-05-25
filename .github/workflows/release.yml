@@ -1,0 +1,66 @@
+name: release
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'deploy/k8s/kustomization.yaml'
+      - '**.md'
+      - 'docs/**'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Compute tag
+        id: tag
+        run: echo "tag=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/cert-watch:latest
+            ghcr.io/${{ github.repository_owner }}/cert-watch:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Bump kustomize image tag
+        run: |
+          cd deploy/k8s
+          curl -sSL -o /tmp/kustomize.tgz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar -xzf /tmp/kustomize.tgz -C /tmp
+          /tmp/kustomize edit set image ghcr.io/${{ github.repository_owner }}/cert-watch=ghcr.io/${{ github.repository_owner }}/cert-watch:${{ steps.tag.outputs.tag }}
+
+      - name: Commit tag bump
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No image change to commit."
+            exit 0
+          fi
+          git add deploy/k8s/kustomization.yaml
+          git commit -m "chore(deploy): bump image to ${{ steps.tag.outputs.tag }}"
+          git push

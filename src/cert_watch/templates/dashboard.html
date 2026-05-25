@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cert-watch</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>cert-watch</h1>
+    <span class="version">v{{ version }}</span>
+  </header>
+  <main>
+    {% if certificates %}
+      <table>
+        <thead>
+          <tr><th>Host</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Days</th></tr>
+        </thead>
+        <tbody>
+          {% for c in certificates %}
+            <tr class="{{ c.urgency }}">
+              <td>{{ c.host }}</td>
+              <td>{{ c.subject }}</td>
+              <td>{{ c.issuer }}</td>
+              <td>{{ c.not_after }}</td>
+              <td>{{ c.days_remaining }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No certificates tracked yet. Add a host to scan or upload a certificate file.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

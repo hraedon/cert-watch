@@ -1,0 +1,9 @@
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #222; }
+header { display: flex; align-items: baseline; gap: 1rem; border-bottom: 1px solid #ddd; padding-bottom: .5rem; }
+.version { color: #888; font-size: .9rem; }
+table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+th, td { text-align: left; padding: .4rem .6rem; border-bottom: 1px solid #eee; }
+tr.red    { background: #fde2e1; }
+tr.yellow { background: #fff3cd; }
+tr.green  { background: #e7f5e9; }
+.empty { color: #666; margin-top: 2rem; font-style: italic; }

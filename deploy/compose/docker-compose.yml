@@ -1,0 +1,17 @@
+services:
+  cert-watch:
+    image: ghcr.io/hraedon/cert-watch:latest
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: cert-watch
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - cert-watch-data:/var/lib/cert-watch
+    environment:
+      CERT_WATCH_DATA_DIR: /var/lib/cert-watch
+
+volumes:
+  cert-watch-data:

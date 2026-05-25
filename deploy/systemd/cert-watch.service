@@ -1,0 +1,27 @@
+[Unit]
+Description=cert-watch — TLS certificate expiry tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=cert-watch
+Group=cert-watch
+Environment=CERT_WATCH_DATA_DIR=/var/lib/cert-watch
+ExecStart=/opt/cert-watch/venv/bin/cert-watch
+Restart=on-failure
+RestartSec=5
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/cert-watch
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target
