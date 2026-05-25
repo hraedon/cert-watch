@@ -11,20 +11,57 @@
     <span class="version">v{{ version }}</span>
   </header>
   <main>
+    {% if error %}
+      <p class="error">Error: {{ error }}</p>
+    {% endif %}
+
+    <section class="forms">
+      <form class="add-host" method="post" action="/hosts">
+        <h2>Add host to scan</h2>
+        <label>Hostname <input type="text" name="hostname" required placeholder="example.com"></label>
+        <label>Port <input type="number" name="port" value="443" min="1" max="65535"></label>
+        <button type="submit">Add &amp; scan</button>
+      </form>
+
+      <form class="upload" method="post" action="/upload" enctype="multipart/form-data">
+        <h2>Upload certificate</h2>
+        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12"></label>
+        <label>Password (PKCS#12 only) <input type="password" name="password" placeholder="optional"></label>
+        <button type="submit">Upload</button>
+      </form>
+    </section>
+
     {% if certificates %}
       <table>
         <thead>
-          <tr><th>Host</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Days</th></tr>
+          <tr>
+            <th>Host / Source</th>
+            <th>Role</th>
+            <th>Subject</th>
+            <th>Issuer</th>
+            <th>Expires</th>
+            <th>Days</th>
+          </tr>
         </thead>
         <tbody>
           {% for c in certificates %}
             <tr class="{{ c.urgency }}">
-              <td>{{ c.host }}</td>
+              <td rowspan="{{ 1 + c.chain|length }}">{{ c.host }}</td>
+              <td>leaf</td>
               <td>{{ c.subject }}</td>
               <td>{{ c.issuer }}</td>
               <td>{{ c.not_after }}</td>
               <td>{{ c.days_remaining }}</td>
             </tr>
+            {% for chain in c.chain %}
+              <tr class="{{ chain.urgency }} chain-row">
+                <td>chain</td>
+                <td>{{ chain.subject }}</td>
+                <td>{{ chain.issuer }}</td>
+                <td>{{ chain.not_after }}</td>
+                <td>{{ chain.days_remaining }}</td>
+              </tr>
+            {% endfor %}
           {% endfor %}
         </tbody>
       </table>
