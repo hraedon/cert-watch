@@ -11,6 +11,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
 
+from cert_watch.cert_chain import validate_chain_order
 from cert_watch.certificate_model import (
     Certificate,
     extract_chain_from_pem,
@@ -108,7 +109,10 @@ def _parse_pkcs12(
 def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
     """Persist leaf + chain via dedicated repos so parent_cert_id is wired correctly."""
     init_schema(repo_path)
-    leaf_repo = SqliteCertificateRepository(repo_path, source="uploaded")
+    chain_valid = validate_chain_order([entry.leaf, *entry.chain])
+    leaf_repo = SqliteCertificateRepository(
+        repo_path, source="uploaded", chain_valid=chain_valid
+    )
     leaf_id = leaf_repo.add(entry.leaf)
     for chain_cert in entry.chain:
         chain_repo = SqliteCertificateRepository(

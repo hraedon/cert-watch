@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from cert_watch.cert_chain import validate_chain_order
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import SqliteCertificateRepository, init_schema
 
@@ -133,11 +134,13 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
+        chain_valid = validate_chain_order([entry.leaf, *entry.chain])
         leaf_repo = SqliteCertificateRepository(
             repo_path_or_repo,
             source="scanned",
             hostname=entry.host,
             port=entry.port,
+            chain_valid=chain_valid,
         )
         leaf_id = leaf_repo.add(entry.leaf)
         for chain_cert in entry.chain:

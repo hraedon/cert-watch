@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     port INTEGER,
     is_leaf INTEGER NOT NULL DEFAULT 1,
     parent_cert_id TEXT,
+    chain_valid INTEGER,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -91,6 +92,10 @@ def init_schema(db_path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(path)) as conn:
         conn.executescript(_SCHEMA)
+        # Idempotent migration: ensure chain_valid column exists on pre-existing DBs.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
+        if "chain_valid" not in cols:
+            conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
         conn.commit()
 
 
@@ -159,6 +164,7 @@ class SqliteCertificateRepository(CertificateRepository):
         hostname: str | None = None,
         port: int | None = None,
         parent_cert_id: str | None = None,
+        chain_valid: bool | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         init_schema(self.db_path)
@@ -166,18 +172,22 @@ class SqliteCertificateRepository(CertificateRepository):
         self.hostname = hostname
         self.port = port
         self.parent_cert_id = parent_cert_id
+        self.chain_valid = chain_valid
 
     def add(self, cert: Certificate) -> str:
         cert_id = str(uuid.uuid4())
         now = _iso(datetime.now(UTC))
+        cv: int | None = (
+            None if self.chain_valid is None else (1 if self.chain_valid else 0)
+        )
         with _connect(self.db_path) as conn:
             conn.execute(
                 """
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parent_cert_id, chain_valid, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert_id,
@@ -193,6 +203,7 @@ class SqliteCertificateRepository(CertificateRepository):
                     self.port,
                     1 if cert.is_leaf else 0,
                     self.parent_cert_id,
+                    cv,
                     now,
                     now,
                 ),
@@ -363,7 +374,7 @@ class SqliteHostRepository:
 
     def list_all(self) -> list[HostEntry]:
         with _connect(self.db_path) as conn:
-            rows = conn.execute("SELECT * FROM hosts").fetchall()
+            rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
         return [
             HostEntry(
                 id=r["id"],
@@ -373,6 +384,87 @@ class SqliteHostRepository:
             )
             for r in rows
         ]
+
+    def get(self, host_id: str) -> HostEntry | None:
+        with _connect(self.db_path) as conn:
+            r = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        if not r:
+            return None
+        return HostEntry(
+            id=r["id"],
+            hostname=r["hostname"],
+            port=r["port"],
+            added_at=_parse_iso(r["added_at"]),
+        )
+
+    def delete(self, host_id: str) -> bool:
+        """Delete the host and cascade-delete its scanned certs (leaf + chain)."""
+        with _connect(self.db_path) as conn:
+            r = conn.execute(
+                "SELECT hostname, port FROM hosts WHERE id = ?", (host_id,)
+            ).fetchone()
+            if not r:
+                return False
+            hostname, port = r["hostname"], r["port"]
+            # Find leaf certs for this host.
+            leaf_ids = [
+                row["id"]
+                for row in conn.execute(
+                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                    (hostname, port),
+                ).fetchall()
+            ]
+            for lid in leaf_ids:
+                conn.execute(
+                    "DELETE FROM certificates WHERE parent_cert_id = ?", (lid,)
+                )
+            conn.execute(
+                "DELETE FROM certificates WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            )
+            conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
+            conn.commit()
+        return True
+
+
+def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
+    """Delete a leaf cert and its chain children (or any cert by id)."""
+    with _connect(db_path) as conn:
+        r = conn.execute(
+            "SELECT id FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        if not r:
+            return False
+        conn.execute("DELETE FROM certificates WHERE parent_cert_id = ?", (cert_id,))
+        conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
+        conn.commit()
+    return True
+
+
+def list_alerts_with_subject(db_path: str | Path) -> list[dict]:
+    """Return alerts joined with the cert subject, newest first."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
+                   a.sent_at, a.error_message, a.message, c.subject AS subject
+            FROM alerts a
+            LEFT JOIN certificates c ON c.id = a.cert_id
+            ORDER BY a.created_at DESC
+            """
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_scan_history(db_path: str | Path) -> list[dict]:
+    """Return scan_history rows, newest first."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM scan_history ORDER BY scanned_at DESC"
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ---------- Dashboard helpers ----------
@@ -445,6 +537,9 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
                 "urgency": _urgency(min_days),
                 "leaf_urgency": _urgency(leaf_days),
                 "chain": chain_view,
+                "chain_valid": (
+                    None if leaf["chain_valid"] is None else bool(leaf["chain_valid"])
+                ),
             }
         )
 
