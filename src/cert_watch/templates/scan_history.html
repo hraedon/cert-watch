@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cert-watch — scan history</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>cert-watch</h1>
+    <span class="version">v{{ version }}</span>
+    <nav class="topnav">
+      <a href="/">Dashboard</a>
+      <a href="/alerts">Alerts</a>
+      <a href="/scan-history">Scan history</a>
+    </nav>
+  </header>
+  <main>
+    <h2>Scan history</h2>
+    {% if history %}
+      <table>
+        <thead>
+          <tr>
+            <th>Scanned at</th>
+            <th>Host</th>
+            <th>Status</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in history %}
+            <tr class="{% if r.status == 'failure' %}red{% elif r.status == 'success' %}green{% else %}yellow{% endif %}">
+              <td>{{ r.scanned_at }}</td>
+              <td>{{ r.hostname }}:{{ r.port }}</td>
+              <td>{{ r.status }}</td>
+              <td>{{ r.error_message or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No scans recorded yet.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cert-watch — alerts</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>cert-watch</h1>
+    <span class="version">v{{ version }}</span>
+    <nav class="topnav">
+      <a href="/">Dashboard</a>
+      <a href="/alerts">Alerts</a>
+      <a href="/scan-history">Scan history</a>
+    </nav>
+  </header>
+  <main>
+    <h2>Alert history</h2>
+    {% if alerts %}
+      <table>
+        <thead>
+          <tr>
+            <th>Created</th>
+            <th>Subject</th>
+            <th>Type</th>
+            <th>Status</th>
+            <th>Threshold (days)</th>
+            <th>Sent</th>
+            <th>Error</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in alerts %}
+            <tr class="{% if a.status == 'failed' %}red{% elif a.status == 'sent' %}green{% else %}yellow{% endif %}">
+              <td>{{ a.created_at }}</td>
+              <td>{{ a.subject or "(deleted)" }}</td>
+              <td>{{ a.alert_type }}</td>
+              <td>{{ a.status }}</td>
+              <td>{{ a.threshold_days if a.threshold_days is not none else "" }}</td>
+              <td>{{ a.sent_at or "" }}</td>
+              <td>{{ a.error_message or "" }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p class="empty">No alerts recorded.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

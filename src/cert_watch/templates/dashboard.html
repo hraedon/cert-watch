@@ -9,6 +9,11 @@
   <header>
     <h1>cert-watch</h1>
     <span class="version">v{{ version }}</span>
+    <nav class="topnav">
+      <a href="/">Dashboard</a>
+      <a href="/alerts">Alerts</a>
+      <a href="/scan-history">Scan history</a>
+    </nav>
   </header>
   <main>
     {% if error %}
@@ -31,6 +36,36 @@
       </form>
     </section>
 
+    <section class="hosts">
+      <h2>Tracked hosts</h2>
+      {% if hosts %}
+        <table class="hosts-table">
+          <thead>
+            <tr><th>Hostname</th><th>Port</th><th>Added</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            {% for h in hosts %}
+              <tr>
+                <td>{{ h.hostname }}</td>
+                <td>{{ h.port }}</td>
+                <td>{{ h.added_at.strftime("%Y-%m-%d") }}</td>
+                <td class="actions">
+                  <form method="post" action="/hosts/{{ h.id }}/scan" style="display:inline">
+                    <button type="submit">Scan now</button>
+                  </form>
+                  <form method="post" action="/hosts/{{ h.id }}/delete" style="display:inline">
+                    <button type="submit" class="danger">Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p class="empty">No hosts being scanned.</p>
+      {% endif %}
+    </section>
+
     {% if certificates %}
       <table>
         <thead>
@@ -41,24 +76,35 @@
             <th>Issuer</th>
             <th>Expires</th>
             <th>Days</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {% for c in certificates %}
             <tr class="{{ c.urgency }}">
-              <td rowspan="{{ 1 + c.chain|length }}">{{ c.host }}</td>
+              <td rowspan="{{ 1 + c.chain|length }}">
+                {{ c.host }}
+                {% if c.chain_valid is sameas false %}
+                  <span class="badge invalid" title="Chain order invalid">chain-invalid</span>
+                {% endif %}
+              </td>
               <td>leaf</td>
               <td>{{ c.subject }}</td>
               <td>{{ c.issuer }}</td>
-              <td>{{ c.not_after }}</td>
+              <td>{{ c.not_after | humanize_expiry }}</td>
               <td>{{ c.days_remaining }}</td>
+              <td rowspan="{{ 1 + c.chain|length }}" class="actions">
+                <form method="post" action="/certificates/{{ c.id }}/delete" style="display:inline">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </td>
             </tr>
             {% for chain in c.chain %}
               <tr class="{{ chain.urgency }} chain-row">
                 <td>chain</td>
                 <td>{{ chain.subject }}</td>
                 <td>{{ chain.issuer }}</td>
-                <td>{{ chain.not_after }}</td>
+                <td>{{ chain.not_after | humanize_expiry }}</td>
                 <td>{{ chain.days_remaining }}</td>
               </tr>
             {% endfor %}

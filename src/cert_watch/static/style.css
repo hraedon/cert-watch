@@ -13,3 +13,14 @@ tr.green  { background: #e7f5e9; }
 .forms h2 { margin: 0 0 .5rem 0; font-size: 1rem; }
 .forms label { display: block; margin: .25rem 0; font-size: .9rem; }
 .chain-row td { color: #555; font-size: .9rem; }
+.topnav { margin-left: auto; display: flex; gap: 1rem; }
+.topnav a { color: #36a; text-decoration: none; }
+.topnav a:hover { text-decoration: underline; }
+.hosts { margin: 1rem 0; }
+.hosts-table { width: auto; min-width: 50%; }
+.actions form { margin: 0; padding: 0; border: none; display: inline; }
+.actions button { margin-right: .25rem; }
+button.danger { background: #fde2e1; border: 1px solid #f5b0ad; color: #800; }
+button.danger:hover { background: #fbc; }
+.badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .75rem; margin-left: .4rem; }
+.badge.invalid { background: #fde2e1; color: #800; border: 1px solid #f5b0ad; }
