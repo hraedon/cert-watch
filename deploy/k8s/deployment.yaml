@@ -17,6 +17,7 @@ spec:
       labels:
         app.kubernetes.io/name: cert-watch
     spec:
+      enableServiceLinks: false  # avoid CERT_WATCH_PORT=tcp://... shadowing our env
       securityContext:
         fsGroup: 999
       containers:
