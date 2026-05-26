@@ -12,6 +12,24 @@ services:
       - cert-watch-data:/var/lib/cert-watch
     environment:
       CERT_WATCH_DATA_DIR: /var/lib/cert-watch
+      # --- Alerts (SMTP) — uncomment and fill in to enable ---
+      # SMTP_HOST: smtp.example.com
+      # SMTP_PORT: "587"
+      # SMTP_USER: ""
+      # SMTP_PASSWORD: ""
+      # ALERT_FROM: cert-watch@example.com
+      # ALERT_RECIPIENTS: ops@example.com
+      # --- Alerts (Webhook) ---
+      # ALERT_WEBHOOK_URL: https://hooks.slack.com/services/...
+      # --- Authentication (disabled by default) ---
+      # AUTH_PROVIDER: ldap            # or: oauth, entra
+      # LDAP_SERVER: ldap://dc.example.com
+      # LDAP_BASE_DN: DC=example,DC=com
+      # LDAP_BIND_DN: CN=svc,DC=example,DC=com
+      # LDAP_BIND_PASSWORD: secret
+      # OAUTH_CLIENT_ID: ""
+      # OAUTH_CLIENT_SECRET: ""
+      # OAUTH_ISSUER_URL: https://login.microsoftonline.com/{tenant}/v2.0
 
 volumes:
   cert-watch-data:

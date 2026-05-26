@@ -30,6 +30,42 @@ spec:
           env:
             - name: CERT_WATCH_DATA_DIR
               value: /var/lib/cert-watch
+            # --- Alerts (SMTP) — uncomment to enable ---
+            # - name: SMTP_HOST
+            #   value: smtp.example.com
+            # - name: ALERT_FROM
+            #   value: cert-watch@example.com
+            # - name: ALERT_RECIPIENTS
+            #   value: ops@example.com
+            # --- Alerts (Webhook) ---
+            # - name: ALERT_WEBHOOK_URL
+            #   value: https://hooks.slack.com/services/...
+            # --- Authentication (disabled by default) ---
+            # - name: AUTH_PROVIDER
+            #   value: ldap    # or: oauth, entra
+            # - name: LDAP_SERVER
+            #   value: ldap://dc.example.com
+            # - name: LDAP_BASE_DN
+            #   value: DC=example,DC=com
+            # - name: LDAP_BIND_DN
+            #   value: CN=svc,DC=example,DC=com
+            # - name: LDAP_BIND_PASSWORD
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: cert-watch-auth
+            #       key: ldap-bind-password
+            # - name: OAUTH_CLIENT_ID
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: cert-watch-auth
+            #       key: oauth-client-id
+            # - name: OAUTH_CLIENT_SECRET
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: cert-watch-auth
+            #       key: oauth-client-secret
+            # - name: OAUTH_ISSUER_URL
+            #   value: https://login.microsoftonline.com/{tenant}/v2.0
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 3
