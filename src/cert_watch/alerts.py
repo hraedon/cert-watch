@@ -1,11 +1,14 @@
-"""Email alerts. See spec wi_fr04_alerts.md."""
+"""Email and webhook alerts. See spec wi_fr04_alerts.md."""
 
 from __future__ import annotations
 
+import json
 import smtplib
+import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
+from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
@@ -26,11 +29,21 @@ class AlertConfig:
     smtp_port: int = 587
 
 
+@dataclass
+class WebhookConfig:
+    """Webhook/Slack alert configuration."""
+
+    url: str
+    headers: dict[str, str] = field(default_factory=dict)
+    timeout: int = 15
+
+
 def evaluate_thresholds(
     cert: Certificate,
     alert_repo: AlertRepository,
     *,
     cert_id: str | None = None,
+    custom_thresholds: tuple[int, ...] | None = None,
 ) -> list[Alert]:
     """
     Create pending alerts for thresholds the cert has now crossed, skipping any
@@ -39,9 +52,14 @@ def evaluate_thresholds(
     The spec talks about cert_id as the link to existing alerts; we accept it as
     a kwarg so callers that persisted the cert can pass the row id. If omitted we
     use fingerprint_sha256 as a stable handle.
+
+    If custom_thresholds is provided, those are used instead of the defaults.
     """
     days = cert.days_until_expiry()
-    thresholds = LEAF_THRESHOLDS if cert.is_leaf else CHAIN_THRESHOLDS
+    if custom_thresholds is not None:
+        thresholds = custom_thresholds
+    else:
+        thresholds = LEAF_THRESHOLDS if cert.is_leaf else CHAIN_THRESHOLDS
     cid = cert_id or cert.fingerprint_sha256
 
     # Find existing alerts for this cert and their thresholds (via threshold_days col).
@@ -73,6 +91,52 @@ def evaluate_thresholds(
     return created
 
 
+def evaluate_all_certs(
+    db_path: str | Path, alert_repo: AlertRepository
+) -> list[Alert]:
+    """Evaluate thresholds for all leaf certificates in the database.
+
+    Looks up per-host custom thresholds from the hosts table and passes them
+    through to evaluate_thresholds.
+    """
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import _connect, _parse_iso
+
+    with _connect(db_path) as conn:
+        host_thresholds: dict[tuple[str, int], int | None] = {}
+        for row in conn.execute("SELECT hostname, port, threshold_days FROM hosts").fetchall():
+            host_thresholds[(row["hostname"], row["port"])] = row["threshold_days"]
+
+        leaves = conn.execute(
+            "SELECT * FROM certificates WHERE is_leaf = 1"
+        ).fetchall()
+
+    all_alerts: list[Alert] = []
+    for leaf_row in leaves:
+        cert = Certificate(
+            subject=leaf_row["subject"],
+            issuer=leaf_row["issuer"],
+            not_before=_parse_iso(leaf_row["not_before"]),
+            not_after=_parse_iso(leaf_row["not_after"]),
+            san_dns_names=json.loads(leaf_row["san_dns_names"]),
+            fingerprint_sha256=leaf_row["fingerprint_sha256"],
+            raw_der=bytes(leaf_row["raw_der"]),
+            is_leaf=True,
+        )
+        custom = None
+        hostname = leaf_row["hostname"]
+        port = leaf_row["port"]
+        if hostname and port:
+            host_td = host_thresholds.get((hostname, port))
+            if host_td is not None:
+                custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
+        alerts = evaluate_thresholds(
+            cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom
+        )
+        all_alerts.extend(alerts)
+    return all_alerts
+
+
 def _format_message(cert: Certificate, days: int, threshold: int) -> str:
     """See AC-05."""
     action = (
@@ -87,6 +151,18 @@ def _format_message(cert: Certificate, days: int, threshold: int) -> str:
         f"({days} days remaining; threshold: <={threshold}d). "
         f"Recommended action: {action}"
     )
+
+
+def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
+    """Strip SMTP credentials from error messages to avoid logging secrets.
+
+    Only replaces passwords >= 4 chars to avoid false positives (e.g. 'p' in 'nope').
+    """
+    if config and config.smtp_password and len(config.smtp_password) >= 4:
+        msg = msg.replace(config.smtp_password, "***")
+    if config and config.smtp_user and len(config.smtp_user) >= 4:
+        msg = msg.replace(config.smtp_user, "***")
+    return msg
 
 
 def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
@@ -106,20 +182,52 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
             s.send_message(msg)
         return True
     except Exception as exc:  # noqa: BLE001 — AC-06 says do not raise
+        alert.error_message = _sanitize_smtp_error(str(exc), config)
+        return False
+
+
+def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
+    """Send alert as JSON POST to a webhook URL. Returns True on success."""
+    if config is None:
+        return False
+    payload = json.dumps({
+        "alert_type": alert.alert_type,
+        "cert_id": alert.cert_id,
+        "message": alert.message,
+        "threshold_days": alert.threshold_days,
+        "status": alert.status,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        config.url,
+        data=payload,
+        headers={"Content-Type": "application/json", **config.headers},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=config.timeout) as resp:
+            return 200 <= resp.status < 300
+    except Exception as exc:  # noqa: BLE001
         alert.error_message = str(exc)
         return False
 
 
 def process_pending(
-    alert_repo: AlertRepository, config: AlertConfig | None
+    alert_repo: AlertRepository,
+    config: AlertConfig | None,
+    webhook_config: WebhookConfig | None = None,
 ) -> dict[str, int]:
-    """See AC-04. No-ops when config is None (per scaffold convention)."""
-    if config is None:
+    """See AC-04. No-ops when both configs are None. Tries webhook if SMTP fails or is absent."""
+    if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0}
     sent = 0
     failed = 0
     for alert in alert_repo.list_pending():
-        if send_alert(alert, config):
+        delivered = False
+        if config is not None:
+            delivered = send_alert(alert, config)
+        if not delivered and webhook_config is not None:
+            delivered = send_webhook(alert, webhook_config)
+        if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1

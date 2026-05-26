@@ -9,10 +9,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cert_watch.cert_chain import validate_chain_order
 from cert_watch.certificate_model import Certificate, parse_certificate
-from cert_watch.database import SqliteCertificateRepository, init_schema
-from cert_watch.database import _connect as _connect_db
+from cert_watch.database import init_schema, replace_scanned
 
 DEFAULT_TIMEOUT = 10.0
 
@@ -33,12 +31,16 @@ class ScannedEntry:
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
-def _open_tls_connection(hostname: str, port: int, timeout: float):
+def _open_tls_connection(hostname: str, port: int, timeout: float, *, verify: bool = False):
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
     ctx = ssl.create_default_context()
-    # We want the cert chain regardless of validity (this is monitoring, not enforcement).
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    if verify:
+        ctx.check_hostname = True
+        ctx.verify_mode = ssl.CERT_REQUIRED
+    else:
+        # We want the cert chain regardless of validity (this is monitoring, not enforcement).
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
     sock = socket.create_connection((hostname, port), timeout=timeout)
     return ctx.wrap_socket(sock, server_hostname=hostname)
 
@@ -82,11 +84,11 @@ def _der_enc():
 
 
 def scan_host(
-    hostname: str, port: int = 443, *, timeout: float = DEFAULT_TIMEOUT
+    hostname: str, port: int = 443, *, timeout: float = DEFAULT_TIMEOUT, verify: bool = False,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06."""
     try:
-        ssl_sock = _open_tls_connection(hostname, port, timeout)
+        ssl_sock = _open_tls_connection(hostname, port, timeout, verify=verify)
     except TimeoutError as exc:
         return ScanError(hostname=hostname, port=port, error_message=f"timeout: {exc}")
     except OSError as exc:
@@ -136,42 +138,14 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
-        chain_valid = validate_chain_order([entry.leaf, *entry.chain])
-        with _connect_db(repo_path_or_repo) as conn:
-            old_leaves = [
-                row["id"]
-                for row in conn.execute(
-                    "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
-                    (entry.host, entry.port),
-                ).fetchall()
-            ]
-            for old_id in old_leaves:
-                conn.execute(
-                    "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
-                )
-            conn.execute(
-                "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
-                (entry.host, entry.port),
-            )
-            conn.commit()
-        leaf_repo = SqliteCertificateRepository(
+        return replace_scanned(
             repo_path_or_repo,
-            source="scanned",
             hostname=entry.host,
             port=entry.port,
-            chain_valid=chain_valid,
+            leaf=entry.leaf,
+            chain=entry.chain,
+            chain_valid=None,  # computed inside replace_scanned
         )
-        leaf_id = leaf_repo.add(entry.leaf)
-        for chain_cert in entry.chain:
-            chain_repo = SqliteCertificateRepository(
-                repo_path_or_repo,
-                source="scanned",
-                hostname=entry.host,
-                port=entry.port,
-                parent_cert_id=leaf_id,
-            )
-            chain_repo.add(chain_cert)
-        return leaf_id
 
     repo = repo_path_or_repo
     leaf_id = repo.add(entry.leaf)

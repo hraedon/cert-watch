@@ -47,11 +47,13 @@ CREATE TABLE IF NOT EXISTS certificates (
     is_leaf INTEGER NOT NULL DEFAULT 1,
     parent_cert_id TEXT,
     chain_valid INTEGER,
+    replaces_cert_id TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);
 CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
+CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
 
 CREATE TABLE IF NOT EXISTS alerts (
     id TEXT PRIMARY KEY,
@@ -80,6 +82,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     id TEXT PRIMARY KEY,
     hostname TEXT NOT NULL,
     port INTEGER NOT NULL DEFAULT 443,
+    threshold_days INTEGER,
     added_at TEXT NOT NULL,
     UNIQUE(hostname, port)
 );
@@ -92,16 +95,22 @@ def init_schema(db_path: str | Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(path)) as conn:
         conn.executescript(_SCHEMA)
-        # Idempotent migration: ensure chain_valid column exists on pre-existing DBs.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         if "chain_valid" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
+        if "replaces_cert_id" not in cols:
+            conn.execute("ALTER TABLE certificates ADD COLUMN replaces_cert_id TEXT")
+        host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
+        if "threshold_days" not in host_cols:
+            conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")
         conn.commit()
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 
@@ -165,6 +174,7 @@ class SqliteCertificateRepository(CertificateRepository):
         port: int | None = None,
         parent_cert_id: str | None = None,
         chain_valid: bool | None = None,
+        replaces_cert_id: str | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         init_schema(self.db_path)
@@ -173,6 +183,7 @@ class SqliteCertificateRepository(CertificateRepository):
         self.port = port
         self.parent_cert_id = parent_cert_id
         self.chain_valid = chain_valid
+        self.replaces_cert_id = replaces_cert_id
 
     def add(self, cert: Certificate) -> str:
         cert_id = str(uuid.uuid4())
@@ -186,8 +197,8 @@ class SqliteCertificateRepository(CertificateRepository):
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert_id,
@@ -204,6 +215,7 @@ class SqliteCertificateRepository(CertificateRepository):
                     1 if cert.is_leaf else 0,
                     self.parent_cert_id,
                     cv,
+                    self.replaces_cert_id,
                     now,
                     now,
                 ),
@@ -347,6 +359,7 @@ class HostEntry:
     hostname: str
     port: int = 443
     id: str = ""
+    threshold_days: int | None = None
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -355,13 +368,15 @@ class SqliteHostRepository:
         self.db_path = Path(db_path)
         init_schema(self.db_path)
 
-    def add(self, hostname: str, port: int = 443) -> str:
+    def add(self, hostname: str, port: int = 443, threshold_days: int | None = None) -> str:
         host_id = str(uuid.uuid4())
         with _connect(self.db_path) as conn:
             try:
                 conn.execute(
-                    "INSERT INTO hosts (id, hostname, port, added_at) VALUES (?, ?, ?, ?)",
-                    (host_id, hostname, port, _iso(datetime.now(UTC))),
+                    "INSERT INTO hosts"
+                    " (id, hostname, port, threshold_days, added_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (host_id, hostname, port, threshold_days, _iso(datetime.now(UTC))),
                 )
                 conn.commit()
             except sqlite3.IntegrityError:
@@ -380,6 +395,7 @@ class SqliteHostRepository:
                 id=r["id"],
                 hostname=r["hostname"],
                 port=r["port"],
+                threshold_days=dict(r).get("threshold_days"),
                 added_at=_parse_iso(r["added_at"]),
             )
             for r in rows
@@ -394,6 +410,7 @@ class SqliteHostRepository:
             id=r["id"],
             hostname=r["hostname"],
             port=r["port"],
+            threshold_days=dict(r).get("threshold_days"),
             added_at=_parse_iso(r["added_at"]),
         )
 
@@ -437,6 +454,111 @@ class SqliteHostRepository:
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
             conn.commit()
         return True
+
+
+def replace_scanned(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    leaf: Certificate,
+    chain: list[Certificate],
+    chain_valid: bool | None,
+) -> str:
+    """Atomically replace all certs for host:port with new leaf + chain.
+
+    Deletes old leaf + chain children, inserts new ones, all in a single
+    transaction. Returns the new leaf cert_id.
+    """
+    from cert_watch.cert_chain import validate_chain_order
+
+    if chain_valid is None:
+        chain_valid = validate_chain_order([leaf, *chain])
+
+    now = _iso(datetime.now(UTC))
+    leaf_id = str(uuid.uuid4())
+
+    with _connect(db_path) as conn:
+        old_leaves = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                (hostname, port),
+            ).fetchall()
+        ]
+        replaces_id: str | None = old_leaves[0] if old_leaves else None
+
+        for old_id in old_leaves:
+            conn.execute(
+                "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
+            )
+        conn.execute(
+            "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
+            (hostname, port),
+        )
+
+        cv: int | None = None if chain_valid is None else (1 if chain_valid else 0)
+        conn.execute(
+            """
+            INSERT INTO certificates
+            (id, subject, issuer, not_before, not_after, san_dns_names,
+             fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+             parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                leaf_id,
+                leaf.subject,
+                leaf.issuer,
+                _iso(leaf.not_before),
+                _iso(leaf.not_after),
+                json.dumps(leaf.san_dns_names),
+                leaf.fingerprint_sha256,
+                leaf.raw_der,
+                "scanned",
+                hostname,
+                port,
+                1,
+                None,
+                cv,
+                replaces_id,
+                now,
+                now,
+            ),
+        )
+
+        for chain_cert in chain:
+            chain_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO certificates
+                (id, subject, issuer, not_before, not_after, san_dns_names,
+                 fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+                 parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chain_id,
+                    chain_cert.subject,
+                    chain_cert.issuer,
+                    _iso(chain_cert.not_before),
+                    _iso(chain_cert.not_after),
+                    json.dumps(chain_cert.san_dns_names),
+                    chain_cert.fingerprint_sha256,
+                    chain_cert.raw_der,
+                    "scanned",
+                    hostname,
+                    port,
+                    0,
+                    leaf_id,
+                    None,
+                    None,
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
+
+    return leaf_id
 
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
@@ -563,6 +685,7 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
                 "chain_valid": (
                     None if leaf["chain_valid"] is None else bool(leaf["chain_valid"])
                 ),
+                "replaces_cert_id": leaf.get("replaces_cert_id"),
             }
         )
 

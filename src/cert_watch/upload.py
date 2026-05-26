@@ -11,7 +11,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.serialization import Encoding, pkcs12
 
-from cert_watch.cert_chain import validate_chain_order
+from cert_watch.cert_chain import extract_chain, extract_chain_pem, validate_chain_order
 from cert_watch.certificate_model import (
     Certificate,
     extract_chain_from_pem,
@@ -36,6 +36,7 @@ class UploadedEntry:
 _PEM_EXT = {".pem", ".crt", ".cer"}
 _DER_EXT = {".der"}
 _PKCS12_EXT = {".pfx", ".p12"}
+_PKCS7_EXT = {".p7b", ".p7c"}
 
 
 def upload_certificate(
@@ -56,6 +57,8 @@ def upload_certificate(
 
     if ext in _PKCS12_EXT:
         return _parse_pkcs12(path.name, data, password)
+    if ext in _PKCS7_EXT:
+        return _parse_pkcs7(path.name, data)
     if ext in _PEM_EXT:
         return _parse_pem_or_der(path.name, data)
     if ext in _DER_EXT:
@@ -104,6 +107,20 @@ def _parse_pkcs12(
             cp.is_leaf = False
             chain.append(cp)
     return UploadedEntry(file_name=name, leaf=leaf_parsed, chain=chain)
+
+
+def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
+    certs = extract_chain(data)
+    if not certs:
+        certs = extract_chain_pem(data)
+    if not certs:
+        return ParseError(error_message="could not parse PKCS#7: no certificates found")
+    leaf = certs[0]
+    leaf.is_leaf = True
+    chain_certs = certs[1:]
+    for c in chain_certs:
+        c.is_leaf = False
+    return UploadedEntry(file_name=name, leaf=leaf, chain=chain_certs)
 
 
 def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:

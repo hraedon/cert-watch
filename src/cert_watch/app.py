@@ -1,18 +1,29 @@
 from __future__ import annotations
 
+import collections
+import csv
+import hashlib
+import hmac
+import io
+import ipaddress
+import logging
+import os as _os
+import secrets as _secrets
+import socket
 import tempfile
+import threading as _threading
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from cert_watch import __version__
-from cert_watch.alerts import process_pending
+from cert_watch import __version__, ct_lookup
+from cert_watch.alerts import evaluate_all_certs, process_pending
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
@@ -27,9 +38,149 @@ from cert_watch.scan import scan_host, store_scanned
 from cert_watch.scheduler import run_scan_now, start_scheduler, stop_scheduler
 from cert_watch.upload import store_uploaded, upload_certificate
 
+logger = logging.getLogger("cert_watch.app")
+
+
+def _setup_logging() -> None:
+    """Configure structured logging for cert-watch."""
+    import sys
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)s %(name)s %(message)s",
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+    )
+    root = logging.getLogger("cert_watch")
+    if not root.handlers:
+        root.addHandler(handler)
+        root.setLevel(logging.INFO)
+
 BASE_DIR = Path(__file__).parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+# ---------- SSRF mitigation ----------
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_blocked_host(hostname: str) -> str | None:
+    """Return an error message if hostname resolves to a blocked IP, else None.
+
+    Only blocks when DNS resolution succeeds AND returns a private/link-local IP.
+    Unresolvable hostnames are allowed through (they'll fail at connection time).
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return None  # Allow through; connection will fail naturally
+    for _family, *_rest in infos:
+        ip_str = _rest[3][0] if _rest else None
+        if ip_str is None:
+            continue
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        for net in _BLOCKED_NETWORKS:
+            if ip in net:
+                return f"hostname resolves to blocked address {ip}"
+    return None
+
+
+# ---------- CSRF protection (double-submit cookie) ----------
+
+_CSRF_SECRET = _os.environ.get("CERT_WATCH_CSRF_SECRET") or _secrets.token_hex(32)
+_CSRF_TOKEN_TTL = 3600 * 8  # 8 hours
+
+
+def _make_csrf_token(session_id: str) -> str:
+    payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
+    sig = hmac.new(_CSRF_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    return f"{payload}:{sig}"
+
+
+def _validate_csrf_token(token: str, session_id: str) -> bool:
+    parts = token.split(":")
+    if len(parts) != 3:
+        return False
+    ts_str, sig = parts[1], parts[2]
+    payload = f"{session_id}:{ts_str}"
+    expected = hmac.new(_CSRF_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        ts = int(ts_str)
+    except ValueError:
+        return False
+    return (datetime.now(UTC).timestamp() - ts) < _CSRF_TOKEN_TTL
+
+
+def _get_session_id(request: Request) -> str:
+    sid = request.cookies.get("cw_sid")
+    if sid:
+        return sid
+    # Check if middleware set a new session ID for this request
+    scope_sid = request.scope.get("session_id")
+    if scope_sid:
+        return scope_sid
+    return _secrets.token_hex(16)
+
+
+# ---------- Rate limiting (in-memory sliding window) ----------
+
+_rate_lock = _threading.Lock()
+_rate_windows: dict[str, collections.deque] = {}
+
+
+def _check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
+    """Return True if request is allowed, False if rate-limited."""
+    now = datetime.now(UTC).timestamp()
+    with _rate_lock:
+        if key not in _rate_windows:
+            _rate_windows[key] = collections.deque()
+        window = _rate_windows[key]
+        cutoff = now - window_seconds
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= max_requests:
+            return False
+        window.append(now)
+        return True
+
+
+def _check_csrf(request: Request) -> str | None:
+    """Validate CSRF double-submit cookie. Returns error message or None.
+
+    Checks: x-csrf-token header, then _csrf_token query param (for form action URLs).
+    Skipped when CERT_WATCH_CSRF_DISABLED=1 (for testing).
+    """
+    if _os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
+        return None
+    token = request.headers.get("x-csrf-token") or request.query_params.get("_csrf_token") or ""
+    if not token:
+        return "missing CSRF token"
+    session_id = request.cookies.get("cw_sid", "")
+    if not _validate_csrf_token(token, session_id):
+        return "invalid or expired CSRF token"
+    return None
+
+
+def _get_csrf_context(request: Request) -> dict:
+    """Return template context dict with CSRF token for the current session."""
+    session_id = _get_session_id(request)
+    token = _make_csrf_token(session_id)
+    return {"csrf_token": token}
 
 
 def humanize_expiry(dt) -> str:
@@ -82,15 +233,19 @@ async def lifespan(app: FastAPI):
     Triggered by socratic-specification debate 005 — the original spec omitted
     the wiring between scheduler module and the app boot path.
     """
+    _setup_logging()
     s = Settings.from_env()
     init_schema(s.db_path)
+    logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s",
+                s.db_path, s.sched_hour, s.sched_min, s.tls_verify)
     alert_cfg = s.build_alert_config()
+    webhook_cfg = s.build_webhook_config()
 
     def _scan_all() -> dict:
         host_repo = SqliteHostRepository(s.db_path)
         hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
         return run_scan_now(
-            scan_fn=lambda host, port: scan_host(host, port),
+            scan_fn=lambda host, port: scan_host(host, port, verify=s.tls_verify),
             alert_fn=lambda: {"sent": 0, "failed": 0},
             db_path=s.db_path,
             host_provider=lambda: hosts,
@@ -99,7 +254,8 @@ async def lifespan(app: FastAPI):
 
     def _alerts() -> dict:
         repo = SqliteAlertRepository(s.db_path)
-        return process_pending(repo, alert_cfg)
+        evaluate_all_certs(s.db_path, repo)
+        return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
 
     start_scheduler(
         scan_fn=_scan_all,
@@ -111,21 +267,70 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         stop_scheduler()
+    logger.info("cert-watch shutting down")
 
 
 app = FastAPI(title="cert-watch", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 
+@app.middleware("http")
+async def csrf_session_middleware(request: Request, call_next):
+    """Ensure every visitor has a session cookie for CSRF protection."""
+    if not request.cookies.get("cw_sid"):
+        sid = _secrets.token_hex(16)
+        request.scope["session_id"] = sid
+        response = await call_next(request)
+        response.set_cookie(
+            "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL
+        )
+        return response
+    return await call_next(request)
+
+
 def _db_path() -> Path:
-    s = Settings.from_env()
-    init_schema(s.db_path)
-    return s.db_path
+    return Settings.from_env().db_path
 
 
 @app.get("/healthz")
-def healthz() -> dict[str, str]:
-    return {"status": "ok", "version": __version__}
+def healthz() -> dict:
+    db = _db_path()
+    checks: dict[str, str] = {}
+    ok = True
+    # DB connectivity
+    try:
+        import sqlite3
+        with sqlite3.connect(str(db), timeout=5) as conn:
+            conn.execute("SELECT 1")
+        checks["database"] = "ok"
+    except Exception as exc:
+        checks["database"] = f"error: {exc}"
+        ok = False
+    # Last scan
+    try:
+        rows = list_scan_history(db)
+        if rows:
+            checks["last_scan"] = rows[0].get("scanned_at", "unknown")
+            checks["last_scan_status"] = rows[0].get("status", "unknown")
+        else:
+            checks["last_scan"] = "none"
+    except Exception:
+        checks["last_scan"] = "unavailable"
+    # Scheduler
+    from cert_watch.scheduler import _scheduler_thread
+    if _scheduler_thread is not None and _scheduler_thread.is_alive():
+        checks["scheduler"] = "running"
+    else:
+        checks["scheduler"] = "not running"
+    # Certificate counts
+    try:
+        dash_rows = list_dashboard_rows(db)
+        checks["certificates"] = str(len(dash_rows))
+        expired = sum(1 for r in dash_rows if r.get("days_remaining", 0) < 0)
+        checks["expired"] = str(expired)
+    except Exception:
+        pass
+    return {"status": "ok" if ok else "degraded", "version": __version__, "checks": checks}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -133,6 +338,7 @@ def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
     db = _db_path()
     rows = list_dashboard_rows(db)
     hosts = SqliteHostRepository(db).list_all()
+    ctx = _get_csrf_context(request)
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -141,35 +347,136 @@ def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
             "hosts": hosts,
             "version": __version__,
             "error": error,
+            **ctx,
         },
     )
 
 
 @app.post("/hosts")
 async def add_host(
+    request: Request,
     hostname: str = Form(...),
     port: int = Form(443),
+    threshold_days: int | None = Form(None),
 ) -> RedirectResponse:
-    # TODO(v0.3): SSRF / port-scan guard, bulk CSV/YAML import, auth,
-    # PKCS#7 (.p7b/.p7c) and JKS support, /metrics Prometheus endpoint.
+    if not (1 <= port <= 65535):
+        return RedirectResponse(
+            url=f"/?error={quote('port must be between 1 and 65535')}", status_code=303
+        )
+    if threshold_days is not None and threshold_days < 1:
+        return RedirectResponse(
+            url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
+        )
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    if not _check_rate_limit("add_host", 20, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many requests')}", status_code=303
+        )
+    ssrf_err = _is_blocked_host(hostname)
+    if ssrf_err:
+        return RedirectResponse(url=f"/?error={quote(ssrf_err)}", status_code=303)
     db = _db_path()
     host_repo = SqliteHostRepository(db)
-    host_repo.add(hostname, port)
+    host_repo.add(hostname, port, threshold_days=threshold_days)
     result = scan_host(hostname, port)
     if not hasattr(result, "error_message"):
         store_scanned(result, db)
+        logger.info("added and scanned host %s:%d", hostname, port)
+    else:
+        logger.warning("added host %s:%d but scan failed: %s", hostname, port, result.error_message)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/hosts/import")
+async def import_hosts(request: Request, file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    if not _check_rate_limit("import_hosts", 5, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many requests')}", status_code=303
+        )
+    db = _db_path()
+    host_repo = SqliteHostRepository(db)
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(content) > MAX_UPLOAD_BYTES:
+        return RedirectResponse(
+            url=f"/?error={quote('CSV file too large (max 10 MB)')}", status_code=303
+        )
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return RedirectResponse(
+            url=f"/?error={quote('CSV must be UTF-8 encoded')}", status_code=303
+        )
+    reader = csv.DictReader(io.StringIO(text))
+    imported = 0
+    errors: list[str] = []
+    for i, row in enumerate(reader, start=2):
+        hostname = row.get("hostname", "").strip()
+        if not hostname:
+            errors.append(f"row {i}: missing hostname")
+            continue
+        port_str = row.get("port", "443").strip()
+        try:
+            port = int(port_str)
+        except ValueError:
+            errors.append(f"row {i}: invalid port '{port_str}'")
+            continue
+        if not (1 <= port <= 65535):
+            errors.append(f"row {i}: port out of range")
+            continue
+        threshold_str = row.get("threshold_days", "").strip()
+        threshold = None
+        if threshold_str:
+            try:
+                threshold = int(threshold_str)
+            except ValueError:
+                errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
+                continue
+        ssrf_err = _is_blocked_host(hostname)
+        if ssrf_err:
+            errors.append(f"row {i}: {ssrf_err}")
+            continue
+        host_repo.add(hostname, port, threshold_days=threshold)
+        result = scan_host(hostname, port)
+        if not hasattr(result, "error_message"):
+            store_scanned(result, db)
+        imported += 1
+    if errors and imported == 0:
+        logger.warning("CSV import failed: %s", errors[:3])
+        return RedirectResponse(
+            url=f"/?error={quote('Import failed: ' + '; '.join(errors[:3]))}", status_code=303
+        )
+    if errors:
+        logger.info("CSV import partial: %d imported, %d errors", imported, len(errors))
+    else:
+        logger.info("CSV import complete: %d hosts imported", imported)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/hosts/{host_id}/delete")
-async def delete_host(host_id: str) -> RedirectResponse:
+async def delete_host(request: Request, host_id: str) -> RedirectResponse:
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path()
     SqliteHostRepository(db).delete(host_id)
+    logger.info("deleted host %s", host_id)
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/hosts/{host_id}/scan")
-async def scan_host_now(host_id: str) -> RedirectResponse:
+async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    if not _check_rate_limit("scan_host", 10, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
+        )
     db = _db_path()
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
@@ -177,13 +484,22 @@ async def scan_host_now(host_id: str) -> RedirectResponse:
     result = scan_host(host.hostname, host.port)
     if not hasattr(result, "error_message"):
         store_scanned(result, db)
+        logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
+    else:
+        logger.warning(
+            "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
+        )
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/certificates/{cert_id}/delete")
-async def delete_certificate(cert_id: str) -> RedirectResponse:
+async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse:
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path()
     delete_certificate_cascade(db, cert_id)
+    logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -209,11 +525,41 @@ def scan_history_view(request: Request) -> HTMLResponse:
     )
 
 
+@app.get("/ct-lookup/{domain}")
+def ct_lookup_view(domain: str) -> dict:
+    result = ct_lookup.query_ct_log(domain)
+    if isinstance(result, str):
+        return {"error": result}
+    return {
+        "domain": domain,
+        "count": len(result),
+        "entries": [
+            {
+                "common_name": e.common_name,
+                "issuer_name": e.issuer_name,
+                "name_value": e.name_value,
+                "not_before": e.not_before.isoformat(),
+                "not_after": e.not_after.isoformat(),
+                "serial_number": e.serial_number,
+            }
+            for e in result
+        ],
+    }
+
+
 @app.post("/upload")
 async def upload(
+    request: Request,
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
     password: str | None = Form(None),  # noqa: B008
 ) -> RedirectResponse:
+    csrf_err = _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    if not _check_rate_limit("upload", 10, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many requests')}", status_code=303
+        )
     db = _db_path()
     suffix = Path(file.filename or "uploaded").suffix or ".pem"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -235,6 +581,131 @@ async def upload(
             )
         entry.file_name = file.filename or entry.file_name
         store_uploaded(entry, db)
+        logger.info("uploaded certificate: %s", file.filename or "unknown")
     finally:
         tmp_path.unlink(missing_ok=True)
     return RedirectResponse(url="/", status_code=303)
+
+
+# ---------- REST API (JSON) ----------
+
+
+@app.get("/api/certificates")
+def api_list_certificates(page: int = 1, limit: int = 50) -> JSONResponse:
+    db = _db_path()
+    rows = list_dashboard_rows(db)
+    limit = min(max(limit, 1), 200)
+    page = max(page, 1)
+    total = len(rows)
+    start = (page - 1) * limit
+    end = start + limit
+    page_rows = rows[start:end]
+    return JSONResponse(content={
+        "certificates": page_rows,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit if limit else 0,
+        },
+    })
+
+
+@app.get("/api/certificates/{cert_id}")
+def api_get_certificate(cert_id: str) -> JSONResponse:
+    db = _db_path()
+    from cert_watch.database import SqliteCertificateRepository
+
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    return JSONResponse(content={
+        "id": cert_id,
+        "subject": cert.subject,
+        "issuer": cert.issuer,
+        "not_before": cert.not_before.isoformat(),
+        "not_after": cert.not_after.isoformat(),
+        "san_dns_names": cert.san_dns_names,
+        "fingerprint_sha256": cert.fingerprint_sha256,
+        "is_leaf": cert.is_leaf,
+        "days_until_expiry": cert.days_until_expiry(),
+    })
+
+
+@app.get("/api/hosts")
+def api_list_hosts(page: int = 1, limit: int = 50) -> JSONResponse:
+    db = _db_path()
+    hosts = SqliteHostRepository(db).list_all()
+    limit = min(max(limit, 1), 200)
+    page = max(page, 1)
+    total = len(hosts)
+    start = (page - 1) * limit
+    end = start + limit
+    page_hosts = hosts[start:end]
+    return JSONResponse(content={
+        "hosts": [
+            {
+                "id": h.id,
+                "hostname": h.hostname,
+                "port": h.port,
+                "added_at": h.added_at.isoformat(),
+            }
+            for h in page_hosts
+        ],
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit if limit else 0,
+        },
+    })
+
+
+@app.get("/api/alerts")
+def api_list_alerts(page: int = 1, limit: int = 50) -> JSONResponse:
+    db = _db_path()
+    rows = list_alerts_with_subject(db)
+    limit = min(max(limit, 1), 200)
+    page = max(page, 1)
+    total = len(rows)
+    start = (page - 1) * limit
+    end = start + limit
+    page_rows = rows[start:end]
+    return JSONResponse(content={
+        "alerts": page_rows,
+        "pagination": {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "pages": (total + limit - 1) // limit if limit else 0,
+        },
+    })
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics() -> str:
+    db = _db_path()
+    rows = list_dashboard_rows(db)
+    hosts = SqliteHostRepository(db).list_all()
+    lines: list[str] = []
+    lines.append("# HELP cert_watch_cert_expiry_days Days until certificate expiry")
+    lines.append("# TYPE cert_watch_cert_expiry_days gauge")
+    for r in rows:
+        host_label = r["host"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        subject_label = r["subject"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        lines.append(
+            f'cert_watch_cert_expiry_days{{host="{host_label}",'
+            f'subject="{subject_label}"}} {r["days_remaining"]}'
+        )
+    lines.append("# HELP cert_watch_hosts_tracked Number of tracked hosts")
+    lines.append("# TYPE cert_watch_hosts_tracked gauge")
+    lines.append(f"cert_watch_hosts_tracked {len(hosts)}")
+    lines.append("# HELP cert_watch_certificates_tracked Number of certificate groups")
+    lines.append("# TYPE cert_watch_certificates_tracked gauge")
+    lines.append(f"cert_watch_certificates_tracked {len(rows)}")
+    expired = sum(1 for r in rows if r["days_remaining"] < 0)
+    lines.append("# HELP cert_watch_certificates_expired Number of expired certificates")
+    lines.append("# TYPE cert_watch_certificates_expired gauge")
+    lines.append(f"cert_watch_certificates_expired {expired}")
+    return "\n".join(lines) + "\n"

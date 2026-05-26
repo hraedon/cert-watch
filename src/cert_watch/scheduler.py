@@ -54,6 +54,7 @@ def _seconds_until(hour: int, minute: int) -> float:
 
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
+_scheduler_lock = threading.Lock()
 
 
 def start_scheduler(
@@ -64,24 +65,29 @@ def start_scheduler(
 ) -> None:
     """Start a daemon thread that runs scan_fn + alert_fn once per day. See AC-01."""
     global _scheduler_thread
+    with _scheduler_lock:
+        if _scheduler_thread is not None and _scheduler_thread.is_alive():
+            return
 
-    def _loop() -> None:
-        while not _scheduler_stop.is_set():
-            wait = _seconds_until(hour, minute)
-            if _scheduler_stop.wait(timeout=wait):
-                return
-            try:
-                scan_fn()
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduler scan_fn failed")
-            try:
-                alert_fn()
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduler alert_fn failed")
+        def _loop() -> None:
+            while not _scheduler_stop.is_set():
+                wait = _seconds_until(hour, minute)
+                if _scheduler_stop.wait(timeout=wait):
+                    return
+                try:
+                    scan_fn()
+                    logger.info("scheduled scan completed")
+                except Exception:  # noqa: BLE001
+                    logger.exception("scheduler scan_fn failed")
+                try:
+                    alert_fn()
+                    logger.info("scheduled alerts completed")
+                except Exception:  # noqa: BLE001
+                    logger.exception("scheduler alert_fn failed")
 
-    _scheduler_stop.clear()
-    _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
-    _scheduler_thread.start()
+        _scheduler_stop.clear()
+        _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
+        _scheduler_thread.start()
 
 
 def stop_scheduler() -> None:

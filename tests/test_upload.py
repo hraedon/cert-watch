@@ -42,6 +42,20 @@ def test_upload_pfx_wrong_password(pfx_file_with_password):
     assert isinstance(err, ParseError)
 
 
+def test_upload_p7b_der(p7b_der_file):
+    entry = upload_certificate(p7b_der_file)
+    assert isinstance(entry, UploadedEntry)
+    assert isinstance(entry.leaf, Certificate)
+    assert len(entry.chain) >= 1
+
+
+def test_upload_p7c_pem(p7c_pem_file):
+    entry = upload_certificate(p7c_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    assert isinstance(entry.leaf, Certificate)
+    assert len(entry.chain) >= 1
+
+
 def test_upload_malformed(malformed_blob):
     err = upload_certificate(malformed_blob)
     assert isinstance(err, ParseError)

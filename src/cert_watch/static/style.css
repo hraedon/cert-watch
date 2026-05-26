@@ -24,3 +24,4 @@ button.danger { background: #fde2e1; border: 1px solid #f5b0ad; color: #800; }
 button.danger:hover { background: #fbc; }
 .badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .75rem; margin-left: .4rem; }
 .badge.invalid { background: #fde2e1; color: #800; border: 1px solid #f5b0ad; }
+.badge.renewed { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }

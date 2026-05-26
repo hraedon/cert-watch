@@ -4,9 +4,11 @@ import pytest
 
 from cert_watch.alerts import (
     AlertConfig,
+    WebhookConfig,
     evaluate_thresholds,
     process_pending,
     send_alert,
+    send_webhook,
 )
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import Alert, SqliteAlertRepository
@@ -132,3 +134,76 @@ def test_alert_formatting_includes_required_fields(alert_repo, expiring_cert):
     assert expiring_cert.display_name in msg or expiring_cert.subject in msg
     assert "days remaining" in msg
     assert "Recommended action" in msg
+
+
+def test_send_webhook_success():
+    config = WebhookConfig(url="https://hooks.example.com/alert")
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="msg")
+    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        ok = send_webhook(alert, config)
+    assert ok is True
+    mock_urlopen.assert_called_once()
+
+
+def test_send_webhook_failure():
+    config = WebhookConfig(url="https://hooks.example.com/alert")
+    alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
+    with patch(
+        "cert_watch.alerts.urllib.request.urlopen",
+        side_effect=Exception("connection refused"),
+    ):
+        ok = send_webhook(alert, config)
+    assert ok is False
+    assert "connection refused" in (alert.error_message or "")
+
+
+def test_send_webhook_none_config():
+    alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
+    assert send_webhook(alert, None) is False
+
+
+def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
+    evaluate_thresholds(expiring_cert, alert_repo)
+    smtp_config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    webhook_config = WebhookConfig(url="https://hooks.example.com/alert")
+    smtp_mock = MagicMock()
+    smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
+    smtp_mock.__exit__ = MagicMock(return_value=False)
+    smtp_mock.send_message.side_effect = Exception("smtp down")
+    with (
+        patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock),
+        patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen,
+    ):
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        counts = process_pending(alert_repo, smtp_config, webhook_config=webhook_config)
+    assert counts["sent"] > 0
+    assert counts["failed"] == 0
+
+
+def test_process_pending_webhook_only(alert_repo, expiring_cert):
+    evaluate_thresholds(expiring_cert, alert_repo)
+    webhook_config = WebhookConfig(url="https://hooks.example.com/alert")
+    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        counts = process_pending(alert_repo, None, webhook_config=webhook_config)
+    assert counts["sent"] > 0
+    assert counts["failed"] == 0

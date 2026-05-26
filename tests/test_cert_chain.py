@@ -17,11 +17,11 @@ def test_validate_chain_order_reversed(chain_pem_bytes):
 
 
 def test_validate_chain_order_empty_and_single(self_signed_leaf):
-    assert validate_chain_order([]) is False
+    assert validate_chain_order([]) is None
     from cert_watch.certificate_model import parse_certificate
 
     leaf = parse_certificate(self_signed_leaf.der)
-    assert validate_chain_order([leaf]) is False
+    assert validate_chain_order([leaf]) is None
 
 
 def test_split_leaf_intermediates(chain_pem_bytes):

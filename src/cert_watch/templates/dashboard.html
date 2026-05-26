@@ -21,18 +21,26 @@
     {% endif %}
 
     <section class="forms">
-      <form class="add-host" method="post" action="/hosts">
+      <form class="add-host" method="post" action="/hosts?_csrf_token={{ csrf_token }}">
         <h2>Add host to scan</h2>
         <label>Hostname <input type="text" name="hostname" required placeholder="example.com"></label>
         <label>Port <input type="number" name="port" value="443" min="1" max="65535"></label>
+        <label>Alert threshold (days) <input type="number" name="threshold_days" placeholder="default: 14/7/3/1" min="1"></label>
         <button type="submit">Add &amp; scan</button>
       </form>
 
-      <form class="upload" method="post" action="/upload" enctype="multipart/form-data">
+      <form class="upload" method="post" action="/upload?_csrf_token={{ csrf_token }}" enctype="multipart/form-data">
         <h2>Upload certificate</h2>
-        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12"></label>
+        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c"></label>
         <label>Password (PKCS#12 only) <input type="password" name="password" placeholder="optional"></label>
         <button type="submit">Upload</button>
+      </form>
+
+      <form class="import-hosts" method="post" action="/hosts/import?_csrf_token={{ csrf_token }}" enctype="multipart/form-data">
+        <h2>Bulk import hosts</h2>
+        <label>CSV file <input type="file" name="file" required accept=".csv"></label>
+        <small>CSV must have a <code>hostname</code> column; optional <code>port</code> (default 443) and <code>threshold_days</code>.</small>
+        <button type="submit">Import</button>
       </form>
     </section>
 
@@ -50,10 +58,10 @@
                 <td>{{ h.port }}</td>
                 <td>{{ h.added_at.strftime("%Y-%m-%d") }}</td>
                 <td class="actions">
-                  <form method="post" action="/hosts/{{ h.id }}/scan" style="display:inline">
+                  <form method="post" action="/hosts/{{ h.id }}/scan?_csrf_token={{ csrf_token }}" style="display:inline">
                     <button type="submit">Scan now</button>
                   </form>
-                  <form method="post" action="/hosts/{{ h.id }}/delete" style="display:inline">
+                  <form method="post" action="/hosts/{{ h.id }}/delete?_csrf_token={{ csrf_token }}" style="display:inline">
                     <button type="submit" class="danger">Delete</button>
                   </form>
                 </td>
@@ -87,6 +95,9 @@
                 {% if c.chain_valid is sameas false %}
                   <span class="badge invalid" title="Chain order invalid">chain-invalid</span>
                 {% endif %}
+                {% if c.replaces_cert_id %}
+                  <span class="badge renewed" title="Renewed — replaces a previous certificate">renewed</span>
+                {% endif %}
               </td>
               <td>leaf</td>
               <td>{{ c.subject }}</td>
@@ -94,7 +105,7 @@
               <td>{{ c.not_after | humanize_expiry }}</td>
               <td>{{ c.days_remaining }}</td>
               <td rowspan="{{ 1 + c.chain|length }}" class="actions">
-                <form method="post" action="/certificates/{{ c.id }}/delete" style="display:inline">
+                <form method="post" action="/certificates/{{ c.id }}/delete?_csrf_token={{ csrf_token }}" style="display:inline">
                   <button type="submit" class="danger">Delete</button>
                 </form>
               </td>

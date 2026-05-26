@@ -14,6 +14,7 @@ from cryptography.hazmat.primitives.serialization import (
     BestAvailableEncryption,
     Encoding,
     NoEncryption,
+    pkcs7,
     pkcs12,
 )
 from cryptography.x509.oid import NameOID
@@ -157,6 +158,38 @@ def pfx_file_with_password(tmp_path: Path, chain_triplet) -> tuple[Path, bytes]:
     return p, pw
 
 
+def _p7b_der_bytes(chain_triplet) -> bytes:
+    certs = [
+        chain_triplet["leaf"].cert,
+        chain_triplet["intermediate"].cert,
+        chain_triplet["root"].cert,
+    ]
+    return pkcs7.serialize_certificates(certs, Encoding.DER)
+
+
+def _p7b_pem_bytes(chain_triplet) -> bytes:
+    certs = [
+        chain_triplet["leaf"].cert,
+        chain_triplet["intermediate"].cert,
+        chain_triplet["root"].cert,
+    ]
+    return pkcs7.serialize_certificates(certs, Encoding.PEM)
+
+
+@pytest.fixture
+def p7b_der_file(tmp_path: Path, chain_triplet) -> Path:
+    p = tmp_path / "chain.p7b"
+    p.write_bytes(_p7b_der_bytes(chain_triplet))
+    return p
+
+
+@pytest.fixture
+def p7c_pem_file(tmp_path: Path, chain_triplet) -> Path:
+    p = tmp_path / "chain.p7c"
+    p.write_bytes(_p7b_pem_bytes(chain_triplet))
+    return p
+
+
 @pytest.fixture
 def malformed_blob(tmp_path: Path) -> Path:
     p = tmp_path / "bad.der"
@@ -168,6 +201,7 @@ def malformed_blob(tmp_path: Path) -> Path:
 def _isolated_data_dir(tmp_path, monkeypatch):
     """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     # Reload Settings module-level singleton to pick this up if imported.
     import importlib
 

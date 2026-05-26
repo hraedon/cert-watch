@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from cryptography import x509
-from cryptography.hazmat.primitives.serialization import pkcs7
+from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 
@@ -12,34 +12,41 @@ def extract_chain(der_bytes: bytes) -> list[Certificate]:
     """Extract certificates from a PKCS#7 DER blob OR concatenated DER. See AC-01."""
     if not der_bytes:
         return []
-    # Try PKCS#7 first.
     try:
         p7_certs = pkcs7.load_der_pkcs7_certificates(der_bytes)
         if p7_certs:
             out: list[Certificate] = []
             for c in p7_certs:
-                parsed = parse_certificate(c.public_bytes(serialization_encoding()))
+                parsed = parse_certificate(c.public_bytes(Encoding.DER))
                 if isinstance(parsed, Certificate):
                     out.append(parsed)
             _mark_leaf(out)
             return out
     except Exception:  # noqa: BLE001
         pass
-    # Try single DER cert.
     parsed = parse_certificate(der_bytes)
     if isinstance(parsed, Certificate):
         return [parsed]
-    # Try concatenated DER by walking lengths via cryptography's loader on slices.
-    # x509 does not give us length easily, so attempt to parse byte-by-byte sliding windows
-    # is impractical; instead, fall back to empty.
     return []
 
 
-def serialization_encoding():
-    """Lazy import to avoid circular import surprises."""
-    from cryptography.hazmat.primitives.serialization import Encoding
-
-    return Encoding.DER
+def extract_chain_pem(pem_bytes: bytes) -> list[Certificate]:
+    """Extract certificates from a PEM-encoded PKCS#7 blob."""
+    if not pem_bytes:
+        return []
+    try:
+        p7_certs = pkcs7.load_pem_pkcs7_certificates(pem_bytes)
+        if p7_certs:
+            out: list[Certificate] = []
+            for c in p7_certs:
+                parsed = parse_certificate(c.public_bytes(Encoding.DER))
+                if isinstance(parsed, Certificate):
+                    out.append(parsed)
+            _mark_leaf(out)
+            return out
+    except Exception:  # noqa: BLE001
+        pass
+    return []
 
 
 def _mark_leaf(certs: list[Certificate]) -> None:
@@ -47,10 +54,10 @@ def _mark_leaf(certs: list[Certificate]) -> None:
         c.is_leaf = i == 0
 
 
-def validate_chain_order(chain: list[Certificate]) -> bool:
-    """See AC-02."""
+def validate_chain_order(chain: list[Certificate]) -> bool | None:
+    """See AC-02. Returns None when chain length < 2 (not applicable)."""
     if len(chain) < 2:
-        return False
+        return None
     return all(
         chain[i].issuer == chain[i + 1].subject for i in range(len(chain) - 1)
     )
