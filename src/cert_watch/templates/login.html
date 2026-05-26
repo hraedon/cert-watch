@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>cert-watch — login</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>cert-watch</h1>
+    <span class="version">v{{ version }}</span>
+  </header>
+  <main>
+    <section class="login-box">
+      <h2>Sign in</h2>
+
+      {% if error %}
+        <p class="error">Error: {{ error }}</p>
+      {% endif %}
+
+      {% if supports_form_login %}
+        <form method="post" action="/login">
+          <label>Username <input type="text" name="username" required autofocus></label>
+          <label>Password <input type="password" name="password" required></label>
+          <button type="submit">Sign in</button>
+        </form>
+      {% endif %}
+
+      {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
+        <div class="oauth-login">
+          <a href="/auth/login" class="oauth-btn">Sign in with {{ provider | title }}</a>
+        </div>
+      {% endif %}
+
+      {% if not supports_form_login and provider not in ("oauth", "entra", "azure", "oidc") %}
+        <p class="empty">No authentication provider configured.</p>
+      {% endif %}
+    </section>
+  </main>
+</body>
+</html>

@@ -25,6 +25,16 @@ e2e = [
     "playwright>=1.49",
     "pytest-playwright>=0.6",
 ]
+auth-ldap = [
+    "ldap3>=2.9",
+]
+auth-oauth = [
+    "authlib>=1.3",
+    "requests>=2.31",
+]
+auth = [
+    "cert-watch[auth-ldap,auth-oauth]",
+]
 
 [project.scripts]
 cert-watch = "cert_watch.__main__:main"

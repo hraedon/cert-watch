@@ -25,3 +25,13 @@ button.danger:hover { background: #fbc; }
 .badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .75rem; margin-left: .4rem; }
 .badge.invalid { background: #fde2e1; color: #800; border: 1px solid #f5b0ad; }
 .badge.renewed { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+.login-box { max-width: 400px; margin: 4rem auto; }
+.login-box h2 { margin-bottom: 1rem; }
+.login-box label { display: block; margin: .5rem 0; font-size: .9rem; }
+.login-box input { display: block; width: 100%; padding: .4rem; margin-top: .2rem; box-sizing: border-box; }
+.login-box button { margin-top: 1rem; width: 100%; }
+.oauth-login { margin-top: 1.5rem; text-align: center; }
+.oauth-btn { display: inline-block; padding: .6rem 1.5rem; background: #36a; color: #fff; text-decoration: none; border-radius: 4px; }
+.oauth-btn:hover { background: #257; }
+.user-info { margin-left: auto; display: flex; align-items: center; gap: .75rem; font-size: .9rem; }
+.user-info a { color: #36a; text-decoration: none; }

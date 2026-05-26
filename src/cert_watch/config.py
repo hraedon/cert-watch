@@ -22,6 +22,21 @@ class Settings:
     webhook_url: str | None = None
     webhook_headers: dict[str, str] | None = None
     tls_verify: bool = False
+    # Auth
+    auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
+    ldap_server: str = ""
+    ldap_base_dn: str = ""
+    ldap_bind_dn: str = ""
+    ldap_bind_password: str = ""
+    ldap_user_filter: str = "(sAMAccountName={username})"
+    ldap_start_tls: bool = False
+    oauth_client_id: str = ""
+    oauth_client_secret: str = ""
+    oauth_issuer_url: str = ""
+    oauth_scope: str = "openid profile email"
+    oauth_authorization_endpoint: str = ""
+    oauth_token_endpoint: str = ""
+    oauth_userinfo_endpoint: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -71,6 +86,21 @@ class Settings:
             webhook_url=webhook_url,
             webhook_headers=webhook_headers,
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
+            # Auth
+            auth_provider=os.environ.get("AUTH_PROVIDER", ""),
+            ldap_server=os.environ.get("LDAP_SERVER", ""),
+            ldap_base_dn=os.environ.get("LDAP_BASE_DN", ""),
+            ldap_bind_dn=os.environ.get("LDAP_BIND_DN", ""),
+            ldap_bind_password=os.environ.get("LDAP_BIND_PASSWORD", ""),
+            ldap_user_filter=os.environ.get("LDAP_USER_FILTER", "(sAMAccountName={username})"),
+            ldap_start_tls=os.environ.get("LDAP_START_TLS", "0") == "1",
+            oauth_client_id=os.environ.get("OAUTH_CLIENT_ID", ""),
+            oauth_client_secret=os.environ.get("OAUTH_CLIENT_SECRET", ""),
+            oauth_issuer_url=os.environ.get("OAUTH_ISSUER_URL", ""),
+            oauth_scope=os.environ.get("OAUTH_SCOPE", "openid profile email"),
+            oauth_authorization_endpoint=os.environ.get("OAUTH_AUTHORIZATION_ENDPOINT", ""),
+            oauth_token_endpoint=os.environ.get("OAUTH_TOKEN_ENDPOINT", ""),
+            oauth_userinfo_endpoint=os.environ.get("OAUTH_USERINFO_ENDPOINT", ""),
         )
 
     def build_alert_config(self):
@@ -101,6 +131,27 @@ class Settings:
         return WebhookConfig(
             url=self.webhook_url,
             headers=self.webhook_headers or {},
+        )
+
+    def build_auth_provider(self):
+        """Return an AuthProvider based on auth config. No-op when AUTH_PROVIDER is unset."""
+        from cert_watch.auth import build_auth_provider
+
+        return build_auth_provider(
+            provider=self.auth_provider,
+            ldap_server=self.ldap_server,
+            ldap_base_dn=self.ldap_base_dn,
+            ldap_bind_dn=self.ldap_bind_dn,
+            ldap_bind_password=self.ldap_bind_password,
+            ldap_user_filter=self.ldap_user_filter,
+            ldap_start_tls=self.ldap_start_tls,
+            oauth_client_id=self.oauth_client_id,
+            oauth_client_secret=self.oauth_client_secret,
+            oauth_issuer_url=self.oauth_issuer_url,
+            oauth_scope=self.oauth_scope,
+            oauth_authorization_endpoint=self.oauth_authorization_endpoint,
+            oauth_token_endpoint=self.oauth_token_endpoint,
+            oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
         )
 
 

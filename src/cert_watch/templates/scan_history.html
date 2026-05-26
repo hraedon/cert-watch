@@ -14,6 +14,12 @@
       <a href="/alerts">Alerts</a>
       <a href="/scan-history">Scan history</a>
     </nav>
+    {% if auth_user %}
+      <div class="user-info">
+        <span>{{ auth_user }}</span>
+        <a href="/auth/logout">Logout</a>
+      </div>
+    {% endif %}
   </header>
   <main>
     <h2>Scan history</h2>

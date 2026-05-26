@@ -24,6 +24,13 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__, ct_lookup
 from cert_watch.alerts import evaluate_all_certs, process_pending
+from cert_watch.auth import (
+    SESSION_COOKIE,
+    SESSION_TTL,
+    NoAuthProvider,
+    create_session,
+    validate_session,
+)
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
@@ -236,8 +243,10 @@ async def lifespan(app: FastAPI):
     _setup_logging()
     s = Settings.from_env()
     init_schema(s.db_path)
-    logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s",
-                s.db_path, s.sched_hour, s.sched_min, s.tls_verify)
+    auth = s.build_auth_provider()
+    app.state.auth_provider = auth
+    logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
+                s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
     alert_cfg = s.build_alert_config()
     webhook_cfg = s.build_webhook_config()
 
@@ -288,6 +297,47 @@ async def csrf_session_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+_PUBLIC_PATHS = frozenset({
+    "/healthz", "/login", "/auth/callback", "/auth/logout",
+})
+
+
+def _is_public_path(path: str) -> bool:
+    return (
+        path in _PUBLIC_PATHS
+        or path.startswith("/static/")
+        or path.startswith("/api/")
+        or path.startswith("/metrics")
+    )
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Enforce authentication when AUTH_PROVIDER is configured.
+
+    Public paths (/healthz, /metrics, /api/*, /static, /login, /auth/*) are exempt.
+    Unauthenticated UI requests redirect to /login; API requests get 401.
+    """
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return await call_next(request)
+
+    path = request.url.path
+    if _is_public_path(path):
+        return await call_next(request)
+
+    token = request.cookies.get(SESSION_COOKIE, "")
+    username = validate_session(token)
+    if username:
+        request.scope["auth_user"] = username
+        return await call_next(request)
+
+    # Unauthenticated
+    if path.startswith("/api/"):
+        return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+    return RedirectResponse(url="/login", status_code=303)
+
+
 def _db_path() -> Path:
     return Settings.from_env().db_path
 
@@ -333,12 +383,108 @@ def healthz() -> dict:
     return {"status": "ok" if ok else "degraded", "version": __version__, "checks": checks}
 
 
+# ---------- Auth routes ----------
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, error: str | None = None) -> HTMLResponse:
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return RedirectResponse(url="/", status_code=303)
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={
+            "version": __version__,
+            "provider": auth.provider_name,
+            "supports_form_login": auth.supports_form_login,
+            "error": error,
+        },
+    )
+
+
+@app.post("/login")
+async def login_submit(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+) -> RedirectResponse:
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return RedirectResponse(url="/", status_code=303)
+    result = auth.authenticate(username, password)
+    if not result.success:
+        return RedirectResponse(
+            url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
+        )
+    token = create_session(result.username)
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL
+    )
+    logger.info("user logged in: %s (%s)", result.username, auth.provider_name)
+    return response
+
+
+@app.get("/auth/login")
+def oauth_start(request: Request) -> RedirectResponse:
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return RedirectResponse(url="/", status_code=303)
+    # Build redirect URI pointing back to /auth/callback
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base}/auth/callback"
+    result = auth.start_oauth_flow(redirect_uri)
+    if not result.success:
+        return RedirectResponse(
+            url=f"/login?error={quote(result.error or 'OAuth start failed')}", status_code=303
+        )
+    return RedirectResponse(url=result.redirect_url, status_code=303)
+
+
+@app.get("/auth/callback")
+def oauth_callback(request: Request, code: str = "", error: str = "") -> RedirectResponse:
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return RedirectResponse(url="/", status_code=303)
+    if error:
+        return RedirectResponse(
+            url=f"/login?error={quote(error)}", status_code=303
+        )
+    if not code:
+        return RedirectResponse(
+            url="/login?error=no+authorization+code", status_code=303
+        )
+    base = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base}/auth/callback"
+    result = auth.complete_oauth_flow(code, redirect_uri)
+    if not result.success:
+        return RedirectResponse(
+            url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
+        )
+    token = create_session(result.username)
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL
+    )
+    logger.info("user logged in via OAuth: %s", result.username)
+    return response
+
+
+@app.get("/auth/logout")
+def logout(request: Request) -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
+
+
 @app.get("/", response_class=HTMLResponse)
 def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
     db = _db_path()
     rows = list_dashboard_rows(db)
     hosts = SqliteHostRepository(db).list_all()
     ctx = _get_csrf_context(request)
+    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -347,6 +493,7 @@ def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
             "hosts": hosts,
             "version": __version__,
             "error": error,
+            "auth_user": auth_user,
             **ctx,
         },
     )
@@ -507,10 +654,11 @@ async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse
 def alerts_view(request: Request) -> HTMLResponse:
     db = _db_path()
     rows = list_alerts_with_subject(db)
+    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="alerts.html",
-        context={"alerts": rows, "version": __version__},
+        context={"alerts": rows, "version": __version__, "auth_user": auth_user},
     )
 
 
@@ -518,10 +666,11 @@ def alerts_view(request: Request) -> HTMLResponse:
 def scan_history_view(request: Request) -> HTMLResponse:
     db = _db_path()
     rows = list_scan_history(db)
+    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="scan_history.html",
-        context={"history": rows, "version": __version__},
+        context={"history": rows, "version": __version__, "auth_user": auth_user},
     )
 
 
