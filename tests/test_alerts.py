@@ -207,3 +207,56 @@ def test_process_pending_webhook_only(alert_repo, expiring_cert):
         counts = process_pending(alert_repo, None, webhook_config=webhook_config)
     assert counts["sent"] > 0
     assert counts["failed"] == 0
+
+
+def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
+    """Deleting a cert must also delete its alerts."""
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import (
+        SqliteCertificateRepository,
+        delete_certificate_cascade,
+        init_schema,
+    )
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    cert = parse_certificate(expiring_soon_leaf.der)
+    assert isinstance(cert, Certificate)
+    repo = SqliteCertificateRepository(db, source="scanned", hostname="h.example.com", port=443)
+    cert_id = repo.add(cert)
+
+    alert_repo = SqliteAlertRepository(db)
+    evaluate_thresholds(cert, alert_repo, cert_id=cert_id)
+    assert len(alert_repo.list_for_cert(cert_id)) > 0
+
+    delete_certificate_cascade(db, cert_id)
+    assert alert_repo.list_for_cert(cert_id) == []
+
+
+def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):
+    """Deleting a host must also delete alerts for its scanned certs."""
+    from cert_watch.certificate_model import parse_certificate
+    from cert_watch.database import (
+        SqliteCertificateRepository,
+        SqliteHostRepository,
+        init_schema,
+    )
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    cert = parse_certificate(expiring_soon_leaf.der)
+    assert isinstance(cert, Certificate)
+    cert_repo = SqliteCertificateRepository(
+        db, source="scanned", hostname="hostdel.example.com", port=443
+    )
+    cert_id = cert_repo.add(cert)
+
+    host_repo = SqliteHostRepository(db)
+    host_id = host_repo.add("hostdel.example.com", 443)
+
+    alert_repo = SqliteAlertRepository(db)
+    evaluate_thresholds(cert, alert_repo, cert_id=cert_id)
+    assert len(alert_repo.list_for_cert(cert_id)) > 0
+
+    host_repo.delete(host_id)
+    assert alert_repo.list_for_cert(cert_id) == []

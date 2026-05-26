@@ -93,3 +93,17 @@ def test_import_hosts_too_large(tmp_path, monkeypatch):
         )
     assert r.status_code == 303
     assert "too%20large" in r.headers["location"]
+
+
+def test_upload_cert_too_large(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+
+    big_content = b"x" * (10 * 1024 * 1024 + 1)
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/upload",
+            files={"file": ("big.pem", big_content, "application/x-pem-file")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "too%20large" in r.headers["location"]
