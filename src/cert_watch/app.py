@@ -31,6 +31,7 @@ from cert_watch.auth import (
     create_session,
     validate_session,
 )
+from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
@@ -89,6 +90,10 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
     Only blocks when DNS resolution succeeds AND returns a private/link-local IP.
     Unresolvable hostnames are allowed through (they'll fail at connection time).
     The authoritative check happens at scan time in scan._resolve_host().
+
+    When a private RFC 1918/ULA address is blocked, the message includes a hint
+    about CERT_WATCH_ALLOW_PRIVATE_IPS. Loopback and link-local always show
+    a plain block message.
     """
     try:
         infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
@@ -103,6 +108,19 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
         except ValueError:
             continue
         if _is_blocked_ip(ip, allow_private=allow_private):
+            # Check if this is a private IP (not always-blocked) to add hint
+            check_ip = (
+                ip.ipv4_mapped
+                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
+                else ip
+            )
+            from cert_watch.scan import _PRIVATE_NETWORKS
+            is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
+            if is_private and not allow_private:
+                return (
+                    f"hostname resolves to blocked address {ip}. "
+                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to scan private IPs."
+                )
             return f"hostname resolves to blocked address {ip}"
     return None
 
@@ -925,6 +943,12 @@ async def add_trust_anchor(
         if isinstance(entry, ParseError):
             return RedirectResponse(
                 url=f"/?error={quote(entry.error_message)}", status_code=303
+            )
+        # Validate that the certificate is suitable as a CA trust anchor
+        ca_err = validate_is_ca_certificate(entry.leaf.raw_der)
+        if ca_err:
+            return RedirectResponse(
+                url=f"/?error={quote('Invalid trust anchor: ' + ca_err)}", status_code=303
             )
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)

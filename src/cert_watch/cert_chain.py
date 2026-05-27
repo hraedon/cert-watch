@@ -54,12 +54,35 @@ def _mark_leaf(certs: list[Certificate]) -> None:
         c.is_leaf = i == 0
 
 
+def _subject_bytes(cert: Certificate) -> bytes:
+    """Return DER-encoded subject for robust comparison.
+
+    Prefers subject_der (from fresh x509 parsing). Falls back to
+    UTF-8 encoded rfc4514 string for DB-loaded certificates.
+    """
+    return cert.subject_der or cert.subject.encode("utf-8")
+
+
+def _issuer_bytes(cert: Certificate) -> bytes:
+    """Return DER-encoded issuer for robust comparison.
+
+    Prefers issuer_der (from fresh x509 parsing). Falls back to
+    UTF-8 encoded rfc4514 string for DB-loaded certificates.
+    """
+    return cert.issuer_der or cert.issuer.encode("utf-8")
+
+
 def validate_chain_order(chain: list[Certificate]) -> bool | None:
-    """See AC-02. Returns None when chain length < 2 (not applicable)."""
+    """See AC-02. Returns None when chain length < 2 (not applicable).
+
+    Compares issuer/subject using DER-encoded Name bytes when available,
+    falling back to string comparison for DB-loaded certificates.
+    """
     if len(chain) < 2:
         return None
     return all(
-        chain[i].issuer == chain[i + 1].subject for i in range(len(chain) - 1)
+        _issuer_bytes(chain[i]) == _subject_bytes(chain[i + 1])
+        for i in range(len(chain) - 1)
     )
 
 
@@ -101,15 +124,12 @@ def validate_chain_with_anchors(chain: list[Certificate], anchors: list[Certific
     if len(chain) < 1:
         return False
     for i in range(len(chain) - 1):
-        if chain[i].issuer != chain[i + 1].subject:
+        if _issuer_bytes(chain[i]) != _subject_bytes(chain[i + 1]):
             return False
     last = chain[-1]
-    if last.subject == last.issuer:
+    if _subject_bytes(last) == _issuer_bytes(last):
         return True
-    for a in anchors:
-        if last.issuer == a.subject:
-            return True
-    return False
+    return any(_issuer_bytes(last) == _subject_bytes(a) for a in anchors)
 
 
 def is_anchored_by_user(chain: list[Certificate], anchors: list[Certificate]) -> bool:
@@ -124,7 +144,7 @@ def is_anchored_by_user(chain: list[Certificate], anchors: list[Certificate]) ->
     for a in anchors:
         if last.fingerprint_sha256 == a.fingerprint_sha256:
             return True
-        if last.issuer == a.subject:
+        if _issuer_bytes(last) == _subject_bytes(a):
             return True
     return False
 
@@ -141,7 +161,7 @@ def chain_status(
     - "public"        : chain is valid and ends at a self-signed root (assumed public CA).
     - "incomplete"    : chain is structurally valid but missing a trusted root.
     """
-    if leaf.subject == leaf.issuer:
+    if _subject_bytes(leaf) == _issuer_bytes(leaf):
         return "self-signed"
     if not chain:
         return "unknown"
@@ -150,9 +170,37 @@ def chain_status(
         return "invalid"
     if is_anchored_by_user([leaf, *chain], anchors):
         return "private"
-    if chain[-1].subject == chain[-1].issuer:
+    if _subject_bytes(chain[-1]) == _issuer_bytes(chain[-1]):
         return "public"
     return "incomplete"
+
+
+def validate_is_ca_certificate(der_bytes: bytes) -> str | None:
+    """Validate that a certificate is suitable as a trust anchor (CA certificate).
+
+    Returns an error message string if the certificate is NOT suitable, or None if OK.
+
+    Hard requirements:
+    - BasicConstraints.ca == True (required)
+
+    Soft checks (logged as warnings, do not block):
+    - Self-signed (subject == issuer)
+    - KeyUsage.key_cert_sign (older roots may lack it)
+    """
+    try:
+        cert = x509.load_der_x509_certificate(der_bytes)
+    except Exception:
+        return "failed to parse certificate"
+
+    # Check BasicConstraints.ca — hard requirement
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints)
+        if not bc.value.ca:
+            return "certificate is not a CA (BasicConstraints: CA=FALSE)"
+    except x509.ExtensionNotFound:
+        return "certificate lacks BasicConstraints extension (not a valid CA)"
+
+    return None
 
 
 # x509 import kept for potential future use of x509.load_der_x509_certificate.

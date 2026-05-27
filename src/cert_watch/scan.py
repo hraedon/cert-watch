@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import ipaddress
+import re
 import socket
 import ssl
+import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,12 +106,14 @@ def _open_tls_connection(
     return ctx.wrap_socket(sock, server_hostname=hostname)
 
 
-def _get_chain_der(ssl_sock) -> list[bytes]:
+def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
     """
     Return DER bytes for every certificate the peer presented.
     Uses SSLSocket.getpeercert(True) for the leaf and (when available)
-    getpeercert_chain() for intermediates. Older Pythons lack the latter; fall
-    back to just the leaf.
+    get_unverified_chain/get_verified_chain for the full chain.
+
+    On Python 3.12 those methods don't exist, so we fall back to
+    openssl s_client to extract the full chain.
     """
     leaf = ssl_sock.getpeercert(binary_form=True)
     chain: list[bytes] = []
@@ -132,7 +137,71 @@ def _get_chain_der(ssl_sock) -> list[bytes]:
                     der = bytes(c)
                 chain.append(der)
             break
+
+    # If we only have the leaf, try openssl s_client for the full chain
+    if len(chain) <= 1:
+        openssl_chain = _get_chain_via_openssl(ssl_sock, hostname)
+        if openssl_chain:
+            chain = openssl_chain
+
     return chain
+
+
+_PEM_CERT_PATTERN = re.compile(
+    b"-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----",
+    re.DOTALL,
+)
+
+
+def _get_chain_via_openssl(ssl_sock, hostname: str) -> list[bytes]:
+    """Extract the full certificate chain using openssl s_client.
+
+    This is a fallback for Python 3.12 where SSLSocket lacks
+    get_unverified_chain() / get_verified_chain().
+    """
+    if not hostname:
+        return []
+
+    try:
+        peer_addr = ssl_sock.getpeername()
+    except (OSError, AttributeError):
+        return []
+
+    host = peer_addr[0]
+    port = peer_addr[1]
+
+    try:
+        proc = subprocess.run(
+            [
+                "openssl", "s_client",
+                "-connect", f"{host}:{port}",
+                "-servername", hostname,
+                "-showcerts",
+            ],
+            input=b"Q\n",
+            capture_output=True,
+            timeout=10,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+
+    if proc.returncode not in (0, 1):
+        return []
+
+    pem_output = proc.stdout
+    matches = _PEM_CERT_PATTERN.findall(pem_output)
+    if not matches:
+        return []
+
+    result: list[bytes] = []
+    for pem_b64 in matches:
+        try:
+            der = base64.b64decode(pem_b64)
+            result.append(der)
+        except Exception:
+            continue
+
+    return result if len(result) > 1 else []
 
 
 def _der_enc():
@@ -162,7 +231,7 @@ def scan_host(
         return ScanError(hostname=hostname, port=port, error_message=str(exc))
 
     try:
-        der_chain = _get_chain_der(ssl_sock)
+        der_chain = _get_chain_der(ssl_sock, hostname)
     finally:
         with contextlib.suppress(Exception):
             ssl_sock.close()

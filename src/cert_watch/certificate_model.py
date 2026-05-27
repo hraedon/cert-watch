@@ -32,6 +32,10 @@ class Certificate:
     raw_der: bytes = b""
     is_leaf: bool = True
     notes: str = ""
+    # DER-encoded Name bytes for robust issuer/subject comparison.
+    # Populated when parsing from x509.Certificate; empty for DB-loaded certs.
+    subject_der: bytes = b""
+    issuer_der: bytes = b""
 
     def days_until_expiry(self) -> int:
         """Whole days between now (UTC) and not_after (floor semantics). See AC-02.
@@ -80,6 +84,8 @@ def _from_x509(cert: x509.Certificate) -> Certificate:
         fingerprint_sha256=fp,
         raw_der=cert.public_bytes(Encoding.DER),
         is_leaf=True,
+        subject_der=cert.subject.public_bytes(Encoding.DER),
+        issuer_der=cert.issuer.public_bytes(Encoding.DER),
     )
 
 

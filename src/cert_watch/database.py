@@ -486,6 +486,19 @@ class SqliteTrustAnchorRepository:
 
 
 @dataclass
+class TrustAnchorEntry:
+    id: str = ""
+    subject: str = ""
+    issuer: str = ""
+    not_before: datetime = field(default_factory=lambda: datetime.now(UTC))
+    not_after: datetime = field(default_factory=lambda: datetime.now(UTC))
+    san_dns_names: list[str] = field(default_factory=list)
+    fingerprint_sha256: str = ""
+    raw_der: bytes = b""
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+@dataclass
 class HostEntry:
     hostname: str
     port: int = 443

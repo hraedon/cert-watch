@@ -44,15 +44,20 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-7 open breadcrumbs in agent-notes: 0 critical, 1 high, 2 medium, 4 low.
+3 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 3 low.
 
-- **BC-016** (high) — Deployed image lags HEAD by ~1700 LOC including security/UX fixes
-- **BC-017** (medium) — E2E test for add-host doesn't assert scan outcome is surfaced
-- **BC-022** (medium) — Python 3.12 TLS chain extraction incomplete; scanned chains all show `unknown`
-- **BC-023** (low) — String-based issuer/subject comparison in `validate_chain_order` is fragile
-- **BC-024** (low) — Trust anchor upload doesn't validate that the file is actually a CA certificate
-- **BC-025** (low) — No UI hint when private IP host is rejected due to `CERT_WATCH_ALLOW_PRIVATE_IPS`
+- **BC-026** (low) — Missing unit tests for trust anchor CA validation (BC-024 follow-up)
+- **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan
 - **FEAT-006** (low) — Database migration tooling (alembic)
+
+### Recently resolved
+
+- **BC-016** (high) — Deploy lag: code current, ops push needed for CI
+- **BC-017** (medium) — E2E test now asserts host row + scan-history failure
+- **BC-022** (medium) — openssl s_client fallback for Python 3.12 chain extraction
+- **BC-023** (low) — DER-based issuer/subject comparison in validate_chain_order
+- **BC-024** (low) — Trust anchor CA validation (BasicConstraints check)
+- **BC-025** (low) — Private IP rejection includes CERT_WATCH_ALLOW_PRIVATE_IPS hint
 
 ## Architecture notes
 

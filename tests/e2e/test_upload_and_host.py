@@ -95,10 +95,17 @@ def test_upload_pfx_shows_leaf_and_chain(
 
 
 def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
+    hostname = "nonexistent.invalid"
     page.goto(cert_watch_server)
-    page.locator('form.add-host input[name="hostname"]').fill("nonexistent.invalid")
+    page.locator('form.add-host input[name="hostname"]').fill(hostname)
     page.locator('form.add-host input[name="port"]').fill("443")
     page.locator("form.add-host button[type=submit]").click()
     # The scan will fail (host doesn't exist) — the dashboard should still load
     # without 500. The host is stored even though no cert is captured.
     expect(page.locator("h1")).to_have_text("cert-watch")
+    # Assert the host appears in the tracked hosts table
+    expect(page.get_by_text(hostname)).to_be_visible()
+    # Navigate to scan-history and assert a failure entry exists
+    page.goto(f"{cert_watch_server}/scan-history")
+    expect(page.get_by_text(hostname, exact=False)).to_be_visible()
+    expect(page.get_by_text("failure")).to_be_visible()
