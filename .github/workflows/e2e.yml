@@ -12,7 +12,6 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.12"
-      - run: uv venv
       - run: uv pip install -e ".[dev,e2e]"
       - name: Install Playwright browsers + OS deps
         run: .venv/bin/playwright install --with-deps chromium
