@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import socket
 import ssl
 from dataclasses import dataclass, field
@@ -13,6 +14,28 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
 
 DEFAULT_TIMEOUT = 10.0
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("::/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    check_ip = (
+        ip.ipv4_mapped
+        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
+        else ip
+    )
+    return any(check_ip in net for net in _BLOCKED_NETWORKS)
 
 
 @dataclass
@@ -31,6 +54,28 @@ class ScannedEntry:
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
+def _resolve_host(hostname: str, port: int) -> tuple[int, tuple]:
+    """Resolve hostname and check all IPs against the SSRF blocklist.
+
+    Returns a (family, sockaddr) tuple for the first allowed address.
+    Raises OSError if every resolved IP is blocked.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise OSError(f"DNS resolution failed for {hostname}: {exc}") from exc
+    for family, _type, _proto, _canonname, sockaddr in infos:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip):
+            continue
+        return family, sockaddr
+    raise OSError(f"hostname {hostname} resolves only to blocked addresses")
+
+
 def _open_tls_connection(hostname: str, port: int, timeout: float, *, verify: bool = False):
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
     ctx = ssl.create_default_context()
@@ -38,10 +83,12 @@ def _open_tls_connection(hostname: str, port: int, timeout: float, *, verify: bo
         ctx.check_hostname = True
         ctx.verify_mode = ssl.CERT_REQUIRED
     else:
-        # We want the cert chain regardless of validity (this is monitoring, not enforcement).
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    sock = socket.create_connection((hostname, port), timeout=timeout)
+    _family, sockaddr = _resolve_host(hostname, port)
+    sock = socket.socket(_family, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
+    sock.connect(sockaddr)
     return ctx.wrap_socket(sock, server_hostname=hostname)
 
 

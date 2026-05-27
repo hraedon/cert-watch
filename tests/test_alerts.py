@@ -167,6 +167,57 @@ def test_send_webhook_none_config():
     assert send_webhook(alert, None) is False
 
 
+def test_send_webhook_template():
+    """FEAT-005: custom template should substitute {{variables}}."""
+    config = WebhookConfig(
+        url="https://hooks.example.com/alert",
+        template='{"text":"[{{alert_type}}] {{message}} (cert: {{cert_id}})"}',
+    )
+    alert = Alert(
+        cert_id="abc123",
+        alert_type="expiry_warning",
+        status="pending",
+        message="Cert expiring soon",
+    )
+    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        ok = send_webhook(alert, config)
+    assert ok is True
+    req = mock_urlopen.call_args[0][0]
+    body = req.data.decode("utf-8")
+    assert "expiry_warning" in body
+    assert "Cert expiring soon" in body
+    assert "abc123" in body
+
+
+def test_send_webhook_template_non_json():
+    """FEAT-005: non-JSON template should use text/plain content type."""
+    config = WebhookConfig(
+        url="https://hooks.example.com/alert",
+        template="Alert: {{alert_type}} - {{message}}",
+    )
+    alert = Alert(
+        cert_id="c",
+        alert_type="expired",
+        status="pending",
+        message="Cert has expired",
+    )
+    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        ok = send_webhook(alert, config)
+    assert ok is True
+    req = mock_urlopen.call_args[0][0]
+    assert req.headers.get("Content-type") == "text/plain"
+
+
 def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
     evaluate_thresholds(expiring_cert, alert_repo)
     smtp_config = AlertConfig(
@@ -260,3 +311,39 @@ def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):
 
     host_repo.delete(host_id)
     assert alert_repo.list_for_cert(cert_id) == []
+
+
+def test_evaluate_thresholds_escalation_after_cooldown(alert_repo, expiring_cert):
+    """FEAT-004: alerts should re-fire after cooldown period expires."""
+    # First call — creates alerts
+    first = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    assert len(first) > 0
+    first_ids = {a.id for a in first}
+
+    # Second call immediately — no new alerts (within cooldown)
+    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    assert second == []
+
+    # Third call with cooldown=0 — should create escalation alerts
+    third = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
+    assert len(third) > 0
+    # New alerts should have different IDs
+    third_ids = {a.id for a in third}
+    assert third_ids.isdisjoint(first_ids)
+
+
+def test_evaluate_thresholds_no_escalation_within_cooldown(alert_repo, expiring_cert):
+    """FEAT-004: alerts should NOT re-fire within cooldown window."""
+    evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    # Immediate re-evaluation should produce no new alerts
+    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    assert second == []
+
+
+def test_evaluate_thresholds_custom_cooldown(alert_repo, expiring_cert):
+    """FEAT-004: cooldown_hours parameter should be respected."""
+    # With very short cooldown, re-evaluation can produce new alerts
+    evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
+    # All thresholds already have alerts, but cooldown=0 means they're eligible
+    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
+    assert len(second) > 0

@@ -13,6 +13,7 @@
       <a href="/">Dashboard</a>
       <a href="/alerts">Alerts</a>
       <a href="/scan-history">Scan history</a>
+      <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">&#x263D;</button>
     </nav>
     {% if auth_user %}
       <div class="user-info">
@@ -27,22 +28,26 @@
     {% endif %}
 
     <section class="forms">
-      <form class="add-host" method="post" action="/hosts?_csrf_token={{ csrf_token }}">
+      <form class="add-host" method="post" action="/hosts">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <h2>Add host to scan</h2>
         <label>Hostname <input type="text" name="hostname" required placeholder="example.com"></label>
         <label>Port <input type="number" name="port" value="443" min="1" max="65535"></label>
         <label>Alert threshold (days) <input type="number" name="threshold_days" placeholder="default: 14/7/3/1" min="1"></label>
+        <label class="checkbox-label"><input type="checkbox" name="common_ports" value="true"> Scan common TLS ports</label>
         <button type="submit">Add &amp; scan</button>
       </form>
 
-      <form class="upload" method="post" action="/upload?_csrf_token={{ csrf_token }}" enctype="multipart/form-data">
+      <form class="upload" method="post" action="/upload" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <h2>Upload certificate</h2>
         <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c"></label>
         <label>Password (PKCS#12 only) <input type="password" name="password" placeholder="optional"></label>
         <button type="submit">Upload</button>
       </form>
 
-      <form class="import-hosts" method="post" action="/hosts/import?_csrf_token={{ csrf_token }}" enctype="multipart/form-data">
+      <form class="import-hosts" method="post" action="/hosts/import" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <h2>Bulk import hosts</h2>
         <label>CSV file <input type="file" name="file" required accept=".csv"></label>
         <small>CSV must have a <code>hostname</code> column; optional <code>port</code> (default 443) and <code>threshold_days</code>.</small>
@@ -64,10 +69,12 @@
                 <td>{{ h.port }}</td>
                 <td>{{ h.added_at.strftime("%Y-%m-%d") }}</td>
                 <td class="actions">
-                  <form method="post" action="/hosts/{{ h.id }}/scan?_csrf_token={{ csrf_token }}" style="display:inline">
+                  <form method="post" action="/hosts/{{ h.id }}/scan" style="display:inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit">Scan now</button>
                   </form>
-                  <form method="post" action="/hosts/{{ h.id }}/delete?_csrf_token={{ csrf_token }}" style="display:inline">
+                  <form method="post" action="/hosts/{{ h.id }}/delete" style="display:inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="danger">Delete</button>
                   </form>
                 </td>
@@ -80,7 +87,37 @@
       {% endif %}
     </section>
 
+    {% if certificates or filter_q or filter_urgency or filter_source %}
+      <form class="filter-bar" method="get" action="/">
+        <label>Search <input type="text" name="q" value="{{ filter_q }}" placeholder="subject, issuer, hostname"></label>
+        <label>Urgency
+          <select name="urgency">
+            <option value="">All</option>
+            <option value="red" {% if filter_urgency == 'red' %}selected{% endif %}>Red</option>
+            <option value="yellow" {% if filter_urgency == 'yellow' %}selected{% endif %}>Yellow</option>
+            <option value="green" {% if filter_urgency == 'green' %}selected{% endif %}>Green</option>
+          </select>
+        </label>
+        <label>Source
+          <select name="source">
+            <option value="">All</option>
+            <option value="scanned" {% if filter_source == 'scanned' %}selected{% endif %}>Scanned</option>
+            <option value="uploaded" {% if filter_source == 'uploaded' %}selected{% endif %}>Uploaded</option>
+          </select>
+        </label>
+        <button type="submit">Filter</button>
+        {% if filter_q or filter_urgency or filter_source %}
+          <a href="/" class="filter-clear">Clear</a>
+        {% endif %}
+      </form>
+    {% endif %}
+
     {% if certificates %}
+      <div class="export-bar">
+        <span>Export:</span>
+        <a href="/api/export/certificates.csv" class="export-btn">CSV</a>
+        <a href="/api/export/certificates.json" class="export-btn">JSON</a>
+      </div>
       <table>
         <thead>
           <tr>
@@ -111,26 +148,67 @@
               <td>{{ c.not_after | humanize_expiry }}</td>
               <td>{{ c.days_remaining }}</td>
               <td rowspan="{{ 1 + c.chain|length }}" class="actions">
-                <form method="post" action="/certificates/{{ c.id }}/delete?_csrf_token={{ csrf_token }}" style="display:inline">
+                <form method="post" action="/certificates/{{ c.id }}/delete" style="display:inline">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                   <button type="submit" class="danger">Delete</button>
                 </form>
               </td>
             </tr>
             {% for chain in c.chain %}
               <tr class="{{ chain.urgency }} chain-row">
-                <td>chain</td>
+                <td><span class="tree-indent" title="Intermediate certificate">&#x2514;&#x2500; chain</span></td>
                 <td>{{ chain.subject }}</td>
                 <td>{{ chain.issuer }}</td>
                 <td>{{ chain.not_after | humanize_expiry }}</td>
                 <td>{{ chain.days_remaining }}</td>
               </tr>
             {% endfor %}
+            <tr class="notes-row">
+              <td colspan="6">
+                <details{% if c.notes %} open{% endif %}>
+                  <summary class="notes-summary">Notes{% if c.notes %} ({{ c.notes|length }}){% endif %}</summary>
+                  <form method="post" action="/certificates/{{ c.id }}/notes" class="notes-form">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <textarea name="notes" rows="2" placeholder="Add notes..." class="notes-textarea">{{ c.notes }}</textarea>
+                    <button type="submit" class="notes-save">Save</button>
+                  </form>
+                </details>
+              </td>
+            </tr>
           {% endfor %}
         </tbody>
       </table>
+      {% if total_pages > 1 %}
+        <nav class="pagination">
+          {% if has_prev %}
+            <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">&laquo; Prev</a>
+          {% endif %}
+          <span class="page-info">Page {{ page }} of {{ total_pages }} ({{ total_certs }} certificates)</span>
+          {% if has_next %}
+            <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">Next &raquo;</a>
+          {% endif %}
+        </nav>
+      {% endif %}
     {% else %}
       <p class="empty">No certificates tracked yet. Add a host to scan or upload a certificate file.</p>
     {% endif %}
   </main>
+  <script>
+    (function() {
+      var t = localStorage.getItem('cw-theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+      var btn = document.getElementById('theme-toggle');
+      if (btn) btn.addEventListener('click', function() {
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        if (dark) {
+          document.documentElement.removeAttribute('data-theme');
+          localStorage.removeItem('cw-theme');
+        } else {
+          document.documentElement.setAttribute('data-theme', 'dark');
+          localStorage.setItem('cw-theme', 'dark');
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

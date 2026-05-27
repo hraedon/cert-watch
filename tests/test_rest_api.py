@@ -98,3 +98,131 @@ def test_api_alerts_empty(tmp_path, monkeypatch):
     data = r.json()
     assert data["alerts"] == []
     assert "pagination" in data
+
+
+def test_api_export_csv_empty(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/export/certificates.csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/csv; charset=utf-8"
+    assert "attachment" in r.headers.get("content-disposition", "")
+    lines = r.text.strip().split("\n")
+    assert len(lines) == 1  # header only
+    assert "host" in lines[0]
+    assert "subject" in lines[0]
+
+
+def test_api_export_csv_with_data(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/export/certificates.csv")
+    assert r.status_code == 200
+    lines = r.text.strip().split("\n")
+    assert len(lines) >= 2  # header + at least one row
+    assert "leaf.example.com" in lines[1]
+
+
+def test_api_export_json_empty(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/export/certificates.json")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["certificates"] == []
+    assert "attachment" in r.headers.get("content-disposition", "")
+
+
+def test_api_export_json_with_data(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/export/certificates.json")
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["certificates"]) >= 1
+    cert = data["certificates"][0]
+    assert "subject" in cert
+    assert "days_remaining" in cert
+    assert "urgency" in cert
+
+
+def test_api_patch_notes(tmp_path, monkeypatch, leaf_pem_file):
+    """FEAT-013: PATCH /api/certificates/{id}/notes should update notes."""
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    cert_id = store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.patch(
+            f"/api/certificates/{cert_id}/notes",
+            json={"notes": "staging cert"},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["notes"] == "staging cert"
+
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/api/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert r.json()["notes"] == "staging cert"
+
+
+def test_api_patch_notes_not_found(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    with TestClient(app_mod.app) as client:
+        r = client.patch(
+            "/api/certificates/nonexistent/notes",
+            json={"notes": "test"},
+        )
+    assert r.status_code == 404
+
+
+def test_api_patch_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    cert_id = store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.patch(
+            f"/api/certificates/{cert_id}/notes",
+            json={"notes": "x" * 10001},
+        )
+    assert r.status_code == 400
+
+
+def test_api_get_certificate_notes_field(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    cert_id = store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/api/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert "notes" in r.json()
+    assert r.json()["notes"] == ""

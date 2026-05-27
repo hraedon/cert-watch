@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
@@ -26,7 +25,8 @@ class ScanHistory:
 
 def record_scan_history(db_path: str | Path, entry: ScanHistory) -> str:
     entry_id = entry.id or str(uuid.uuid4())
-    with sqlite3.connect(str(db_path)) as conn:
+    from cert_watch.database import _connect
+    with _connect(db_path) as conn:
         conn.execute(
             """INSERT INTO scan_history
                (id, hostname, port, status, scanned_at, error_message)
@@ -169,7 +169,7 @@ def run_scan_now(
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:
-    with sqlite3.connect(str(db_path)) as conn:
-        conn.row_factory = sqlite3.Row
+    from cert_watch.database import _connect
+    with _connect(db_path) as conn:
         rows = conn.execute("SELECT hostname, port FROM hosts").fetchall()
     return [(r["hostname"], r["port"]) for r in rows]

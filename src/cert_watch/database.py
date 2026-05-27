@@ -48,6 +48,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     parent_cert_id TEXT,
     chain_valid INTEGER,
     replaces_cert_id TEXT,
+    notes TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -100,9 +101,27 @@ def init_schema(db_path: str | Path) -> None:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
         if "replaces_cert_id" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN replaces_cert_id TEXT")
+        if "notes" not in cols:
+            conn.execute("ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
         if "threshold_days" not in host_cols:
             conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")
+        # Idempotent unique-index migration for hosts(hostname, port) — BC-019
+        indexes = {r[1] for r in conn.execute("PRAGMA index_list('hosts')").fetchall()}
+        if "ux_hosts_hostname_port" not in indexes:
+            conn.execute(
+                """
+                DELETE FROM hosts
+                WHERE rowid NOT IN (
+                    SELECT MIN(rowid)
+                    FROM hosts
+                    GROUP BY hostname, port
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_hostname_port ON hosts(hostname, port)"
+            )
         conn.commit()
 
 
@@ -137,6 +156,7 @@ def _row_to_cert(row: sqlite3.Row) -> Certificate:
         fingerprint_sha256=row["fingerprint_sha256"],
         raw_der=bytes(row["raw_der"]),
         is_leaf=bool(row["is_leaf"]),
+        notes=dict(row).get("notes", ""),
     )
     return cert
 
@@ -197,8 +217,9 @@ class SqliteCertificateRepository(CertificateRepository):
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert_id,
@@ -216,6 +237,7 @@ class SqliteCertificateRepository(CertificateRepository):
                     self.parent_cert_id,
                     cv,
                     self.replaces_cert_id,
+                    cert.notes,
                     now,
                     now,
                 ),
@@ -236,8 +258,13 @@ class SqliteCertificateRepository(CertificateRepository):
         return [_row_to_cert(r) for r in rows]
 
     def list_expiring_within(self, days: int) -> list[Certificate]:
-        all_certs = self.list_all()
-        return [c for c in all_certs if c.days_until_expiry() <= days]
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM certificates "
+                "WHERE julianday(not_after) <= julianday('now', '+' || ? || ' days')",
+                (days,),
+            ).fetchall()
+        return [_row_to_cert(r) for r in rows]
 
     def update_expiry(self, cert_id: str, not_after: datetime) -> None:
         now = _iso(datetime.now(UTC))
@@ -251,6 +278,15 @@ class SqliteCertificateRepository(CertificateRepository):
     def delete(self, cert_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
+            conn.commit()
+
+    def update_notes(self, cert_id: str, notes: str) -> None:
+        now = _iso(datetime.now(UTC))
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE certificates SET notes = ?, updated_at = ? WHERE id = ?",
+                (notes, now, cert_id),
+            )
             conn.commit()
 
 
@@ -451,6 +487,10 @@ class SqliteHostRepository:
                 "DELETE FROM certificates WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
+            conn.execute(
+                "DELETE FROM scan_history WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
             conn.commit()
         return True
@@ -495,6 +535,18 @@ def replace_scanned(
             "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
             (hostname, port),
         )
+        old_all_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchall()
+        ]
+        if old_all_ids:
+            ph = ",".join("?" * len(old_all_ids))
+            conn.execute(
+                f"DELETE FROM alerts WHERE cert_id IN ({ph})", old_all_ids
+            )
 
         cv: int | None = None if chain_valid is None else (1 if chain_valid else 0)
         conn.execute(
@@ -502,8 +554,9 @@ def replace_scanned(
             INSERT INTO certificates
             (id, subject, issuer, not_before, not_after, san_dns_names,
              fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             parent_cert_id, chain_valid, replaces_cert_id, notes,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 leaf_id,
@@ -521,6 +574,7 @@ def replace_scanned(
                 None,
                 cv,
                 replaces_id,
+                "",
                 now,
                 now,
             ),
@@ -533,8 +587,9 @@ def replace_scanned(
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, replaces_cert_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chain_id,
@@ -552,6 +607,7 @@ def replace_scanned(
                     leaf_id,
                     None,
                     None,
+                    "",
                     now,
                     now,
                 ),
@@ -640,6 +696,7 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
             children_by_leaf.setdefault(d["parent_cert_id"] or "", []).append(d)
 
     def _days(iso_str: str) -> int:
+        """Floor days remaining — same semantics as Certificate.days_until_expiry()."""
         return (_parse_iso(iso_str) - datetime.now(UTC)).days
 
     def _urgency(days: int) -> str:
@@ -653,16 +710,16 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
     for leaf in leaf_rows:
         chain = children_by_leaf.get(leaf["id"], [])
         leaf_days = _days(leaf["not_after"])
-        chain_view = [
-            {
+        chain_view = []
+        for c in chain:
+            days = _days(c["not_after"])
+            chain_view.append({
                 "subject": c["subject"],
                 "issuer": c["issuer"],
                 "not_after": c["not_after"],
-                "days_remaining": _days(c["not_after"]),
-                "urgency": _urgency(_days(c["not_after"])),
-            }
-            for c in chain
-        ]
+                "days_remaining": days,
+                "urgency": _urgency(days),
+            })
         all_days = [leaf_days, *[c["days_remaining"] for c in chain_view]]
         min_days = min(all_days)
         host = (
@@ -686,6 +743,7 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
                     None if leaf["chain_valid"] is None else bool(leaf["chain_valid"])
                 ),
                 "replaces_cert_id": leaf.get("replaces_cert_id"),
+                "notes": dict(leaf).get("notes", ""),
             }
         )
 

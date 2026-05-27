@@ -47,3 +47,23 @@ def test_metrics_with_data(tmp_path, monkeypatch, leaf_pem_file):
     assert "cert_watch_hosts_tracked 1" in text
     assert "cert_watch_certificates_tracked 1" in text
     assert "leaf.example.com" in text
+
+
+def test_prometheus_rules_valid_yaml():
+    """FEAT-011: prometheus-rules.yaml must be valid YAML with expected alerts."""
+    from pathlib import Path
+
+    import yaml
+
+    rules_path = Path(__file__).resolve().parent.parent / "deploy" / "k8s" / "prometheus-rules.yaml"
+    assert rules_path.exists(), f"prometheus-rules.yaml not found at {rules_path}"
+    content = rules_path.read_text()
+    doc = yaml.safe_load(content)
+    assert doc["apiVersion"] == "monitoring.coreos.com/v1"
+    assert doc["kind"] == "PrometheusRule"
+    assert doc["metadata"]["name"] == "cert-watch-alerts"
+    rules = doc["spec"]["groups"][0]["rules"]
+    alert_names = {r["alert"] for r in rules}
+    assert "CertExpiringCritical" in alert_names
+    assert "CertExpiringWarning" in alert_names
+    assert "CertExpired" in alert_names

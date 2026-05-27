@@ -8,6 +8,9 @@ Type=simple
 User=cert-watch
 Group=cert-watch
 Environment=CERT_WATCH_DATA_DIR=/var/lib/cert-watch
+# Secrets: set fixed values in production to survive restarts
+# Environment=CERT_WATCH_CSRF_SECRET=change-me-in-production
+# Environment=CERT_WATCH_AUTH_SECRET=change-me-in-production
 ExecStart=/opt/cert-watch/venv/bin/cert-watch
 Restart=on-failure
 RestartSec=5

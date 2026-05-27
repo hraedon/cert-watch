@@ -18,6 +18,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
+
+from cert_watch.auth import _sign_session
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -41,11 +43,20 @@ from cert_watch.database import (
     list_dashboard_rows,
     list_scan_history,
 )
-from cert_watch.scan import scan_host, store_scanned
-from cert_watch.scheduler import run_scan_now, start_scheduler, stop_scheduler
-from cert_watch.upload import store_uploaded, upload_certificate
+from cert_watch.scan import ScanError, _is_blocked_ip, scan_host, store_scanned
+from cert_watch.scheduler import (
+    ScanHistory,
+    record_scan_history,
+    run_scan_now,
+    start_scheduler,
+    stop_scheduler,
+)
+from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.app")
+
+
+_COOKIE_SECURE = _os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") == "1"
 
 
 def _setup_logging() -> None:
@@ -68,17 +79,9 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 # ---------- SSRF mitigation ----------
-
-_BLOCKED_NETWORKS = [
-    ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
-    ipaddress.ip_network("169.254.0.0/16"),
-    ipaddress.ip_network("::1/128"),
-    ipaddress.ip_network("fc00::/7"),
-    ipaddress.ip_network("fe80::/10"),
-]
+# The authoritative blocklist lives in scan.py (_BLOCKED_NETWORKS, _is_blocked_ip).
+# _is_blocked_host below is a UX pre-check for the add-host form; enforcement
+# happens at scan time in scan._resolve_host().
 
 
 def _is_blocked_host(hostname: str) -> str | None:
@@ -86,11 +89,12 @@ def _is_blocked_host(hostname: str) -> str | None:
 
     Only blocks when DNS resolution succeeds AND returns a private/link-local IP.
     Unresolvable hostnames are allowed through (they'll fail at connection time).
+    The authoritative check happens at scan time in scan._resolve_host().
     """
     try:
         infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return None  # Allow through; connection will fail naturally
+        return None
     for _family, *_rest in infos:
         ip_str = _rest[3][0] if _rest else None
         if ip_str is None:
@@ -99,9 +103,8 @@ def _is_blocked_host(hostname: str) -> str | None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        for net in _BLOCKED_NETWORKS:
-            if ip in net:
-                return f"hostname resolves to blocked address {ip}"
+        if _is_blocked_ip(ip):
+            return f"hostname resolves to blocked address {ip}"
     return None
 
 
@@ -166,15 +169,21 @@ def _check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
         return True
 
 
-def _check_csrf(request: Request) -> str | None:
+async def _check_csrf(request: Request) -> str | None:
     """Validate CSRF double-submit cookie. Returns error message or None.
 
-    Checks: x-csrf-token header, then _csrf_token query param (for form action URLs).
+    Checks: x-csrf-token header, _csrf_token form field, then query param (fallback).
     Skipped when CERT_WATCH_CSRF_DISABLED=1 (for testing).
     """
     if _os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
         return None
     token = request.headers.get("x-csrf-token") or request.query_params.get("_csrf_token") or ""
+    if not token:
+        try:
+            form = await request.form()
+            token = form.get("_csrf_token", "")
+        except Exception:
+            pass
     if not token:
         return "missing CSRF token"
     session_id = request.cookies.get("cw_sid", "")
@@ -291,7 +300,8 @@ async def csrf_session_middleware(request: Request, call_next):
         request.scope["session_id"] = sid
         response = await call_next(request)
         response.set_cookie(
-            "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL
+            "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL,
+            secure=_COOKIE_SECURE,
         )
         return response
     return await call_next(request)
@@ -420,7 +430,8 @@ async def login_submit(
     token = create_session(result.username)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL
+        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
+        secure=_COOKIE_SECURE,
     )
     logger.info("user logged in: %s (%s)", result.username, auth.provider_name)
     return response
@@ -439,11 +450,22 @@ def oauth_start(request: Request) -> RedirectResponse:
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'OAuth start failed')}", status_code=303
         )
-    return RedirectResponse(url=result.redirect_url, status_code=303)
+    response = RedirectResponse(url=result.redirect_url, status_code=303)
+    # BC-009: store signed state in a cookie for callback verification
+    if result.error:
+        response.set_cookie(
+            "cw_oauth_state",
+            result.error,
+            httponly=True,
+            samesite="lax",
+            max_age=600,
+            secure=_COOKIE_SECURE,
+        )
+    return response
 
 
 @app.get("/auth/callback")
-def oauth_callback(request: Request, code: str = "", error: str = "") -> RedirectResponse:
+def oauth_callback(request: Request, code: str = "", error: str = "", state: str = "") -> RedirectResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
@@ -455,17 +477,21 @@ def oauth_callback(request: Request, code: str = "", error: str = "") -> Redirec
         return RedirectResponse(
             url="/login?error=no+authorization+code", status_code=303
         )
+    # BC-009: verify state parameter
+    signed_state = request.cookies.get("cw_oauth_state", "")
     base = str(request.base_url).rstrip("/")
     redirect_uri = f"{base}/auth/callback"
-    result = auth.complete_oauth_flow(code, redirect_uri)
+    result = auth.complete_oauth_flow(code, redirect_uri, state=signed_state)
     if not result.success:
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
         )
     token = create_session(result.username)
     response = RedirectResponse(url="/", status_code=303)
+    response.delete_cookie("cw_oauth_state")
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL
+        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
+        secure=_COOKIE_SECURE,
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response
@@ -479,24 +505,62 @@ def logout(request: Request) -> RedirectResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, error: str | None = None) -> HTMLResponse:
+def dashboard(
+    request: Request,
+    error: str | None = None,
+    q: str | None = None,
+    urgency: str | None = None,
+    source: str | None = None,
+    page: int = 1,
+) -> HTMLResponse:
     db = _db_path()
     rows = list_dashboard_rows(db)
+    if q:
+        ql = q.lower()
+        rows = [
+            r for r in rows
+            if ql in r["subject"].lower()
+            or ql in r["issuer"].lower()
+            or ql in r["host"].lower()
+        ]
+    if urgency:
+        rows = [r for r in rows if r["urgency"] == urgency]
+    if source:
+        rows = [r for r in rows if r["source"] == source]
     hosts = SqliteHostRepository(db).list_all()
     ctx = _get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
+
+    per_page = 25
+    total = len(rows)
+    total_pages = max((total + per_page - 1) // per_page, 1)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * per_page
+    page_rows = rows[start : start + per_page]
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "certificates": rows,
+            "certificates": page_rows,
             "hosts": hosts,
             "version": __version__,
             "error": error,
             "auth_user": auth_user,
+            "filter_q": q or "",
+            "filter_urgency": urgency or "",
+            "filter_source": source or "",
+            "page": page,
+            "total_pages": total_pages,
+            "total_certs": total,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
             **ctx,
         },
     )
+
+
+COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
 
 
 @app.post("/hosts")
@@ -505,8 +569,9 @@ async def add_host(
     hostname: str = Form(...),
     port: int = Form(443),
     threshold_days: int | None = Form(None),
+    common_ports: bool = Form(False),
 ) -> RedirectResponse:
-    if not (1 <= port <= 65535):
+    if not common_ports and not (1 <= port <= 65535):
         return RedirectResponse(
             url=f"/?error={quote('port must be between 1 and 65535')}", status_code=303
         )
@@ -514,10 +579,10 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
         )
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not _check_rate_limit("add_host", 20, 60):
+    if not _check_rate_limit(f"add_host:{request.client.host}", 20, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
@@ -526,22 +591,41 @@ async def add_host(
         return RedirectResponse(url=f"/?error={quote(ssrf_err)}", status_code=303)
     db = _db_path()
     host_repo = SqliteHostRepository(db)
-    host_repo.add(hostname, port, threshold_days=threshold_days)
-    result = scan_host(hostname, port)
-    if not hasattr(result, "error_message"):
-        store_scanned(result, db)
-        logger.info("added and scanned host %s:%d", hostname, port)
-    else:
-        logger.warning("added host %s:%d but scan failed: %s", hostname, port, result.error_message)
+    ports = COMMON_TLS_PORTS if common_ports else (port,)
+    scanned = 0
+    for p in ports:
+        host_repo.add(hostname, p, threshold_days=threshold_days)
+        result = scan_host(hostname, p)
+        if not isinstance(result, ScanError):
+            store_scanned(result, db)
+            scanned += 1
+            record_scan_history(
+                db, ScanHistory(hostname=hostname, port=p, status="success")
+            )
+            logger.info("added and scanned host %s:%d", hostname, p)
+        else:
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname=hostname, port=p, status="failure",
+                    error_message=result.error_message,
+                ),
+            )
+            logger.warning(
+                "added host %s:%d but scan failed: %s",
+                hostname, p, result.error_message,
+            )
+    if common_ports:
+        logger.info("common-ports scan for %s: %d/%d succeeded", hostname, scanned, len(ports))
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.post("/hosts/import")
 async def import_hosts(request: Request, file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not _check_rate_limit("import_hosts", 5, 60):
+    if not _check_rate_limit(f"import_hosts:{request.client.host}", 5, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
@@ -589,8 +673,21 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             continue
         host_repo.add(hostname, port, threshold_days=threshold)
         result = scan_host(hostname, port)
-        if not hasattr(result, "error_message"):
+        if not isinstance(result, ScanError):
             store_scanned(result, db)
+            record_scan_history(
+                db, ScanHistory(hostname=hostname, port=port, status="success")
+            )
+        else:
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname=hostname,
+                    port=port,
+                    status="failure",
+                    error_message=result.error_message,
+                ),
+            )
         imported += 1
     if errors and imported == 0:
         logger.warning("CSV import failed: %s", errors[:3])
@@ -606,7 +703,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
 @app.post("/hosts/{host_id}/delete")
 async def delete_host(request: Request, host_id: str) -> RedirectResponse:
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path()
@@ -617,10 +714,10 @@ async def delete_host(request: Request, host_id: str) -> RedirectResponse:
 
 @app.post("/hosts/{host_id}/scan")
 async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not _check_rate_limit("scan_host", 10, 60):
+    if not _check_rate_limit(f"scan_host:{request.client.host}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
         )
@@ -629,24 +726,59 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     result = scan_host(host.hostname, host.port)
-    if not hasattr(result, "error_message"):
+    if not isinstance(result, ScanError):
         store_scanned(result, db)
-        logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
-    else:
-        logger.warning(
-            "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
+        record_scan_history(
+            db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
         )
-    return RedirectResponse(url="/", status_code=303)
+        logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
+        return RedirectResponse(url="/", status_code=303)
+    record_scan_history(
+        db,
+        ScanHistory(
+            hostname=host.hostname,
+            port=host.port,
+            status="failure",
+            error_message=result.error_message,
+        ),
+    )
+    logger.warning(
+        "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
+    )
+    msg = f"scan failed for {host.hostname}:{host.port}: {result.error_message}"
+    return RedirectResponse(url=f"/?error={quote(msg)}", status_code=303)
 
 
 @app.post("/certificates/{cert_id}/delete")
 async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse:
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path()
     delete_certificate_cascade(db, cert_id)
     logger.info("deleted certificate %s (cascade)", cert_id)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/certificates/{cert_id}/notes")
+async def update_certificate_notes(
+    request: Request, cert_id: str, notes: str = Form(...)
+) -> RedirectResponse:
+    csrf_err = await _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    if len(notes) > 10000:
+        return RedirectResponse(
+            url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
+        )
+    db = _db_path()
+    from cert_watch.database import SqliteCertificateRepository
+
+    repo = SqliteCertificateRepository(db)
+    if repo.get_by_id(cert_id) is None:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    repo.update_notes(cert_id, notes)
+    logger.info("updated notes for certificate %s", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -702,15 +834,17 @@ async def upload(
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
     password: str | None = Form(None),  # noqa: B008
 ) -> RedirectResponse:
-    csrf_err = _check_csrf(request)
+    csrf_err = await _check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not _check_rate_limit("upload", 10, 60):
+    if not _check_rate_limit(f"upload:{request.client.host}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     db = _db_path()
-    suffix = Path(file.filename or "uploaded").suffix or ".pem"
+    allowed_suffixes = {".pem", ".crt", ".cer", ".der", ".pfx", ".p12", ".p7b", ".p7c"}
+    raw_suffix = Path(file.filename or "uploaded").suffix.lower()
+    suffix = raw_suffix if raw_suffix in allowed_suffixes else ".pem"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         content = await file.read(MAX_UPLOAD_BYTES + 1)
         if len(content) > MAX_UPLOAD_BYTES:
@@ -724,7 +858,7 @@ async def upload(
     try:
         pw_bytes = password.encode("utf-8") if password else None
         entry = upload_certificate(tmp_path, password=pw_bytes)
-        if hasattr(entry, "error_message"):
+        if isinstance(entry, ParseError):
             return RedirectResponse(
                 url=f"/?error={quote(entry.error_message)}", status_code=303
             )
@@ -779,7 +913,40 @@ def api_get_certificate(cert_id: str) -> JSONResponse:
         "fingerprint_sha256": cert.fingerprint_sha256,
         "is_leaf": cert.is_leaf,
         "days_until_expiry": cert.days_until_expiry(),
+        "notes": cert.notes,
     })
+
+
+@app.patch("/api/certificates/{cert_id}/notes")
+async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
+    # BC-012: PATCH notes requires auth and CSRF when authentication is enabled
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is not None and not isinstance(auth, NoAuthProvider):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        username = validate_session(token)
+        if not username:
+            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+        csrf_err = await _check_csrf(request)
+        if csrf_err:
+            return JSONResponse(content={"error": csrf_err}, status_code=403)
+    db = _db_path()
+    from cert_watch.database import SqliteCertificateRepository
+
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+    notes = body.get("notes", "")
+    if not isinstance(notes, str):
+        return JSONResponse(content={"error": "notes must be a string"}, status_code=400)
+    if len(notes) > 10000:
+        return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
+    repo.update_notes(cert_id, notes)
+    return JSONResponse(content={"id": cert_id, "notes": notes})
 
 
 @app.get("/api/hosts")
@@ -830,6 +997,64 @@ def api_list_alerts(page: int = 1, limit: int = 50) -> JSONResponse:
             "pages": (total + limit - 1) // limit if limit else 0,
         },
     })
+
+
+@app.get("/api/export/certificates.csv")
+def api_export_certificates_csv() -> PlainTextResponse:
+    """Export all certificates as CSV for compliance reporting."""
+    db = _db_path()
+    rows = list_dashboard_rows(db)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "host", "source", "subject", "issuer", "not_after",
+        "days_remaining", "urgency", "chain_valid", "leaf_subject",
+        "leaf_issuer", "leaf_not_after",
+    ])
+    for r in rows:
+        writer.writerow([
+            r["host"],
+            r["source"],
+            r["subject"],
+            r["issuer"],
+            r["not_after"],
+            r["days_remaining"],
+            r["urgency"],
+            r.get("chain_valid", ""),
+            r["subject"],
+            r["issuer"],
+            r["not_after"],
+        ])
+        for chain in r.get("chain", []):
+            writer.writerow([
+                r["host"],
+                r["source"],
+                chain["subject"],
+                chain["issuer"],
+                chain["not_after"],
+                chain["days_remaining"],
+                chain["urgency"],
+                "",
+                r["subject"],
+                r["issuer"],
+                r["not_after"],
+            ])
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=certificates.csv"},
+    )
+
+
+@app.get("/api/export/certificates.json")
+def api_export_certificates_json() -> JSONResponse:
+    """Export all certificates as JSON for compliance reporting."""
+    db = _db_path()
+    rows = list_dashboard_rows(db)
+    return JSONResponse(
+        content={"certificates": rows},
+        headers={"Content-Disposition": "attachment; filename=certificates.json"},
+    )
 
 
 @app.get("/metrics", response_class=PlainTextResponse)

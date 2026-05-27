@@ -76,3 +76,34 @@ def test_extract_chain_from_pem(chain_pem_bytes):
 def test_extract_chain_from_pem_empty():
     assert extract_chain_from_pem("") == []
     assert extract_chain_from_pem("nothing here") == []
+
+
+def test_days_until_expiry_no_truncation():
+    """BC-006: days_until_expiry uses floor semantics (documented).
+
+    A cert expiring in 1d23h returns 1 (floor of 1.958 days), matching
+    the alert threshold semantics: the 1-day alert fires when there are
+    fewer than 2 full days remaining.
+    """
+    from datetime import UTC, timedelta
+
+    now = __import__("datetime").datetime.now(UTC)
+    cert = Certificate(
+        subject="test.example.com",
+        issuer="test.example.com",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=1, hours=23),
+        san_dns_names=["test.example.com"],
+    )
+    assert cert.days_until_expiry() == 1
+
+    # A cert with exactly 2 full days remaining should show 2.
+    # Add 10s buffer to avoid microsecond drift between the two now() calls.
+    cert2 = Certificate(
+        subject="test2.example.com",
+        issuer="test2.example.com",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=2, seconds=10),
+        san_dns_names=["test2.example.com"],
+    )
+    assert cert2.days_until_expiry() == 2

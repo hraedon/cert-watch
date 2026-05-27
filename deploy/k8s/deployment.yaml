@@ -24,12 +24,30 @@ spec:
         - name: cert-watch
           image: ghcr.io/hraedon/cert-watch:latest
           imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8000
           env:
             - name: CERT_WATCH_DATA_DIR
               value: /var/lib/cert-watch
+            - name: CERT_WATCH_CSRF_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cert-watch-secrets
+                  key: csrf-secret
+            - name: CERT_WATCH_AUTH_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: cert-watch-secrets
+                  key: auth-secret
             # --- Alerts (SMTP) — uncomment to enable ---
             # - name: SMTP_HOST
             #   value: smtp.example.com
@@ -80,7 +98,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/cert-watch
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: cert-watch-data
+        - name: tmp
+          emptyDir: {}

@@ -36,6 +36,7 @@ class WebhookConfig:
     url: str
     headers: dict[str, str] = field(default_factory=dict)
     timeout: int = 15
+    template: str = ""  # Jinja-style template; empty = default JSON
 
 
 def evaluate_thresholds(
@@ -44,10 +45,16 @@ def evaluate_thresholds(
     *,
     cert_id: str | None = None,
     custom_thresholds: tuple[int, ...] | None = None,
+    cooldown_hours: int = 24,
 ) -> list[Alert]:
     """
     Create pending alerts for thresholds the cert has now crossed, skipping any
     threshold that already has an alert recorded for this cert. See AC-02.
+
+    Escalation: if the most recent alert for a threshold is older than
+    cooldown_hours and the cert still crosses that threshold, a new alert
+    is created. This ensures persistent expiry issues get re-alerted while
+    avoiding noise from repeated alerts within the cooldown window.
 
     The spec talks about cert_id as the link to existing alerts; we accept it as
     a kwarg so callers that persisted the cert can pass the row id. If omitted we
@@ -61,22 +68,42 @@ def evaluate_thresholds(
     else:
         thresholds = LEAF_THRESHOLDS if cert.is_leaf else CHAIN_THRESHOLDS
     cid = cert_id or cert.fingerprint_sha256
+    now = datetime.now(UTC)
 
-    # Find existing alerts for this cert and their thresholds (via threshold_days col).
+    # Find existing alerts for this cert and their thresholds.
+    # Track the most recent alert time per threshold for cooldown logic.
     existing_thresholds: set[int] = set()
-    if hasattr(alert_repo, "list_for_cert"):
-        for a in alert_repo.list_for_cert(cid):
-            if a.threshold_days is not None:
-                existing_thresholds.add(a.threshold_days)
-    else:
-        # Fallback: list pending only.
-        for a in alert_repo.list_pending():
-            if a.cert_id == cid and a.threshold_days is not None:
-                existing_thresholds.add(a.threshold_days)
+    latest_alert_by_threshold: dict[int, datetime] = {}
+    cert_alerts = (
+        alert_repo.list_for_cert(cid)
+        if hasattr(alert_repo, "list_for_cert")
+        else [a for a in alert_repo.list_pending() if a.cert_id == cid]
+    )
+    for a in cert_alerts:
+        if a.threshold_days is not None:
+            existing_thresholds.add(a.threshold_days)
+            prev_latest = latest_alert_by_threshold.get(
+                a.threshold_days, datetime.min.replace(tzinfo=UTC)
+            )
+            if a.created_at > prev_latest:
+                latest_alert_by_threshold[a.threshold_days] = a.created_at
 
     created: list[Alert] = []
     for t in thresholds:
-        if days <= t and t not in existing_thresholds:
+        # Floor semantics: days_until_expiry() returns floor(delta), so a
+        # cert with 1d23h remaining shows days=1 and crosses the t=1 threshold.
+        # This means a threshold can fire up to ~23h before the nominal expiry
+        # day; acceptable because thresholds are calendar-day aligned.
+        if days <= t:
+            # Check cooldown: skip if a recent alert exists for this threshold
+            if t in existing_thresholds:
+                last_alert_time = latest_alert_by_threshold.get(t)
+                cooldown_secs = cooldown_hours * 3600
+                if (
+                    last_alert_time
+                    and (now - last_alert_time).total_seconds() < cooldown_secs
+                ):
+                    continue
             alert = Alert(
                 cert_id=cid,
                 alert_type="expired" if days < 0 else "expiry_warning",
@@ -99,7 +126,6 @@ def evaluate_all_certs(
     Looks up per-host custom thresholds from the hosts table and passes them
     through to evaluate_thresholds.
     """
-    from cert_watch.certificate_model import Certificate
     from cert_watch.database import _connect, _parse_iso
 
     with _connect(db_path) as conn:
@@ -187,20 +213,34 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
 
 
 def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
-    """Send alert as JSON POST to a webhook URL. Returns True on success."""
+    """Send alert as JSON POST to a webhook URL. Returns True on success.
+
+    If config.template is set, uses it as the payload with {{var}} substitution.
+    Available variables: alert_type, cert_id, message, threshold_days, status.
+    """
     if config is None:
         return False
-    payload = json.dumps({
-        "alert_type": alert.alert_type,
-        "cert_id": alert.cert_id,
-        "message": alert.message,
-        "threshold_days": alert.threshold_days,
-        "status": alert.status,
-    }).encode("utf-8")
+    if config.template:
+        payload = config.template
+        for key in ("alert_type", "cert_id", "message", "threshold_days", "status"):
+            value = str(getattr(alert, key, ""))
+            payload = payload.replace("{{" + key + "}}", value)
+        content_type = "text/plain"
+        if payload.lstrip().startswith("{"):
+            content_type = "application/json"
+    else:
+        payload = json.dumps({
+            "alert_type": alert.alert_type,
+            "cert_id": alert.cert_id,
+            "message": alert.message,
+            "threshold_days": alert.threshold_days,
+            "status": alert.status,
+        })
+        content_type = "application/json"
     req = urllib.request.Request(
         config.url,
-        data=payload,
-        headers={"Content-Type": "application/json", **config.headers},
+        data=payload.encode("utf-8"),
+        headers={"Content-Type": content_type, **config.headers},
         method="POST",
     )
     try:

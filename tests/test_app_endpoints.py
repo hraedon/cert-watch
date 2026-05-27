@@ -93,6 +93,41 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, self_signed_leaf):
     assert called["args"] == ("scan-target.example.com", 443)
 
 
+def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
+    """Regression: scan-now used to silently swallow ScanError, leaving the user
+    with no UI feedback. Failure must redirect with ?error= AND write a failure
+    row to scan_history so the user can see what happened."""
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch import app as app_mod_pkg
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.scan import ScanError
+    hid = SqliteHostRepository(db).add("refused.example.com", 443)
+
+    def fake_scan_host(hostname, port=443, **kw):
+        return ScanError(hostname=hostname, port=port, error_message="connection refused")
+
+    monkeypatch.setattr(app_mod_pkg, "scan_host", fake_scan_host)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
+    assert r.status_code == 303
+    assert "error=" in r.headers["location"]
+    loc = r.headers["location"]
+    assert "connection%20refused" in loc or "connection+refused" in loc
+
+    import sqlite3
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
+            ("refused.example.com", 443),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "failure"
+    assert rows[0][1] == "connection refused"
+
+
 def test_scan_now_404_redirect_on_unknown_host(tmp_path, monkeypatch):
     app_mod = _reload_app(monkeypatch, tmp_path)
     with TestClient(app_mod.app) as client:
@@ -217,3 +252,41 @@ def test_lifespan_respects_sched_env(tmp_path, monkeypatch):
         client.get("/healthz")
     assert captured["hour"] == 3
     assert captured["minute"] == 15
+
+
+def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, self_signed_leaf):
+    """FEAT-008: common_ports flag should scan multiple TLS ports."""
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.scan import ScannedEntry
+
+    scanned_ports = []
+
+    def fake_scan_host(hostname, port=443, **kw):
+        scanned_ports.append(port)
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    monkeypatch.setattr(app_mod, "scan_host", fake_scan_host)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": "multi.example.com", "common_ports": "true"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    # Should have scanned common TLS ports
+    assert 443 in scanned_ports
+    assert 8443 in scanned_ports
+    assert len(scanned_ports) >= 2
+
+    # All ports should be registered as hosts
+    host_repo = SqliteHostRepository(db)
+    hosts = host_repo.list_all()
+    hostnames = [(h.hostname, h.port) for h in hosts]
+    assert ("multi.example.com", 443) in hostnames
+    assert ("multi.example.com", 8443) in hostnames

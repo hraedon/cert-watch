@@ -31,9 +31,18 @@ class Certificate:
     fingerprint_sha256: str = ""
     raw_der: bytes = b""
     is_leaf: bool = True
+    notes: str = ""
 
     def days_until_expiry(self) -> int:
-        """Whole days between now (UTC) and not_after. See AC-02."""
+        """Whole days between now (UTC) and not_after (floor semantics). See AC-02.
+
+        Uses floor (truncation): a cert expiring in 1d23h returns 1, not 2.
+        This matches the alert threshold semantics — the 1-day alert fires
+        when there are fewer than 2 full days remaining, which is correct:
+        you have at most 1 complete day left. The trade-off is that a
+        threshold boundary can fire up to ~23h before the nominal expiry
+        day; this is acceptable because thresholds are calendar-day aligned.
+        """
         now = datetime.now(UTC)
         not_after = self.not_after
         if not_after.tzinfo is None:

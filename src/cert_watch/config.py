@@ -21,6 +21,7 @@ class Settings:
     alert_recipients: tuple[str, ...] = ()
     webhook_url: str | None = None
     webhook_headers: dict[str, str] | None = None
+    webhook_template: str = ""
     tls_verify: bool = False
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
@@ -85,6 +86,7 @@ class Settings:
             alert_recipients=recipients,
             webhook_url=webhook_url,
             webhook_headers=webhook_headers,
+            webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             # Auth
             auth_provider=os.environ.get("AUTH_PROVIDER", ""),
@@ -131,6 +133,7 @@ class Settings:
         return WebhookConfig(
             url=self.webhook_url,
             headers=self.webhook_headers or {},
+            template=self.webhook_template,
         )
 
     def build_auth_provider(self):

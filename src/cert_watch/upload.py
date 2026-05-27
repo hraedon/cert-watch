@@ -67,6 +67,9 @@ def upload_certificate(
     try_pem = _parse_pem_or_der(path.name, data)
     if isinstance(try_pem, UploadedEntry):
         return try_pem
+    try_der = _parse_der(path.name, data)
+    if isinstance(try_der, UploadedEntry):
+        return try_der
     return ParseError(error_message=f"unsupported file extension: {ext}")
 
 

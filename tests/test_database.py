@@ -70,3 +70,23 @@ def test_alert_repository_lifecycle(tmp_path):
     arepo.mark_failed(a2id, "smtp dead")
     rows = [a for a in arepo.list_all() if a.id == a2id]
     assert rows[0].status == "failed" and rows[0].error_message == "smtp dead"
+
+
+def test_update_notes(tmp_path, self_signed_leaf):
+    """FEAT-013: update_notes should persist notes to the database."""
+    from cert_watch.certificate_model import Certificate
+
+    db = tmp_path / "test.sqlite3"
+    cert = parse_certificate(self_signed_leaf.der)
+    assert isinstance(cert, Certificate)
+    repo = SqliteCertificateRepository(db, source="test")
+    cert_id = repo.add(cert)
+
+    loaded = repo.get_by_id(cert_id)
+    assert loaded is not None
+    assert loaded.notes == ""
+
+    repo.update_notes(cert_id, "staging cert for renewal")
+    loaded = repo.get_by_id(cert_id)
+    assert loaded is not None
+    assert loaded.notes == "staging cert for renewal"

@@ -1,0 +1,56 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cert-watch-alerts
+  namespace: cert-watch
+  labels:
+    app.kubernetes.io/name: cert-watch
+    app.kubernetes.io/part-of: cert-watch
+    prometheus: kube-prometheus
+spec:
+  groups:
+    - name: cert-watch.rules
+      rules:
+        - alert: CertExpiringCritical
+          expr: cert_watch_cert_expiry_days < 3
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate expiring in < 3 days"
+            description: >-
+              Certificate {{ $labels.subject }} on host {{ $labels.host }}
+              expires in {{ $value }} days. Renew immediately.
+
+        - alert: CertExpiringWarning
+          expr: cert_watch_cert_expiry_days < 7
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificate expiring in < 7 days"
+            description: >-
+              Certificate {{ $labels.subject }} on host {{ $labels.host }}
+              expires in {{ $value }} days. Plan renewal soon.
+
+        - alert: CertExpired
+          expr: cert_watch_cert_expiry_days < 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificate has expired"
+            description: >-
+              Certificate {{ $labels.subject }} on host {{ $labels.host }}
+              expired {{ $value }} days ago. Renew immediately.
+
+        - alert: CertWatchScanFailures
+          expr: cert_watch_certificates_expired > 0
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Expired certificates detected"
+            description: >-
+              {{ $value }} certificate(s) have expired. Check the cert-watch
+              dashboard for details.

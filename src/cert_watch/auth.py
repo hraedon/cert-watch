@@ -21,6 +21,28 @@ logger = logging.getLogger("cert_watch.auth")
 SESSION_COOKIE = "cw_auth"
 SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
 _signing_key = os.environ.get("CERT_WATCH_AUTH_SECRET") or secrets.token_hex(32)
+if not os.environ.get("CERT_WATCH_AUTH_SECRET"):
+    logger.warning(
+        "CERT_WATCH_AUTH_SECRET is not set; using an ephemeral random value. "
+        "Sessions will be invalidated on every restart. Set CERT_WATCH_AUTH_SECRET in production."
+    )
+
+
+def _sign_state(state: str) -> str:
+    sig = hmac.new(_signing_key.encode(), state.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{state}:{sig}"
+
+
+def _verify_state(token: str) -> str | None:
+    if not token or ":" not in token:
+        return None
+    last_colon = token.rfind(":")
+    state = token[:last_colon]
+    sig = token[last_colon + 1 :]
+    expected = hmac.new(_signing_key.encode(), state.encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return state
 
 
 # ---------- Session helpers ----------
@@ -297,13 +319,18 @@ class OAuthProvider(AuthProvider):
         uri, state = client.create_authorization_url(
             authorization_endpoint, redirect_uri=redirect_uri
         )
-        return AuthResult(success=True, redirect_url=uri)
+        return AuthResult(success=True, redirect_url=uri, error=_sign_state(state))
 
-    def complete_oauth_flow(self, code: str, redirect_uri: str) -> AuthResult:
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         try:
             from authlib.integrations.requests_client import OAuth2Session
         except ImportError:
             return AuthResult(success=False, error="authlib not installed")
+        # BC-009: verify state parameter before exchanging code
+        if state:
+            expected_state = _verify_state(state)
+            if expected_state is None:
+                return AuthResult(success=False, error="invalid OAuth state")
         endpoints = self._discover()
         token_endpoint = endpoints.get("token_endpoint", "")
         if not token_endpoint:
@@ -329,6 +356,16 @@ class OAuthProvider(AuthProvider):
                     parts = id_token.split(".")
                     if len(parts) >= 2:
                         claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+                        # BC-015/014: verify iss and aud claims
+                        expected_iss = self.config.issuer_url.rstrip("/")
+                        actual_iss = claims.get("iss", "").rstrip("/")
+                        if actual_iss and expected_iss and actual_iss != expected_iss:
+                            return AuthResult(success=False, error="ID token issuer mismatch")
+                        aud = claims.get("aud", "")
+                        if isinstance(aud, list):
+                            aud = aud[0] if aud else ""
+                        if aud and aud != self.config.client_id:
+                            return AuthResult(success=False, error="ID token audience mismatch")
                         username = (
                             claims.get("preferred_username")
                             or claims.get("email")

@@ -12,6 +12,9 @@ services:
       - cert-watch-data:/var/lib/cert-watch
     environment:
       CERT_WATCH_DATA_DIR: /var/lib/cert-watch
+      # --- Secrets: set fixed values in production to survive restarts ---
+      # CERT_WATCH_CSRF_SECRET: change-me-in-production
+      # CERT_WATCH_AUTH_SECRET: change-me-in-production
       # --- Alerts (SMTP) — uncomment and fill in to enable ---
       # SMTP_HOST: smtp.example.com
       # SMTP_PORT: "587"
