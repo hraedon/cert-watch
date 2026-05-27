@@ -12,6 +12,8 @@ services:
       - cert-watch-data:/var/lib/cert-watch
     environment:
       CERT_WATCH_DATA_DIR: /var/lib/cert-watch
+      # --- Scanning options ---
+      # CERT_WATCH_ALLOW_PRIVATE_IPS: "1"
       # --- Secrets: set fixed values in production to survive restarts ---
       # CERT_WATCH_CSRF_SECRET: change-me-in-production
       # CERT_WATCH_AUTH_SECRET: change-me-in-production

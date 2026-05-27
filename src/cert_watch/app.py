@@ -18,8 +18,6 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, Request, UploadFile
-
-from cert_watch.auth import _sign_session
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -37,6 +35,7 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
     SqliteHostRepository,
+    SqliteTrustAnchorRepository,
     delete_certificate_cascade,
     init_schema,
     list_alerts_with_subject,
@@ -84,7 +83,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # happens at scan time in scan._resolve_host().
 
 
-def _is_blocked_host(hostname: str) -> str | None:
+def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | None:
     """Return an error message if hostname resolves to a blocked IP, else None.
 
     Only blocks when DNS resolution succeeds AND returns a private/link-local IP.
@@ -103,7 +102,7 @@ def _is_blocked_host(hostname: str) -> str | None:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_blocked_ip(ip):
+        if _is_blocked_ip(ip, allow_private=allow_private):
             return f"hostname resolves to blocked address {ip}"
     return None
 
@@ -263,7 +262,9 @@ async def lifespan(app: FastAPI):
         host_repo = SqliteHostRepository(s.db_path)
         hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
         return run_scan_now(
-            scan_fn=lambda host, port: scan_host(host, port, verify=s.tls_verify),
+            scan_fn=lambda host, port: scan_host(
+                host, port, verify=s.tls_verify, allow_private=s.allow_private
+            ),
             alert_fn=lambda: {"sent": 0, "failed": 0},
             db_path=s.db_path,
             host_provider=lambda: hosts,
@@ -534,6 +535,7 @@ def dashboard(
     if source:
         rows = [r for r in rows if r["source"] == source]
     hosts = SqliteHostRepository(db).list_all()
+    anchors = SqliteTrustAnchorRepository(db).list_entries()
     ctx = _get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
 
@@ -550,6 +552,7 @@ def dashboard(
         context={
             "certificates": page_rows,
             "hosts": hosts,
+            "trust_anchors": anchors,
             "version": __version__,
             "error": error,
             "auth_user": auth_user,
@@ -567,6 +570,10 @@ def dashboard(
 
 
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
+
+
+def _allow_private() -> bool:
+    return Settings.from_env().allow_private
 
 
 @app.post("/hosts")
@@ -592,7 +599,7 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
-    ssrf_err = _is_blocked_host(hostname)
+    ssrf_err = _is_blocked_host(hostname, allow_private=Settings.from_env().allow_private)
     if ssrf_err:
         return RedirectResponse(url=f"/?error={quote(ssrf_err)}", status_code=303)
     db = _db_path()
@@ -601,7 +608,7 @@ async def add_host(
     scanned = 0
     for p in ports:
         host_repo.add(hostname, p, threshold_days=threshold_days)
-        result = scan_host(hostname, p)
+        result = scan_host(hostname, p, allow_private=Settings.from_env().allow_private)
         if not isinstance(result, ScanError):
             store_scanned(result, db)
             scanned += 1
@@ -673,12 +680,12 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
                 continue
-        ssrf_err = _is_blocked_host(hostname)
+        ssrf_err = _is_blocked_host(hostname, allow_private=Settings.from_env().allow_private)
         if ssrf_err:
             errors.append(f"row {i}: {ssrf_err}")
             continue
         host_repo.add(hostname, port, threshold_days=threshold)
-        result = scan_host(hostname, port)
+        result = scan_host(hostname, port, allow_private=Settings.from_env().allow_private)
         if not isinstance(result, ScanError):
             store_scanned(result, db)
             record_scan_history(
@@ -731,7 +738,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    result = scan_host(host.hostname, host.port)
+    result = scan_host(host.hostname, host.port, allow_private=Settings.from_env().allow_private)
     if not isinstance(result, ScanError):
         store_scanned(result, db)
         record_scan_history(
@@ -888,6 +895,55 @@ async def upload(
         logger.info("uploaded certificate: %s", file.filename or "unknown")
     finally:
         tmp_path.unlink(missing_ok=True)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/trust-anchors")
+async def add_trust_anchor(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008
+) -> RedirectResponse:
+    csrf_err = await _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    db = _db_path()
+    allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
+    raw_suffix = Path(file.filename or "uploaded").suffix.lower()
+    suffix = raw_suffix if raw_suffix in allowed_suffixes else ".pem"
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        content = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(content) > MAX_UPLOAD_BYTES:
+            tmp.close()
+            Path(tmp.name).unlink(missing_ok=True)
+            return RedirectResponse(
+                url=f"/?error={quote('file too large (max 10 MB)')}", status_code=303
+            )
+        tmp.write(content)
+        tmp_path = Path(tmp.name)
+    try:
+        entry = upload_certificate(tmp_path)
+        if isinstance(entry, ParseError):
+            return RedirectResponse(
+                url=f"/?error={quote(entry.error_message)}", status_code=303
+            )
+        # Store as a trust anchor (not a certificate for monitoring)
+        repo = SqliteTrustAnchorRepository(db)
+        repo.add(entry.leaf)
+        logger.info("uploaded trust anchor: %s", entry.leaf.subject)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/trust-anchors/{anchor_id}/delete")
+async def delete_trust_anchor(request: Request, anchor_id: str) -> RedirectResponse:
+    csrf_err = await _check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    db = _db_path()
+    repo = SqliteTrustAnchorRepository(db)
+    repo.delete(anchor_id)
+    logger.info("deleted trust anchor %s", anchor_id)
     return RedirectResponse(url="/", status_code=303)
 
 

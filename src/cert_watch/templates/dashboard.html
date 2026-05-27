@@ -46,6 +46,13 @@
         <button type="submit">Upload</button>
       </form>
 
+      <form class="upload" method="post" action="/trust-anchors" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <h2>Upload trust anchor</h2>
+        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der"></label>
+        <button type="submit">Upload</button>
+      </form>
+
       <form class="import-hosts" method="post" action="/hosts/import" enctype="multipart/form-data">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <h2>Bulk import hosts</h2>
@@ -86,6 +93,31 @@
         <p class="empty">No hosts being scanned.</p>
       {% endif %}
     </section>
+
+    {% if trust_anchors %}
+    <section class="hosts">
+      <h2>Trust anchors</h2>
+      <table class="hosts-table">
+        <thead>
+          <tr><th>Subject</th><th>Added</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+          {% for a in trust_anchors %}
+            <tr>
+              <td>{{ a.subject }}</td>
+              <td>{{ a.created_at.strftime("%Y-%m-%d") }}</td>
+              <td class="actions">
+                <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <button type="submit" class="danger">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+    {% endif %}
 
     {% if certificates or filter_q or filter_urgency or filter_source %}
       <form class="filter-bar" method="get" action="/">
@@ -135,8 +167,18 @@
             <tr class="{{ c.urgency }}">
               <td rowspan="{{ 1 + c.chain|length }}">
                 {{ c.host }}
-                {% if c.chain_valid is sameas false %}
-                  <span class="badge invalid" title="Chain order invalid">chain-invalid</span>
+                {% if c.chain_status == 'public' %}
+                  <span class="badge public" title="Chain valid, anchored by public CA">public</span>
+                {% elif c.chain_status == 'private' %}
+                  <span class="badge private" title="Chain valid, anchored by uploaded trust anchor">private</span>
+                {% elif c.chain_status == 'self-signed' %}
+                  <span class="badge self-signed" title="Self-signed certificate">self-signed</span>
+                {% elif c.chain_status == 'incomplete' %}
+                  <span class="badge incomplete" title="Chain order valid but missing trusted root">incomplete</span>
+                {% elif c.chain_status == 'invalid' %}
+                  <span class="badge invalid" title="Chain order is structurally broken">invalid</span>
+                {% elif c.chain_status == 'unknown' %}
+                  <span class="badge unknown" title="No chain certificates available">unknown</span>
                 {% endif %}
                 {% if c.replaces_cert_id %}
                   <span class="badge renewed" title="Renewed — replaces a previous certificate">renewed</span>

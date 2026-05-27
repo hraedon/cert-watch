@@ -15,27 +15,36 @@ from cert_watch.database import init_schema, replace_scanned
 
 DEFAULT_TIMEOUT = 10.0
 
-_BLOCKED_NETWORKS = [
+# Always blocked: loopback, link-local, unspecified
+_ALWAYS_BLOCKED_NETWORKS = [
     ipaddress.ip_network("0.0.0.0/8"),
     ipaddress.ip_network("127.0.0.0/8"),
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("169.254.0.0/16"),
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("::/128"),
-    ipaddress.ip_network("fc00::/7"),
     ipaddress.ip_network("fe80::/10"),
 ]
 
+# Private RFC 1918 / ULA — blocked unless allow_private=True
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("fc00::/7"),
+]
 
-def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+
+def _is_blocked_ip(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address, *, allow_private: bool = False
+) -> bool:
     check_ip = (
         ip.ipv4_mapped
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
         else ip
     )
-    return any(check_ip in net for net in _BLOCKED_NETWORKS)
+    if any(check_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
+        return True
+    return not allow_private and any(check_ip in net for net in _PRIVATE_NETWORKS)
 
 
 @dataclass
@@ -54,7 +63,7 @@ class ScannedEntry:
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
-def _resolve_host(hostname: str, port: int) -> tuple[int, tuple]:
+def _resolve_host(hostname: str, port: int, *, allow_private: bool = False) -> tuple[int, tuple]:
     """Resolve hostname and check all IPs against the SSRF blocklist.
 
     Returns a (family, sockaddr) tuple for the first allowed address.
@@ -70,13 +79,15 @@ def _resolve_host(hostname: str, port: int) -> tuple[int, tuple]:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_blocked_ip(ip):
+        if _is_blocked_ip(ip, allow_private=allow_private):
             continue
         return family, sockaddr
     raise OSError(f"hostname {hostname} resolves only to blocked addresses")
 
 
-def _open_tls_connection(hostname: str, port: int, timeout: float, *, verify: bool = False):
+def _open_tls_connection(
+    hostname: str, port: int, timeout: float, *, verify: bool = False, allow_private: bool = False,
+):
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
     ctx = ssl.create_default_context()
     if verify:
@@ -85,7 +96,7 @@ def _open_tls_connection(hostname: str, port: int, timeout: float, *, verify: bo
     else:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    _family, sockaddr = _resolve_host(hostname, port)
+    _family, sockaddr = _resolve_host(hostname, port, allow_private=allow_private)
     sock = socket.socket(_family, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     sock.connect(sockaddr)
@@ -131,11 +142,18 @@ def _der_enc():
 
 
 def scan_host(
-    hostname: str, port: int = 443, *, timeout: float = DEFAULT_TIMEOUT, verify: bool = False,
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    verify: bool = False,
+    allow_private: bool = False,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06."""
     try:
-        ssl_sock = _open_tls_connection(hostname, port, timeout, verify=verify)
+        ssl_sock = _open_tls_connection(
+            hostname, port, timeout, verify=verify, allow_private=allow_private
+        )
     except TimeoutError as exc:
         return ScanError(hostname=hostname, port=port, error_message=f"timeout: {exc}")
     except OSError as exc:

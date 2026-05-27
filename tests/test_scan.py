@@ -29,7 +29,7 @@ def _fake_ssl_socket(der_chain: list[bytes]) -> MagicMock:
 def test_scan_host_success(monkeypatch, chain_triplet):
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
 
-    def fake_open(hostname, port, timeout, verify=False):
+    def fake_open(hostname, port, timeout, verify=False, allow_private=False):
         return _fake_ssl_socket(der_chain)
 
     monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
@@ -46,7 +46,7 @@ def test_scan_host_success(monkeypatch, chain_triplet):
 
 
 def test_scan_host_connection_failure(monkeypatch):
-    def fake_open(hostname, port, timeout, verify=False):
+    def fake_open(hostname, port, timeout, verify=False, allow_private=False):
         raise ConnectionRefusedError("refused")
 
     monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
@@ -56,7 +56,7 @@ def test_scan_host_connection_failure(monkeypatch):
 
 
 def test_scan_host_timeout(monkeypatch):
-    def fake_open(hostname, port, timeout, verify=False):
+    def fake_open(hostname, port, timeout, verify=False, allow_private=False):
         raise TimeoutError("timed out")
 
     monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
@@ -65,7 +65,7 @@ def test_scan_host_timeout(monkeypatch):
 
 
 def test_scan_host_no_cert(monkeypatch):
-    def fake_open(hostname, port, timeout, verify=False):
+    def fake_open(hostname, port, timeout, verify=False, allow_private=False):
         return _fake_ssl_socket([])
 
     monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
@@ -77,7 +77,7 @@ def test_store_scanned_with_db_path(tmp_path, chain_triplet, monkeypatch):
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
     monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection",
-        lambda h, p, t, verify=False: _fake_ssl_socket(der_chain),
+        lambda h, p, t, verify=False, allow_private=False: _fake_ssl_socket(der_chain),
     )
     result = scan_host("example.com", 443)
     assert isinstance(result, ScannedEntry)

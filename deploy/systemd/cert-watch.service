@@ -8,6 +8,8 @@ Type=simple
 User=cert-watch
 Group=cert-watch
 Environment=CERT_WATCH_DATA_DIR=/var/lib/cert-watch
+# Scanning options
+# Environment=CERT_WATCH_ALLOW_PRIVATE_IPS=1
 # Secrets: set fixed values in production to survive restarts
 # Environment=CERT_WATCH_CSRF_SECRET=change-me-in-production
 # Environment=CERT_WATCH_AUTH_SECRET=change-me-in-production

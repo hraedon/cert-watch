@@ -39,7 +39,20 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **Empty-state must not error.** The dashboard renders an "empty state" message when no certificates exist.
 - **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/api/*`, `/static` stay open for monitoring when auth is enabled.
 - **Environment-driven config.** All settings via env vars (see README). No config files.
+- **`CERT_WATCH_ALLOW_PRIVATE_IPS`** — set `1` to scan RFC 1918 / ULA hosts (e.g. internal k8s services). Loopback and link-local remain blocked.
 - **Spec acceptance criteria are the boundary.** Don't add features beyond the spec without a tracked breadcrumb or plan entry.
+
+## Known issues (open breadcrumbs)
+
+7 open breadcrumbs in agent-notes: 0 critical, 1 high, 2 medium, 4 low.
+
+- **BC-016** (high) — Deployed image lags HEAD by ~1700 LOC including security/UX fixes
+- **BC-017** (medium) — E2E test for add-host doesn't assert scan outcome is surfaced
+- **BC-022** (medium) — Python 3.12 TLS chain extraction incomplete; scanned chains all show `unknown`
+- **BC-023** (low) — String-based issuer/subject comparison in `validate_chain_order` is fragile
+- **BC-024** (low) — Trust anchor upload doesn't validate that the file is actually a CA certificate
+- **BC-025** (low) — No UI hint when private IP host is rejected due to `CERT_WATCH_ALLOW_PRIVATE_IPS`
+- **FEAT-006** (low) — Database migration tooling (alembic)
 
 ## Architecture notes
 

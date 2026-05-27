@@ -23,6 +23,7 @@ class Settings:
     webhook_headers: dict[str, str] | None = None
     webhook_template: str = ""
     tls_verify: bool = False
+    allow_private: bool = False
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -88,6 +89,7 @@ class Settings:
             webhook_headers=webhook_headers,
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
+            allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "0") == "1",
             # Auth
             auth_provider=os.environ.get("AUTH_PROVIDER", ""),
             ldap_server=os.environ.get("LDAP_SERVER", ""),

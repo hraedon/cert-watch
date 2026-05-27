@@ -92,5 +92,69 @@ def deduplicate_chain(certificates: list[Certificate]) -> list[Certificate]:
     return out
 
 
+def validate_chain_with_anchors(chain: list[Certificate], anchors: list[Certificate]) -> bool:
+    """Validate chain order including trust anchors.
+
+    Same issuer==subject walk as validate_chain_order, but the final step
+    may match an anchor (anchor.subject == last cert.issuer).
+    """
+    if len(chain) < 1:
+        return False
+    for i in range(len(chain) - 1):
+        if chain[i].issuer != chain[i + 1].subject:
+            return False
+    last = chain[-1]
+    if last.subject == last.issuer:
+        return True
+    for a in anchors:
+        if last.issuer == a.subject:
+            return True
+    return False
+
+
+def is_anchored_by_user(chain: list[Certificate], anchors: list[Certificate]) -> bool:
+    """Return True if the chain is anchored by a user-uploaded trust anchor.
+
+    Checks whether the last certificate matches an uploaded anchor by
+    fingerprint (self-signed roots) or by issuer/subject linkage.
+    """
+    if not chain or not anchors:
+        return False
+    last = chain[-1]
+    for a in anchors:
+        if last.fingerprint_sha256 == a.fingerprint_sha256:
+            return True
+        if last.issuer == a.subject:
+            return True
+    return False
+
+
+def chain_status(
+    leaf: Certificate, chain: list[Certificate], anchors: list[Certificate]
+) -> str:
+    """Return a human-readable chain trust status.
+
+    - "self-signed"   : leaf is its own issuer.
+    - "unknown"       : no intermediates available (can't validate).
+    - "invalid"       : chain order is structurally broken.
+    - "private"       : chain is valid and anchored by a user-uploaded trust anchor.
+    - "public"        : chain is valid and ends at a self-signed root (assumed public CA).
+    - "incomplete"    : chain is structurally valid but missing a trusted root.
+    """
+    if leaf.subject == leaf.issuer:
+        return "self-signed"
+    if not chain:
+        return "unknown"
+    structural = validate_chain_order([leaf, *chain])
+    if not structural:
+        return "invalid"
+    if is_anchored_by_user([leaf, *chain], anchors):
+        return "private"
+    if chain[-1].subject == chain[-1].issuer:
+        return "public"
+    return "incomplete"
+
+
 # x509 import kept for potential future use of x509.load_der_x509_certificate.
 _ = x509
+

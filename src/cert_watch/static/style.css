@@ -74,6 +74,11 @@ button.danger:hover { background: var(--btn-danger-hover); }
 .badge { display: inline-block; padding: .1rem .4rem; border-radius: 3px; font-size: .75rem; margin-left: .4rem; }
 .badge.invalid { background: var(--red-bg); color: var(--red-text); border: 1px solid var(--red-border); }
 .badge.renewed { background: var(--green-badge-bg); color: var(--green-text); border: 1px solid var(--green-border); }
+.badge.public { background: var(--green-badge-bg); color: var(--green-text); border: 1px solid var(--green-border); }
+.badge.private { background: var(--yellow-bg); color: var(--yellow-text); border: 1px solid var(--yellow-border); }
+.badge.incomplete { background: var(--red-bg); color: var(--red-text); border: 1px solid var(--red-border); }
+.badge.self-signed { background: var(--yellow-bg); color: var(--yellow-text); border: 1px solid var(--yellow-border); }
+.badge.unknown { background: #6c757d20; color: #6c757d; border: 1px solid #6c757d40; }
 .login-box { max-width: 400px; margin: 4rem auto; }
 .login-box h2 { margin-bottom: 1rem; }
 .login-box label { display: block; margin: .5rem 0; font-size: .9rem; }

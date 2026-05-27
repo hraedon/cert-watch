@@ -48,6 +48,9 @@ spec:
                 secretKeyRef:
                   name: cert-watch-secrets
                   key: auth-secret
+            # --- Scanning options ---
+            # - name: CERT_WATCH_ALLOW_PRIVATE_IPS
+            #   value: "1"
             # --- Alerts (SMTP) — uncomment to enable ---
             # - name: SMTP_HOST
             #   value: smtp.example.com

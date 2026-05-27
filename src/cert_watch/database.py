@@ -87,6 +87,18 @@ CREATE TABLE IF NOT EXISTS hosts (
     added_at TEXT NOT NULL,
     UNIQUE(hostname, port)
 );
+
+CREATE TABLE IF NOT EXISTS trust_anchors (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    san_dns_names TEXT NOT NULL,
+    fingerprint_sha256 TEXT NOT NULL,
+    raw_der BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -106,6 +118,24 @@ def init_schema(db_path: str | Path) -> None:
         host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
         if "threshold_days" not in host_cols:
             conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")
+        # trust_anchors migration
+        ta_cols = {r[1] for r in conn.execute("PRAGMA table_info(trust_anchors)").fetchall()}
+        if not ta_cols:
+            conn.execute(
+                """
+                CREATE TABLE trust_anchors (
+                    id TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    issuer TEXT NOT NULL,
+                    not_before TEXT NOT NULL,
+                    not_after TEXT NOT NULL,
+                    san_dns_names TEXT NOT NULL,
+                    fingerprint_sha256 TEXT NOT NULL,
+                    raw_der BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
         # Idempotent unique-index migration for hosts(hostname, port) — BC-019
         indexes = {r[1] for r in conn.execute("PRAGMA index_list('hosts')").fetchall()}
         if "ux_hosts_hostname_port" not in indexes:
@@ -385,6 +415,71 @@ class SqliteAlertRepository(AlertRepository):
             sent_at=_parse_iso(row["sent_at"]) if row["sent_at"] else None,
             error_message=row["error_message"],
         )
+
+
+# ---------- Trust Anchors ----------
+
+class SqliteTrustAnchorRepository:
+    """Store user-uploaded root / CA certificates for private-chain validation."""
+
+    def __init__(self, db_path: str | Path) -> None:
+        self.db_path = Path(db_path)
+        init_schema(self.db_path)
+
+    def add(self, cert: Certificate) -> str:
+        anchor_id = str(uuid.uuid4())
+        now = _iso(datetime.now(UTC))
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO trust_anchors
+                (id, subject, issuer, not_before, not_after, san_dns_names,
+                 fingerprint_sha256, raw_der, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    anchor_id,
+                    cert.subject,
+                    cert.issuer,
+                    _iso(cert.not_before),
+                    _iso(cert.not_after),
+                    json.dumps(cert.san_dns_names),
+                    cert.fingerprint_sha256,
+                    cert.raw_der,
+                    now,
+                ),
+            )
+            conn.commit()
+        return anchor_id
+
+    def list_all(self) -> list[Certificate]:
+        with _connect(self.db_path) as conn:
+            rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
+        return [_row_to_cert(r) for r in rows]
+
+    def list_entries(self) -> list[TrustAnchorEntry]:
+        with _connect(self.db_path) as conn:
+            rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
+        return [
+            TrustAnchorEntry(
+                id=r["id"],
+                subject=r["subject"],
+                issuer=r["issuer"],
+                not_before=_parse_iso(r["not_before"]),
+                not_after=_parse_iso(r["not_after"]),
+                san_dns_names=json.loads(r["san_dns_names"]),
+                fingerprint_sha256=r["fingerprint_sha256"],
+                raw_der=bytes(r["raw_der"]),
+                created_at=_parse_iso(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def delete(self, anchor_id: str) -> bool:
+        with _connect(self.db_path) as conn:
+            r = conn.execute("DELETE FROM trust_anchors WHERE id = ?", (anchor_id,))
+            conn.commit()
+            return r.rowcount > 0
 
 
 # ---------- Host list (for the add-host UI extension) ----------
@@ -677,11 +772,16 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
     or uploaded bundle surfaces leaf + intermediate + root, and the row's urgency
     is driven by the most-urgent cert in that group.
     """
+    from cert_watch.cert_chain import chain_status
+
     init_schema(db_path)
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT * FROM certificates ORDER BY created_at"
         ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+    anchors = [_row_to_cert(r) for r in anchor_rows]
 
     # Group by (source, hostname, port, parent_cert_id-or-self).
     # For uploaded bundles, leaf has no parent and intermediates point to the leaf id.
@@ -727,6 +827,10 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
             if leaf["hostname"]
             else f"(uploaded:{leaf['source']})"
         )
+        # Build Certificate objects for chain_status evaluation
+        leaf_cert = _row_to_cert(leaf)
+        chain_certs = [_row_to_cert(c) for c in chain]
+        _chain_status = chain_status(leaf_cert, chain_certs, anchors)
         dash.append(
             {
                 "id": leaf["id"],
@@ -742,6 +846,7 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
                 "chain_valid": (
                     None if leaf["chain_valid"] is None else bool(leaf["chain_valid"])
                 ),
+                "chain_status": _chain_status,
                 "replaces_cert_id": leaf.get("replaces_cert_id"),
                 "notes": dict(leaf).get("notes", ""),
             }
