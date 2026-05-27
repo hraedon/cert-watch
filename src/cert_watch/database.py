@@ -31,7 +31,7 @@ class Alert:
 # ---------- Schema ----------
 
 
-_SCHEMA = """
+_TABLES_SCHEMA = """
 CREATE TABLE IF NOT EXISTS certificates (
     id TEXT PRIMARY KEY,
     subject TEXT NOT NULL,
@@ -52,9 +52,6 @@ CREATE TABLE IF NOT EXISTS certificates (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);
-CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
-CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
 
 CREATE TABLE IF NOT EXISTS alerts (
     id TEXT PRIMARY KEY,
@@ -67,8 +64,6 @@ CREATE TABLE IF NOT EXISTS alerts (
     sent_at TEXT,
     error_message TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_alert_cert ON alerts(cert_id);
-CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
 
 CREATE TABLE IF NOT EXISTS scan_history (
     id TEXT PRIMARY KEY,
@@ -101,13 +96,24 @@ CREATE TABLE IF NOT EXISTS trust_anchors (
 );
 """
 
+_INDEXES_SCHEMA = """
+CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);
+CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
+CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_cert ON alerts(cert_id);
+CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
+"""
+
 
 def init_schema(db_path: str | Path) -> None:
     """Create all tables if they do not exist. Idempotent. See AC-06."""
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(path)) as conn:
-        conn.executescript(_SCHEMA)
+        # 1. Create tables first (no-op if they already exist)
+        conn.executescript(_TABLES_SCHEMA)
+
+        # 2. Migrate columns that may be missing on existing databases
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         if "chain_valid" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
@@ -136,7 +142,11 @@ def init_schema(db_path: str | Path) -> None:
                 )
                 """
             )
-        # Idempotent unique-index migration for hosts(hostname, port) — BC-019
+
+        # 3. Create indexes only after columns are guaranteed to exist
+        conn.executescript(_INDEXES_SCHEMA)
+
+        # 4. Idempotent unique-index migration for hosts(hostname, port) — BC-019
         indexes = {r[1] for r in conn.execute("PRAGMA index_list('hosts')").fetchall()}
         if "ux_hosts_hostname_port" not in indexes:
             conn.execute(
@@ -889,18 +899,25 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
         ).fetchall()
         anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
         host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+        # Only fetch the latest scan per host directly in SQL (BC-028)
         scan_rows = conn.execute(
-            "SELECT * FROM scan_history ORDER BY scanned_at DESC"
+            """
+            SELECT hostname, port, status, scanned_at, error_message
+            FROM scan_history sh1
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at)
+                FROM scan_history sh2
+                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+            )
+            """
         ).fetchall()
 
     dash = _build_dashboard_rows(cert_rows, anchor_rows)
 
     # Latest scan per host
-    latest_scan: dict[tuple[str, int], dict] = {}
-    for r in scan_rows:
-        key = (r["hostname"], r["port"])
-        if key not in latest_scan:
-            latest_scan[key] = dict(r)
+    latest_scan: dict[tuple[str, int], dict] = {
+        (r["hostname"], r["port"]): dict(r) for r in scan_rows
+    }
 
     # Map scanned certs by host key
     scanned_map: dict[str, dict] = {}
