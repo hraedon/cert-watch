@@ -7,10 +7,8 @@ resources:
 - deployment.yaml
 - service.yaml
 - ingress.yaml
-- prometheus-rules.yaml
-  - networkpolicy.yaml
-  - https-redirect.yaml
+- prometheus-rules.yaml - networkpolicy.yaml - https-redirect.yaml
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch
-  newTag: 0646d68
+  newTag: 89a6f80
