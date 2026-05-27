@@ -9,7 +9,6 @@ import ipaddress
 import logging
 import os as _os
 import secrets as _secrets
-import socket
 import tempfile
 import threading as _threading
 from contextlib import asynccontextmanager
@@ -44,7 +43,14 @@ from cert_watch.database import (
     list_scan_history,
     list_unified_entries,
 )
-from cert_watch.scan import _PRIVATE_NETWORKS, ScanError, _is_blocked_ip, scan_host, store_scanned
+from cert_watch.scan import (
+    _PRIVATE_NETWORKS,
+    ScanError,
+    _is_blocked_ip,
+    resolve_hostname,
+    scan_host,
+    store_scanned,
+)
 from cert_watch.scheduler import (
     ScanHistory,
     record_scan_history,
@@ -85,7 +91,9 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 # happens at scan time in scan._resolve_host().
 
 
-def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | None:
+def _is_blocked_host(
+    hostname: str, *, allow_private: bool = True, dns_servers: tuple[str, ...] = (),
+) -> str | None:
     """Return an error message if hostname resolves to a blocked IP, else None.
 
     Only blocks when DNS resolution succeeds AND returns a private/link-local IP.
@@ -96,12 +104,11 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
     about CERT_WATCH_ALLOW_PRIVATE_IPS. Loopback and link-local always show
     a plain block message.
     """
-    try:
-        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
+    infos = resolve_hostname(hostname, 0, dns_servers=dns_servers)
+    if not infos:
         return None
-    for _family, *_rest in infos:
-        ip_str = _rest[3][0] if _rest else None
+    for _family, sockaddr in infos:
+        ip_str = sockaddr[0]
         if ip_str is None:
             continue
         try:
@@ -109,7 +116,6 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
         except ValueError:
             continue
         if _is_blocked_ip(ip, allow_private=allow_private):
-            # Check if this is a private IP (not always-blocked) to add hint
             check_ip = (
                 ip.ipv4_mapped
                 if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
@@ -119,7 +125,7 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
             if is_private and not allow_private:
                 return (
                     f"hostname resolves to blocked address {ip}. "
-                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to scan private IPs."
+                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs."
                 )
             return f"hostname resolves to blocked address {ip}"
     return None
@@ -294,7 +300,8 @@ async def lifespan(app: FastAPI):
         hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
         return run_scan_now(
             scan_fn=lambda host, port: scan_host(
-                host, port, verify=s.tls_verify, allow_private=s.allow_private
+                host, port, verify=s.tls_verify, allow_private=s.allow_private,
+                dns_servers=s.dns_servers,
             ),
             alert_fn=lambda: {"sent": 0, "failed": 0},
             db_path=s.db_path,
@@ -634,6 +641,10 @@ def _allow_private() -> bool:
     return Settings.from_env().allow_private
 
 
+def _dns_servers() -> tuple[str, ...]:
+    return Settings.from_env().dns_servers
+
+
 @app.post("/hosts")
 async def add_host(
     request: Request,
@@ -657,7 +668,9 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
-    ssrf_err = _is_blocked_host(hostname, allow_private=Settings.from_env().allow_private)
+    ssrf_err = _is_blocked_host(
+        hostname, allow_private=_allow_private(), dns_servers=_dns_servers(),
+    )
     if ssrf_err:
         return RedirectResponse(url=f"/?error={quote(ssrf_err)}", status_code=303)
     db = _db_path()
@@ -666,7 +679,9 @@ async def add_host(
     scanned = 0
     for p in ports:
         host_repo.add(hostname, p, threshold_days=threshold_days)
-        result = scan_host(hostname, p, allow_private=Settings.from_env().allow_private)
+        result = scan_host(
+            hostname, p, allow_private=_allow_private(), dns_servers=_dns_servers(),
+        )
         if not isinstance(result, ScanError):
             store_scanned(result, db)
             scanned += 1
@@ -738,12 +753,16 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
                 continue
-        ssrf_err = _is_blocked_host(hostname, allow_private=Settings.from_env().allow_private)
+        ssrf_err = _is_blocked_host(
+            hostname, allow_private=_allow_private(), dns_servers=_dns_servers(),
+        )
         if ssrf_err:
             errors.append(f"row {i}: {ssrf_err}")
             continue
         host_repo.add(hostname, port, threshold_days=threshold)
-        result = scan_host(hostname, port, allow_private=Settings.from_env().allow_private)
+        result = scan_host(
+            hostname, port, allow_private=_allow_private(), dns_servers=_dns_servers(),
+        )
         if not isinstance(result, ScanError):
             store_scanned(result, db)
             record_scan_history(
@@ -796,7 +815,10 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    result = scan_host(host.hostname, host.port, allow_private=Settings.from_env().allow_private)
+    result = scan_host(
+        host.hostname, host.port,
+        allow_private=_allow_private(), dns_servers=_dns_servers(),
+    )
     if not isinstance(result, ScanError):
         store_scanned(result, db)
         record_scan_history(

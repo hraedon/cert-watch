@@ -8,7 +8,8 @@ resources:
 - service.yaml
 - ingress.yaml
 - prometheus-rules.yaml
-- networkpolicy.yaml
+  - networkpolicy.yaml
+  - https-redirect.yaml
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch

@@ -29,17 +29,17 @@ def test_is_blocked_ip_loopback():
 
 def test_is_blocked_ip_private_10():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("10.0.0.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("10.0.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_private_172():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("172.16.0.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("172.16.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_private_192():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("192.168.1.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("192.168.1.1"), allow_private=False)
 
 
 def test_is_blocked_ip_link_local():
@@ -64,7 +64,7 @@ def test_is_blocked_ip_ipv6_mapped_loopback():
 
 def test_is_blocked_ip_ipv6_mapped_private():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("::ffff:10.0.0.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("::ffff:10.0.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_ipv6_unspecified():
@@ -139,7 +139,7 @@ def test_app_is_blocked_host_private(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("10.0.0.1", None)),
     ])
-    assert _is_blocked_host("internal.corp") is not None
+    assert _is_blocked_host("internal.corp", allow_private=False) is not None
 
 
 def test_app_is_blocked_host_public(monkeypatch):

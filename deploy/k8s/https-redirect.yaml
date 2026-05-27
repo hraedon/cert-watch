@@ -1,0 +1,26 @@
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: cert-watch-https-redirect
+  namespace: cert-watch
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: cert-watch-https-redirect
+  namespace: cert-watch
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`cert-watch.k8s.hraedon.com`)
+      kind: Rule
+      middlewares:
+        - name: cert-watch-https-redirect
+      services:
+        - name: cert-watch
+          port: 80

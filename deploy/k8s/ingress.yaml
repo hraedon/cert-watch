@@ -5,6 +5,7 @@ metadata:
   namespace: cert-watch
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod-porkbun
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
 spec:
   ingressClassName: traefik-internal
   tls:

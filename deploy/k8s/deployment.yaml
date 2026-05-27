@@ -49,8 +49,10 @@ spec:
                   name: cert-watch-secrets
                   key: auth-secret
             # --- Scanning options ---
-            # - name: CERT_WATCH_ALLOW_PRIVATE_IPS
-            #   value: "1"
+            - name: CERT_WATCH_ALLOW_PRIVATE_IPS
+              value: "1"
+            - name: CERT_WATCH_DNS_SERVERS
+              value: "192.168.1.29,192.168.1.19"
             # --- Alerts (SMTP) — uncomment to enable ---
             # - name: SMTP_HOST
             #   value: smtp.example.com
