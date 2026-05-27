@@ -202,7 +202,3 @@ def validate_is_ca_certificate(der_bytes: bytes) -> str | None:
 
     return None
 
-
-# x509 import kept for potential future use of x509.load_der_x509_certificate.
-_ = x509
-

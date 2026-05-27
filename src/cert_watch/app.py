@@ -43,7 +43,7 @@ from cert_watch.database import (
     list_dashboard_rows,
     list_scan_history,
 )
-from cert_watch.scan import ScanError, _is_blocked_ip, scan_host, store_scanned
+from cert_watch.scan import _PRIVATE_NETWORKS, ScanError, _is_blocked_ip, scan_host, store_scanned
 from cert_watch.scheduler import (
     ScanHistory,
     record_scan_history,
@@ -114,7 +114,6 @@ def _is_blocked_host(hostname: str, *, allow_private: bool = False) -> str | Non
                 if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
                 else ip
             )
-            from cert_watch.scan import _PRIVATE_NETWORKS
             is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
             if is_private and not allow_private:
                 return (
@@ -168,12 +167,25 @@ def _get_session_id(request: Request) -> str:
 
 _rate_lock = _threading.Lock()
 _rate_windows: dict[str, collections.deque] = {}
+_rate_last_sweep = 0.0
+_RATE_SWEEP_INTERVAL = 300.0
+
+
+def _sweep_rate_windows() -> None:
+    """Remove entries with empty windows to prevent unbounded growth."""
+    for key in list(_rate_windows):
+        if not _rate_windows[key]:
+            del _rate_windows[key]
 
 
 def _check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
     """Return True if request is allowed, False if rate-limited."""
+    global _rate_last_sweep
     now = datetime.now(UTC).timestamp()
     with _rate_lock:
+        if now - _rate_last_sweep > _RATE_SWEEP_INTERVAL:
+            _sweep_rate_windows()
+            _rate_last_sweep = now
         if key not in _rate_windows:
             _rate_windows[key] = collections.deque()
         window = _rate_windows[key]
@@ -490,7 +502,12 @@ def oauth_start(request: Request) -> RedirectResponse:
 
 
 @app.get("/auth/callback")
-def oauth_callback(request: Request, code: str = "", error: str = "", state: str = "") -> RedirectResponse:
+def oauth_callback(
+    request: Request,
+    code: str = "",
+    error: str = "",
+    state: str = "",
+) -> RedirectResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
@@ -838,7 +855,9 @@ def scan_history_view(request: Request) -> HTMLResponse:
 
 
 @app.get("/ct-lookup/{domain}")
-def ct_lookup_view(domain: str) -> dict:
+def ct_lookup_view(request: Request, domain: str) -> dict:
+    if not _check_rate_limit(f"ct:{request.client.host}", 10, 60):
+        return JSONResponse({"error": "rate limited"}, status_code=429)
     result = ct_lookup.query_ct_log(domain)
     if isinstance(result, str):
         return {"error": result}
@@ -860,9 +879,21 @@ def ct_lookup_view(domain: str) -> dict:
 
 
 @app.get("/caa-check/{domain}")
-def caa_check_view(domain: str) -> dict:
+def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
+    if not _check_rate_limit(f"caa:{request.client.host}", 10, 60):
+        return JSONResponse({"error": "rate limited"}, status_code=429)
+    import re as _re
+
+    _DOMAIN_RE = _re.compile(
+        r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
+        r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*"
+        r"\.[a-zA-Z]{2,}$",
+    )
+    if not domain or len(domain) > 253 or not _DOMAIN_RE.match(domain):
+        return {"domain": domain, "error": "invalid domain"}
     from cert_watch.caa_check import check_caa
+
     result = check_caa(domain)
     if result.error:
         return {"domain": domain, "error": result.error}

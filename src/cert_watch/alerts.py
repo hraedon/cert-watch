@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import smtplib
 import urllib.request
@@ -201,8 +202,14 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     msg["To"] = ", ".join(config.recipients)
     msg.set_content(alert.message)
     try:
-        with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15) as s:
-            s.starttls()
+        if config.smtp_port == 465:
+            s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+        else:
+            s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
+        with s:
+            if config.smtp_port != 465:
+                with contextlib.suppress(smtplib.SMTPNotSupportedError):
+                    s.starttls()
             if config.smtp_user:
                 s.login(config.smtp_user, config.smtp_password)
             s.send_message(msg)

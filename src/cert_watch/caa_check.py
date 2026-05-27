@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import socket
 from dataclasses import dataclass
 
 logger = logging.getLogger("cert_watch.caa_check")
@@ -21,11 +20,9 @@ class CAAResult:
 def _query_caa_records(domain: str) -> list[str] | str:
     """Query CAA records for a domain using dnspython if available, else dig/system."""
     try:
+        import dns.rdatatype  # noqa: I001
         import dns.resolver
-        import dns.rdatatype
     except ImportError:
-        # Fallback: try to use socket.getaddrinfo won't work for CAA.
-        # We'll return a clear error.
         return "dnspython not installed; install with: pip install dnspython"
 
     # Walk up the domain tree looking for CAA records
@@ -59,7 +56,13 @@ def check_caa(domain: str) -> CAAResult:
     """
     raw = _query_caa_records(domain)
     if isinstance(raw, str):
-        return CAAResult(domain=domain, records=[], issue_allowed=True, issuewild_allowed=True, error=raw)
+        return CAAResult(
+            domain=domain,
+            records=[],
+            issue_allowed=True,
+            issuewild_allowed=True,
+            error=raw,
+        )
 
     if not raw:
         # No CAA records = no restriction

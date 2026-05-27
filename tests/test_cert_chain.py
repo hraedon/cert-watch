@@ -1,3 +1,11 @@
+from datetime import UTC, datetime, timedelta
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.x509.oid import NameOID
+
 from cert_watch.cert_chain import (
     chain_status,
     deduplicate_chain,
@@ -5,8 +13,28 @@ from cert_watch.cert_chain import (
     split_leaf_intermediates,
     validate_chain_order,
     validate_chain_with_anchors,
+    validate_is_ca_certificate,
 )
-from cert_watch.certificate_model import Certificate, extract_chain_from_pem, parse_certificate
+from cert_watch.certificate_model import extract_chain_from_pem, parse_certificate
+
+
+def _make_ca_cert(ca: bool) -> bytes:
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Test Cert")])
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
+        .add_extension(
+            x509.BasicConstraints(ca=ca, path_length=None),
+            critical=True,
+        )
+    )
+    return builder.sign(key, hashes.SHA256()).public_bytes(Encoding.DER)
 
 
 def test_validate_chain_order_correct(chain_pem_bytes):
@@ -116,3 +144,47 @@ def test_validate_chain_with_anchors_with_root(chain_pem_bytes):
     certs = extract_chain_from_pem(chain_pem_bytes.decode())
     root = certs[-1]
     assert validate_chain_with_anchors(certs, [root]) is True
+
+
+# ---------- validate_is_ca_certificate (BC-026) ----------
+
+
+def test_validate_is_ca_valid_root():
+    der = _make_ca_cert(ca=True)
+    assert validate_is_ca_certificate(der) is None
+
+
+def test_validate_is_ca_non_ca_cert():
+    der = _make_ca_cert(ca=False)
+    result = validate_is_ca_certificate(der)
+    assert result is not None
+    assert "CA=FALSE" in result
+
+
+def test_validate_is_ca_no_basic_constraints():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "No BC")])
+    der = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
+        .sign(key, hashes.SHA256())
+        .public_bytes(Encoding.DER)
+    )
+    result = validate_is_ca_certificate(der)
+    assert result is not None
+    assert "BasicConstraints" in result
+
+
+def test_validate_is_ca_invalid_der():
+    result = validate_is_ca_certificate(b"not-a-certificate")
+    assert result == "failed to parse certificate"
+
+
+def test_validate_is_ca_empty_der():
+    result = validate_is_ca_certificate(b"")
+    assert result == "failed to parse certificate"

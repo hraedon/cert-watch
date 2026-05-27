@@ -53,5 +53,8 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
                     hostname, entry.common_name, entry.issuer_name, entry.serial_number,
                 )
     if new > 0:
-        logger.info("CT monitor complete: %d checked, %d new certificates, %d errors", checked, new, errors)
+        logger.info(
+            "CT monitor complete: %d checked, %d new certificates, %d errors",
+            checked, new, errors,
+        )
     return {"checked": checked, "new": new, "errors": errors}

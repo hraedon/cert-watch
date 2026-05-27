@@ -41,8 +41,11 @@ def test_ct_monitor_skips_known_serial(tmp_path):
     import sqlite3
     with sqlite3.connect(str(db)) as conn:
         conn.execute(
-            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO certificates ("
+            "id, subject, issuer, not_before, not_after, san_dns_names, "
+            "fingerprint_sha256, raw_der, source, hostname, port, "
+            "is_leaf, created_at, updated_at"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "cert-1", "CN=known", "CN=issuer", "2025-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00", "[]", "known-serial-456", b"der",
