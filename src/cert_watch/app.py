@@ -275,9 +275,15 @@ async def lifespan(app: FastAPI):
         evaluate_all_certs(s.db_path, repo)
         return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
 
+    def _ct_check() -> dict:
+        """Scheduled CT monitoring: query crt.sh for every tracked host domain."""
+        from cert_watch.ct_monitor import run_ct_monitor
+        return run_ct_monitor(s.db_path)
+
     start_scheduler(
         scan_fn=_scan_all,
         alert_fn=_alerts,
+        ct_fn=_ct_check,
         hour=s.sched_hour,
         minute=s.sched_min,
     )
@@ -825,6 +831,21 @@ def ct_lookup_view(domain: str) -> dict:
             }
             for e in result
         ],
+    }
+
+
+@app.get("/caa-check/{domain}")
+def caa_check_view(domain: str) -> dict:
+    """FEAT-010: Return CAA records and issuance policy for a domain."""
+    from cert_watch.caa_check import check_caa
+    result = check_caa(domain)
+    if result.error:
+        return {"domain": domain, "error": result.error}
+    return {
+        "domain": domain,
+        "records": result.records,
+        "issue_allowed": result.issue_allowed,
+        "issuewild_allowed": result.issuewild_allowed,
     }
 
 

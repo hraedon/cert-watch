@@ -60,10 +60,12 @@ _scheduler_lock = threading.Lock()
 def start_scheduler(
     scan_fn: Callable[[], dict],
     alert_fn: Callable[[], dict],
+    *,
+    ct_fn: Callable[[], dict] | None = None,
     hour: int = 6,
     minute: int = 0,
 ) -> None:
-    """Start a daemon thread that runs scan_fn + alert_fn once per day. See AC-01."""
+    """Start a daemon thread that runs scan_fn + ct_fn + alert_fn once per day. See AC-01."""
     global _scheduler_thread
     with _scheduler_lock:
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
@@ -79,6 +81,12 @@ def start_scheduler(
                     logger.info("scheduled scan completed")
                 except Exception:  # noqa: BLE001
                     logger.exception("scheduler scan_fn failed")
+                if ct_fn is not None:
+                    try:
+                        ct_fn()
+                        logger.info("scheduled CT check completed")
+                    except Exception:  # noqa: BLE001
+                        logger.exception("scheduler ct_fn failed")
                 try:
                     alert_fn()
                     logger.info("scheduled alerts completed")
