@@ -62,38 +62,6 @@
       </form>
     </section>
 
-    <section class="hosts">
-      <h2>Tracked hosts</h2>
-      {% if hosts %}
-        <table class="hosts-table">
-          <thead>
-            <tr><th>Hostname</th><th>Port</th><th>Added</th><th>Actions</th></tr>
-          </thead>
-          <tbody>
-            {% for h in hosts %}
-              <tr>
-                <td>{{ h.hostname }}</td>
-                <td>{{ h.port }}</td>
-                <td>{{ h.added_at.strftime("%Y-%m-%d") }}</td>
-                <td class="actions">
-                  <form method="post" action="/hosts/{{ h.id }}/scan" style="display:inline">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit">Scan now</button>
-                  </form>
-                  <form method="post" action="/hosts/{{ h.id }}/delete" style="display:inline">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger">Delete</button>
-                  </form>
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      {% else %}
-        <p class="empty">No hosts being scanned.</p>
-      {% endif %}
-    </section>
-
     {% if trust_anchors %}
     <section class="hosts">
       <h2>Trust anchors</h2>
@@ -119,7 +87,7 @@
     </section>
     {% endif %}
 
-    {% if certificates or filter_q or filter_urgency or filter_source %}
+    {% if entries or filter_q or filter_urgency or filter_source %}
       <form class="filter-bar" method="get" action="/">
         <label>Search <input type="text" name="q" value="{{ filter_q }}" placeholder="subject, issuer, hostname"></label>
         <label>Urgency
@@ -144,90 +112,191 @@
       </form>
     {% endif %}
 
-    {% if certificates %}
+    {% if entries %}
       <div class="export-bar">
         <span>Export:</span>
         <a href="/api/export/certificates.csv" class="export-btn">CSV</a>
         <a href="/api/export/certificates.json" class="export-btn">JSON</a>
       </div>
-      <table>
+
+      {% macro sort_link(column, label) %}
+        {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
+        <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">{{ label }}</a>
+        {% if sort_by == column %}<span class="sort-arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
+      {% endmacro %}
+
+      <table class="unified-table">
         <thead>
           <tr>
-            <th>Host / Source</th>
-            <th>Role</th>
+            <th class="sortable">{{ sort_link('name', 'Name') }}</th>
             <th>Subject</th>
             <th>Issuer</th>
-            <th>Expires</th>
-            <th>Days</th>
+            <th class="sortable">{{ sort_link('issue_date', 'Issue Date') }}</th>
+            <th class="sortable">{{ sort_link('last_scan', 'Last Scan') }}</th>
+            <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
+            <th class="sortable">{{ sort_link('days', 'Days') }}</th>
+            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
-        <tbody>
-          {% for c in certificates %}
-            <tr class="{{ c.urgency }}">
-              <td rowspan="{{ 1 + c.chain|length }}">
-                {{ c.host }}
-                {% if c.chain_status == 'public' %}
+        {% for e in entries %}
+          <tbody class="entry-group">
+            <tr class="entry-summary {{ e.urgency }}" onclick="toggleDetail(this)">
+              <td>
+                {{ e.name }}
+                {% if e.kind == 'pending' %}
+                  <span class="badge pending" title="This host has not been successfully scanned yet">not yet scanned</span>
+                  {% if e.scan_status == 'failure' %}
+                    <span class="badge invalid" title="Last scan failed">scan failed</span>
+                  {% endif %}
+                {% elif e.kind == 'uploaded' %}
+                  <span class="badge uploaded" title="Uploaded certificate">uploaded</span>
+                {% endif %}
+                {% if e.chain_status == 'public' %}
                   <span class="badge public" title="Chain valid, anchored by public CA">public</span>
-                {% elif c.chain_status == 'private' %}
+                {% elif e.chain_status == 'private' %}
                   <span class="badge private" title="Chain valid, anchored by uploaded trust anchor">private</span>
-                {% elif c.chain_status == 'self-signed' %}
+                {% elif e.chain_status == 'self-signed' %}
                   <span class="badge self-signed" title="Self-signed certificate">self-signed</span>
-                {% elif c.chain_status == 'incomplete' %}
+                {% elif e.chain_status == 'incomplete' %}
                   <span class="badge incomplete" title="Chain order valid but missing trusted root">incomplete</span>
-                {% elif c.chain_status == 'invalid' %}
+                {% elif e.chain_status == 'invalid' %}
                   <span class="badge invalid" title="Chain order is structurally broken">invalid</span>
-                {% elif c.chain_status == 'unknown' %}
+                {% elif e.chain_status == 'unknown' %}
                   <span class="badge unknown" title="No chain certificates available">unknown</span>
                 {% endif %}
-                {% if c.replaces_cert_id %}
+                {% if e.replaces_cert_id %}
                   <span class="badge renewed" title="Renewed — replaces a previous certificate">renewed</span>
                 {% endif %}
               </td>
-              <td>leaf</td>
-              <td>{{ c.subject }}</td>
-              <td>{{ c.issuer }}</td>
-              <td>{{ c.not_after | humanize_expiry }}</td>
-              <td>{{ c.days_remaining }}</td>
-              <td rowspan="{{ 1 + c.chain|length }}" class="actions">
-                <form method="post" action="/certificates/{{ c.id }}/delete" style="display:inline">
-                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                  <button type="submit" class="danger">Delete</button>
-                </form>
+              <td>{{ e.subject or '—' }}</td>
+              <td>{{ e.issuer or '—' }}</td>
+              <td>{{ e.not_before[:10] if e.not_before else '—' }}</td>
+              <td>
+                {% if e.last_scanned_at %}
+                  {{ e.last_scanned_at[:10] }}
+                  {% if e.scan_status == 'failure' %}
+                    <span class="badge invalid">failed</span>
+                  {% endif %}
+                {% else %}
+                  —
+                {% endif %}
               </td>
-            </tr>
-            {% for chain in c.chain %}
-              <tr class="{{ chain.urgency }} chain-row">
-                <td><span class="tree-indent" title="Intermediate certificate">&#x2514;&#x2500; chain</span></td>
-                <td>{{ chain.subject }}</td>
-                <td>{{ chain.issuer }}</td>
-                <td>{{ chain.not_after | humanize_expiry }}</td>
-                <td>{{ chain.days_remaining }}</td>
-              </tr>
-            {% endfor %}
-            <tr class="notes-row">
-              <td colspan="6">
-                <details{% if c.notes %} open{% endif %}>
-                  <summary class="notes-summary">Notes{% if c.notes %} ({{ c.notes|length }}){% endif %}</summary>
-                  <form method="post" action="/certificates/{{ c.id }}/notes" class="notes-form">
+              <td>{{ (e.not_after | humanize_expiry) if e.not_after else '—' }}</td>
+              <td>{{ e.days_remaining if e.days_remaining is not none else '—' }}</td>
+              <td>
+                {% if e.urgency == 'red' %}
+                  <span class="status-dot red" title="Expiring within 7 days"></span>
+                {% elif e.urgency == 'yellow' %}
+                  <span class="status-dot yellow" title="Expiring within 30 days"></span>
+                {% elif e.urgency == 'green' %}
+                  <span class="status-dot green" title="Healthy"></span>
+                {% else %}
+                  <span class="status-dot gray" title="Not scanned"></span>
+                {% endif %}
+              </td>
+              <td class="actions">
+                {% if e.kind in ('scanned', 'uploaded') %}
+                  <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <textarea name="notes" rows="2" placeholder="Add notes..." class="notes-textarea">{{ c.notes }}</textarea>
-                    <button type="submit" class="notes-save">Save</button>
+                    <button type="submit" class="danger">Delete</button>
                   </form>
-                </details>
+                {% endif %}
+                {% if e.host_id %}
+                  <form method="post" action="/hosts/{{ e.host_id }}/scan" style="display:inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <button type="submit">Scan now</button>
+                  </form>
+                  <form method="post" action="/hosts/{{ e.host_id }}/delete" style="display:inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="danger">Delete host</button>
+                  </form>
+                {% endif %}
               </td>
             </tr>
-          {% endfor %}
-        </tbody>
+            <tr class="entry-detail hidden">
+              <td colspan="9">
+                <div class="detail-panel">
+                  <div class="detail-grid">
+                    <div class="detail-section">
+                      <h4>Details</h4>
+                      {% if e.kind == 'pending' %}
+                        <dl>
+                          <dt>Hostname</dt><dd>{{ e.host.split(':')[0] }}</dd>
+                          <dt>Port</dt><dd>{{ e.host.split(':')[1] }}</dd>
+                          <dt>Added</dt><dd>{{ e.added_at[:10] if e.added_at else '—' }}</dd>
+                          {% if e.last_scanned_at %}
+                            <dt>Last scan</dt><dd>{{ e.last_scanned_at[:10] }} ({{ e.scan_status }})</dd>
+                            {% if e.scan_error %}
+                              <dt>Error</dt><dd class="detail-error">{{ e.scan_error }}</dd>
+                            {% endif %}
+                          {% endif %}
+                        </dl>
+                      {% else %}
+                        <dl>
+                          <dt>Subject</dt><dd>{{ e.subject }}</dd>
+                          <dt>Issuer</dt><dd>{{ e.issuer }}</dd>
+                          <dt>Not before</dt><dd>{{ e.not_before[:10] if e.not_before else '—' }}</dd>
+                          <dt>Not after</dt><dd>{{ e.not_after[:10] if e.not_after else '—' }} ({{ e.days_remaining }} days)</dd>
+                          <dt>Chain status</dt><dd>{{ e.chain_status or '—' }}</dd>
+                          <dt>Chain valid</dt><dd>{{ 'Yes' if e.chain_valid else ('No' if e.chain_valid is sameas false else '—') }}</dd>
+                        </dl>
+                      {% endif %}
+                    </div>
+                    {% if e.chain %}
+                      <div class="detail-section">
+                        <h4>Certificate chain</h4>
+                        <table class="chain-table">
+                          <thead>
+                            <tr><th>Role</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Days</th></tr>
+                          </thead>
+                          <tbody>
+                            <tr class="{{ e.leaf_urgency }}">
+                              <td>leaf</td>
+                              <td>{{ e.subject }}</td>
+                              <td>{{ e.issuer }}</td>
+                              <td>{{ e.not_after | humanize_expiry }}</td>
+                              <td>{{ e.days_remaining }}</td>
+                            </tr>
+                            {% for chain in e.chain %}
+                              <tr class="{{ chain.urgency }}">
+                                <td><span class="tree-indent">&#x2514;&#x2500; chain</span></td>
+                                <td>{{ chain.subject }}</td>
+                                <td>{{ chain.issuer }}</td>
+                                <td>{{ chain.not_after | humanize_expiry }}</td>
+                                <td>{{ chain.days_remaining }}</td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      </div>
+                    {% endif %}
+                    {% if e.kind in ('scanned', 'uploaded') %}
+                      <div class="detail-section detail-wide">
+                        <h4>Notes</h4>
+                        <form method="post" action="/certificates/{{ e.id }}/notes" class="notes-form">
+                          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                          <textarea name="notes" rows="3" placeholder="Add notes..." class="notes-textarea">{{ e.notes }}</textarea>
+                          <button type="submit" class="notes-save">Save</button>
+                        </form>
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        {% endfor %}
       </table>
+
       {% if total_pages > 1 %}
         <nav class="pagination">
           {% if has_prev %}
-            <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">&laquo; Prev</a>
+            <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}">&laquo; Prev</a>
           {% endif %}
-          <span class="page-info">Page {{ page }} of {{ total_pages }} ({{ total_certs }} certificates)</span>
+          <span class="page-info">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entries)</span>
           {% if has_next %}
-            <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">Next &raquo;</a>
+            <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}">Next &raquo;</a>
           {% endif %}
         </nav>
       {% endif %}
@@ -251,6 +320,14 @@
         }
       });
     })();
+    function toggleDetail(row) {
+      var tbody = row.parentNode;
+      var detail = tbody.querySelector('.entry-detail');
+      if (detail) {
+        detail.classList.toggle('hidden');
+        row.classList.toggle('expanded');
+      }
+    }
   </script>
 </body>
 </html>

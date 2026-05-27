@@ -95,10 +95,8 @@ def test_dashboard_filter_by_search(tmp_path, monkeypatch, leaf_pem_file, chain_
         r = client.get("/?q=chain-leaf")
     assert r.status_code == 200
     assert "chain-leaf.example.com" in r.text
-    # self-signed leaf should be filtered out (unless chain-leaf is also in its data)
-    # The filter matches subject, issuer, hostname — so check both don't appear
-    # unless they share text. They don't, so leaf.example.com should not appear.
-    assert r.text.count("leaf.example.com") <= 1  # may appear in chain-leaf context
+    # The self-signed leaf should be filtered out; only chain-leaf should render.
+    assert r.text.count("entry-group") == 1
 
 
 def test_dashboard_filter_by_urgency(tmp_path, monkeypatch, leaf_pem_file, expiring_soon_leaf):

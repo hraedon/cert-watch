@@ -42,6 +42,7 @@ from cert_watch.database import (
     list_alerts_with_subject,
     list_dashboard_rows,
     list_scan_history,
+    list_unified_entries,
 )
 from cert_watch.scan import _PRIVATE_NETWORKS, ScanError, _is_blocked_ip, scan_host, store_scanned
 from cert_watch.scheduler import (
@@ -553,40 +554,60 @@ def dashboard(
     q: str | None = None,
     urgency: str | None = None,
     source: str | None = None,
+    sort_by: str = "days",
+    sort_order: str = "asc",
     page: int = 1,
 ) -> HTMLResponse:
     db = _db_path()
-    rows = list_dashboard_rows(db)
+    entries = list_unified_entries(db)
+
     if q:
         ql = q.lower()
-        rows = [
-            r for r in rows
-            if ql in r["subject"].lower()
-            or ql in r["issuer"].lower()
-            or ql in r["host"].lower()
+        entries = [
+            e for e in entries
+            if ql in (e.get("name") or "").lower()
+            or ql in (e.get("subject") or "").lower()
+            or ql in (e.get("issuer") or "").lower()
+            or ql in (e.get("host") or "").lower()
         ]
     if urgency:
-        rows = [r for r in rows if r["urgency"] == urgency]
+        entries = [e for e in entries if e["urgency"] == urgency]
     if source:
-        rows = [r for r in rows if r["source"] == source]
-    hosts = SqliteHostRepository(db).list_all()
+        if source == "scanned":
+            entries = [e for e in entries if e["kind"] in ("scanned", "pending")]
+        else:
+            entries = [e for e in entries if e["source"] == source]
+
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     ctx = _get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
 
+    # Server-side sorting
+    _sort_keys = {
+        "name": lambda e: (e.get("name") or "").lower(),
+        "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
+        "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
+        "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
+        "days": lambda e: (
+            e["days_remaining"] if e["days_remaining"] is not None else 9999
+        ),
+    }
+    key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
+    reverse = sort_order == "desc"
+    entries.sort(key=key_fn, reverse=reverse)
+
     per_page = 25
-    total = len(rows)
+    total = len(entries)
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
     start = (page - 1) * per_page
-    page_rows = rows[start : start + per_page]
+    page_entries = entries[start : start + per_page]
 
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "certificates": page_rows,
-            "hosts": hosts,
+            "entries": page_entries,
             "trust_anchors": anchors,
             "version": __version__,
             "error": error,
@@ -594,9 +615,11 @@ def dashboard(
             "filter_q": q or "",
             "filter_urgency": urgency or "",
             "filter_source": source or "",
+            "sort_by": sort_by,
+            "sort_order": sort_order,
             "page": page,
             "total_pages": total_pages,
-            "total_certs": total,
+            "total_entries": total,
             "has_prev": page > 1,
             "has_next": page < total_pages,
             **ctx,

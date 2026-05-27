@@ -779,29 +779,18 @@ def list_scan_history(db_path: str | Path) -> list[dict]:
 # ---------- Dashboard helpers ----------
 
 
-def list_dashboard_rows(db_path: str | Path) -> list[dict]:
-    """
-    Return rich rows for the dashboard. Per the scope extension, each scanned host
-    or uploaded bundle surfaces leaf + intermediate + root, and the row's urgency
-    is driven by the most-urgent cert in that group.
-    """
+def _build_dashboard_rows(
+    cert_rows: list[sqlite3.Row],
+    anchor_rows: list[sqlite3.Row],
+) -> list[dict]:
+    """Build rich dashboard rows from raw certificate and anchor rows."""
     from cert_watch.cert_chain import chain_status
-
-    init_schema(db_path)
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM certificates ORDER BY created_at"
-        ).fetchall()
-        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
 
     anchors = [_row_to_cert(r) for r in anchor_rows]
 
-    # Group by (source, hostname, port, parent_cert_id-or-self).
-    # For uploaded bundles, leaf has no parent and intermediates point to the leaf id.
-    # For scanned hosts, same shape.
     leaf_rows: list[dict] = []
     children_by_leaf: dict[str, list[dict]] = {}
-    for r in rows:
+    for r in cert_rows:
         d = dict(r)
         if d["is_leaf"]:
             leaf_rows.append(d)
@@ -809,7 +798,6 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
             children_by_leaf.setdefault(d["parent_cert_id"] or "", []).append(d)
 
     def _days(iso_str: str) -> int:
-        """Floor days remaining — same semantics as Certificate.days_until_expiry()."""
         return (_parse_iso(iso_str) - datetime.now(UTC)).days
 
     def _urgency(days: int) -> str:
@@ -827,8 +815,10 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
         for c in chain:
             days = _days(c["not_after"])
             chain_view.append({
+                "id": c["id"],
                 "subject": c["subject"],
                 "issuer": c["issuer"],
+                "not_before": c["not_before"],
                 "not_after": c["not_after"],
                 "days_remaining": days,
                 "urgency": _urgency(days),
@@ -840,7 +830,6 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
             if leaf["hostname"]
             else f"(uploaded:{leaf['source']})"
         )
-        # Build Certificate objects for chain_status evaluation
         leaf_cert = _row_to_cert(leaf)
         chain_certs = [_row_to_cert(c) for c in chain]
         _chain_status = chain_status(leaf_cert, chain_certs, anchors)
@@ -851,6 +840,7 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
                 "source": leaf["source"],
                 "subject": leaf["subject"],
                 "issuer": leaf["issuer"],
+                "not_before": leaf["not_before"],
                 "not_after": leaf["not_after"],
                 "days_remaining": leaf_days,
                 "urgency": _urgency(min_days),
@@ -865,5 +855,115 @@ def list_dashboard_rows(db_path: str | Path) -> list[dict]:
             }
         )
 
+    return dash
+
+
+def list_dashboard_rows(db_path: str | Path) -> list[dict]:
+    """
+    Return rich rows for the dashboard. Per the scope extension, each scanned host
+    or uploaded bundle surfaces leaf + intermediate + root, and the row's urgency
+    is driven by the most-urgent cert in that group.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM certificates ORDER BY created_at"
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+    dash = _build_dashboard_rows(rows, anchor_rows)
     dash.sort(key=lambda d: min([d["days_remaining"], *[c["days_remaining"] for c in d["chain"]]]))
     return dash
+
+
+def list_unified_entries(db_path: str | Path) -> list[dict]:
+    """Return a merged list of hosts (pending or scanned) and uploaded certificates.
+
+    Each entry has a ``kind`` of ``scanned``, ``uploaded``, or ``pending``.
+    Pending hosts carry cert fields set to ``None`` and urgency ``gray``.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        cert_rows = conn.execute(
+            "SELECT * FROM certificates ORDER BY created_at"
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+        scan_rows = conn.execute(
+            "SELECT * FROM scan_history ORDER BY scanned_at DESC"
+        ).fetchall()
+
+    dash = _build_dashboard_rows(cert_rows, anchor_rows)
+
+    # Latest scan per host
+    latest_scan: dict[tuple[str, int], dict] = {}
+    for r in scan_rows:
+        key = (r["hostname"], r["port"])
+        if key not in latest_scan:
+            latest_scan[key] = dict(r)
+
+    # Map scanned certs by host key
+    scanned_map: dict[str, dict] = {}
+    uploaded: list[dict] = []
+    for c in dash:
+        if c["source"] == "scanned":
+            scanned_map[c["host"]] = c
+        else:
+            uploaded.append(c)
+
+    # Host id lookup for scanned/pending entries
+    host_id_map: dict[tuple[str, int], str] = {
+        (h["hostname"], h["port"]): h["id"] for h in host_rows
+    }
+
+    entries: list[dict] = []
+    for h in host_rows:
+        host_key = f"{h['hostname']}:{h['port']}"
+        scan = latest_scan.get((h["hostname"], h["port"]))
+        if host_key in scanned_map:
+            row = scanned_map[host_key]
+            row["kind"] = "scanned"
+            row["host_id"] = host_id_map.get((h["hostname"], h["port"]))
+            row["last_scanned_at"] = scan["scanned_at"] if scan else None
+            row["scan_status"] = scan["status"] if scan else None
+            row["scan_error"] = scan.get("error_message") if scan else None
+            row["added_at"] = h["added_at"]
+            entries.append(row)
+        else:
+            entries.append(
+                {
+                    "id": h["id"],
+                    "host_id": h["id"],
+                    "kind": "pending",
+                    "name": host_key,
+                    "host": host_key,
+                    "source": "scanned",
+                    "subject": None,
+                    "issuer": None,
+                    "not_before": None,
+                    "not_after": None,
+                    "days_remaining": None,
+                    "urgency": "gray",
+                    "leaf_urgency": "gray",
+                    "chain": [],
+                    "chain_valid": None,
+                    "chain_status": None,
+                    "replaces_cert_id": None,
+                    "notes": "",
+                    "last_scanned_at": scan["scanned_at"] if scan else None,
+                    "scan_status": scan["status"] if scan else None,
+                    "scan_error": scan.get("error_message") if scan else None,
+                    "added_at": h["added_at"],
+                }
+            )
+
+    for u in uploaded:
+        u["kind"] = "uploaded"
+        u["name"] = u["subject"]
+        u["last_scanned_at"] = None
+        u["scan_status"] = None
+        u["scan_error"] = None
+        u["added_at"] = None
+        entries.append(u)
+
+    return entries

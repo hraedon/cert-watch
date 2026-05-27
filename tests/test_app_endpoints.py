@@ -202,7 +202,7 @@ def test_dashboard_lists_tracked_hosts(tmp_path, monkeypatch):
         r = client.get("/")
     assert r.status_code == 200
     assert "tracked.example.com" in r.text
-    assert "Tracked hosts" in r.text
+    assert "entry-group" in r.text
 
 
 def test_lifespan_starts_scheduler(tmp_path, monkeypatch):
