@@ -77,8 +77,8 @@ def test_upload_pem_appears_on_dashboard(
     page: Page, cert_watch_server: str, pem_path: Path
 ) -> None:
     page.goto(cert_watch_server)
-    page.locator('form.upload input[name="file"]').set_input_files(str(pem_path))
-    page.locator("form.upload button[type=submit]").click()
+    page.locator('form.upload[action="/upload"] input[name="file"]').set_input_files(str(pem_path))
+    page.locator('form.upload[action="/upload"] button[type=submit]').click()
     expect(page.locator("body")).to_contain_text("e2e-pem.example.com")
 
 
@@ -86,8 +86,8 @@ def test_upload_pfx_shows_leaf_and_chain(
     page: Page, cert_watch_server: str, pfx_path: Path
 ) -> None:
     page.goto(cert_watch_server)
-    page.locator('form.upload input[name="file"]').set_input_files(str(pfx_path))
-    page.locator("form.upload button[type=submit]").click()
+    page.locator('form.upload[action="/upload"] input[name="file"]').set_input_files(str(pfx_path))
+    page.locator('form.upload[action="/upload"] button[type=submit]').click()
     body = page.locator("body")
     expect(body).to_contain_text("e2e-pfx.example.com")
     expect(body).to_contain_text("E2E Intermediate")
@@ -104,8 +104,8 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     # without 500. The host is stored even though no cert is captured.
     expect(page.locator("h1")).to_have_text("cert-watch")
     # Assert the host appears in the tracked hosts table
-    expect(page.get_by_text(hostname)).to_be_visible()
+    expect(page.get_by_text(hostname, exact=True)).to_be_visible()
     # Navigate to scan-history and assert a failure entry exists
     page.goto(f"{cert_watch_server}/scan-history")
-    expect(page.get_by_text(hostname, exact=False)).to_be_visible()
+    expect(page.locator("td", has_text=hostname)).to_be_visible()
     expect(page.get_by_text("failure")).to_be_visible()

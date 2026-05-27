@@ -43,8 +43,11 @@ def test_upload_then_delete_removes_cert(
     page: Page, cert_watch_server: str, delete_pem_path: Path
 ) -> None:
     page.goto(cert_watch_server)
-    page.locator('form.upload input[name="file"]').set_input_files(str(delete_pem_path))
-    page.locator("form.upload button[type=submit]").click()
+    upload_form = 'form.upload[action="/upload"]'
+    page.locator(f'{upload_form} input[name="file"]').set_input_files(
+        str(delete_pem_path),
+    )
+    page.locator(f'{upload_form} button[type=submit]').click()
     body = page.locator("body")
     expect(body).to_contain_text("e2e-delete.example.com")
 
