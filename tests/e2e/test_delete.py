@@ -52,7 +52,7 @@ def test_upload_then_delete_removes_cert(
     expect(body).to_contain_text("e2e-delete.example.com")
 
     # Click the first cert-row delete button inside the unified table.
-    page.locator(".entry-group form[action^='/certificates/'][action$='/delete'] button").first.click()
+    page.locator('[data-testid="delete-cert-btn"]').first.click()
 
     # After delete, the dashboard should no longer contain the cert subject.
     expect(page.locator("body")).not_to_contain_text("e2e-delete.example.com")

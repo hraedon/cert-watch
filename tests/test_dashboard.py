@@ -96,7 +96,11 @@ def test_dashboard_filter_by_search(tmp_path, monkeypatch, leaf_pem_file, chain_
     assert r.status_code == 200
     assert "chain-leaf.example.com" in r.text
     # The self-signed leaf should be filtered out; only chain-leaf should render.
-    assert r.text.count("entry-group") == 1
+    import re
+    # Count actual <tbody class="entry-group"> elements (data-testid adds a second
+    # raw-text occurrence of the substring, so we match the opening tag exactly).
+    groups = re.findall(r'<tbody class="entry-group"', r.text)
+    assert len(groups) == 1
 
 
 def test_dashboard_filter_by_urgency(tmp_path, monkeypatch, leaf_pem_file, expiring_soon_leaf):

@@ -140,8 +140,8 @@
           </tr>
         </thead>
         {% for e in entries %}
-          <tbody class="entry-group">
-            <tr class="entry-summary {{ e.urgency }}" onclick="toggleDetail(this)">
+          <tbody class="entry-group" data-testid="entry-group">
+            <tr class="entry-summary {{ e.urgency }}" data-testid="entry-summary" onclick="toggleDetail(this)">
               <td>
                 {{ e.name }}
                 {% if e.kind == 'pending' %}
@@ -199,22 +199,22 @@
                 {% if e.kind in ('scanned', 'uploaded') %}
                   <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger">Delete</button>
+                    <button type="submit" class="danger" data-testid="delete-cert-btn">Delete</button>
                   </form>
                 {% endif %}
                 {% if e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit">Scan now</button>
+                    <button type="submit" data-testid="scan-now-btn">Scan now</button>
                   </form>
                   <form method="post" action="/hosts/{{ e.host_id }}/delete" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger">Delete host</button>
+                    <button type="submit" class="danger" data-testid="delete-host-btn">Delete host</button>
                   </form>
                 {% endif %}
               </td>
             </tr>
-            <tr class="entry-detail hidden">
+            <tr class="entry-detail hidden" data-testid="entry-detail">
               <td colspan="9">
                 <div class="detail-panel">
                   <div class="detail-grid">

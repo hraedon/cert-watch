@@ -104,7 +104,7 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     # without 500. The host is stored even though no cert is captured.
     expect(page.locator("h1")).to_have_text("cert-watch")
     # Assert the host appears in the unified list summary row
-    expect(page.locator(".entry-summary td", has_text=hostname)).to_be_visible()
+    expect(page.locator('[data-testid="entry-summary"]', has_text=hostname)).to_be_visible()
     # Navigate to scan-history and assert a failure entry exists
     page.goto(f"{cert_watch_server}/scan-history")
     expect(page.get_by_text("nonexistent.invalid:443", exact=True)).to_be_visible()
