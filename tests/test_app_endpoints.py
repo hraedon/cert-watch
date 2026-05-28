@@ -95,7 +95,7 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, self_signed_leaf):
 
 def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
     """Regression: scan-now used to silently swallow ScanError, leaving the user
-    with no UI feedback. Failure must redirect with ?error= AND write a failure
+    with no UI feedback. Failure must redirect with ?warning= AND write a failure
     row to scan_history so the user can see what happened."""
     app_mod = _reload_app(monkeypatch, tmp_path)
     db = tmp_path / "cert-watch.sqlite3"
@@ -113,7 +113,7 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
     assert r.status_code == 303
-    assert "error=" in r.headers["location"]
+    assert "warning=" in r.headers["location"]
     loc = r.headers["location"]
     assert "connection%20refused" in loc or "connection+refused" in loc
 

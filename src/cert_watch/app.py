@@ -558,6 +558,7 @@ def logout(request: Request) -> RedirectResponse:
 def dashboard(
     request: Request,
     error: str | None = None,
+    warning: str | None = None,
     q: str | None = None,
     urgency: str | None = None,
     source: str | None = None,
@@ -618,6 +619,7 @@ def dashboard(
             "trust_anchors": anchors,
             "version": __version__,
             "error": error,
+            "warning": warning,
             "auth_user": auth_user,
             "filter_q": q or "",
             "filter_urgency": urgency or "",
@@ -839,7 +841,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
     )
     msg = f"scan failed for {host.hostname}:{host.port}: {result.error_message}"
-    return RedirectResponse(url=f"/?error={quote(msg)}", status_code=303)
+    return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
 
 
 @app.post("/certificates/{cert_id}/delete")

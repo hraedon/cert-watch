@@ -26,6 +26,9 @@
     {% if error %}
       <p class="error">Error: {{ error }}</p>
     {% endif %}
+    {% if warning %}
+      <p class="warning">Warning: {{ warning }}</p>
+    {% endif %}
 
     <section class="forms">
       <form class="add-host" method="post" action="/hosts">
@@ -199,7 +202,7 @@
                 {% if e.kind in ('scanned', 'uploaded') %}
                   <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger" data-testid="delete-cert-btn">Delete</button>
+                    <button type="submit" class="danger" data-testid="delete-cert-btn">Clear results</button>
                   </form>
                 {% endif %}
                 {% if e.host_id %}

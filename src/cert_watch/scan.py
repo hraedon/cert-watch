@@ -321,6 +321,29 @@ def _der_enc():
     return Encoding.DER
 
 
+def _friendly_scan_error(exc: BaseException) -> str:
+    """Translate raw socket/TLS exceptions into human-friendly messages."""
+    msg = str(exc)
+    import errno as _errno
+    if isinstance(exc, ConnectionRefusedError) or _errno.ECONNREFUSED in (
+        getattr(exc, "errno", None),
+    ):
+        return "Connection refused — the host is not accepting connections on this port"
+    if isinstance(exc, TimeoutError):
+        return "Connection timed out — the host did not respond in time"
+    if isinstance(exc, OSError):
+        if "DNS resolution failed" in msg or "Name or service not known" in msg:
+            return f"Could not resolve hostname: {msg}"
+        if "blocked address" in msg.lower():
+            return msg
+        if "timed out" in msg.lower():
+            return "Connection timed out — the host did not respond in time"
+        if "Network is unreachable" in msg:
+            return "Network unreachable — no route to the host"
+        return f"Connection failed: {msg}"
+    return msg
+
+
 def scan_host(
     hostname: str,
     port: int = 443,
@@ -336,12 +359,10 @@ def scan_host(
             hostname, port, timeout, verify=verify, allow_private=allow_private,
             dns_servers=dns_servers,
         )
-    except TimeoutError as exc:
-        return ScanError(hostname=hostname, port=port, error_message=f"timeout: {exc}")
-    except OSError as exc:
-        return ScanError(hostname=hostname, port=port, error_message=str(exc))
+    except (TimeoutError, OSError) as exc:
+        return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
     except Exception as exc:  # noqa: BLE001
-        return ScanError(hostname=hostname, port=port, error_message=str(exc))
+        return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
     try:
         der_chain = _get_chain_der(ssl_sock, hostname)

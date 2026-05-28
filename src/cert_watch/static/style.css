@@ -67,6 +67,7 @@ tr.green  { background: var(--green-bg); }
 tr.gray   { background: var(--gray-bg); color: var(--gray-text); }
 .empty { color: var(--text-muted); margin-top: 2rem; font-style: italic; }
 .error { color: var(--red-text); background: var(--red-bg); padding: .5rem; border-radius: 4px; }
+.warning { color: var(--yellow-text); background: var(--yellow-bg); padding: .5rem; border-radius: 4px; border: 1px solid var(--yellow-border); }
 .forms { display: flex; gap: 2rem; margin: 1rem 0; flex-wrap: wrap; }
 .forms form { border: 1px solid var(--border); padding: .75rem 1rem; border-radius: 4px; }
 .forms h2 { margin: 0 0 .5rem 0; font-size: 1rem; }
