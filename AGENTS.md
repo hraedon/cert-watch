@@ -45,10 +45,12 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-3 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 3 low.
+5 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 5 low.
 
 - **BC-026** (low) — Missing unit tests for trust anchor CA validation (BC-024 follow-up)
 - **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan
+- **BC-028** (low) — openssl s_client fallback opens second TLS connection per scan (duplicate of BC-027, keep one)
+- **BC-029** (low) — REST API pagination lacks HATEOAS navigation links
 - **FEAT-006** (low) — Database migration tooling (alembic)
 
 ### Recently resolved
@@ -59,6 +61,16 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **BC-023** (low) — DER-based issuer/subject comparison in validate_chain_order
 - **BC-024** (low) — Trust anchor CA validation (BasicConstraints check)
 - **BC-025** (low) — Private IP rejection includes CERT_WATCH_ALLOW_PRIVATE_IPS hint
+
+### Recently implemented features
+
+- **Scan retry** — `scan_host()` retries transient failures (connection refused, timeout) up to 2 times with exponential backoff.
+- **Fast scheduler retry** — When hosts have no successful scan yet, the scheduler retries every hour instead of waiting for the daily cycle.
+- **Scan result diffing** — On renewal (fingerprint change), `replace_scanned()` logs what changed (expiry shift, SAN changes, issuer change).
+- **Confirmation dialogs** — Destructive actions ("Clear results", "Delete host", "Remove trust anchor") require `confirm()` before submitting.
+- **Rate limit headers** — API responses include `X-RateLimit-Remaining`, `X-RateLimit-Limit`, and `Retry-After` (on 429).
+- **System CA chain validation** — `chain_status()` checks the system trust store, so LE and other public CA chains show as "public" even when the root is omitted.
+- **Scan failure UX** — Scan failures show as yellow warnings (not red errors) with human-friendly messages.
 
 ## Architecture notes
 

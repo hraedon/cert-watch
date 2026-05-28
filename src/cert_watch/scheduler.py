@@ -52,6 +52,28 @@ def _seconds_until(hour: int, minute: int) -> float:
     return (target - now).total_seconds()
 
 
+FAST_RETRY_INTERVAL = 3600  # 1 hour
+
+
+def _has_pending_hosts(db_path: str | Path) -> bool:
+    """Check if any host has never been successfully scanned."""
+    from cert_watch.database import _connect
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """
+            SELECT 1 FROM hosts h
+            WHERE NOT EXISTS (
+                SELECT 1 FROM scan_history sh
+                WHERE sh.hostname = h.hostname
+                AND sh.port = h.port
+                AND sh.status = 'success'
+            )
+            LIMIT 1
+            """
+        ).fetchone()
+    return row is not None
+
+
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
@@ -64,34 +86,49 @@ def start_scheduler(
     ct_fn: Callable[[], dict] | None = None,
     hour: int = 6,
     minute: int = 0,
+    db_path: str | Path | None = None,
 ) -> None:
-    """Start a daemon thread that runs scan_fn + ct_fn + alert_fn once per day. See AC-01."""
+    """Start a daemon thread that runs scan_fn + ct_fn + alert_fn once per day.
+
+    When db_path is provided and there are hosts with no successful scan yet,
+    the scheduler retries every FAST_RETRY_INTERVAL (1 hour) instead of waiting
+    for the next daily cycle.  See AC-01.
+    """
     global _scheduler_thread
     with _scheduler_lock:
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
+        def _run_cycle() -> None:
+            try:
+                scan_fn()
+                logger.info("scheduled scan completed")
+            except Exception:  # noqa: BLE001
+                logger.exception("scheduler scan_fn failed")
+            if ct_fn is not None:
+                try:
+                    ct_fn()
+                    logger.info("scheduled CT check completed")
+                except Exception:  # noqa: BLE001
+                    logger.exception("scheduler ct_fn failed")
+            try:
+                alert_fn()
+                logger.info("scheduled alerts completed")
+            except Exception:  # noqa: BLE001
+                logger.exception("scheduler alert_fn failed")
+
         def _loop() -> None:
             while not _scheduler_stop.is_set():
                 wait = _seconds_until(hour, minute)
-                if _scheduler_stop.wait(timeout=wait):
-                    return
-                try:
-                    scan_fn()
-                    logger.info("scheduled scan completed")
-                except Exception:  # noqa: BLE001
-                    logger.exception("scheduler scan_fn failed")
-                if ct_fn is not None:
-                    try:
-                        ct_fn()
-                        logger.info("scheduled CT check completed")
-                    except Exception:  # noqa: BLE001
-                        logger.exception("scheduler ct_fn failed")
-                try:
-                    alert_fn()
-                    logger.info("scheduled alerts completed")
-                except Exception:  # noqa: BLE001
-                    logger.exception("scheduler alert_fn failed")
+                if db_path is not None and _has_pending_hosts(db_path):
+                    fast_wait = min(wait, FAST_RETRY_INTERVAL)
+                    logger.debug("pending hosts found, retrying in %ds", fast_wait)
+                    if _scheduler_stop.wait(timeout=fast_wait):
+                        return
+                else:
+                    if _scheduler_stop.wait(timeout=wait):
+                        return
+                _run_cycle()
 
         _scheduler_stop.clear()
         _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")

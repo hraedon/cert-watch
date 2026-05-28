@@ -78,7 +78,7 @@
               <td>{{ a.subject }}</td>
               <td>{{ a.created_at.strftime("%Y-%m-%d") }}</td>
               <td class="actions">
-                <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline">
+                <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this trust anchor?">
                   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                   <button type="submit" class="danger">Delete</button>
                 </form>
@@ -200,7 +200,7 @@
               </td>
               <td class="actions">
                 {% if e.kind in ('scanned', 'uploaded') %}
-                  <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline">
+                  <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Clear scan results for this certificate?">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="danger" data-testid="delete-cert-btn">Clear results</button>
                   </form>
@@ -210,7 +210,7 @@
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" data-testid="scan-now-btn">Scan now</button>
                   </form>
-                  <form method="post" action="/hosts/{{ e.host_id }}/delete" style="display:inline">
+                  <form method="post" action="/hosts/{{ e.host_id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this host and all its scan data?">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="danger" data-testid="delete-host-btn">Delete host</button>
                   </form>
@@ -331,6 +331,15 @@
         row.classList.toggle('expanded');
       }
     }
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      if (form.classList.contains('confirm-form')) {
+        var msg = form.getAttribute('data-confirm') || 'Are you sure?';
+        if (!confirm(msg)) {
+          e.preventDefault();
+        }
+      }
+    });
   </script>
 </body>
 </html>

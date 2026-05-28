@@ -205,6 +205,19 @@ def _check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
         return True
 
 
+def _get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tuple[int, int]:
+    """Return (remaining, retry_after_seconds) for the given rate limit window."""
+    now = datetime.now(UTC).timestamp()
+    with _rate_lock:
+        window = _rate_windows.get(key, collections.deque())
+        cutoff = now - window_seconds
+        count = sum(1 for t in window if t >= cutoff)
+        remaining = max(0, max_requests - count)
+        oldest = min((t for t in window if t >= cutoff), default=now)
+        retry_after = max(0, int(window_seconds - (now - oldest)))
+        return remaining, retry_after
+
+
 async def _check_csrf(request: Request) -> str | None:
     """Validate CSRF double-submit cookie. Returns error message or None.
 
@@ -325,6 +338,7 @@ async def lifespan(app: FastAPI):
         ct_fn=_ct_check,
         hour=s.sched_hour,
         minute=s.sched_min,
+        db_path=s.db_path,
     )
     try:
         yield
@@ -335,6 +349,20 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="cert-watch", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+
+
+@app.middleware("http")
+async def rate_limit_headers_middleware(request: Request, call_next):
+    """Add X-RateLimit-Remaining and Retry-After headers to API responses."""
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        client = request.client.host if request.client else "unknown"
+        remaining, retry_after = _get_rate_remaining(f"api:{client}", 60, 60)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        response.headers["X-RateLimit-Limit"] = "60"
+        if response.status_code == 429:
+            response.headers["Retry-After"] = str(retry_after)
+    return response
 
 
 @app.middleware("http")

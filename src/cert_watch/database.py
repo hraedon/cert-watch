@@ -625,7 +625,8 @@ def replace_scanned(
     """Atomically replace all certs for host:port with new leaf + chain.
 
     Deletes old leaf + chain children, inserts new ones, all in a single
-    transaction. Returns the new leaf cert_id.
+    transaction. Returns the new leaf cert_id.  Records a renewal diff
+    when the certificate fingerprint changed.
     """
     from cert_watch.cert_chain import validate_chain_order
 
@@ -644,6 +645,12 @@ def replace_scanned(
             ).fetchall()
         ]
         replaces_id: str | None = old_leaves[0] if old_leaves else None
+
+        old_leaf_row = None
+        if replaces_id:
+            old_leaf_row = conn.execute(
+                "SELECT * FROM certificates WHERE id = ?", (replaces_id,)
+            ).fetchone()
 
         for old_id in old_leaves:
             conn.execute(
@@ -732,7 +739,38 @@ def replace_scanned(
             )
         conn.commit()
 
+    if old_leaf_row is not None and leaf.fingerprint_sha256 != old_leaf_row["fingerprint_sha256"]:
+        changes = _compute_renewal_diff(old_leaf_row, leaf)
+        if changes:
+            import logging
+            logging.getLogger("cert_watch.database").info(
+                "certificate renewed for %s:%s — %s",
+                hostname, port, "; ".join(changes),
+            )
+
     return leaf_id
+
+
+def _compute_renewal_diff(old_row: sqlite3.Row, new_leaf: Certificate) -> list[str]:
+    """Compute human-readable diff between old and new leaf certificates."""
+    changes: list[str] = []
+    old_na = old_row["not_after"]
+    if old_na:
+        old_expiry = _parse_iso(old_na)
+        days_added = (new_leaf.not_after - old_expiry).days
+        if days_added > 0:
+            changes.append(f"expiry extended by {days_added} days")
+    old_sans = set(json.loads(old_row["san_dns_names"]))
+    new_sans = set(new_leaf.san_dns_names)
+    added = new_sans - old_sans
+    removed = old_sans - new_sans
+    if added:
+        changes.append(f"SAN added: {', '.join(sorted(added))}")
+    if removed:
+        changes.append(f"SAN removed: {', '.join(sorted(removed))}")
+    if old_row["issuer"] != new_leaf.issuer:
+        changes.append(f"issuer changed to {new_leaf.issuer}")
+    return changes
 
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:

@@ -19,6 +19,8 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
 
 DEFAULT_TIMEOUT = 10.0
+SCAN_RETRIES = 2
+SCAN_RETRY_BACKOFF = 1.0
 
 # Always blocked: loopback, link-local, unspecified
 _ALWAYS_BLOCKED_NETWORKS = [
@@ -352,8 +354,34 @@ def scan_host(
     verify: bool = False,
     allow_private: bool = True,
     dns_servers: tuple[str, ...] = (),
+    retries: int = SCAN_RETRIES,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06."""
+    last_error: ScanError | None = None
+    for attempt in range(1 + retries):
+        result = _scan_host_once(
+            hostname, port, timeout=timeout, verify=verify,
+            allow_private=allow_private, dns_servers=dns_servers,
+        )
+        if isinstance(result, ScannedEntry):
+            return result
+        last_error = result
+        if attempt < retries:
+            import time
+            time.sleep(SCAN_RETRY_BACKOFF * (2 ** attempt))
+    return last_error
+
+
+def _scan_host_once(
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    verify: bool = False,
+    allow_private: bool = True,
+    dns_servers: tuple[str, ...] = (),
+) -> ScannedEntry | ScanError:
+    """Single TLS handshake attempt — no retry logic."""
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=verify, allow_private=allow_private,
