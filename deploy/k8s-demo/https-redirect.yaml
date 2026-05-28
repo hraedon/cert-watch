@@ -17,7 +17,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`cert-watch.hraedon.com`)
+    - match: Host(`cert-watch-demo.hraedon.com`)
       kind: Rule
       middlewares:
         - name: cert-watch-demo-https-redirect

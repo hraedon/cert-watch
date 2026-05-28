@@ -9,10 +9,10 @@ metadata:
 spec:
   ingressClassName: traefik-external
   tls:
-    - hosts: [cert-watch.hraedon.com]
+    - hosts: [cert-watch-demo.hraedon.com]
       secretName: cert-watch-demo-tls
   rules:
-    - host: cert-watch.hraedon.com
+    - host: cert-watch-demo.hraedon.com
       http:
         paths:
           - path: /
