@@ -956,6 +956,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
     # Parse key type and signature algorithm from raw DER
     try:
@@ -963,7 +964,6 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         key_info = x509_cert.public_key()
         key_type_str = type(key_info).__name__
         try:
-            from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
             if isinstance(key_info, rsa.RSAPublicKey):
                 key_type_str = f"RSA {key_info.key_size}"
             elif isinstance(key_info, ec.EllipticCurvePublicKey):
