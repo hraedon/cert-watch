@@ -1,76 +1,101 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>cert-watch — alerts</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <header>
-    <h1>cert-watch</h1>
-    <span class="version">v{{ version }}</span>
-    <nav class="topnav">
-      <a href="/">Dashboard</a>
-      <a href="/alerts">Alerts</a>
-      <a href="/scan-history">Scan history</a>
-      <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">&#x263D;</button>
-    </nav>
-    {% if auth_user %}
-      <div class="user-info">
-        <span>{{ auth_user }}</span>
-        <a href="/auth/logout">Logout</a>
-      </div>
+{% extends "base.html" %}
+{% block title %}cert-watch — alerts{% endblock %}
+
+{% macro svg_icon(name, size=16, sw=1.7) %}
+  {% if name == 'shield' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+  {% elif name == 'clock' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'alert' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+  {% elif name == 'check-circle' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'server' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
+  {% elif name == 'bell' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
+  {% elif name == 'link' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
+  {% elif name == 'key' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2"/><path d="M15 7a4 4 0 11-6 6l-6 6v3h3l6-6a4 4 0 016-6l1-1-3-3z"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div style="padding:22px 26px;max-width:1080px">
+  {# ---- Page header ---- #}
+  <div class="cw-page-head">
+    <div>
+      <h1>Alerts</h1>
+      <div class="cw-page-head-sub">Expiry &amp; scan notifications sent via email and webhook.</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <span class="cw-chip" style="padding:6px 10px">{{ svg_icon('bell', 12) }}Email</span>
+      <span class="cw-chip" style="padding:6px 10px">{{ svg_icon('link', 12) }}Webhook</span>
+    </div>
+  </div>
+
+  {# ---- Severity stats ---- #}
+  {% set ns = namespace(all_count=0, critical_count=0, warning_count=0) %}
+  {% for a in alerts %}
+    {% set ns.all_count = ns.all_count + 1 %}
+    {% if a.alert_type == 'expired' or a.alert_type == 'scan_failure' %}
+      {% set ns.critical_count = ns.critical_count + 1 %}
+    {% elif a.alert_type == 'expiry_warning' %}
+      {% set ns.warning_count = ns.warning_count + 1 %}
     {% endif %}
-  </header>
-  <main>
-    <h2>Alert history</h2>
-    {% if alerts %}
-      <table>
-        <thead>
-          <tr>
-            <th>Created</th>
-            <th>Subject</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Threshold (days)</th>
-            <th>Sent</th>
-            <th>Error</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for a in alerts %}
-            <tr class="{% if a.status == 'failed' %}red{% elif a.status == 'sent' %}green{% else %}yellow{% endif %}">
-              <td>{{ a.created_at }}</td>
-              <td>{{ a.subject or "(deleted)" }}</td>
-              <td>{{ a.alert_type }}</td>
-              <td>{{ a.status }}</td>
-              <td>{{ a.threshold_days if a.threshold_days is not none else "" }}</td>
-              <td>{{ a.sent_at or "" }}</td>
-              <td>{{ a.error_message or "" }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    {% else %}
-      <p class="empty">No alerts recorded.</p>
-    {% endif %}
-  </main>
-  <script>
-    (function() {
-      var t = localStorage.getItem('cw-theme');
-      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-      var btn = document.getElementById('theme-toggle');
-      if (btn) btn.addEventListener('click', function() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        if (dark) {
-          document.documentElement.removeAttribute('data-theme');
-          localStorage.removeItem('cw-theme');
-        } else {
-          document.documentElement.setAttribute('data-theme', 'dark');
-          localStorage.setItem('cw-theme', 'dark');
-        }
-      });
-    })();
-  </script>
-</body>
-</html>
+  {% endfor %}
+
+  <div class="cw-stats cw-stats-3" style="margin-bottom:18px">
+    <div class="cw-stat">
+      <div class="cw-stat-rail" style="background:var(--accent)"></div>
+      <div class="cw-stat-top" style="color:var(--accent)">{{ svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Total alerts</span></div>
+      <div class="cw-stat-val" style="color:var(--text)">{{ ns.all_count }}</div>
+    </div>
+    <div class="cw-stat">
+      <div class="cw-stat-rail" style="background:var(--crit)"></div>
+      <div class="cw-stat-top" style="color:var(--crit)">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Critical</span></div>
+      <div class="cw-stat-val" style="color:var(--crit)">{{ ns.critical_count }}</div>
+    </div>
+    <div class="cw-stat">
+      <div class="cw-stat-rail" style="background:var(--warn)"></div>
+      <div class="cw-stat-top" style="color:var(--warn)">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Warnings</span></div>
+      <div class="cw-stat-val" style="color:var(--warn)">{{ ns.warning_count }}</div>
+    </div>
+  </div>
+
+  {# ---- Alert list ---- #}
+  {% if alerts %}
+    <div style="display:flex;flex-direction:column;gap:10px">
+      {% for a in alerts %}
+        {% set sev_color = 'var(--crit)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn)' if a.alert_type == 'expiry_warning' else 'var(--accent)' %}
+        {% set sev_bg = 'var(--crit-soft)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn-soft)' if a.alert_type == 'expiry_warning' else 'var(--accent-soft)' %}
+        {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'clock' %}
+        <div class="cw-panel" style="padding:14px 16px;display:flex;gap:14px;align-items:center;border-left:3px solid {{ sev_color }}">
+          <div style="width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:{{ sev_color }};background:{{ sev_bg }}">
+            {{ svg_icon(icon_name, 17) }}
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:9px">
+              <span class="cw-host" style="font-size:13px">{{ a.subject or "(deleted)" }}</span>
+            </div>
+            <div style="font-size:12.5px;color:var(--text-2);margin-top:3px">{{ a.message }}</div>
+          </div>
+          <div style="text-align:right;min-width:110px">
+            <div style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:500;color:{{ 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' }}">
+              <span style="width:6px;height:6px;border-radius:3px;background:{{ 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' }}"></span>{{ a.status }}
+            </div>
+            <div class="mono" style="font-size:11px;color:var(--text-3);margin-top:4px">{{ a.created_at[:16] if a.created_at else '' }}</div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="cw-panel" style="padding:64px 0;text-align:center">
+      <div style="width:52px;height:52px;border-radius:14px;background:var(--ok-soft);color:var(--ok);display:inline-flex;align-items:center;justify-content:center;margin-bottom:14px">{{ svg_icon('check-circle', 24) }}</div>
+      <div style="font-size:15px;font-weight:600">No alerts recorded</div>
+      <div style="font-size:13px;color:var(--text-3);margin-top:5px">Alerts will appear here when certificates expire or scans fail.</div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

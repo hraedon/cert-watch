@@ -36,6 +36,8 @@ from cert_watch.database import (
     SqliteAlertRepository,
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
+    _connect,
+    _row_to_cert,
     delete_certificate_cascade,
     init_schema,
     list_alerts_with_subject,
@@ -288,7 +290,77 @@ def _relative(days: int) -> str:
     return f"expired {amount} ago" if past else f"in {amount}"
 
 
+def _compute_urgency(days_remaining: int | None) -> str:
+    """Compute urgency bucket from days until expiry. Jinja filter."""
+    if days_remaining is None:
+        return "gray"
+    if days_remaining < 0:
+        return "expired"
+    if days_remaining <= 7:
+        return "critical"
+    if days_remaining <= 14:
+        return "warning"
+    return "healthy"
+
+
+def _relative_short(days: int) -> str:
+    """Short relative time string: 'in 4 days', '3 days ago', 'in 2 months'."""
+    if days == 0:
+        return "today"
+    past = days < 0
+    n = abs(days)
+    if n < 45:
+        unit = "day" if n == 1 else "days"
+        amount = f"{n} {unit}"
+    elif n < 365:
+        months = round(n / 30)
+        unit = "month" if months == 1 else "months"
+        amount = f"{months} {unit}"
+    else:
+        years = round(n / 365)
+        unit = "year" if years == 1 else "years"
+        amount = f"{years} {unit}"
+    return f"expired {amount} ago" if past else f"in {amount}"
+
+
+def _parse_dn_field(dn: str, field: str) -> str:
+    """Extract a single RDN value from an RFC 4514 DN string.
+
+    e.g. _parse_dn_field('CN=example.com,O=Acme Inc.,C=US', 'CN') -> 'example.com'
+    """
+    if not dn:
+        return ""
+    for part in dn.split(","):
+        part = part.strip()
+        if part.startswith(f"{field}="):
+            return part[len(field) + 1 :]
+    return ""
+
+
+def _friendly_issuer(issuer_dn: str) -> str:
+    """Extract a friendly issuer org name from the issuer DN.
+
+    Tries O= first, falls back to CN=.
+    """
+    return _parse_dn_field(issuer_dn, "O") or _parse_dn_field(issuer_dn, "CN") or issuer_dn
+
+
+def _issuer_cn(issuer_dn: str) -> str:
+    """Extract the issuer CN from the DN."""
+    return _parse_dn_field(issuer_dn, "CN") or issuer_dn
+
+
+def _subject_cn(subject_dn: str) -> str:
+    """Extract the subject CN from the DN."""
+    return _parse_dn_field(subject_dn, "CN") or subject_dn
+
+
 templates.env.filters["humanize_expiry"] = humanize_expiry
+templates.env.filters["urgency"] = _compute_urgency
+templates.env.filters["relative_short"] = _relative_short
+templates.env.filters["friendly_issuer"] = _friendly_issuer
+templates.env.filters["issuer_cn"] = _issuer_cn
+templates.env.filters["subject_cn"] = _subject_cn
 
 
 @asynccontextmanager
@@ -649,6 +721,7 @@ def dashboard(
             "error": error,
             "warning": warning,
             "auth_user": auth_user,
+            "active_page": "dashboard",
             "filter_q": q or "",
             "filter_urgency": urgency or "",
             "filter_source": source or "",
@@ -872,6 +945,137 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
 
 
+@app.get("/certificates/{cert_id}", response_class=HTMLResponse)
+def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
+    db = _db_path()
+    from cert_watch.database import SqliteCertificateRepository
+
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+
+    from cryptography import x509
+
+    # Parse key type and signature algorithm from raw DER
+    try:
+        x509_cert = x509.load_der_x509_certificate(cert.raw_der)
+        key_info = x509_cert.public_key()
+        key_type_str = type(key_info).__name__
+        try:
+            from cryptography.hazmat.primitives.asymmetric import ec, ed25519, ed448, rsa
+            if isinstance(key_info, rsa.RSAPublicKey):
+                key_type_str = f"RSA {key_info.key_size}"
+            elif isinstance(key_info, ec.EllipticCurvePublicKey):
+                key_type_str = f"ECDSA {key_info.curve.name}"
+            elif isinstance(key_info, ed25519.Ed25519PublicKey):
+                key_type_str = "Ed25519"
+            elif isinstance(key_info, ed448.Ed448PublicKey):
+                key_type_str = "Ed448"
+        except Exception:
+            pass
+        sig_alg = x509_cert.signature_algorithm_oid._name
+        serial = format(x509_cert.serial_number, 'X')
+        # Format serial with colons
+        serial = ':'.join(serial[i:i+2] for i in range(0, len(serial), 2))
+    except Exception:
+        key_type_str = "unknown"
+        sig_alg = "unknown"
+        serial = "unknown"
+
+    fp_hex = cert.fingerprint_sha256
+    # Format fingerprint with colons if not already
+    if ":" not in fp_hex and len(fp_hex) == 64:
+        fp_hex = ':'.join(fp_hex[i:i+2] for i in range(0, len(fp_hex), 2)).upper()
+
+    # Get chain (non-leaf certs with this cert as parent)
+    with _connect(db) as conn:
+        chain_rows = conn.execute(
+            "SELECT * FROM certificates WHERE parent_cert_id = ? AND is_leaf = 0",
+            (cert_id,),
+        ).fetchall()
+
+    chain_certs = []
+    for cr in chain_rows:
+        c = _row_to_cert(cr)
+        chain_days = c.days_until_expiry()
+        chain_certs.append({
+            "id": cr["id"],
+            "subject": c.subject,
+            "issuer": c.issuer,
+            "not_after": c.not_after.isoformat(),
+            "days_remaining": chain_days,
+            "subject_cn": _subject_cn(c.subject),
+            "issuer_org": _friendly_issuer(c.issuer),
+        })
+
+    # Determine chain status
+    from cert_watch.cert_chain import chain_status as _chain_status
+    anchors = SqliteTrustAnchorRepository(db).list_entries()
+    chain_certs_objects = [_row_to_cert(cr) for cr in chain_rows]
+    cs = _chain_status(cert, chain_certs_objects, anchors)
+
+    # Compute urgency from the cert and chain
+    leaf_days = cert.days_until_expiry()
+    all_chain_days = [c["days_remaining"] for c in chain_certs]
+    worst_days = min([leaf_days] + all_chain_days) if all_chain_days else leaf_days
+    urgency = _compute_urgency(worst_days)
+
+    # Get host info if scanned
+    hostname = ""
+    port = 443
+    with _connect(db) as conn:
+        host_row = conn.execute(
+            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        if host_row:
+            hostname = host_row["hostname"] or ""
+            port = host_row["port"] or 443
+
+    # Get last scan time
+    last_scan = None
+    if hostname:
+        with _connect(db) as conn:
+            scan_row = conn.execute(
+                "SELECT scanned_at FROM scan_history "
+                "WHERE hostname = ? AND port = ? "
+                "ORDER BY scanned_at DESC LIMIT 1",
+                (hostname, port),
+            ).fetchone()
+            if scan_row:
+                last_scan = scan_row["scanned_at"]
+
+    ctx = _get_csrf_context(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="certificate_detail.html",
+        context={
+            "cert": cert,
+            "cert_id": cert_id,
+            "version": __version__,
+            "auth_user": request.scope.get("auth_user", ""),
+            "active_page": "dashboard",
+            "key_type": key_type_str,
+            "sig_alg": sig_alg,
+            "serial": serial,
+            "fingerprint": fp_hex,
+            "chain": chain_certs,
+            "chain_status": cs,
+            "urgency": urgency,
+            "days_remaining": leaf_days,
+            "subject_cn": _subject_cn(cert.subject),
+            "issuer_org": _friendly_issuer(cert.issuer),
+            "issuer_cn": _issuer_cn(cert.issuer),
+            "hostname": hostname,
+            "port": port,
+            "last_scan": last_scan,
+            "source": cert.san_dns_names,
+            "now": datetime.now(UTC),
+            **ctx,
+        },
+    )
+
+
 @app.post("/certificates/{cert_id}/delete")
 async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse:
     csrf_err = await _check_csrf(request)
@@ -913,7 +1117,12 @@ def alerts_view(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="alerts.html",
-        context={"alerts": rows, "version": __version__, "auth_user": auth_user},
+        context={
+            "alerts": rows,
+            "version": __version__,
+            "auth_user": auth_user,
+            "active_page": "alerts",
+        },
     )
 
 
@@ -925,7 +1134,12 @@ def scan_history_view(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(
         request=request,
         name="scan_history.html",
-        context={"history": rows, "version": __version__, "auth_user": auth_user},
+        context={
+            "history": rows,
+            "version": __version__,
+            "auth_user": auth_user,
+            "active_page": "scans",
+        },
     )
 
 

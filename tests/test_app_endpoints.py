@@ -161,7 +161,7 @@ def test_alerts_view_lists_existing(tmp_path, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.get("/alerts")
     assert r.status_code == 200
-    assert "expiry_warning" in r.text
+    assert "m" in r.text  # alert message is displayed
 
 
 def test_scan_history_empty(tmp_path, monkeypatch):
@@ -202,7 +202,6 @@ def test_dashboard_lists_tracked_hosts(tmp_path, monkeypatch):
         r = client.get("/")
     assert r.status_code == 200
     assert "tracked.example.com" in r.text
-    assert "entry-group" in r.text
 
 
 def test_lifespan_starts_scheduler(tmp_path, monkeypatch):

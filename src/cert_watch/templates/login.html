@@ -1,41 +1,84 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cert-watch — login</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <script>
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
 </head>
 <body>
-  <header>
-    <h1>cert-watch</h1>
-    <span class="version">v{{ version }}</span>
-  </header>
-  <main>
-    <section class="login-box">
-      <h2>Sign in</h2>
-
-      {% if error %}
-        <p class="error">Error: {{ error }}</p>
-      {% endif %}
-
-      {% if supports_form_login %}
-        <form method="post" action="/login">
-          <label>Username <input type="text" name="username" required autofocus></label>
-          <label>Password <input type="password" name="password" required></label>
-          <button type="submit">Sign in</button>
-        </form>
-      {% endif %}
-
-      {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
-        <div class="oauth-login">
-          <a href="/auth/login" class="oauth-btn">Sign in with {{ provider | title }}</a>
+  <div class="cw-app">
+    <div class="cw-page" style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+      <div class="cw-panel cw-form-panel">
+        <div style="text-align:center;margin-bottom:24px">
+          <div class="cw-mark" style="width:40px;height:40px;border-radius:10px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:#fff;background:linear-gradient(150deg, var(--accent), var(--accent-2));box-shadow:0 2px 8px var(--accent-soft)">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <h2 style="margin:0;font-size:18px;font-weight:600">Sign in to cert-watch</h2>
         </div>
-      {% endif %}
 
-      {% if not supports_form_login and provider not in ("oauth", "entra", "azure", "oidc") %}
-        <p class="empty">No authentication provider configured.</p>
-      {% endif %}
-    </section>
-  </main>
+        {% if error %}
+          <div style="padding:10px 14px;background:var(--crit-soft);border:1px solid color-mix(in srgb, var(--crit) 30%, transparent);border-radius:var(--radius);color:var(--crit);font-size:13px;margin-bottom:16px">
+            {{ error }}
+          </div>
+        {% endif %}
+
+        {% if supports_form_login %}
+          <form method="post" action="/login">
+            <div class="cw-field" style="margin-bottom:12px">
+              <label class="cw-label">Username</label>
+              <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
+            </div>
+            <div class="cw-field" style="margin-bottom:16px">
+              <label class="cw-label">Password</label>
+              <input class="cw-input" type="password" name="password" required placeholder="password">
+            </div>
+            <button type="submit" class="cw-btn primary" style="width:100%;justify-content:center">Sign in</button>
+          </form>
+        {% endif %}
+
+        {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
+          <div style="margin-top:20px;text-align:center">
+            <a href="/auth/login" class="cw-btn primary" style="width:100%;justify-content:center;text-decoration:none">
+              Sign in with {{ provider | title }}
+            </a>
+          </div>
+        {% endif %}
+
+        {% if not supports_form_login and provider not in ("oauth", "entra", "azure", "oidc") %}
+          <div style="text-align:center;padding:20px 0;color:var(--text-3);font-size:13px">
+            No authentication provider configured.
+          </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <script>
+    (function() {
+      var btn = document.getElementById('theme-toggle');
+      if (!btn) return;
+      function updateIcons() {
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var d = document.getElementById('theme-icon-dark');
+        var l = document.getElementById('theme-icon-light');
+        if (d) d.style.display = dark ? 'none' : 'block';
+        if (l) l.style.display = dark ? 'block' : 'none';
+      }
+      updateIcons();
+      btn.addEventListener('click', function() {
+        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        var next = dark ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem('cw-theme', next);
+        updateIcons();
+      });
+    })();
+  </script>
 </body>
 </html>

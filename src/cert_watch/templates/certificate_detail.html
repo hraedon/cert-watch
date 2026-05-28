@@ -1,0 +1,319 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — {{ subject_cn }}{% endblock %}
+
+{% macro svg_icon(name, size=16, sw=1.7) %}
+  {% if name == 'shield' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+  {% elif name == 'clock' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'alert' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+  {% elif name == 'check-circle' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'search' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 21l-4.3-4.3"/><path d="M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+  {% elif name == 'refresh' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+  {% elif name == 'server' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
+  {% elif name == 'file' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
+  {% elif name == 'globe' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
+  {% elif name == 'chevron-right' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+  {% elif name == 'download' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+  {% elif name == 'link' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
+  {% elif name == 'key' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2"/><path d="M15 7a4 4 0 11-6 6l-6 6v3h3l6-6a4 4 0 016-6l1-1-3-3z"/></svg>
+  {% elif name == 'trash' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+  {% elif name == 'check' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% block content %}
+<div style="padding:20px 26px">
+  {# ---- Breadcrumb ---- #}
+  <div class="cw-breadcrumb">
+    <a href="/" class="cw-link">Certificates</a>
+    {{ svg_icon('chevron-right', 13) }}
+    <span class="mono" style="color:var(--text-2)">{{ subject_cn }}</span>
+  </div>
+
+  {# ---- Header ---- #}
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px">
+    <div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <h1 class="mono" style="margin:0;font-size:22px;font-weight:600;letter-spacing:-.5px">{{ subject_cn }}</h1>
+        <span class="cw-pill {{ urgency }}">
+          <span class="dot"></span>
+          {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+        </span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:9px">
+        {% if cert.source == 'scanned' %}
+          <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
+        {% elif cert.source == 'uploaded' %}
+          <span class="cw-chip">{{ svg_icon('file', 12, 1.6) }}Uploaded</span>
+        {% else %}
+          <span class="cw-chip">{{ svg_icon('globe', 12, 1.6) }}Public CT</span>
+        {% endif %}
+        <span style="font-size:12.5px;color:var(--text-3)" class="mono">
+          {% if cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}{% elif cert.source == 'uploaded' %}uploaded file{% else %}discovered via Certificate Transparency{% endif %}
+        </span>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px">
+      {% if hostname %}
+        <form method="post" action="/hosts/{{ cert_id }}/scan" style="display:inline">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Scan now</button>
+        </form>
+      {% endif %}
+      <a href="/api/certificates/{{ cert_id }}" class="cw-btn">{{ svg_icon('download', 14) }}Download</a>
+      <form method="post" action="/certificates/{{ cert_id }}/delete" style="display:inline" class="confirm-form" data-confirm="Delete this certificate?">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cw-iconbtn" title="Delete">{{ svg_icon('trash', 15) }}</button>
+      </form>
+    </div>
+  </div>
+
+  {# ---- Two-column layout ---- #}
+  <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:18px;align-items:start">
+    {# ---- Left column ---- #}
+    <div>
+      {# Validity meter #}
+      <div class="cw-panel" style="padding:16px 18px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:12px">
+          <div>
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;margin-bottom:4px">TIME REMAINING</div>
+            <div style="display:flex;align-items:baseline;gap:8px">
+              <span style="font-size:30px;font-weight:600;letter-spacing:-1px;color:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
+                {% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}
+              </span>
+              {% if days_remaining >= 0 %}<span style="font-size:14px;color:var(--text-2)">days</span>{% endif %}
+            </div>
+          </div>
+          <span class="cw-pill {{ urgency }}">
+            <span class="dot"></span>
+            {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% else %}Healthy{% endif %}
+          </span>
+        </div>
+        {# Progress bar #}
+        {% set issued_days = cert.not_before | int if cert.not_before else 0 %}
+        {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
+        {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
+        {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
+        <div style="position:relative;height:8px;border-radius:5px;background:var(--inset);overflow:hidden">
+          <div style="position:absolute;inset:0;width:{{ pct }}%;background:linear-gradient(90deg, var(--ok), {% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %});border-radius:5px"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11.5px" class="mono">
+          <span style="color:var(--text-3)">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
+          <span style="color:var(--text-3)">{{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }} · expires</span>
+        </div>
+      </div>
+
+      {# SANs #}
+      <div class="cw-panel" style="padding:15px 18px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          {{ svg_icon('globe', 15) }}
+          <span style="font-size:13.5px;font-weight:600">Subject Alternative Names</span>
+          <span class="mono" style="font-size:11.5px;color:var(--text-3);background:var(--inset);border-radius:5px;padding:1px 6px">{{ cert.san_dns_names | length }}</span>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:7px">
+          {% for san in cert.san_dns_names %}
+            <span class="cw-chip san" style="font-size:12px;padding:4px 10px">
+              {{ svg_icon('globe', 11, 1.5) }}{{ san }}
+            </span>
+          {% endfor %}
+          {% if not cert.san_dns_names %}
+            <span class="cw-sub">no SAN entries</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Certificate details #}
+      <div class="cw-panel" style="padding:16px 18px">
+        <div style="font-size:13.5px;font-weight:600;margin-bottom:15px">Certificate details</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 22px">
+          <div style="grid-column:span 2">
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SUBJECT</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5;word-break:break-word">{{ cert.subject }}</div>
+          </div>
+          <div style="grid-column:span 2">
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">ISSUER</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5;word-break:break-word">{{ cert.issuer }}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">KEY</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ key_type }}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SIGNATURE</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ sig_alg }}</div>
+          </div>
+          <div style="grid-column:span 2">
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SERIAL NUMBER</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ serial }}</div>
+          </div>
+          <div style="grid-column:span 2">
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SHA-256 FINGERPRINT</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ fingerprint }}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">ISSUED</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}</div>
+          </div>
+          <div>
+            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">LAST SCANNED</div>
+            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ last_scan[:10] if last_scan else '—' }}</div>
+          </div>
+        </div>
+      </div>
+
+      {# Notes #}
+      <div class="cw-panel" style="padding:15px 18px;margin-top:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+          {{ svg_icon('file', 15) }}
+          <span style="font-size:13.5px;font-weight:600">Notes &amp; procedures</span>
+          <div class="cw-spacer"></div>
+          <form method="post" action="/certificates/{{ cert_id }}/notes" style="display:inline">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <textarea name="notes" style="display:none" id="notes-hidden">{{ cert.notes }}</textarea>
+          </form>
+          <button class="cw-btn ghost sm" type="button" onclick="toggleNotes()">
+            {{ svg_icon('key', 13) }}<span id="notes-btn-label">Edit</span>
+          </button>
+        </div>
+        <div id="notes-view" onclick="toggleNotes()" class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
+        <div id="notes-edit" style="display:none">
+          <textarea id="notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ cert.notes }}</textarea>
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="cw-btn sm" type="button" onclick="toggleNotes()">Cancel</button>
+            <button class="cw-btn primary sm" type="button" onclick="saveNotes()">Save</button>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;margin-top:9px;font-size:11px;color:var(--text-3)">
+          {{ svg_icon('clock', 11, 1.6) }}
+          <span>Markdown supported · saved to this certificate</span>
+        </div>
+      </div>
+    </div>
+
+    {# ---- Right column — chain ---- #}
+    <div class="cw-panel" style="padding:16px 18px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        {{ svg_icon('link', 15) }}
+        <span style="font-size:13.5px;font-weight:600">Certificate chain</span>
+      </div>
+
+      {# Leaf node #}
+      <div class="cw-chain-node" style="margin-bottom:14px">
+        <div class="cw-chain-dot" style="border-color:var(--accent)"></div>
+        {% if chain %}<div class="cw-chain-line"></div>{% endif %}
+        <div class="cw-panel" style="padding:11px 13px;background:var(--panel-2)">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span class="cw-host" style="font-size:13px">{{ subject_cn }}</span>
+            <span style="font-size:10.5px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap">Leaf · end-entity</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px">
+            <span class="cw-chip">{{ svg_icon('key', 11, 1.6) }}{{ key_type }}</span>
+            <span class="mono" style="color:var(--text-3)">exp {{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }}</span>
+            <div class="cw-spacer"></div>
+            <span style="display:inline-flex;align-items:center;gap:5px;color:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
+              <span style="width:6px;height:6px;border-radius:3px;background:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}"></span>
+              <span style="font-size:11.5px;font-weight:500">{% if days_remaining < 0 %}expired{% else %}{{ days_remaining }}d{% endif %}</span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {# Chain intermediates/roots #}
+      {% for c in chain %}
+        {% set c_days = c.days_remaining %}
+        {% set c_urg = c_days | urgency %}
+        <div class="cw-chain-node" style="margin-bottom:{% if loop.last %}14px{% else %}14px{% endif %}">
+          <div class="cw-chain-dot" style="border-color:var(--text-2)"></div>
+          {% if not loop.last %}<div class="cw-chain-line"></div>{% endif %}
+          <div class="cw-panel" style="padding:11px 13px;background:var(--panel-2)">
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+              <span class="cw-host" style="font-size:13px">{{ c.subject_cn }}</span>
+              <span style="font-size:10.5px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap">Intermediate CA</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px">
+              <span class="cw-chip">{{ svg_icon('key', 11, 1.6) }}RSA 2048</span>
+              <span class="mono" style="color:var(--text-3)">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
+              <div class="cw-spacer"></div>
+              <span style="display:inline-flex;align-items:center;gap:5px;color:{% if c_urg == 'expired' %}var(--expired){% elif c_urg == 'critical' %}var(--crit){% elif c_urg == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
+                <span style="width:6px;height:6px;border-radius:3px;background:{% if c_urg == 'expired' %}var(--expired){% elif c_urg == 'critical' %}var(--crit){% elif c_urg == 'warning' %}var(--warn){% else %}var(--ok){% endif %}"></span>
+                <span style="font-size:11.5px;font-weight:500">{% if c_days < 0 %}expired{% else %}{{ c_days }}d{% endif %}</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+
+      {# Chain status banner #}
+      {% if chain_status == 'public' or chain_status == 'private' %}
+        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--ok-soft);color:var(--ok)">
+          {{ svg_icon('check-circle', 14) }}
+          <span style="font-size:12px;font-weight:500">Chain verified to trusted root</span>
+        </div>
+      {% elif chain_status == 'incomplete' %}
+        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--warn-soft);color:var(--warn)">
+          {{ svg_icon('alert', 14) }}
+          <span style="font-size:12px;font-weight:500">Server did not send intermediate(s) — chain rebuilt from known CAs</span>
+        </div>
+      {% elif chain_status == 'self-signed' %}
+        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--accent-soft);color:var(--accent)">
+          {{ svg_icon('key', 14) }}
+          <span style="font-size:12px;font-weight:500">Self-signed certificate</span>
+        </div>
+      {% elif chain_status == 'invalid' %}
+        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--crit-soft);color:var(--crit)">
+          {{ svg_icon('alert', 14) }}
+          <span style="font-size:12px;font-weight:500">Chain validation failed</span>
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function toggleNotes() {
+  var view = document.getElementById('notes-view');
+  var edit = document.getElementById('notes-edit');
+  var label = document.getElementById('notes-btn-label');
+  if (edit.style.display === 'none') {
+    view.style.display = 'none';
+    edit.style.display = 'block';
+    label.textContent = 'Cancel';
+    document.getElementById('notes-textarea').focus();
+  } else {
+    view.style.display = 'block';
+    edit.style.display = 'none';
+    label.textContent = 'Edit';
+  }
+}
+function saveNotes() {
+  var notes = document.getElementById('notes-textarea').value;
+  document.getElementById('notes-hidden').value = notes;
+  document.querySelector('#notes-hidden').closest('form').submit();
+}
+document.addEventListener('submit', function(e) {
+  var form = e.target;
+  if (form.classList.contains('confirm-form')) {
+    var msg = form.getAttribute('data-confirm') || 'Are you sure?';
+    if (!confirm(msg)) {
+      e.preventDefault();
+    }
+  }
+});
+</script>
+{% endblock %}

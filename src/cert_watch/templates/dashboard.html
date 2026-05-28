@@ -1,345 +1,398 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <title>cert-watch</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <header>
-    <h1>cert-watch</h1>
-    <span class="version">v{{ version }}</span>
-    <nav class="topnav">
-      <a href="/">Dashboard</a>
-      <a href="/alerts">Alerts</a>
-      <a href="/scan-history">Scan history</a>
-      <button class="theme-toggle" id="theme-toggle" title="Toggle dark mode">&#x263D;</button>
-    </nav>
-    {% if auth_user %}
-      <div class="user-info">
-        <span>{{ auth_user }}</span>
-        <a href="/auth/logout">Logout</a>
-      </div>
+{% extends "base.html" %}
+{% block title %}cert-watch — dashboard{% endblock %}
+
+{% macro svg_icon(name, size=16, sw=1.7) %}
+  {% if name == 'shield' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+  {% elif name == 'clock' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'alert' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+  {% elif name == 'check-circle' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+  {% elif name == 'search' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 21l-4.3-4.3"/><path d="M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
+  {% elif name == 'plus' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+  {% elif name == 'upload' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+  {% elif name == 'refresh' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+  {% elif name == 'server' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
+  {% elif name == 'file' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
+  {% elif name == 'globe' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
+  {% elif name == 'chevron-right' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
+  {% elif name == 'download' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+  {% elif name == 'filter' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/></svg>
+  {% elif name == 'link' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
+  {% elif name == 'trash' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
+  {% elif name == 'x' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+  {% endif %}
+{% endmacro %}
+
+{% macro stat_card(tone, icon, label, value, sub) %}
+  <div class="cw-stat">
+    {% if tone == 'default' %}
+      <div class="cw-stat-rail" style="background:var(--accent)"></div>
+    {% elif tone == 'attention' %}
+      <div class="cw-stat-rail" style="background:var(--crit)"></div>
+    {% elif tone == 'warning' %}
+      <div class="cw-stat-rail" style="background:var(--warn)"></div>
+    {% elif tone == 'ok' %}
+      <div class="cw-stat-rail" style="background:var(--ok)"></div>
     {% endif %}
-  </header>
-  <main>
-    {% if error %}
-      <p class="error">Error: {{ error }}</p>
-    {% endif %}
-    {% if warning %}
-      <p class="warning">Warning: {{ warning }}</p>
-    {% endif %}
+    <div class="cw-stat-top" style="{% if tone == 'default' %}color:var(--accent){% elif tone == 'attention' %}color:var(--crit){% elif tone == 'warning' %}color:var(--warn){% elif tone == 'ok' %}color:var(--ok){% endif %}">
+      {{ svg_icon(icon, 15, 1.8) }}
+      <span class="cw-stat-label" style="color:var(--text-2)">{{ label }}</span>
+    </div>
+    <div class="cw-stat-val" style="{% if tone == 'default' %}color:var(--text){% else %}{% if tone == 'attention' %}color:var(--crit){% elif tone == 'warning' %}color:var(--warn){% elif tone == 'ok' %}color:var(--ok){% endif %}{% endif %}">{{ value }}</div>
+    {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
+  </div>
+{% endmacro %}
 
-    <section class="forms">
-      <form class="add-host" method="post" action="/hosts">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <h2>Add host to scan</h2>
-        <label>Hostname <input type="text" name="hostname" required placeholder="example.com"></label>
-        <label>Port <input type="number" name="port" value="443" min="1" max="65535"></label>
-        <label>Alert threshold (days) <input type="number" name="threshold_days" placeholder="default: 14/7/3/1" min="1"></label>
-        <label class="checkbox-label"><input type="checkbox" name="common_ports" value="true"> Scan common TLS ports</label>
-        <button type="submit">Add &amp; scan</button>
-      </form>
+{% macro sort_link(column, label) %}
+  {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
+  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" style="color:inherit;text-decoration:none">{{ label }}</a>
+  {% if sort_by == column %}<span style="margin-left:4px;opacity:.7">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
+{% endmacro %}
 
-      <form class="upload" method="post" action="/upload" enctype="multipart/form-data">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <h2>Upload certificate</h2>
-        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c"></label>
-        <label>Password (PKCS#12 only) <input type="password" name="password" placeholder="optional"></label>
-        <button type="submit">Upload</button>
-      </form>
+{% block content %}
+{# ---- Compute stats ---- #}
+{% set ns = namespace(expired=0, critical=0, warning=0, healthy=0, total=0) %}
+{% for e in entries %}
+  {% set u = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+  {% set ns.total = ns.total + 1 %}
+  {% if u == 'expired' %}{% set ns.expired = ns.expired + 1 %}
+  {% elif u == 'critical' %}{% set ns.critical = ns.critical + 1 %}
+  {% elif u == 'warning' %}{% set ns.warning = ns.warning + 1 %}
+  {% elif u == 'healthy' %}{% set ns.healthy = ns.healthy + 1 %}
+  {% endif %}
+{% endfor %}
 
-      <form class="upload" method="post" action="/trust-anchors" enctype="multipart/form-data">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <h2>Upload trust anchor</h2>
-        <label>File <input type="file" name="file" required accept=".pem,.crt,.cer,.der"></label>
-        <button type="submit">Upload</button>
-      </form>
+<div style="padding:22px 26px">
+  {# ---- Page header ---- #}
+  <div class="cw-page-head">
+    <div>
+      <h1>Certificates</h1>
+      <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
+    </div>
+    <div style="display:flex;gap:8px">
+      <a href="/api/export/certificates.csv" class="cw-btn">{{ svg_icon('download', 14) }}Export CSV</a>
+      <a href="/api/export/certificates.json" class="cw-btn">{{ svg_icon('download', 14) }}Export JSON</a>
+    </div>
+  </div>
 
-      <form class="import-hosts" method="post" action="/hosts/import" enctype="multipart/form-data">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <h2>Bulk import hosts</h2>
-        <label>CSV file <input type="file" name="file" required accept=".csv"></label>
-        <small>CSV must have a <code>hostname</code> column; optional <code>port</code> (default 443) and <code>threshold_days</code>.</small>
-        <button type="submit">Import</button>
-      </form>
-    </section>
+  {# ---- Stat cards ---- #}
+  <div class="cw-stats" style="margin-bottom:18px">
+    {{ stat_card('default', 'shield', 'Tracked certificates', total_entries, '') }}
+    {{ stat_card('attention', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
+    {{ stat_card('warning', 'clock', 'Expiring ≤ 14 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
+    {{ stat_card('ok', 'check-circle', 'Healthy', ns.healthy, 'no action needed') }}
+  </div>
 
-    {% if trust_anchors %}
-    <section class="hosts">
-      <h2>Trust anchors</h2>
-      <table class="hosts-table">
-        <thead>
-          <tr><th>Subject</th><th>Added</th><th>Actions</th></tr>
-        </thead>
-        <tbody>
-          {% for a in trust_anchors %}
-            <tr>
-              <td>{{ a.subject }}</td>
-              <td>{{ a.created_at.strftime("%Y-%m-%d") }}</td>
-              <td class="actions">
-                <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this trust anchor?">
-                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                  <button type="submit" class="danger">Delete</button>
-                </form>
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </section>
-    {% endif %}
+  {# ---- Toolbar ---- #}
+  <form class="cw-toolbar" method="get" action="/" style="margin-bottom:14px">
+    <div class="cw-search">
+      {{ svg_icon('search', 15) }}
+      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…">
+    </div>
+    <div class="cw-seg">
+      <button type="submit" name="urgency" value="" class="{% if not filter_urgency %}on{% endif %}">All<span class="cnt">{{ total_entries }}</span></button>
+      <button type="submit" name="urgency" value="expired" class="{% if filter_urgency == 'expired' %}on{% endif %}">Expired<span class="cnt">{{ ns.expired }}</span></button>
+      <button type="submit" name="urgency" value="critical" class="{% if filter_urgency == 'critical' %}on{% endif %}">Critical<span class="cnt">{{ ns.critical }}</span></button>
+      <button type="submit" name="urgency" value="warning" class="{% if filter_urgency == 'warning' %}on{% endif %}">Warning<span class="cnt">{{ ns.warning }}</span></button>
+      <button type="submit" name="urgency" value="healthy" class="{% if filter_urgency == 'healthy' %}on{% endif %}">Healthy<span class="cnt">{{ ns.healthy }}</span></button>
+    </div>
+    <div class="cw-spacer"></div>
+    <button type="submit" name="source" value="" class="cw-btn">{{ svg_icon('filter', 14) }}Source: {{ filter_source if filter_source else 'All' }}</button>
+  </form>
 
-    {% if entries or filter_q or filter_urgency or filter_source %}
-      <form class="filter-bar" method="get" action="/">
-        <label>Search <input type="text" name="q" value="{{ filter_q }}" placeholder="subject, issuer, hostname"></label>
-        <label>Urgency
-          <select name="urgency">
-            <option value="">All</option>
-            <option value="red" {% if filter_urgency == 'red' %}selected{% endif %}>Red</option>
-            <option value="yellow" {% if filter_urgency == 'yellow' %}selected{% endif %}>Yellow</option>
-            <option value="green" {% if filter_urgency == 'green' %}selected{% endif %}>Green</option>
-          </select>
-        </label>
-        <label>Source
-          <select name="source">
-            <option value="">All</option>
-            <option value="scanned" {% if filter_source == 'scanned' %}selected{% endif %}>Scanned</option>
-            <option value="uploaded" {% if filter_source == 'uploaded' %}selected{% endif %}>Uploaded</option>
-          </select>
-        </label>
-        <button type="submit">Filter</button>
-        {% if filter_q or filter_urgency or filter_source %}
-          <a href="/" class="filter-clear">Clear</a>
-        {% endif %}
-      </form>
-    {% endif %}
-
-    {% if entries %}
-      <div class="export-bar">
-        <span>Export:</span>
-        <a href="/api/export/certificates.csv" class="export-btn">CSV</a>
-        <a href="/api/export/certificates.json" class="export-btn">JSON</a>
-      </div>
-
-      {% macro sort_link(column, label) %}
-        {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
-        <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}">{{ label }}</a>
-        {% if sort_by == column %}<span class="sort-arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
-      {% endmacro %}
-
-      <table class="unified-table">
-        <thead>
-          <tr>
-            <th class="sortable">{{ sort_link('name', 'Name') }}</th>
-            <th>Subject</th>
-            <th>Issuer</th>
-            <th class="sortable">{{ sort_link('issue_date', 'Issue Date') }}</th>
-            <th class="sortable">{{ sort_link('last_scan', 'Last Scan') }}</th>
-            <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
-            <th class="sortable">{{ sort_link('days', 'Days') }}</th>
-            <th>Status</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
+  {# ---- Table ---- #}
+  <div class="cw-panel cw-table-wrap">
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th class="sortable" style="padding-top:14px">{{ sort_link('name', 'Certificate') }}</th>
+          <th class="sortable">{{ sort_link('issuer', 'Issuer') }}</th>
+          <th>Source</th>
+          <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
+          <th style="width:120px">Status</th>
+          <th style="width:96px"></th>
+        </tr>
+      </thead>
+      <tbody>
         {% for e in entries %}
-          <tbody class="entry-group" data-testid="entry-group">
-            <tr class="entry-summary {{ e.urgency }}" data-testid="entry-summary" onclick="toggleDetail(this)">
-              <td>
-                {{ e.name }}
-                {% if e.kind == 'pending' %}
-                  <span class="badge pending" title="This host has not been successfully scanned yet">not yet scanned</span>
-                  {% if e.scan_status == 'failure' %}
-                    <span class="badge invalid" title="Last scan failed">scan failed</span>
-                  {% endif %}
-                {% elif e.kind == 'uploaded' %}
-                  <span class="badge uploaded" title="Uploaded certificate">uploaded</span>
-                {% endif %}
+          {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+          <tr class="cw-row-link" onclick="window.location='/certificates/{{ e.id }}'" style="cursor:pointer">
+            <td style="max-width:360px">
+              <div style="display:flex;align-items:center;gap:8px">
+                <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
                 {% if e.chain_status == 'public' %}
-                  <span class="badge public" title="Chain valid, anchored by public CA">public</span>
-                {% elif e.chain_status == 'private' %}
-                  <span class="badge private" title="Chain valid, anchored by uploaded trust anchor">private</span>
-                {% elif e.chain_status == 'self-signed' %}
-                  <span class="badge self-signed" title="Self-signed certificate">self-signed</span>
+                  <span class="cw-chip" style="color:var(--ok);border-color:color-mix(in srgb, var(--ok) 30%, transparent)">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="badge incomplete" title="Chain order valid but missing trusted root">incomplete</span>
-                {% elif e.chain_status == 'invalid' %}
-                  <span class="badge invalid" title="Chain order is structurally broken">invalid</span>
-                {% elif e.chain_status == 'unknown' %}
-                  <span class="badge unknown" title="No chain certificates available">unknown</span>
+                  <span class="cw-chip" style="color:var(--warn);border-color:color-mix(in srgb, var(--warn) 30%, transparent);background:var(--warn-soft)">incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
-                  <span class="badge renewed" title="Renewed — replaces a previous certificate">renewed</span>
+                  <span class="cw-chip" style="color:var(--ok);border-color:color-mix(in srgb, var(--ok) 30%, transparent)">renewed</span>
                 {% endif %}
-              </td>
-              <td>{{ e.subject or '—' }}</td>
-              <td>{{ e.issuer or '—' }}</td>
-              <td>{{ e.not_before[:10] if e.not_before else '—' }}</td>
-              <td>
-                {% if e.last_scanned_at %}
-                  {{ e.last_scanned_at[:10] }}
-                  {% if e.scan_status == 'failure' %}
-                    <span class="badge invalid">failed</span>
+              </div>
+              {% if e.san_dns_names %}
+                <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px">
+                  {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
+                  {% for san in (san_list[:2] if san_list else []) %}
+                    <span class="cw-chip san">{{ san }}</span>
+                  {% endfor %}
+                  {% if san_list and san_list | length > 2 %}
+                    <span class="cw-chip more">+{{ san_list | length - 2 }} more</span>
                   {% endif %}
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <div style="font-size:13px;color:var(--text);font-weight:500">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
+              <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
+            </td>
+            <td>
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+                {% if e.source == 'scanned' %}
+                  <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
+                {% elif e.source == 'uploaded' %}
+                  <span class="cw-chip">{{ svg_icon('file', 12, 1.6) }}Uploaded</span>
                 {% else %}
-                  —
+                  <span class="cw-chip">{{ svg_icon('globe', 12, 1.6) }}Public CT</span>
                 {% endif %}
-              </td>
-              <td>{{ (e.not_after | humanize_expiry) if e.not_after else '—' }}</td>
-              <td>{{ e.days_remaining if e.days_remaining is not none else '—' }}</td>
-              <td>
-                {% if e.urgency == 'red' %}
-                  <span class="status-dot red" title="Expiring within 7 days"></span>
-                {% elif e.urgency == 'yellow' %}
-                  <span class="status-dot yellow" title="Expiring within 30 days"></span>
-                {% elif e.urgency == 'green' %}
-                  <span class="status-dot green" title="Healthy"></span>
-                {% else %}
-                  <span class="status-dot gray" title="Not scanned"></span>
+                {% if e.source == 'scanned' %}
+                  {% if e.chain_valid == true %}
+                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ svg_icon('link', 11, 1.6) }}full chain</span>
+                  {% elif e.chain_valid == false %}
+                    <span class="cw-chip" style="color:var(--warn);border-color:color-mix(in srgb, var(--warn) 30%, transparent);background:var(--warn-soft)">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                  {% endif %}
                 {% endif %}
-              </td>
-              <td class="actions">
-                {% if e.kind in ('scanned', 'uploaded') %}
-                  <form method="post" action="/certificates/{{ e.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Clear scan results for this certificate?">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger" data-testid="delete-cert-btn">Clear results</button>
-                  </form>
-                {% endif %}
+              </div>
+            </td>
+            <td style="min-width:150px">
+              <div class="mono" style="font-size:12.5px;color:var(--text);font-weight:500">{{ e.not_after[:10] if e.not_after else '—' }}</div>
+              {% if e.days_remaining is not none %}
+                <div class="cw-sub" style="{% if e.days_remaining < 0 %}color:var(--expired){% elif e.days_remaining <= 7 %}color:var(--crit){% elif e.days_remaining <= 14 %}color:var(--warn){% endif %}margin-bottom:6px">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+              {% endif %}
+              {% if e.days_remaining is not none %}
+                {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
+                <div style="width:130px">
+                  <div class="cw-bar" title="{{ e.days_remaining }} days">
+                    <i style="width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %};background:{% if e.days_remaining < 0 %}var(--expired);opacity:.5{% elif e.days_remaining <= 7 %}var(--crit){% elif e.days_remaining <= 14 %}var(--warn){% else %}var(--ok){% endif %};border-radius:3px;display:block;height:100%"></i>
+                  </div>
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <span class="cw-pill {{ urg }}">
+                <span class="dot"></span>
+                {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+              </span>
+            </td>
+            <td onclick="event.stopPropagation()">
+              <div class="cw-rowact">
                 {% if e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" style="display:inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" data-testid="scan-now-btn">Scan now</button>
-                  </form>
-                  <form method="post" action="/hosts/{{ e.host_id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this host and all its scan data?">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="danger" data-testid="delete-host-btn">Delete host</button>
+                    <button type="submit" class="cw-iconbtn" title="Scan now" style="width:30px;height:30px" data-testid="scan-now-btn">
+                      {{ svg_icon('refresh', 14) }}
+                    </button>
                   </form>
                 {% endif %}
-              </td>
-            </tr>
-            <tr class="entry-detail hidden" data-testid="entry-detail">
-              <td colspan="9">
-                <div class="detail-panel">
-                  <div class="detail-grid">
-                    <div class="detail-section">
-                      <h4>Details</h4>
-                      {% if e.kind == 'pending' %}
-                        <dl>
-                          <dt>Hostname</dt><dd>{{ e.host.split(':')[0] }}</dd>
-                          <dt>Port</dt><dd>{{ e.host.split(':')[1] }}</dd>
-                          <dt>Added</dt><dd>{{ e.added_at[:10] if e.added_at else '—' }}</dd>
-                          {% if e.last_scanned_at %}
-                            <dt>Last scan</dt><dd>{{ e.last_scanned_at[:10] }} ({{ e.scan_status }})</dd>
-                            {% if e.scan_error %}
-                              <dt>Error</dt><dd class="detail-error">{{ e.scan_error }}</dd>
-                            {% endif %}
-                          {% endif %}
-                        </dl>
-                      {% else %}
-                        <dl>
-                          <dt>Subject</dt><dd>{{ e.subject }}</dd>
-                          <dt>Issuer</dt><dd>{{ e.issuer }}</dd>
-                          <dt>Not before</dt><dd>{{ e.not_before[:10] if e.not_before else '—' }}</dd>
-                          <dt>Not after</dt><dd>{{ e.not_after[:10] if e.not_after else '—' }} ({{ e.days_remaining }} days)</dd>
-                          <dt>Chain status</dt><dd>{{ e.chain_status or '—' }}</dd>
-                          <dt>Chain valid</dt><dd>{{ 'Yes' if e.chain_valid else ('No' if e.chain_valid is sameas false else '—') }}</dd>
-                        </dl>
-                      {% endif %}
-                    </div>
-                    {% if e.chain %}
-                      <div class="detail-section">
-                        <h4>Certificate chain</h4>
-                        <table class="chain-table">
-                          <thead>
-                            <tr><th>Role</th><th>Subject</th><th>Issuer</th><th>Expires</th><th>Days</th></tr>
-                          </thead>
-                          <tbody>
-                            <tr class="{{ e.leaf_urgency }}">
-                              <td>leaf</td>
-                              <td>{{ e.subject }}</td>
-                              <td>{{ e.issuer }}</td>
-                              <td>{{ e.not_after | humanize_expiry }}</td>
-                              <td>{{ e.days_remaining }}</td>
-                            </tr>
-                            {% for chain in e.chain %}
-                              <tr class="{{ chain.urgency }}">
-                                <td><span class="tree-indent">&#x2514;&#x2500; chain</span></td>
-                                <td>{{ chain.subject }}</td>
-                                <td>{{ chain.issuer }}</td>
-                                <td>{{ chain.not_after | humanize_expiry }}</td>
-                                <td>{{ chain.days_remaining }}</td>
-                              </tr>
-                            {% endfor %}
-                          </tbody>
-                        </table>
-                      </div>
-                    {% endif %}
-                    {% if e.kind in ('scanned', 'uploaded') %}
-                      <div class="detail-section detail-wide">
-                        <h4>Notes</h4>
-                        <form method="post" action="/certificates/{{ e.id }}/notes" class="notes-form">
-                          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                          <textarea name="notes" rows="3" placeholder="Add notes..." class="notes-textarea">{{ e.notes }}</textarea>
-                          <button type="submit" class="notes-save">Save</button>
-                        </form>
-                      </div>
-                    {% endif %}
-                  </div>
-                </div>
-              </td>
-            </tr>
-          </tbody>
+                <a href="/certificates/{{ e.id }}" class="cw-iconbtn" title="Details" style="width:30px;height:30px;text-decoration:none">
+                  {{ svg_icon('chevron-right', 14) }}
+                </a>
+              </div>
+            </td>
+          </tr>
         {% endfor %}
-      </table>
+      </tbody>
+    </table>
 
-      {% if total_pages > 1 %}
-        <nav class="pagination">
-          {% if has_prev %}
-            <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}">&laquo; Prev</a>
-          {% endif %}
-          <span class="page-info">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entries)</span>
-          {% if has_next %}
-            <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}">Next &raquo;</a>
-          {% endif %}
-        </nav>
-      {% endif %}
-    {% else %}
-      <p class="empty">No certificates tracked yet. Add a host to scan or upload a certificate file.</p>
+    {% if not entries %}
+      <div class="cw-empty">
+        <div class="cw-empty-icon">{{ svg_icon('search', 20) }}</div>
+        <div class="cw-empty-title">No matching certificates</div>
+        <div class="cw-empty-sub">Try a different search or filter.</div>
+      </div>
     {% endif %}
-  </main>
-  <script>
-    (function() {
-      var t = localStorage.getItem('cw-theme');
-      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
-      var btn = document.getElementById('theme-toggle');
-      if (btn) btn.addEventListener('click', function() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        if (dark) {
-          document.documentElement.removeAttribute('data-theme');
-          localStorage.removeItem('cw-theme');
-        } else {
-          document.documentElement.setAttribute('data-theme', 'dark');
-          localStorage.setItem('cw-theme', 'dark');
-        }
-      });
-    })();
-    function toggleDetail(row) {
-      var tbody = row.parentNode;
-      var detail = tbody.querySelector('.entry-detail');
-      if (detail) {
-        detail.classList.toggle('hidden');
-        row.classList.toggle('expanded');
-      }
+  </div>
+
+  {# ---- Pagination ---- #}
+  {% if total_pages > 1 %}
+    <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;font-size:13px">
+      {% if has_prev %}
+        <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">&laquo; Prev</a>
+      {% endif %}
+      <span class="cw-muted">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entries)</span>
+      {% if has_next %}
+        <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">Next &raquo;</a>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {# ---- Trust anchors ---- #}
+  {% if trust_anchors %}
+    <div style="margin-top:24px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+        {{ svg_icon('link', 16) }}
+        <span style="font-size:14px;font-weight:600">Trust anchors</span>
+      </div>
+      <div class="cw-panel cw-table-wrap">
+        <table class="cw-table">
+          <thead>
+            <tr><th>Subject</th><th>Added</th><th style="width:100px"></th></tr>
+          </thead>
+          <tbody>
+            {% for a in trust_anchors %}
+              <tr>
+                <td class="mono" style="font-size:12.5px">{{ a.subject }}</td>
+                <td style="font-size:12.5px;color:var(--text-2)">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
+                <td>
+                  <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this trust anchor?">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ svg_icon('trash', 13) }}Delete</button>
+                  </form>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  {% endif %}
+</div>
+
+{# ---- Add-host slide-over ---- #}
+<div class="cw-slide-bg" id="slide-bg" onclick="closeSlide()"></div>
+<div class="cw-slide" id="slide-panel">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--border)">
+    <div>
+      <div style="font-size:15px;font-weight:600">Add certificates</div>
+      <div style="font-size:12px;color:var(--text-3);margin-top:2px">Scan a host, upload a file, or import in bulk.</div>
+    </div>
+    <button class="cw-iconbtn" onclick="closeSlide()">{{ svg_icon('x', 16) }}</button>
+  </div>
+  <div style="padding:16px 20px 0">
+    <div class="cw-seg" id="add-tabs" style="width:100%;display:grid;grid-template-columns:1fr 1fr 1fr">
+      <button type="button" class="on" data-tab="scan" onclick="switchTab('scan')">{{ svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab="upload" onclick="switchTab('upload')">{{ svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab="bulk" onclick="switchTab('bulk')">{{ svg_icon('upload', 13) }}Bulk import</button>
+    </div>
+  </div>
+  <div style="flex:1;overflow:auto;padding:20px">
+    {# Scan host tab #}
+    <div id="tab-scan" class="tab-body">
+      <form method="post" action="/hosts" style="display:flex;flex-direction:column;gap:16px">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label">Hostname</label>
+          <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div class="cw-field">
+            <label class="cw-label">Port</label>
+            <input class="cw-input mono" type="number" name="port" value="443" min="1" max="65535">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label">Alert threshold (days)</label>
+            <input class="cw-input mono" type="number" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
+          </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text-2);cursor:pointer">
+          <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
+        </label>
+        <div style="flex:1"></div>
+        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
+          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('refresh', 14) }}Add &amp; scan</button>
+        </div>
+      </form>
+    </div>
+    {# Upload file tab #}
+    <div id="tab-upload" class="tab-body" style="display:none">
+      <form method="post" action="/upload" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:16px">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-drop" onclick="document.getElementById('file-input').click()">
+          <div style="width:38px;height:38px;border-radius:10px;background:var(--panel-2);display:inline-flex;align-items:center;justify-content:center;color:var(--accent);margin-bottom:10px">{{ svg_icon('upload', 18) }}</div>
+          <div style="font-size:13.5px;font-weight:600">Drop a certificate, or <span class="cw-link">browse</span></div>
+          <div style="font-size:11.5px;color:var(--text-3);margin-top:6px">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
+          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" style="display:none">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label">Password <span style="color:var(--text-3)">(PKCS#12 only, optional)</span></label>
+          <input class="cw-input" type="password" name="password" placeholder="optional">
+        </div>
+        <div style="flex:1"></div>
+        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
+          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('upload', 14) }}Upload</button>
+        </div>
+      </form>
+    </div>
+    {# Bulk import tab #}
+    <div id="tab-bulk" class="tab-body" style="display:none">
+      <form method="post" action="/hosts/import" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:16px">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-drop" onclick="document.getElementById('csv-input').click()">
+          <div style="width:38px;height:38px;border-radius:10px;background:var(--panel-2);display:inline-flex;align-items:center;justify-content:center;color:var(--accent);margin-bottom:10px">{{ svg_icon('file', 18) }}</div>
+          <div style="font-size:13.5px;font-weight:600">Drop a CSV, or <span class="cw-link">browse</span></div>
+          <div style="font-size:11.5px;color:var(--text-3);margin-top:6px">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
+          <input type="file" id="csv-input" name="file" required accept=".csv" style="display:none">
+        </div>
+        <div style="font-size:12.5px;color:var(--text-2);background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:11px 13px;line-height:1.5">
+          <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;color:var(--text)">{{ svg_icon('file', 13) }}<b style="font-weight:600">Example</b></div>
+          <code class="mono" style="font-size:11.5px;color:var(--text-3)">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
+        </div>
+        <div style="flex:1"></div>
+        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
+          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('plus', 14) }}Import</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block topbar_actions %}
+  <button class="cw-btn primary" onclick="openSlide()">{{ svg_icon('plus', 15, 2) }}Add host</button>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function openSlide() {
+  document.getElementById('slide-bg').classList.add('on');
+  document.getElementById('slide-panel').classList.add('on');
+}
+function closeSlide() {
+  document.getElementById('slide-bg').classList.remove('on');
+  document.getElementById('slide-panel').classList.remove('on');
+}
+function switchTab(tab) {
+  document.querySelectorAll('.tab-body').forEach(function(b) { b.style.display = 'none'; });
+  document.getElementById('tab-' + tab).style.display = 'flex';
+  document.querySelectorAll('#add-tabs button').forEach(function(b) { b.classList.remove('on'); });
+  document.querySelector('#add-tabs button[data-tab="' + tab + '"]').classList.add('on');
+}
+document.addEventListener('submit', function(e) {
+  var form = e.target;
+  if (form.classList.contains('confirm-form')) {
+    var msg = form.getAttribute('data-confirm') || 'Are you sure?';
+    if (!confirm(msg)) {
+      e.preventDefault();
     }
-    document.addEventListener('submit', function(e) {
-      var form = e.target;
-      if (form.classList.contains('confirm-form')) {
-        var msg = form.getAttribute('data-confirm') || 'Are you sure?';
-        if (!confirm(msg)) {
-          e.preventDefault();
-        }
-      }
-    });
-  </script>
-</body>
-</html>
+  }
+});
+</script>
+{% endblock %}

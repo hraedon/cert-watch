@@ -849,11 +849,13 @@ def _build_dashboard_rows(
         return (_parse_iso(iso_str) - datetime.now(UTC)).days
 
     def _urgency(days: int) -> str:
-        if days < 7:
-            return "red"
-        if days < 30:
-            return "yellow"
-        return "green"
+        if days < 0:
+            return "expired"
+        if days <= 7:
+            return "critical"
+        if days <= 14:
+            return "warning"
+        return "healthy"
 
     dash: list[dict] = []
     for leaf in leaf_rows:
