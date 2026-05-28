@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
 
 from cert_watch.certificate_model import Certificate, parse_certificate
+
+logger = logging.getLogger("cert_watch.cert_chain")
 
 
 def extract_chain(der_bytes: bytes) -> list[Certificate]:
@@ -70,6 +75,67 @@ def _issuer_bytes(cert: Certificate) -> bytes:
     UTF-8 encoded rfc4514 string for DB-loaded certificates.
     """
     return cert.issuer_der or cert.issuer.encode("utf-8")
+
+
+_SYSTEM_CA_BUNDLE_PATHS = [
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+    "/etc/ssl/ca-bundle.pem",
+    "/etc/ssl/cert.pem",
+]
+
+_system_ca_subjects_cache: set[bytes] | None = None
+
+
+def _load_system_ca_subjects() -> set[bytes]:
+    """Lazy-load DER-encoded subject bytes from the system CA trust store.
+
+    Returns an empty set if no system CA bundle is found (e.g. minimal
+    containers).  The result is cached after the first call.
+    """
+    global _system_ca_subjects_cache
+    if _system_ca_subjects_cache is not None:
+        return _system_ca_subjects_cache
+
+    subjects: set[bytes] = set()
+    for path in _SYSTEM_CA_BUNDLE_PATHS:
+        pem_path = Path(path)
+        if not pem_path.exists():
+            continue
+        try:
+            pem_data = pem_path.read_bytes()
+        except OSError:
+            continue
+        while pem_data:
+            start = pem_data.find(b"-----BEGIN CERTIFICATE-----")
+            if start == -1:
+                break
+            end = pem_data.find(b"-----END CERTIFICATE-----", start)
+            if end == -1:
+                break
+            end += len(b"-----END CERTIFICATE-----")
+            try:
+                cert = x509.load_pem_x509_certificate(pem_data[start:end])
+                subjects.add(cert.subject.public_bytes(Encoding.DER))
+            except Exception:
+                pass
+            pem_data = pem_data[end:]
+        break
+
+    logger.debug("loaded %d system CA subjects from trust store", len(subjects))
+    _system_ca_subjects_cache = subjects
+    return subjects
+
+
+def _is_anchored_by_system_root(chain: list[Certificate]) -> bool:
+    """Return True if the chain's last cert issuer matches a system CA root."""
+    if not chain:
+        return False
+    subjects = _load_system_ca_subjects()
+    if not subjects:
+        return False
+    last = chain[-1]
+    return _issuer_bytes(last) in subjects
 
 
 def validate_chain_order(chain: list[Certificate]) -> bool | None:
@@ -158,19 +224,23 @@ def chain_status(
     - "unknown"       : no intermediates available (can't validate).
     - "invalid"       : chain order is structurally broken.
     - "private"       : chain is valid and anchored by a user-uploaded trust anchor.
-    - "public"        : chain is valid and ends at a self-signed root (assumed public CA).
+    - "public"        : chain is valid and ends at a self-signed root (assumed public CA)
+                        or at a certificate whose issuer is in the system trust store.
     - "incomplete"    : chain is structurally valid but missing a trusted root.
     """
     if _subject_bytes(leaf) == _issuer_bytes(leaf):
         return "self-signed"
     if not chain:
         return "unknown"
-    structural = validate_chain_order([leaf, *chain])
+    full = [leaf, *chain]
+    structural = validate_chain_order(full)
     if not structural:
         return "invalid"
-    if is_anchored_by_user([leaf, *chain], anchors):
+    if is_anchored_by_user(full, anchors):
         return "private"
     if _subject_bytes(chain[-1]) == _issuer_bytes(chain[-1]):
+        return "public"
+    if _is_anchored_by_system_root(full):
         return "public"
     return "incomplete"
 
