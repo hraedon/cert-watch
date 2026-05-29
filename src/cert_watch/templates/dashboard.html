@@ -515,7 +515,7 @@ function toggleGroup(groupId) {
   var row = document.getElementById('group-hosts-' + groupId);
   var chevron = document.getElementById('chevron-' + groupId);
   if (row) {
-    row.classList.toggle('cw-hidden');
+    row.classList.toggle('cw-open');
     if (chevron) chevron.classList.toggle('cw-group-chevron-open');
   }
 }
