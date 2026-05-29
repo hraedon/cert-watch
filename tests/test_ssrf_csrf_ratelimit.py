@@ -135,7 +135,7 @@ def test_resolve_host_dns_failure(monkeypatch):
 # ── SSRF: app._is_blocked_host (UX pre-check) ──────────────────────────────
 
 def test_app_is_blocked_host_private(monkeypatch):
-    from cert_watch.app import _is_blocked_host
+    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("10.0.0.1", None)),
     ])
@@ -143,7 +143,7 @@ def test_app_is_blocked_host_private(monkeypatch):
 
 
 def test_app_is_blocked_host_public(monkeypatch):
-    from cert_watch.app import _is_blocked_host
+    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", None)),
     ])
@@ -151,7 +151,7 @@ def test_app_is_blocked_host_public(monkeypatch):
 
 
 def test_app_is_blocked_host_unresolvable(monkeypatch):
-    from cert_watch.app import _is_blocked_host
+    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
 
     def _raise(*a, **kw):
         raise socket.gaierror("nope")
@@ -163,30 +163,31 @@ def test_app_is_blocked_host_unresolvable(monkeypatch):
 # ── CSRF: token validation ─────────────────────────────────────────────────
 
 def test_csrf_make_validate_roundtrip():
-    from cert_watch.app import _make_csrf_token, _validate_csrf_token
+    from cert_watch.middleware import make_csrf_token, validate_csrf_token
     sid = "test-session-123"
-    token = _make_csrf_token(sid)
-    assert _validate_csrf_token(token, sid)
+    token = make_csrf_token(sid)
+    assert validate_csrf_token(token, sid)
 
 
 def test_csrf_rejects_wrong_session():
-    from cert_watch.app import _make_csrf_token, _validate_csrf_token
-    token = _make_csrf_token("session-a")
-    assert not _validate_csrf_token(token, "session-b")
+    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    token = make_csrf_token("session-a")
+    assert not validate_csrf_token(token, "session-b")
 
 
 def test_csrf_rejects_tampered_token():
-    from cert_watch.app import _make_csrf_token, _validate_csrf_token
-    token = _make_csrf_token("s1")
+    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    token = make_csrf_token("s1")
     parts = token.split(":")
-    parts[2] = "deadbeef"
-    assert not _validate_csrf_token(":".join(parts), "s1")
+    # Tamper with the signature
+    parts[-1] = "tampered"
+    assert not validate_csrf_token(":".join(parts), "s1")
 
 
 def test_csrf_rejects_malformed_token():
-    from cert_watch.app import _validate_csrf_token
-    assert not _validate_csrf_token("bad-token", "s1")
-    assert not _validate_csrf_token("", "s1")
+    from cert_watch.middleware import validate_csrf_token
+    assert not validate_csrf_token("bad-token", "s1")
+    assert not validate_csrf_token("", "s1")
 
 
 # ── CSRF: hidden field accepted in POST ────────────────────────────────────
@@ -206,10 +207,11 @@ def test_csrf_hidden_field_accepted(tmp_path, monkeypatch):
         sid_cookie = r.cookies.get("cw_sid")
         assert sid_cookie
 
-    from cert_watch.app import _make_csrf_token
-    token = _make_csrf_token(sid_cookie)
+    from cert_watch.middleware import make_csrf_token
+    token = make_csrf_token(sid_cookie)
 
-    monkeypatch.setattr(app_mod, "scan_host", lambda *a, **kw: app_mod.ScanError(
+    from cert_watch.scan import ScanError
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", lambda *a, **kw: ScanError(
         hostname="x", port=443, error_message="test"
     ))
 
@@ -242,17 +244,17 @@ def test_csrf_missing_token_rejected(tmp_path, monkeypatch):
 # ── Rate limiting: per-IP keys ─────────────────────────────────────────────
 
 def test_rate_limit_allows_first_request():
-    from cert_watch.app import _check_rate_limit
+    from cert_watch.middleware import check_rate_limit
     key = f"test_rl:{time.time()}"
-    assert _check_rate_limit(key, 2, 60)
-    assert _check_rate_limit(key, 2, 60)
-    assert not _check_rate_limit(key, 2, 60)
+    assert check_rate_limit(key, 2, 60)
+    assert check_rate_limit(key, 2, 60)
+    assert not check_rate_limit(key, 2, 60)
 
 
 def test_rate_limit_per_ip_isolation():
-    from cert_watch.app import _check_rate_limit
+    from cert_watch.middleware import check_rate_limit
     key_a = f"test_rl_ip_a:{time.time()}"
     key_b = f"test_rl_ip_b:{time.time()}"
-    _check_rate_limit(key_a, 1, 60)
-    assert not _check_rate_limit(key_a, 1, 60)
-    assert _check_rate_limit(key_b, 1, 60)
+    check_rate_limit(key_a, 1, 60)
+    assert not check_rate_limit(key_a, 1, 60)
+    assert check_rate_limit(key_b, 1, 60)

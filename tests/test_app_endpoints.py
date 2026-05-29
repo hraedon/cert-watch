@@ -85,7 +85,7 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, self_signed_leaf):
         cert = parse_certificate(self_signed_leaf.der)
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
-    monkeypatch.setattr(app_mod, "scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
@@ -100,7 +100,6 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
     app_mod = _reload_app(monkeypatch, tmp_path)
     db = tmp_path / "cert-watch.sqlite3"
 
-    from cert_watch import app as app_mod_pkg
     from cert_watch.database import SqliteHostRepository
     from cert_watch.scan import ScanError
     hid = SqliteHostRepository(db).add("refused.example.com", 443)
@@ -108,7 +107,7 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
     def fake_scan_host(hostname, port=443, **kw):
         return ScanError(hostname=hostname, port=port, error_message="connection refused")
 
-    monkeypatch.setattr(app_mod_pkg, "scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
@@ -269,7 +268,7 @@ def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, self_signed
         cert = parse_certificate(self_signed_leaf.der)
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
-    monkeypatch.setattr(app_mod, "scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(

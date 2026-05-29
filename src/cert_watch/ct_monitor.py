@@ -25,13 +25,16 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
         rows = conn.execute(
             "SELECT DISTINCT hostname FROM hosts WHERE hostname IS NOT NULL"
         ).fetchall()
-        # Also collect known fingerprints for dedup
+        # Collect known fingerprints for dedup against stored certificates.
+        # Note: crt.sh provides serial_number, not SHA256 fingerprints,
+        # so we also track (serial, issuer) pairs seen in CT results.
         known_fps = {
             r["fingerprint_sha256"]
             for r in conn.execute(
                 "SELECT fingerprint_sha256 FROM certificates"
             ).fetchall()
         }
+        known_serial_issuer: set[tuple[str, str]] = set()
 
     checked = 0
     new = 0
@@ -45,8 +48,11 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
             errors += 1
             continue
         for entry in result:
-            fp = entry.serial_number  # crt.sh doesn't give SHA256; use serial as handle
-            if fp not in known_fps:
+            # Use (serial, issuer) as composite key — serial numbers alone
+            # are not unique across CAs.
+            dedup_key = (entry.serial_number, entry.issuer_name)
+            if dedup_key not in known_fps and dedup_key not in known_serial_issuer:
+                known_serial_issuer.add(dedup_key)
                 new += 1
                 logger.info(
                     "CT monitor: new certificate found for %s — CN=%s issuer=%s serial=%s",

@@ -45,12 +45,17 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-5 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 5 low.
+9 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 9 low.
 
 - **BC-026** (low) — Missing unit tests for trust anchor CA validation (BC-024 follow-up)
 - **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan
 - **BC-028** (low) — openssl s_client fallback opens second TLS connection per scan (duplicate of BC-027, keep one)
 - **BC-029** (low) — REST API pagination lacks HATEOAS navigation links
+- **BC-030** (low) — app.py decomposition (in-progress, initial split done)
+- **BC-031** (low) — Add PostgreSQL and MSSQL support alongside SQLite
+- **BC-032** (low) — Structured JSON logging for observability integration
+- **BC-033** (low) — Dashboard grouping by cert fingerprint with per-host status
+- **BC-034** (low) — Owner/contact field with alert routing and renewal status
 - **FEAT-006** (low) — Database migration tooling (alembic)
 
 ### Recently resolved
@@ -71,6 +76,15 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **Rate limit headers** — API responses include `X-RateLimit-Remaining`, `X-RateLimit-Limit`, and `Retry-After` (on 429).
 - **System CA chain validation** — `chain_status()` checks the system trust store, so LE and other public CA chains show as "public" even when the root is omitted.
 - **Scan failure UX** — Scan failures show as yellow warnings (not red errors) with human-friendly messages.
+- **Rate limit enforcement** — API middleware returns 429 on rate limit exceeded (not just headers).
+- **app.py decomposition** — Split ~1500-line monolith into `middleware.py`, `filters.py`, and `routes/` modules.
+- **Host tags** — `tags` column on hosts for categorization and filtering.
+- **Per-host scan scheduling** — `scan_interval_hours` column allows different scan frequencies per host.
+- **Webhook test endpoint** — `POST /api/webhook/test` sends a test payload to verify webhook config.
+- **Expiry digest mode** — `ALERT_DIGEST_ONLY=1` sends a single daily summary instead of per-cert alerts.
+- **Webhook retry** — `process_pending()` retries failed alerts up to 3 times with exponential backoff.
+- **Host export CSV** — `GET /api/export/hosts.csv` for bulk host list export.
+- **SQL-level pagination** — `list_dashboard_rows()` accepts sort/pagination params for efficient queries.
 
 ## Architecture notes
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import smtplib
 import urllib.request
 from dataclasses import dataclass, field
@@ -13,6 +14,8 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
+
+logger = logging.getLogger("cert_watch.alerts")
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 CHAIN_THRESHOLDS = (30, 14, 7)
@@ -258,27 +261,140 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
         return False
 
 
+ALERT_MAX_RETRIES = 3
+ALERT_RETRY_DELAY = 2  # seconds between retries
+
+
+def send_expiry_digest(
+    db_path: str | Path,
+    config: AlertConfig | None,
+    webhook_config: WebhookConfig | None = None,
+) -> bool:
+    """Send a single digest email summarizing all certificates expiring within 30 days.
+
+    Returns True if the digest was delivered successfully.
+    """
+    from cert_watch.database import _connect, _parse_iso
+
+    if config is None and webhook_config is None:
+        return False
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM certificates WHERE is_leaf = 1 ORDER BY not_after"
+        ).fetchall()
+
+    now = datetime.now(UTC)
+    expiring: list[dict] = []
+    for r in rows:
+        na = _parse_iso(r["not_after"])
+        days = (na - now).days
+        if days <= 30:
+            expiring.append({
+                "subject": r["subject"],
+                "hostname": r["hostname"] or "",
+                "port": r["port"] or 443,
+                "not_after": r["not_after"],
+                "days_remaining": days,
+            })
+
+    if not expiring:
+        return True  # nothing to report
+
+    # Build digest message
+    lines = [
+        f"[cert-watch] Expiry Digest — {len(expiring)} certificate(s) expiring within 30 days",
+        "",
+    ]
+    for cert in expiring:
+        host = f"{cert['hostname']}:{cert['port']}" if cert["hostname"] else "(uploaded)"
+        status = "EXPIRED" if cert["days_remaining"] < 0 else f"{cert['days_remaining']}d remaining"
+        lines.append(f"  - {cert['subject']} ({host}) — {status} — expires {cert['not_after']}")
+
+    message = "\n".join(lines)
+
+    # Send via email
+    if config is not None:
+        try:
+            msg = EmailMessage()
+            msg["Subject"] = f"[cert-watch] Expiry Digest: {len(expiring)} cert(s) expiring soon"
+            msg["From"] = config.from_addr
+            msg["To"] = ", ".join(config.recipients)
+            msg.set_content(message)
+            if config.smtp_port == 465:
+                s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+            else:
+                s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
+            with s:
+                if config.smtp_port != 465:
+                    with contextlib.suppress(smtplib.SMTPNotSupportedError):
+                        s.starttls()
+                if config.smtp_user:
+                    s.login(config.smtp_user, config.smtp_password)
+                s.send_message(msg)
+            return True
+        except Exception as exc:
+            logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
+
+    # Send via webhook
+    if webhook_config is not None:
+        import urllib.request as _urlreq
+
+        payload = json.dumps({
+            "alert_type": "expiry_digest",
+            "cert_count": len(expiring),
+            "message": message,
+            "certificates": expiring,
+        })
+        req = _urlreq.Request(
+            webhook_config.url,
+            data=payload.encode("utf-8"),
+            headers={"Content-Type": "application/json", **webhook_config.headers},
+            method="POST",
+        )
+        try:
+            with _urlreq.urlopen(req, timeout=webhook_config.timeout) as resp:
+                return 200 <= resp.status < 300
+        except Exception:
+            return False
+
+    return False
+
+
 def process_pending(
     alert_repo: AlertRepository,
     config: AlertConfig | None,
     webhook_config: WebhookConfig | None = None,
 ) -> dict[str, int]:
-    """See AC-04. No-ops when both configs are None. Tries webhook if SMTP fails or is absent."""
+    """See AC-04. No-ops when both configs are None. Tries webhook if SMTP fails or is absent.
+
+    Failed deliveries are retried up to ALERT_MAX_RETRIES times with a short delay.
+    """
     if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0}
     sent = 0
     failed = 0
     for alert in alert_repo.list_pending():
         delivered = False
-        if config is not None:
-            delivered = send_alert(alert, config)
-        if not delivered and webhook_config is not None:
-            delivered = send_webhook(alert, webhook_config)
+        last_error = ""
+        for attempt in range(ALERT_MAX_RETRIES):
+            if config is not None:
+                delivered = send_alert(alert, config)
+            if not delivered and webhook_config is not None:
+                delivered = send_webhook(alert, webhook_config)
+            if delivered:
+                break
+            last_error = alert.error_message or "unknown"
+            if attempt < ALERT_MAX_RETRIES - 1:
+                import time
+                time.sleep(ALERT_RETRY_DELAY * (attempt + 1))
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1
         else:
-            alert_repo.mark_failed(alert.id, alert.error_message or "unknown")
+            alert_repo.mark_failed(
+                alert.id, f"{last_error} (after {ALERT_MAX_RETRIES} attempts)"
+            )
             failed += 1
     return {"sent": sent, "failed": failed}

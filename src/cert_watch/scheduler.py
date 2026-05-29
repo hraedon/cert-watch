@@ -74,6 +74,47 @@ def _has_pending_hosts(db_path: str | Path) -> bool:
     return row is not None
 
 
+def get_hosts_due_for_scan(db_path: str | Path) -> list[tuple[str, int]]:
+    """Return hosts that are due for scanning based on per-host intervals.
+
+    A host is due if:
+    - It has a scan_interval_hours set AND enough time has passed since last scan
+    - OR it has no scan_interval_hours (uses default daily cycle, always due)
+    - OR it has never been scanned (always due)
+    """
+    from cert_watch.database import _connect
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT h.hostname, h.port, h.scan_interval_hours,
+                   MAX(sh.scanned_at) as last_scan
+            FROM hosts h
+            LEFT JOIN scan_history sh
+                ON sh.hostname = h.hostname AND sh.port = h.port AND sh.status = 'success'
+            GROUP BY h.hostname, h.port
+            """
+        ).fetchall()
+
+    now = datetime.now(UTC)
+    due: list[tuple[str, int]] = []
+    for r in rows:
+        if r["scan_interval_hours"] is None:
+            # Default: always include in daily cycle
+            due.append((r["hostname"], r["port"]))
+            continue
+        if r["last_scan"] is None:
+            # Never scanned — always due
+            due.append((r["hostname"], r["port"]))
+            continue
+        last = datetime.fromisoformat(r["last_scan"])
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=UTC)
+        hours_since = (now - last).total_seconds() / 3600
+        if hours_since >= r["scan_interval_hours"]:
+            due.append((r["hostname"], r["port"]))
+    return due
+
+
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
@@ -214,7 +255,5 @@ def run_scan_now(
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:
-    from cert_watch.database import _connect
-    with _connect(db_path) as conn:
-        rows = conn.execute("SELECT hostname, port FROM hosts").fetchall()
-    return [(r["hostname"], r["port"]) for r in rows]
+    """Return hosts due for scanning, respecting per-host intervals."""
+    return get_hosts_due_for_scan(db_path)

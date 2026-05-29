@@ -35,6 +35,9 @@ auth-oauth = [
 auth = [
     "cert-watch[auth-ldap,auth-oauth]",
 ]
+dns = [
+    "dnspython>=2.6",
+]
 
 [project.scripts]
 cert-watch = "cert_watch.__main__:main"

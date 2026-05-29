@@ -22,6 +22,7 @@ class Settings:
     webhook_url: str | None = None
     webhook_headers: dict[str, str] | None = None
     webhook_template: str = ""
+    alert_digest_only: bool = False
     tls_verify: bool = False
     allow_private: bool = True
     dns_servers: tuple[str, ...] = ()
@@ -89,6 +90,7 @@ class Settings:
             webhook_url=webhook_url,
             webhook_headers=webhook_headers,
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
+            alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             dns_servers=tuple(
@@ -166,4 +168,4 @@ class Settings:
         )
 
 
-settings = Settings.from_env()
+

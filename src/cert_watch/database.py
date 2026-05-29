@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -79,6 +80,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     hostname TEXT NOT NULL,
     port INTEGER NOT NULL DEFAULT 443,
     threshold_days INTEGER,
+    tags TEXT NOT NULL DEFAULT '',
+    scan_interval_hours INTEGER,
     added_at TEXT NOT NULL,
     UNIQUE(hostname, port)
 );
@@ -105,9 +108,19 @@ CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
 """
 
 
+_initialized_paths: set[str] = set()
+
+
 def init_schema(db_path: str | Path) -> None:
-    """Create all tables if they do not exist. Idempotent. See AC-06."""
+    """Create all tables if they do not exist. Idempotent. See AC-06.
+
+    Tracks initialized paths so repeat calls for the same database
+    return immediately after the first successful initialization.
+    """
     path = Path(db_path)
+    path_str = str(path)
+    if path_str in _initialized_paths:
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(path)) as conn:
         # 1. Create tables first (no-op if they already exist)
@@ -124,6 +137,10 @@ def init_schema(db_path: str | Path) -> None:
         host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
         if "threshold_days" not in host_cols:
             conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")
+        if "tags" not in host_cols:
+            conn.execute("ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+        if "scan_interval_hours" not in host_cols:
+            conn.execute("ALTER TABLE hosts ADD COLUMN scan_interval_hours INTEGER")
         # trust_anchors migration
         ta_cols = {r[1] for r in conn.execute("PRAGMA table_info(trust_anchors)").fetchall()}
         if not ta_cols:
@@ -163,13 +180,36 @@ def init_schema(db_path: str | Path) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_hostname_port ON hosts(hostname, port)"
             )
         conn.commit()
+    _initialized_paths.add(path_str)
+
+
+_conn_local = threading.local()
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path), timeout=30)
+    """Return a cached connection for the current thread.
+
+    Reuses one connection per (thread, db_path) pair. WAL mode and
+    busy_timeout are set once on first connect; they persist in the
+    database file and connection respectively.
+    """
+    path_str = str(db_path)
+    cache = getattr(_conn_local, "connections", None)
+    if cache is None:
+        cache = {}
+        _conn_local.connections = cache
+    conn = cache.get(path_str)
+    if conn is not None:
+        try:
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            cache.pop(path_str, None)
+    conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
+    cache[path_str] = conn
     return conn
 
 
@@ -514,6 +554,8 @@ class HostEntry:
     port: int = 443
     id: str = ""
     threshold_days: int | None = None
+    tags: str = ""
+    scan_interval_hours: int | None = None
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -522,15 +564,25 @@ class SqliteHostRepository:
         self.db_path = Path(db_path)
         init_schema(self.db_path)
 
-    def add(self, hostname: str, port: int = 443, threshold_days: int | None = None) -> str:
+    def add(
+        self,
+        hostname: str,
+        port: int = 443,
+        threshold_days: int | None = None,
+        tags: str = "",
+        scan_interval_hours: int | None = None,
+    ) -> str:
         host_id = str(uuid.uuid4())
         with _connect(self.db_path) as conn:
             try:
                 conn.execute(
                     "INSERT INTO hosts"
-                    " (id, hostname, port, threshold_days, added_at)"
-                    " VALUES (?, ?, ?, ?, ?)",
-                    (host_id, hostname, port, threshold_days, _iso(datetime.now(UTC))),
+                    " (id, hostname, port, threshold_days, tags, scan_interval_hours, added_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        host_id, hostname, port, threshold_days, tags,
+                        scan_interval_hours, _iso(datetime.now(UTC)),
+                    ),
                 )
                 conn.commit()
             except sqlite3.IntegrityError:
@@ -550,6 +602,8 @@ class SqliteHostRepository:
                 hostname=r["hostname"],
                 port=r["port"],
                 threshold_days=dict(r).get("threshold_days"),
+                tags=dict(r).get("tags", ""),
+                scan_interval_hours=dict(r).get("scan_interval_hours"),
                 added_at=_parse_iso(r["added_at"]),
             )
             for r in rows
@@ -565,6 +619,8 @@ class SqliteHostRepository:
             hostname=r["hostname"],
             port=r["port"],
             threshold_days=dict(r).get("threshold_days"),
+            tags=dict(r).get("tags", ""),
+            scan_interval_hours=dict(r).get("scan_interval_hours"),
             added_at=_parse_iso(r["added_at"]),
         )
 
@@ -908,22 +964,76 @@ def _build_dashboard_rows(
     return dash
 
 
-def list_dashboard_rows(db_path: str | Path) -> list[dict]:
+def list_dashboard_rows(
+    db_path: str | Path,
+    *,
+    sort_by: str = "days",
+    sort_order: str = "asc",
+    page: int = 1,
+    per_page: int = 0,
+) -> list[dict]:
     """
     Return rich rows for the dashboard. Per the scope extension, each scanned host
     or uploaded bundle surfaces leaf + intermediate + root, and the row's urgency
     is driven by the most-urgent cert in that group.
+
+    When per_page > 0, applies pagination at the SQL level for leaf certificates
+    and fetches only the chain children needed for that page.
     """
     init_schema(db_path)
+
+    # Map sort_by to SQL ORDER BY for leaf certificates
+    _sort_map = {
+        "name": "subject",
+        "issue_date": "not_before",
+        "expiry": "not_after",
+        "days": "not_after",
+        "last_scan": "not_after",
+    }
+    sql_col = _sort_map.get(sort_by, "not_after")
+    sql_dir = "ASC" if sort_order == "asc" else "DESC"
+
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM certificates ORDER BY created_at"
-        ).fetchall()
+        if per_page > 0:
+            offset = max(0, (page - 1) * per_page)
+            leaf_rows = conn.execute(
+                f"SELECT * FROM certificates WHERE is_leaf = 1 "
+                f"ORDER BY {sql_col} {sql_dir} LIMIT ? OFFSET ?",
+                (per_page, offset),
+            ).fetchall()
+            leaf_ids = [r["id"] for r in leaf_rows]
+            if leaf_ids:
+                ph = ",".join("?" * len(leaf_ids))
+                chain_rows = conn.execute(
+                    f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph})",
+                    leaf_ids,
+                ).fetchall()
+            else:
+                chain_rows = []
+            rows = list(leaf_rows) + list(chain_rows)
+        else:
+            rows = conn.execute(
+                "SELECT * FROM certificates ORDER BY created_at"
+            ).fetchall()
         anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
 
     dash = _build_dashboard_rows(rows, anchor_rows)
-    dash.sort(key=lambda d: min([d["days_remaining"], *[c["days_remaining"] for c in d["chain"]]]))
+    if per_page == 0:
+        dash.sort(
+            key=lambda d: min(
+                [d["days_remaining"], *[c["days_remaining"] for c in d["chain"]]]
+            )
+        )
     return dash
+
+
+def count_dashboard_leaves(db_path: str | Path) -> int:
+    """Return the total number of leaf certificates for pagination."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+        ).fetchone()
+    return row[0] if row else 0
 
 
 def list_unified_entries(db_path: str | Path) -> list[dict]:

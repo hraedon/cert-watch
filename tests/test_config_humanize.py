@@ -64,10 +64,10 @@ def _frozen_now(year=2026, month=6, day=1):
 
 
 def test_humanize_in_days():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
     target = fixed + timedelta(days=3)
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)
@@ -76,10 +76,10 @@ def test_humanize_in_days():
 
 
 def test_humanize_expired():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
     target = fixed - timedelta(days=5)
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)
@@ -87,10 +87,10 @@ def test_humanize_expired():
 
 
 def test_humanize_months():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
     target = fixed + timedelta(days=90)
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)
@@ -98,9 +98,9 @@ def test_humanize_months():
 
 
 def test_humanize_today():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(fixed)
@@ -108,10 +108,10 @@ def test_humanize_today():
 
 
 def test_humanize_accepts_iso_string():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
     target = (fixed + timedelta(days=10)).isoformat()
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)
@@ -119,10 +119,10 @@ def test_humanize_accepts_iso_string():
 
 
 def test_humanize_years():
-    from cert_watch.app import humanize_expiry
+    from cert_watch.filters import humanize_expiry
     fixed = _frozen_now()
     target = fixed + timedelta(days=800)
-    with patch("cert_watch.app.datetime") as mock_dt:
+    with patch("cert_watch.filters.datetime") as mock_dt:
         mock_dt.now.return_value = fixed
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)

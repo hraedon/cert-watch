@@ -106,7 +106,7 @@ class AuthProvider(ABC):
         """Begin OAuth flow; returns redirect URL in AuthResult."""
 
     @abstractmethod
-    def complete_oauth_flow(self, code: str, redirect_uri: str) -> AuthResult:
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         """Complete OAuth flow with authorization code; returns username."""
 
     @property
@@ -131,7 +131,7 @@ class NoAuthProvider(AuthProvider):
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
         return AuthResult(success=False, error="OAuth not configured")
 
-    def complete_oauth_flow(self, code: str, redirect_uri: str) -> AuthResult:
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         return AuthResult(success=False, error="OAuth not configured")
 
     @property
@@ -221,7 +221,7 @@ class LDAPAuthProvider(AuthProvider):
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
         return AuthResult(success=False, error="OAuth not available with LDAP provider")
 
-    def complete_oauth_flow(self, code: str, redirect_uri: str) -> AuthResult:
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         return AuthResult(success=False, error="OAuth not available with LDAP provider")
 
     @property
