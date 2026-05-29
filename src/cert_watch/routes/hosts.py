@@ -307,12 +307,14 @@ def api_export_hosts_csv(request: Request) -> PlainTextResponse:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
-        "hostname", "port", "threshold_days", "tags", "scan_interval_hours", "added_at",
+        "hostname", "port", "threshold_days", "tags", "scan_interval_hours",
+        "owner_name", "owner_email", "owner_slack", "renewal_status", "added_at",
     ])
     for h in hosts:
         writer.writerow([
             h.hostname, h.port, h.threshold_days or "", h.tags,
-            h.scan_interval_hours or "", h.added_at.isoformat(),
+            h.scan_interval_hours or "", h.owner_name, h.owner_email,
+            h.owner_slack, h.renewal_status, h.added_at.isoformat(),
         ])
     return PlainTextResponse(
         content=output.getvalue(),

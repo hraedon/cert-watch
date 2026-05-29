@@ -127,3 +127,71 @@ def test_humanize_years():
         mock_dt.fromisoformat = datetime.fromisoformat
         out = humanize_expiry(target)
     assert "in 2 years" in out
+
+
+# ---------- JSON logging ----------
+
+
+def test_log_format_env_json(monkeypatch, tmp_path):
+    monkeypatch.delenv("CERT_WATCH_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_LOG_FORMAT", "json")
+    from cert_watch import config as _config
+    importlib.reload(_config)
+    s = _config.Settings.from_env()
+    assert s.log_format == "json"
+
+
+def test_log_format_env_text_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("CERT_WATCH_LOG_FORMAT", raising=False)
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    from cert_watch import config as _config
+    importlib.reload(_config)
+    s = _config.Settings.from_env()
+    assert s.log_format == "text"
+
+
+def test_json_formatter_output():
+    import json
+    import logging
+
+    from cert_watch.app import _setup_logging
+
+    # Remove existing handlers to get a clean slate for this test
+    root = logging.getLogger("cert_watch")
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+    _setup_logging(log_format="json")
+    assert root.handlers, "expected at least one handler"
+    formatter = root.handlers[-1].formatter
+
+    record = logging.LogRecord(
+        "cert_watch.test", logging.INFO, "", 0, "hello world", (), None
+    )
+    output = formatter.format(record)
+    data = json.loads(output)
+    assert data["level"] == "INFO"
+    assert data["logger"] == "cert_watch.test"
+    assert data["message"] == "hello world"
+    assert "timestamp" in data
+
+    # Clean up
+    for h in list(root.handlers):
+        root.removeHandler(h)
+
+
+def test_text_formatter_output():
+    import logging
+
+
+    formatter = logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    record = logging.LogRecord(
+        "cert_watch.test", logging.INFO, "", 0, "hello world", (), None
+    )
+    output = formatter.format(record)
+    assert "hello world" in output
+    assert "INFO" in output

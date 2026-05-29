@@ -16,14 +16,14 @@
 {% endmacro %}
 
 {% block content %}
-<div style="padding:22px 26px;max-width:1080px">
+<div class="cw-page--constrained">
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>
       <h1>Scan history</h1>
       <div class="cw-page-head-sub">TLS handshakes performed on tracked hosts, scheduled and on-demand.</div>
     </div>
-    <form method="post" action="/hosts/all/scan" style="display:inline">
+    <form method="post" action="/hosts/all/scan" class="cw-inline">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Run scan now</button>
     </form>
@@ -41,22 +41,22 @@
     {% set ns.last_scan_status = history[0].status %}
   {% endif %}
 
-  <div class="cw-stats cw-stats-3" style="margin-bottom:18px">
+  <div class="cw-stats cw-stats-3 cw-mb-18">
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--accent)"></div>
-      <div class="cw-stat-top" style="color:var(--accent)">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Last scan</span></div>
-      <div class="cw-stat-val" style="font-size:22px;color:var(--text)">{{ ns.last_scan_time }}</div>
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
+      <div class="cw-stat-top cw-stat-top-accent">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Last scan</span></div>
+      <div class="cw-stat-val cw-stat-val-default cw-fz-22">{{ ns.last_scan_time }}</div>
       <div class="cw-stat-sub">{{ ns.last_scan_status }}</div>
     </div>
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--ok)"></div>
-      <div class="cw-stat-top" style="color:var(--ok)">{{ svg_icon('check-circle', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Total scans</span></div>
-      <div class="cw-stat-val" style="color:var(--text)">{{ history | length }}</div>
+      <div class="cw-stat-rail cw-stat-rail-ok"></div>
+      <div class="cw-stat-top cw-stat-top-ok">{{ svg_icon('check-circle', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total scans</span></div>
+      <div class="cw-stat-val cw-stat-val-default">{{ history | length }}</div>
     </div>
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--crit)"></div>
-      <div class="cw-stat-top" style="color:var(--crit)">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Failures</span></div>
-      <div class="cw-stat-val" style="color:var(--crit)">{{ ns.fail_7d }}</div>
+      <div class="cw-stat-rail cw-stat-rail-crit"></div>
+      <div class="cw-stat-top cw-stat-top-crit">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Failures</span></div>
+      <div class="cw-stat-val cw-stat-val-crit">{{ ns.fail_7d }}</div>
     </div>
   </div>
 
@@ -66,7 +66,7 @@
       <table class="cw-table">
         <thead>
           <tr>
-            <th style="padding-top:14px">When</th>
+            <th class="cw-th-pt-14">When</th>
             <th>Host</th>
             <th>Status</th>
             <th>Error</th>
@@ -76,25 +76,25 @@
           {% for r in history %}
             {% set row_color = 'var(--crit)' if r.status == 'failure' else 'var(--ok)' if r.status == 'success' else 'var(--warn)' %}
             <tr>
-              <td class="mono" style="font-size:12.5px;color:var(--text)">{{ r.scanned_at[:16] if r.scanned_at else '—' }}</td>
-              <td class="mono" style="font-size:12.5px;color:var(--text-2)">{{ r.hostname }}:{{ r.port }}</td>
+              <td class="mono cw-fz-12-5 cw-text-text">{{ r.scanned_at[:16] if r.scanned_at else '—' }}</td>
+              <td class="mono cw-fz-12-5 cw-text-text-2">{{ r.hostname }}:{{ r.port }}</td>
               <td>
                 <span class="cw-pill {% if r.status == 'failure' %}critical{% elif r.status == 'success' %}healthy{% else %}warning{% endif %}">
                   <span class="dot"></span>
                   {{ r.status }}
                 </span>
               </td>
-              <td style="font-size:12.5px;color:var(--text-3);max-width:300px">{{ r.error_message or '' }}</td>
+              <td class="cw-fz-12-5 cw-text-text-3 cw-td-mw-300">{{ r.error_message or '' }}</td>
             </tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   {% else %}
-    <div class="cw-panel" style="padding:64px 0;text-align:center">
-      <div style="width:52px;height:52px;border-radius:14px;background:var(--accent-soft);color:var(--accent);display:inline-flex;align-items:center;justify-content:center;margin-bottom:14px">{{ svg_icon('clock', 24) }}</div>
-      <div style="font-size:15px;font-weight:600">No scans recorded yet</div>
-      <div style="font-size:13px;color:var(--text-3);margin-top:5px">Scan history will appear here after the first scan.</div>
+    <div class="cw-panel" class="cw-empty-state">
+      <div class="cw-empty-icon-circle cw-empty-icon-accent">{{ svg_icon('clock', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">No scans recorded yet</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Scan history will appear here after the first scan.</div>
     </div>
   {% endif %}
 </div>

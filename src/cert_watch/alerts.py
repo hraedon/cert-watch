@@ -50,6 +50,7 @@ def evaluate_thresholds(
     cert_id: str | None = None,
     custom_thresholds: tuple[int, ...] | None = None,
     cooldown_hours: int = 24,
+    owner_info: dict | None = None,
 ) -> list[Alert]:
     """
     Create pending alerts for thresholds the cert has now crossed, skipping any
@@ -94,6 +95,10 @@ def evaluate_thresholds(
 
     created: list[Alert] = []
     for t in thresholds:
+        # Suppress alerts when renewal is complete — certs renewed don't need
+        # re-alerting until the next threshold window opens.
+        if owner_info and owner_info.get("renewal_status") == "renewed":
+            continue
         # Floor semantics: days_until_expiry() returns floor(delta), so a
         # cert with 1d23h remaining shows days=1 and crosses the t=1 threshold.
         # This means a threshold can fire up to ~23h before the nominal expiry
@@ -112,8 +117,13 @@ def evaluate_thresholds(
                 cert_id=cid,
                 alert_type="expired" if days < 0 else "expiry_warning",
                 status="pending",
-                message=_format_message(cert, days, t),
+                message=_format_message(cert, days, t, owner_info=owner_info),
                 threshold_days=t,
+                extra_recipients=(
+                    [owner_info["owner_email"]]
+                    if owner_info and owner_info.get("owner_email")
+                    else []
+                ),
             )
             alert_id = alert_repo.create(alert)
             alert.id = alert_id
@@ -127,15 +137,23 @@ def evaluate_all_certs(
 ) -> list[Alert]:
     """Evaluate thresholds for all leaf certificates in the database.
 
-    Looks up per-host custom thresholds from the hosts table and passes them
-    through to evaluate_thresholds.
+    Looks up per-host custom thresholds and owner/contact info from the hosts
+    table and passes them through to evaluate_thresholds.
     """
     from cert_watch.database import _connect, _parse_iso
 
     with _connect(db_path) as conn:
         host_thresholds: dict[tuple[str, int], int | None] = {}
-        for row in conn.execute("SELECT hostname, port, threshold_days FROM hosts").fetchall():
-            host_thresholds[(row["hostname"], row["port"])] = row["threshold_days"]
+        host_owners: dict[tuple[str, int], dict] = {}
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            key = (row["hostname"], row["port"])
+            host_thresholds[key] = row["threshold_days"]
+            host_owners[key] = {
+                "owner_name": dict(row).get("owner_name", ""),
+                "owner_email": dict(row).get("owner_email", ""),
+                "owner_slack": dict(row).get("owner_slack", ""),
+                "renewal_status": dict(row).get("renewal_status", "pending"),
+            }
 
         leaves = conn.execute(
             "SELECT * FROM certificates WHERE is_leaf = 1"
@@ -156,31 +174,49 @@ def evaluate_all_certs(
         custom = None
         hostname = leaf_row["hostname"]
         port = leaf_row["port"]
+        owner_info: dict | None = None
         if hostname and port:
             host_td = host_thresholds.get((hostname, port))
             if host_td is not None:
                 custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
+            owner_info = host_owners.get((hostname, port))
         alerts = evaluate_thresholds(
-            cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom
+            cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
+            owner_info=owner_info,
         )
         all_alerts.extend(alerts)
     return all_alerts
 
 
-def _format_message(cert: Certificate, days: int, threshold: int) -> str:
+def _format_message(
+    cert: Certificate, days: int, threshold: int, *, owner_info: dict | None = None
+) -> str:
     """See AC-05."""
     action = (
         "Renew this certificate immediately."
         if days <= 7
         else "Plan a renewal soon."
     )
-    return (
+    msg = (
         f"Certificate '{cert.display_name}' "
         f"(subject: {cert.subject}) "
         f"expires on {cert.not_after.isoformat()} "
         f"({days} days remaining; threshold: <={threshold}d). "
         f"Recommended action: {action}"
     )
+    if owner_info:
+        parts = []
+        if owner_info.get("owner_name"):
+            parts.append(f"Owner: {owner_info['owner_name']}")
+        if owner_info.get("owner_email"):
+            parts.append(f"Contact: {owner_info['owner_email']}")
+        if owner_info.get("owner_slack"):
+            parts.append(f"Slack: {owner_info['owner_slack']}")
+        if parts:
+            msg += " " + "; ".join(parts)
+    if owner_info and owner_info.get("renewal_status") == "in_progress":
+        msg += " (renewal in progress)"
+    return msg
 
 
 def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
@@ -202,7 +238,10 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
     msg["From"] = config.from_addr
-    msg["To"] = ", ".join(config.recipients)
+    all_recipients = list(config.recipients) + [
+        r for r in alert.extra_recipients if r not in config.recipients
+    ]
+    msg["To"] = ", ".join(all_recipients)
     msg.set_content(alert.message)
     try:
         if config.smtp_port == 465:
@@ -239,13 +278,16 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
         if payload.lstrip().startswith("{"):
             content_type = "application/json"
     else:
-        payload = json.dumps({
+        payload_dict = {
             "alert_type": alert.alert_type,
             "cert_id": alert.cert_id,
             "message": alert.message,
             "threshold_days": alert.threshold_days,
             "status": alert.status,
-        })
+        }
+        if alert.extra_recipients:
+            payload_dict["extra_recipients"] = alert.extra_recipients
+        payload = json.dumps(payload_dict)
         content_type = "application/json"
     req = urllib.request.Request(
         config.url,

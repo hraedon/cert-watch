@@ -34,16 +34,41 @@ templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 register_filters(templates)
 
 
-def _setup_logging() -> None:
-    """Configure structured logging for cert-watch."""
+def _setup_logging(log_format: str = "text") -> None:
+    """Configure logging for cert-watch. Supports 'text' (default) and 'json' formats."""
+    import json as _json
     import sys
+
+    class _JsonFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            entry = {
+                "timestamp": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
+                "level": record.levelname,
+                "logger": record.name,
+                "message": record.getMessage(),
+            }
+            if record.exc_info and record.exc_info[1]:
+                entry["exception"] = self.formatException(record.exc_info)
+            extra = {
+                k: v for k, v in record.__dict__.items()
+                if k not in logging.LogRecord(
+                    "", 0, "", 0, "", (), None
+                ).__dict__ and k not in ("message", "asctime")
+            }
+            if extra:
+                entry["extra"] = extra
+            return _json.dumps(entry, default=str)
+
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-            datefmt="%Y-%m-%dT%H:%M:%S",
+    if log_format == "json":
+        handler.setFormatter(_JsonFormatter())
+    else:
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s %(message)s",
+                datefmt="%Y-%m-%dT%H:%M:%S",
+            )
         )
-    )
     root = logging.getLogger("cert_watch")
     if not root.handlers:
         root.addHandler(handler)
@@ -53,8 +78,8 @@ def _setup_logging() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """FastAPI lifespan: starts the daily scheduler and tears it down on shutdown."""
-    _setup_logging()
     s = Settings.from_env()
+    _setup_logging(log_format=s.log_format)
     init_schema(s.db_path)
     auth = s.build_auth_provider()
     app.state.auth_provider = auth

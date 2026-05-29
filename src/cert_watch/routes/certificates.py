@@ -101,6 +101,22 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     for cr in chain_rows:
         c = _row_to_cert(cr)
         chain_days = c.days_until_expiry()
+        # Determine key type from raw DER
+        kt = "unknown"
+        try:
+            x509_chain = x509.load_der_x509_certificate(c.raw_der)
+            k = x509_chain.public_key()
+            kt = type(k).__name__
+            if isinstance(k, rsa.RSAPublicKey):
+                kt = f"RSA {k.key_size}"
+            elif isinstance(k, ec.EllipticCurvePublicKey):
+                kt = f"ECDSA {k.curve.name}"
+            elif isinstance(k, ed25519.Ed25519PublicKey):
+                kt = "Ed25519"
+            elif isinstance(k, ed448.Ed448PublicKey):
+                kt = "Ed448"
+        except Exception:
+            pass
         chain_certs.append({
             "id": cr["id"],
             "subject": c.subject,
@@ -109,6 +125,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "days_remaining": chain_days,
             "subject_cn": subject_cn(c.subject),
             "issuer_org": friendly_issuer(c.issuer),
+            "key_type": kt,
         })
 
     # Determine chain status

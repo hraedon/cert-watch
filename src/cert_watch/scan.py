@@ -225,14 +225,16 @@ def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
     Uses SSLSocket.getpeercert(True) for the leaf and (when available)
     get_unverified_chain/get_verified_chain for the full chain.
 
-    On Python 3.12 those methods don't exist, so we fall back to
-    openssl s_client to extract the full chain.
+    On Python < 3.13 those methods don't exist, so we fall back to
+    openssl s_client to extract the full chain. To avoid opening a
+    second TLS connection (which could hit a different backend behind
+    a load balancer), the openssl fallback is invoked as a standalone
+    scan — see _scan_via_openssl().
     """
     leaf = ssl_sock.getpeercert(binary_form=True)
     chain: list[bytes] = []
     if leaf:
         chain.append(leaf)
-    # Python 3.13+ exposes get_verified_chain / get_unverified_chain. Try both.
     for method in ("get_unverified_chain", "get_verified_chain"):
         getter = getattr(ssl_sock, method, None)
         if getter:
@@ -242,20 +244,12 @@ def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
                 continue
             chain = []
             for c in items:
-                # Newer cryptography returns _Certificate-like with public_bytes,
-                # cpython returns bytes-like via .public_bytes() on Certificate objects
                 try:
                     der = c.public_bytes(_der_enc())
                 except AttributeError:
                     der = bytes(c)
                 chain.append(der)
             break
-
-    # If we only have the leaf, try openssl s_client for the full chain
-    if len(chain) <= 1:
-        openssl_chain = _get_chain_via_openssl(ssl_sock, hostname)
-        if openssl_chain:
-            chain = openssl_chain
 
     return chain
 
@@ -266,23 +260,26 @@ _PEM_CERT_PATTERN = re.compile(
 )
 
 
-def _get_chain_via_openssl(ssl_sock, hostname: str) -> list[bytes]:
-    """Extract the full certificate chain using openssl s_client.
+def _scan_via_openssl(
+    hostname: str, port: int, timeout: float, *, allow_private: bool = True,
+    dns_servers: tuple[str, ...] = (),
+) -> list[bytes]:
+    """Extract the full certificate chain using a single openssl s_client call.
 
-    This is a fallback for Python 3.12 where SSLSocket lacks
-    get_unverified_chain() / get_verified_chain().
+    This is used on Python < 3.13 where SSLSocket lacks chain access
+    methods. Instead of opening a *second* TLS connection alongside the
+    Python one (which could hit a different backend behind a load
+    balancer), we do ONE openssl s_client connection and parse the PEM
+    output for both leaf and chain.
     """
-    if not hostname:
-        return []
-
     try:
-        peer_addr = ssl_sock.getpeername()
-    except (OSError, AttributeError):
+        _family, sockaddr = _resolve_host(
+            hostname, port, allow_private=allow_private, dns_servers=dns_servers,
+        )
+    except OSError:
         return []
 
-    host = peer_addr[0]
-    port = peer_addr[1]
-
+    host = sockaddr[0]
     try:
         proc = subprocess.run(
             [
@@ -293,7 +290,7 @@ def _get_chain_via_openssl(ssl_sock, hostname: str) -> list[bytes]:
             ],
             input=b"Q\n",
             capture_output=True,
-            timeout=10,
+            timeout=timeout,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return []
@@ -314,7 +311,14 @@ def _get_chain_via_openssl(ssl_sock, hostname: str) -> list[bytes]:
         except Exception:
             continue
 
-    return result if len(result) > 1 else []
+    return result
+
+
+def _has_native_chain_api() -> bool:
+    """Check if the current Python supports native chain extraction (3.13+)."""
+    return hasattr(ssl.SSLSocket, "get_unverified_chain") or hasattr(
+        ssl.SSLSocket, "get_verified_chain"
+    )
 
 
 def _der_enc():
@@ -381,7 +385,19 @@ def _scan_host_once(
     allow_private: bool = True,
     dns_servers: tuple[str, ...] = (),
 ) -> ScannedEntry | ScanError:
-    """Single TLS handshake attempt — no retry logic."""
+    """Single TLS handshake attempt — no retry logic.
+
+    On Python < 3.13, native chain extraction is unavailable. Rather than
+    opening a second TLS connection to the same host (which can hit a
+    different backend behind a load balancer), we use openssl s_client
+    as the primary connection, getting both leaf and chain from one call.
+    """
+    if not _has_native_chain_api():
+        return _scan_host_via_openssl(
+            hostname, port, timeout=timeout,
+            allow_private=allow_private, dns_servers=dns_servers,
+        )
+
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=verify, allow_private=allow_private,
@@ -421,6 +437,78 @@ def _scan_host_once(
         port=port,
         leaf=leaf_parsed,
         chain=chain_certs,
+        scanned_at=datetime.now(UTC),
+    )
+
+
+def _scan_host_via_openssl(
+    hostname: str,
+    port: int,
+    *,
+    timeout: float,
+    allow_private: bool,
+    dns_servers: tuple[str, ...],
+) -> ScannedEntry | ScanError:
+    """Scan using openssl s_client only — one connection for both leaf and chain.
+
+    Used on Python < 3.13 where SSLSocket lacks native chain methods.
+    If openssl is unavailable or fails, falls back to the Python TLS
+    connection (leaf-only, no chain).
+    """
+    der_chain = _scan_via_openssl(
+        hostname, port, timeout, allow_private=allow_private, dns_servers=dns_servers,
+    )
+
+    if der_chain:
+        leaf_parsed = parse_certificate(der_chain[0])
+        if isinstance(leaf_parsed, Certificate):
+            chain_certs: list[Certificate] = []
+            for der in der_chain[1:]:
+                cp = parse_certificate(der)
+                if isinstance(cp, Certificate):
+                    cp.is_leaf = False
+                    chain_certs.append(cp)
+            return ScannedEntry(
+                host=hostname,
+                port=port,
+                leaf=leaf_parsed,
+                chain=chain_certs,
+                scanned_at=datetime.now(UTC),
+            )
+
+    # Fallback: try Python TLS connection for leaf-only scan
+    try:
+        ssl_sock = _open_tls_connection(
+            hostname, port, timeout, verify=False,
+            allow_private=allow_private, dns_servers=dns_servers,
+        )
+    except (TimeoutError, OSError) as exc:
+        return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
+    except Exception as exc:  # noqa: BLE001
+        return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
+
+    try:
+        leaf = ssl_sock.getpeercert(binary_form=True)
+    finally:
+        with contextlib.suppress(Exception):
+            ssl_sock.close()
+
+    if not leaf:
+        return ScanError(
+            hostname=hostname, port=port, error_message="no certificate presented"
+        )
+
+    leaf_parsed = parse_certificate(leaf)
+    if not isinstance(leaf_parsed, Certificate):
+        return ScanError(
+            hostname=hostname, port=port, error_message=leaf_parsed.message
+        )
+
+    return ScannedEntry(
+        host=hostname,
+        port=port,
+        leaf=leaf_parsed,
+        chain=[],
         scanned_at=datetime.now(UTC),
     )
 

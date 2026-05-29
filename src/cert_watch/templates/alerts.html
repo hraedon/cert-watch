@@ -22,16 +22,16 @@
 {% endmacro %}
 
 {% block content %}
-<div style="padding:22px 26px;max-width:1080px">
+<div class="cw-page--constrained">
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>
       <h1>Alerts</h1>
       <div class="cw-page-head-sub">Expiry &amp; scan notifications sent via email and webhook.</div>
     </div>
-    <div style="display:flex;gap:8px">
-      <span class="cw-chip" style="padding:6px 10px">{{ svg_icon('bell', 12) }}Email</span>
-      <span class="cw-chip" style="padding:6px 10px">{{ svg_icon('link', 12) }}Webhook</span>
+    <div class="cw-flex cw-gap-8">
+      <span class="cw-chip cw-p-chip">{{ svg_icon('bell', 12) }}Email</span>
+      <span class="cw-chip cw-p-chip">{{ svg_icon('link', 12) }}Webhook</span>
     </div>
   </div>
 
@@ -46,55 +46,56 @@
     {% endif %}
   {% endfor %}
 
-  <div class="cw-stats cw-stats-3" style="margin-bottom:18px">
+  <div class="cw-stats cw-stats-3 cw-mb-18">
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--accent)"></div>
-      <div class="cw-stat-top" style="color:var(--accent)">{{ svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Total alerts</span></div>
-      <div class="cw-stat-val" style="color:var(--text)">{{ ns.all_count }}</div>
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
+      <div class="cw-stat-top cw-stat-top-accent">{{ svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total alerts</span></div>
+      <div class="cw-stat-val cw-stat-val-default">{{ ns.all_count }}</div>
     </div>
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--crit)"></div>
-      <div class="cw-stat-top" style="color:var(--crit)">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Critical</span></div>
-      <div class="cw-stat-val" style="color:var(--crit)">{{ ns.critical_count }}</div>
+      <div class="cw-stat-rail cw-stat-rail-crit"></div>
+      <div class="cw-stat-top cw-stat-top-crit">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Critical</span></div>
+      <div class="cw-stat-val cw-stat-val-crit">{{ ns.critical_count }}</div>
     </div>
     <div class="cw-stat">
-      <div class="cw-stat-rail" style="background:var(--warn)"></div>
-      <div class="cw-stat-top" style="color:var(--warn)">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label" style="color:var(--text-2)">Warnings</span></div>
-      <div class="cw-stat-val" style="color:var(--warn)">{{ ns.warning_count }}</div>
+      <div class="cw-stat-rail cw-stat-rail-warn"></div>
+      <div class="cw-stat-top cw-stat-top-warn">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Warnings</span></div>
+      <div class="cw-stat-val cw-stat-val-warn">{{ ns.warning_count }}</div>
     </div>
   </div>
 
   {# ---- Alert list ---- #}
   {% if alerts %}
-    <div style="display:flex;flex-direction:column;gap:10px">
+    <div class="cw-flex-col cw-gap-10">
       {% for a in alerts %}
         {% set sev_color = 'var(--crit)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn)' if a.alert_type == 'expiry_warning' else 'var(--accent)' %}
         {% set sev_bg = 'var(--crit-soft)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn-soft)' if a.alert_type == 'expiry_warning' else 'var(--accent-soft)' %}
         {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'clock' %}
-        <div class="cw-panel" style="padding:14px 16px;display:flex;gap:14px;align-items:center;border-left:3px solid {{ sev_color }}">
-          <div style="width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;color:{{ sev_color }};background:{{ sev_bg }}">
+        <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}">
+          <div class="cw-alert-icon cw-sev-icon" style="--sev-color:{{ sev_color }};--sev-bg:{{ sev_bg }}">
             {{ svg_icon(icon_name, 17) }}
           </div>
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;gap:9px">
-              <span class="cw-host" style="font-size:13px">{{ a.subject or "(deleted)" }}</span>
+          <div class="cw-alert-body">
+            <div class="cw-flex cw-items-center cw-gap-8">
+              <span class="cw-host">{{ a.subject or "(deleted)" }}</span>
             </div>
-            <div style="font-size:12.5px;color:var(--text-2);margin-top:3px">{{ a.message }}</div>
+            <div class="cw-fz-12-5 cw-text-text-2 cw-mt-3">{{ a.message }}</div>
           </div>
-          <div style="text-align:right;min-width:110px">
-            <div style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:500;color:{{ 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' }}">
-              <span style="width:6px;height:6px;border-radius:3px;background:{{ 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' }}"></span>{{ a.status }}
+          <div class="cw-alert-meta">
+            {% set dot_color = 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' %}
+            <div class="cw-status-dot cw-dot-color" style="--dot-color:{{ dot_color }}">
+              <span class="cw-status-dot__mark"></span>{{ a.status }}
             </div>
-            <div class="mono" style="font-size:11px;color:var(--text-3);margin-top:4px">{{ a.created_at[:16] if a.created_at else '' }}</div>
+            <div class="mono cw-fz-11 cw-text-text-3 cw-mt-4">{{ a.created_at[:16] if a.created_at else '' }}</div>
           </div>
         </div>
       {% endfor %}
     </div>
   {% else %}
-    <div class="cw-panel" style="padding:64px 0;text-align:center">
-      <div style="width:52px;height:52px;border-radius:14px;background:var(--ok-soft);color:var(--ok);display:inline-flex;align-items:center;justify-content:center;margin-bottom:14px">{{ svg_icon('check-circle', 24) }}</div>
-      <div style="font-size:15px;font-weight:600">No alerts recorded</div>
-      <div style="font-size:13px;color:var(--text-3);margin-top:5px">Alerts will appear here when certificates expire or scans fail.</div>
+    <div class="cw-panel cw-empty-state">
+      <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ svg_icon('check-circle', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">No alerts recorded</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Alerts will appear here when certificates expire or scans fail.</div>
     </div>
   {% endif %}
 </div>

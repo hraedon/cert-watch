@@ -14,45 +14,45 @@
 </head>
 <body>
   <div class="cw-app">
-    <div class="cw-page" style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+    <div class="cw-page" class="cw-login-center">
       <div class="cw-panel cw-form-panel">
-        <div style="text-align:center;margin-bottom:24px">
-          <div class="cw-mark" style="width:40px;height:40px;border-radius:10px;margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:#fff;background:linear-gradient(150deg, var(--accent), var(--accent-2));box-shadow:0 2px 8px var(--accent-soft)">
+        <div class="cw-login-intro">
+          <div class="cw-mark" class="cw-login-mark">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
           </div>
-          <h2 style="margin:0;font-size:18px;font-weight:600">Sign in to cert-watch</h2>
+          <h2 class="cw-login-title">Sign in to cert-watch</h2>
         </div>
 
         {% if error %}
-          <div style="padding:10px 14px;background:var(--crit-soft);border:1px solid color-mix(in srgb, var(--crit) 30%, transparent);border-radius:var(--radius);color:var(--crit);font-size:13px;margin-bottom:16px">
+          <div class="cw-login-error">
             {{ error }}
           </div>
         {% endif %}
 
         {% if supports_form_login %}
           <form method="post" action="/login">
-            <div class="cw-field" style="margin-bottom:12px">
+            <div class="cw-field" class="cw-mb-12">
               <label class="cw-label">Username</label>
               <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
             </div>
-            <div class="cw-field" style="margin-bottom:16px">
+            <div class="cw-field" class="cw-mb-16">
               <label class="cw-label">Password</label>
               <input class="cw-input" type="password" name="password" required placeholder="password">
             </div>
-            <button type="submit" class="cw-btn primary" style="width:100%;justify-content:center">Sign in</button>
+            <button type="submit" class="cw-btn primary" class="cw-btn--expand">Sign in</button>
           </form>
         {% endif %}
 
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
-          <div style="margin-top:20px;text-align:center">
-            <a href="/auth/login" class="cw-btn primary" style="width:100%;justify-content:center;text-decoration:none">
+          <div class="cw-login-oauth-wrap">
+            <a href="/auth/login" class="cw-btn primary" class="cw-btn--expand cw-no-decoration">
               Sign in with {{ provider | title }}
             </a>
           </div>
         {% endif %}
 
         {% if not supports_form_login and provider not in ("oauth", "entra", "azure", "oidc") %}
-          <div style="text-align:center;padding:20px 0;color:var(--text-3);font-size:13px">
+          <div class="cw-login-noauth">
             No authentication provider configured.
           </div>
         {% endif %}

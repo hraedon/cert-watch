@@ -27,6 +27,16 @@ logger = logging.getLogger("cert_watch.routes.api")
 router = APIRouter()
 
 
+def _pagination_links(request: Request, path: str, page: int, limit: int, total: int) -> dict:
+    """Build HATEOAS pagination links for a JSON API response."""
+    pages = (total + limit - 1) // limit if limit else 0
+    base = str(request.base_url).rstrip("/") + path
+    links: dict[str, str | None] = {"self": f"{base}?page={page}&limit={limit}"}
+    links["next"] = f"{base}?page={page + 1}&limit={limit}" if page < pages else None
+    links["prev"] = f"{base}?page={page - 1}&limit={limit}" if page > 1 else None
+    return links
+
+
 def _get_settings(request: Request) -> Settings:
     return request.app.state.settings
 
@@ -45,13 +55,15 @@ def api_list_certificates(request: Request, page: int = 1, limit: int = 50) -> J
     page = max(page, 1)
     total = count_dashboard_leaves(db)
     rows = list_dashboard_rows(db, page=page, per_page=limit)
+    pages = (total + limit - 1) // limit if limit else 0
     return JSONResponse(content={
         "certificates": rows,
         "pagination": {
             "page": page,
             "limit": limit,
             "total": total,
-            "pages": (total + limit - 1) // limit if limit else 0,
+            "pages": pages,
+            **_pagination_links(request, "/api/certificates", page, limit, total),
         },
     })
 
@@ -130,6 +142,10 @@ def api_list_hosts(request: Request, page: int = 1, limit: int = 50) -> JSONResp
                 "port": h.port,
                 "tags": h.tags,
                 "scan_interval_hours": h.scan_interval_hours,
+                "owner_name": h.owner_name,
+                "owner_email": h.owner_email,
+                "owner_slack": h.owner_slack,
+                "renewal_status": h.renewal_status,
                 "added_at": h.added_at.isoformat(),
             }
             for h in page_hosts
@@ -139,7 +155,63 @@ def api_list_hosts(request: Request, page: int = 1, limit: int = 50) -> JSONResp
             "limit": limit,
             "total": total,
             "pages": (total + limit - 1) // limit if limit else 0,
+            **_pagination_links(request, "/api/hosts", page, limit, total),
         },
+    })
+
+
+@router.patch("/api/hosts/{host_id}/owner")
+async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
+    """Update owner/contact and renewal status for a host."""
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is not None and not isinstance(auth, NoAuthProvider):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        username = validate_session(token)
+        if not username:
+            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+        csrf_err = await check_csrf(request)
+        if csrf_err:
+            return JSONResponse(content={"error": csrf_err}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+
+    valid_statuses = {"pending", "in_progress", "renewed"}
+    renewal_status = body.get("renewal_status")
+    if renewal_status is not None and renewal_status not in valid_statuses:
+        return JSONResponse(
+            content={"error": f"renewal_status must be one of {valid_statuses}"},
+            status_code=400,
+        )
+    for field in ("owner_name", "owner_email", "owner_slack"):
+        val = body.get(field)
+        if val is not None and not isinstance(val, str):
+            return JSONResponse(
+                content={"error": f"{field} must be a string"},
+                status_code=400,
+            )
+
+    db = _db_path(request)
+    repo = SqliteHostRepository(db)
+    host = repo.get(host_id)
+    if host is None:
+        return JSONResponse(content={"error": "host not found"}, status_code=404)
+
+    repo.update_owner(
+        host_id,
+        owner_name=body.get("owner_name"),
+        owner_email=body.get("owner_email"),
+        owner_slack=body.get("owner_slack"),
+        renewal_status=renewal_status,
+    )
+    updated = repo.get(host_id)
+    return JSONResponse(content={
+        "id": host_id,
+        "owner_name": updated.owner_name,
+        "owner_email": updated.owner_email,
+        "owner_slack": updated.owner_slack,
+        "renewal_status": updated.renewal_status,
     })
 
 
@@ -163,6 +235,7 @@ def api_list_alerts(request: Request, page: int = 1, limit: int = 50) -> JSONRes
             "limit": limit,
             "total": total,
             "pages": (total + limit - 1) // limit if limit else 0,
+            **_pagination_links(request, "/api/alerts", page, limit, total),
         },
     })
 

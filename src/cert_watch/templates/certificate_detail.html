@@ -36,25 +36,25 @@
 {% endmacro %}
 
 {% block content %}
-<div style="padding:20px 26px">
+<div class="cw-page-wrap">
   {# ---- Breadcrumb ---- #}
   <div class="cw-breadcrumb">
     <a href="/" class="cw-link">Certificates</a>
     {{ svg_icon('chevron-right', 13) }}
-    <span class="mono" style="color:var(--text-2)">{{ subject_cn }}</span>
+    <span class="mono cw-text-text-2">{{ subject_cn }}</span>
   </div>
 
   {# ---- Header ---- #}
-  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px">
+  <div class="cw-page-head cw-page-head--start cw-mb-20">
     <div>
-      <div style="display:flex;align-items:center;gap:12px">
-        <h1 class="mono" style="margin:0;font-size:22px;font-weight:600;letter-spacing:-.5px">{{ subject_cn }}</h1>
+      <div class="cw-flex cw-items-center cw-gap-12">
+        <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0">{{ subject_cn }}</h1>
         <span class="cw-pill {{ urgency }}">
           <span class="dot"></span>
           {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
         </span>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:9px">
+      <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
         {% if cert.source == 'scanned' %}
           <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
         {% elif cert.source == 'uploaded' %}
@@ -62,20 +62,20 @@
         {% else %}
           <span class="cw-chip">{{ svg_icon('globe', 12, 1.6) }}Public CT</span>
         {% endif %}
-        <span style="font-size:12.5px;color:var(--text-3)" class="mono">
+        <span class="mono cw-fz-12-5 cw-text-text-3">
           {% if cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}{% elif cert.source == 'uploaded' %}uploaded file{% else %}discovered via Certificate Transparency{% endif %}
         </span>
       </div>
     </div>
-    <div style="display:flex;gap:8px">
+    <div class="cw-flex cw-gap-8">
       {% if hostname %}
-        <form method="post" action="/hosts/{{ cert_id }}/scan" style="display:inline">
+        <form method="post" action="/hosts/{{ cert_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
       <a href="/api/certificates/{{ cert_id }}" class="cw-btn">{{ svg_icon('download', 14) }}Download</a>
-      <form method="post" action="/certificates/{{ cert_id }}/delete" style="display:inline" class="confirm-form" data-confirm="Delete this certificate?">
+      <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-iconbtn" title="Delete">{{ svg_icon('trash', 15) }}</button>
       </form>
@@ -83,19 +83,20 @@
   </div>
 
   {# ---- Two-column layout ---- #}
-  <div style="display:grid;grid-template-columns:1.6fr 1fr;gap:18px;align-items:start">
+  <div class="cw-layout-16-1">
     {# ---- Left column ---- #}
     <div>
       {# Validity meter #}
-      <div class="cw-panel" style="padding:16px 18px;margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:12px">
+      <div class="cw-panel cw-panel--p-16-18 cw-mb-16">
+        <div class="cw-flex cw-justify-between cw-items-end cw-mb-12">
           <div>
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;margin-bottom:4px">TIME REMAINING</div>
-            <div style="display:flex;align-items:baseline;gap:8px">
-              <span style="font-size:30px;font-weight:600;letter-spacing:-1px;color:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
+            <div class="cw-fz-11 cw-text-text-3 cw-fw-500 cw-mb-4">TIME REMAINING</div>
+            <div class="cw-flex cw-items-baseline cw-gap-8">
+              {% set _tone = 'var(--expired)' if urgency == 'expired' else 'var(--crit)' if urgency == 'critical' else 'var(--warn)' if urgency == 'warning' else 'var(--ok)' %}
+              <span class="cw-fz-30 cw-fw-600 cw-ls-04em cw-tone-text" style="--tone:{{ _tone }}">
                 {% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}
               </span>
-              {% if days_remaining >= 0 %}<span style="font-size:14px;color:var(--text-2)">days</span>{% endif %}
+              {% if days_remaining >= 0 %}<span class="cw-fz-14 cw-text-text-2">days</span>{% endif %}
             </div>
           </div>
           <span class="cw-pill {{ urgency }}">
@@ -108,25 +109,25 @@
         {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
         {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
         {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
-        <div style="position:relative;height:8px;border-radius:5px;background:var(--inset);overflow:hidden">
-          <div style="position:absolute;inset:0;width:{{ pct }}%;background:linear-gradient(90deg, var(--ok), {% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %});border-radius:5px"></div>
+        <div class="cw-validity-bar-track">
+          <div class="cw-urgency-bar-fill" style="width:{{ pct }}%;--tone:{{ _tone }}"></div>
         </div>
-        <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11.5px" class="mono">
-          <span style="color:var(--text-3)">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
-          <span style="color:var(--text-3)">{{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }} · expires</span>
+        <div class="cw-flex cw-justify-between cw-mt-8 cw-fz-11-5 mono">
+          <span class="cw-text-text-3">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
+          <span class="cw-text-text-3">{{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }} · expires</span>
         </div>
       </div>
 
       {# SANs #}
-      <div class="cw-panel" style="padding:15px 18px;margin-bottom:16px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
           {{ svg_icon('globe', 15) }}
-          <span style="font-size:13.5px;font-weight:600">Subject Alternative Names</span>
-          <span class="mono" style="font-size:11.5px;color:var(--text-3);background:var(--inset);border-radius:5px;padding:1px 6px">{{ cert.san_dns_names | length }}</span>
+          <span class="cw-fz-13-5 cw-fw-600">Subject Alternative Names</span>
+          <span class="mono cw-fz-11-5 cw-text-text-3 cw-bg-inset cw-p-san-count">{{ cert.san_dns_names | length }}</span>
         </div>
-        <div style="display:flex;flex-wrap:wrap;gap:7px">
+        <div class="cw-flex cw-wrap cw-gap-7">
           {% for san in cert.san_dns_names %}
-            <span class="cw-chip san" style="font-size:12px;padding:4px 10px">
+            <span class="cw-chip san cw-fz-12 cw-p-san-chip">
               {{ svg_icon('globe', 11, 1.5) }}{{ san }}
             </span>
           {% endfor %}
@@ -137,67 +138,67 @@
       </div>
 
       {# Certificate details #}
-      <div class="cw-panel" style="padding:16px 18px">
-        <div style="font-size:13.5px;font-weight:600;margin-bottom:15px">Certificate details</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px 22px">
-          <div style="grid-column:span 2">
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SUBJECT</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5;word-break:break-word">{{ cert.subject }}</div>
+      <div class="cw-panel cw-panel--p-16-18">
+        <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Certificate details</div>
+        <div class="cw-grid-2-16-22">
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">SUBJECT</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.subject }}</div>
           </div>
-          <div style="grid-column:span 2">
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">ISSUER</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5;word-break:break-word">{{ cert.issuer }}</div>
-          </div>
-          <div>
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">KEY</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ key_type }}</div>
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">ISSUER</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.issuer }}</div>
           </div>
           <div>
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SIGNATURE</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ sig_alg }}</div>
-          </div>
-          <div style="grid-column:span 2">
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SERIAL NUMBER</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ serial }}</div>
-          </div>
-          <div style="grid-column:span 2">
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">SHA-256 FINGERPRINT</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ fingerprint }}</div>
+            <div class="cw-detail-label">KEY</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ key_type }}</div>
           </div>
           <div>
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">ISSUED</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}</div>
+            <div class="cw-detail-label">SIGNATURE</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ sig_alg }}</div>
+          </div>
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">SERIAL NUMBER</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ serial }}</div>
+          </div>
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">SHA-256 FINGERPRINT</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ fingerprint }}</div>
           </div>
           <div>
-            <div style="font-size:11px;color:var(--text-3);font-weight:500;letter-spacing:.03em;margin-bottom:5px">LAST SCANNED</div>
-            <div class="mono" style="font-size:12.5px;color:var(--text);line-height:1.5">{{ last_scan[:10] if last_scan else '—' }}</div>
+            <div class="cw-detail-label">ISSUED</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}</div>
+          </div>
+          <div>
+            <div class="cw-detail-label">LAST SCANNED</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ last_scan[:10] if last_scan else '—' }}</div>
           </div>
         </div>
       </div>
 
       {# Notes #}
-      <div class="cw-panel" style="padding:15px 18px;margin-top:16px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
           {{ svg_icon('file', 15) }}
-          <span style="font-size:13.5px;font-weight:600">Notes &amp; procedures</span>
+          <span class="cw-fz-13-5 cw-fw-600">Notes &amp; procedures</span>
           <div class="cw-spacer"></div>
-          <form method="post" action="/certificates/{{ cert_id }}/notes" style="display:inline">
+          <form method="post" action="/certificates/{{ cert_id }}/notes" class="cw-inline">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <textarea name="notes" style="display:none" id="notes-hidden">{{ cert.notes }}</textarea>
+            <textarea name="notes" class="cw-hidden" id="notes-hidden">{{ cert.notes }}</textarea>
           </form>
           <button class="cw-btn ghost sm" type="button" onclick="toggleNotes()">
             {{ svg_icon('key', 13) }}<span id="notes-btn-label">Edit</span>
           </button>
         </div>
         <div id="notes-view" onclick="toggleNotes()" class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
-        <div id="notes-edit" style="display:none">
+        <div id="notes-edit" class="cw-hidden">
           <textarea id="notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ cert.notes }}</textarea>
-          <div style="display:flex;gap:8px;margin-top:8px">
+          <div class="cw-flex cw-gap-8 cw-mt-8">
             <button class="cw-btn sm" type="button" onclick="toggleNotes()">Cancel</button>
             <button class="cw-btn primary sm" type="button" onclick="saveNotes()">Save</button>
           </div>
         </div>
-        <div style="display:flex;align-items:center;gap:6px;margin-top:9px;font-size:11px;color:var(--text-3)">
+        <div class="cw-flex cw-items-center cw-gap-6 cw-mt-9 cw-fz-11 cw-text-text-3">
           {{ svg_icon('clock', 11, 1.6) }}
           <span>Markdown supported · saved to this certificate</span>
         </div>
@@ -205,28 +206,28 @@
     </div>
 
     {# ---- Right column — chain ---- #}
-    <div class="cw-panel" style="padding:16px 18px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+    <div class="cw-panel cw-panel--p-16-18">
+      <div class="cw-flex cw-items-center cw-gap-8 cw-mb-16">
         {{ svg_icon('link', 15) }}
-        <span style="font-size:13.5px;font-weight:600">Certificate chain</span>
+        <span class="cw-fz-13-5 cw-fw-600">Certificate chain</span>
       </div>
 
       {# Leaf node #}
-      <div class="cw-chain-node" style="margin-bottom:14px">
-        <div class="cw-chain-dot" style="border-color:var(--accent)"></div>
+      <div class="cw-chain-node cw-mb-14">
+        <div class="cw-chain-dot cw-border-accent"></div>
         {% if chain %}<div class="cw-chain-line"></div>{% endif %}
-        <div class="cw-panel" style="padding:11px 13px;background:var(--panel-2)">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-            <span class="cw-host" style="font-size:13px">{{ subject_cn }}</span>
-            <span style="font-size:10.5px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap">Leaf · end-entity</span>
+        <div class="cw-panel cw-panel--p-11-13">
+          <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
+            <span class="cw-host cw-fz-13">{{ subject_cn }}</span>
+            <span class="cw-label-leaf">Leaf · end-entity</span>
           </div>
-          <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px">
+          <div class="cw-flex cw-items-center cw-gap-10 cw-mt-8 cw-fz-11-5">
             <span class="cw-chip">{{ svg_icon('key', 11, 1.6) }}{{ key_type }}</span>
-            <span class="mono" style="color:var(--text-3)">exp {{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }}</span>
+            <span class="mono cw-text-text-3">exp {{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }}</span>
             <div class="cw-spacer"></div>
-            <span style="display:inline-flex;align-items:center;gap:5px;color:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
-              <span style="width:6px;height:6px;border-radius:3px;background:{% if urgency == 'expired' %}var(--expired){% elif urgency == 'critical' %}var(--crit){% elif urgency == 'warning' %}var(--warn){% else %}var(--ok){% endif %}"></span>
-              <span style="font-size:11.5px;font-weight:500">{% if days_remaining < 0 %}expired{% else %}{{ days_remaining }}d{% endif %}</span>
+            <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ _tone }}">
+              <span class="cw-status-dot__mark"></span>
+              <span class="cw-fw-500">{% if days_remaining < 0 %}expired{% else %}{{ days_remaining }}d{% endif %}</span>
             </span>
           </div>
         </div>
@@ -236,21 +237,22 @@
       {% for c in chain %}
         {% set c_days = c.days_remaining %}
         {% set c_urg = c_days | urgency %}
-        <div class="cw-chain-node" style="margin-bottom:{% if loop.last %}14px{% else %}14px{% endif %}">
-          <div class="cw-chain-dot" style="border-color:var(--text-2)"></div>
+        <div class="cw-mb-14 cw-chain-node">
+          <div class="cw-chain-dot cw-border-text-2"></div>
           {% if not loop.last %}<div class="cw-chain-line"></div>{% endif %}
-          <div class="cw-panel" style="padding:11px 13px;background:var(--panel-2)">
-            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
-              <span class="cw-host" style="font-size:13px">{{ c.subject_cn }}</span>
-              <span style="font-size:10.5px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.03em;white-space:nowrap">Intermediate CA</span>
+          <div class="cw-panel cw-panel--p-11-13">
+            <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
+              <span class="cw-host cw-fz-13">{{ c.subject_cn }}</span>
+              <span class="cw-label-inter">Intermediate CA</span>
             </div>
-            <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:11.5px">
-              <span class="cw-chip">{{ svg_icon('key', 11, 1.6) }}RSA 2048</span>
-              <span class="mono" style="color:var(--text-3)">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
+            <div class="cw-flex cw-items-center cw-gap-10 cw-mt-8 cw-fz-11-5">
+              <span class="cw-chip">{{ svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
+              <span class="mono cw-text-text-3">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
               <div class="cw-spacer"></div>
-              <span style="display:inline-flex;align-items:center;gap:5px;color:{% if c_urg == 'expired' %}var(--expired){% elif c_urg == 'critical' %}var(--crit){% elif c_urg == 'warning' %}var(--warn){% else %}var(--ok){% endif %}">
-                <span style="width:6px;height:6px;border-radius:3px;background:{% if c_urg == 'expired' %}var(--expired){% elif c_urg == 'critical' %}var(--crit){% elif c_urg == 'warning' %}var(--warn){% else %}var(--ok){% endif %}"></span>
-                <span style="font-size:11.5px;font-weight:500">{% if c_days < 0 %}expired{% else %}{{ c_days }}d{% endif %}</span>
+              {% set c_tone = 'var(--expired)' if c_urg == 'expired' else 'var(--crit)' if c_urg == 'critical' else 'var(--warn)' if c_urg == 'warning' else 'var(--ok)' %}
+              <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ c_tone }}">
+                <span class="cw-status-dot__mark"></span>
+                <span class="cw-fw-500">{% if c_days < 0 %}expired{% else %}{{ c_days }}d{% endif %}</span>
               </span>
             </div>
           </div>
@@ -258,27 +260,29 @@
       {% endfor %}
 
       {# Chain status banner #}
-      {% if chain_status == 'public' or chain_status == 'private' %}
-        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--ok-soft);color:var(--ok)">
+      {% set _banner_map = {
+        'public': ('var(--ok-soft)', 'var(--ok)'),
+        'private': ('var(--ok-soft)', 'var(--ok)'),
+        'incomplete': ('var(--warn-soft)', 'var(--warn)'),
+        'self-signed': ('var(--accent-soft)', 'var(--accent)'),
+        'invalid': ('var(--crit-soft)', 'var(--crit)')
+      } %}
+      {% set _bg, _fg = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text)' )) %}
+      <div class="cw-chain-banner cw-mt-4 cw-p-9-11 cw-banner-tone" style="--banner-bg:{{ _bg }};--banner-color:{{ _fg }}">
+        {% if chain_status == 'public' or chain_status == 'private' %}
           {{ svg_icon('check-circle', 14) }}
-          <span style="font-size:12px;font-weight:500">Chain verified to trusted root</span>
-        </div>
-      {% elif chain_status == 'incomplete' %}
-        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--warn-soft);color:var(--warn)">
+          <span class="cw-fz-12 cw-fw-500">Chain verified to trusted root</span>
+        {% elif chain_status == 'incomplete' %}
           {{ svg_icon('alert', 14) }}
-          <span style="font-size:12px;font-weight:500">Server did not send intermediate(s) — chain rebuilt from known CAs</span>
-        </div>
-      {% elif chain_status == 'self-signed' %}
-        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--accent-soft);color:var(--accent)">
+          <span class="cw-fz-12 cw-fw-500">Server did not send intermediate(s) — chain rebuilt from known CAs</span>
+        {% elif chain_status == 'self-signed' %}
           {{ svg_icon('key', 14) }}
-          <span style="font-size:12px;font-weight:500">Self-signed certificate</span>
-        </div>
-      {% elif chain_status == 'invalid' %}
-        <div style="display:flex;align-items:center;gap:7px;margin-top:4px;padding:9px 11px;border-radius:8px;background:var(--crit-soft);color:var(--crit)">
+          <span class="cw-fz-12 cw-fw-500">Self-signed certificate</span>
+        {% elif chain_status == 'invalid' %}
           {{ svg_icon('alert', 14) }}
-          <span style="font-size:12px;font-weight:500">Chain validation failed</span>
-        </div>
-      {% endif %}
+          <span class="cw-fz-12 cw-fw-500">Chain validation failed</span>
+        {% endif %}
+      </div>
     </div>
   </div>
 </div>

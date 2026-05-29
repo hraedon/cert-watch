@@ -1,0 +1,23 @@
+# FEAT-006: Database migration tooling (alembic)
+
+**Type:** feature
+**Severity:** low
+**Status:** new
+**Filed:** 2026-05-29
+
+## Problem
+
+Schema migrations are currently handled by ad-hoc `ALTER TABLE ... ADD COLUMN` statements in `init_schema()`. This approach has accumulated 8 migrations and is becoming fragile:
+
+- Migrations are not versioned or reversible — there's no `downgrade` path.
+- Column additions use `IF NOT EXISTS`-style checks that depend on `PRAGMA table_info`, which is SQLite-specific.
+- As the schema grows (owner fields, renewal status, future indexes), the migration function will become a maintenance liability. Adding a column that needs a default or a data migration (e.g. backfilling `renewal_status` from a computed value) is awkward.
+- Multi-database support (BC-031) is blocked because there's no way to apply migrations portably.
+
+## Suggested fix
+
+1. Introduce Alembic with auto-generated migrations from SQLAlchemy models.
+2. Define the schema as SQLAlchemy `Table` objects or declarative models alongside the current `database.py` DDL strings (or replace the DDL strings).
+3. `init_schema()` should check the current Alembic revision and stamp it rather than running raw DDL.
+4. Keep SQLite as the default — Alembic supports SQLite's limited ALTER TABLE via batch operations.
+5. This is a prerequisite for BC-031 (multi-database support).
