@@ -58,6 +58,9 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not e2e'"
+addopts = "-ra -m 'not e2e and not integration'"
 # E2E tests opt-in via `pytest -m e2e` (requires Playwright + browsers).
-markers = ["e2e: end-to-end tests requiring Playwright + a running app"]
+markers = [
+    "e2e: end-to-end tests requiring Playwright + a running app",
+    "integration: integration tests requiring external tools (e.g. openssl)",
+]
