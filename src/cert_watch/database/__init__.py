@@ -1,0 +1,78 @@
+"""Database layer package.
+
+Previously a single 1200-line module (`database.py`).  Split into:
+- `schema`     – DDL strings, `init_schema()`, migration logic
+- `connection` – `_connect`, `_iso`, `_parse_iso`, `_row_to_cert`
+- `repo`       – Repository classes (`CertificateRepository`, `AlertRepository`,
+                `SqliteHostRepository`, `SqliteTrustAnchorRepository`)
+- `queries`    – Dashboard helpers (`list_dashboard_rows`, `list_unified_entries`,
+                `count_dashboard_leaves`), `replace_scanned`, `delete_certificate_cascade`,
+                `list_alerts_with_subject`, `list_scan_history`
+
+All public names from the monolith are re-exported so external imports
+(`from cert_watch.database import X`) continue to work.
+"""
+
+# __future__ must stay at the top of the physical file
+from __future__ import annotations
+
+from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert
+
+# Dashboard & utility queries
+from cert_watch.database.queries import (
+    count_dashboard_leaves,
+    delete_certificate_cascade,
+    group_entries_by_fingerprint,
+    list_alerts_with_subject,
+    list_dashboard_rows,
+    list_scan_history,
+    list_unified_entries,
+    replace_scanned,
+)
+
+# Repositories & dataclasses
+from cert_watch.database.repo import (
+    Alert,
+    AlertRepository,
+    CertificateRepository,
+    HostEntry,
+    SqliteAlertRepository,
+    SqliteCertificateRepository,
+    SqliteHostRepository,
+    SqliteTrustAnchorRepository,
+    TrustAnchorEntry,
+)
+
+# Schema / connection
+from cert_watch.database.schema import _INDEXES_SCHEMA, _TABLES_SCHEMA, init_schema
+
+__all__ = [
+    # schema
+    "init_schema",
+    "_TABLES_SCHEMA",
+    "_INDEXES_SCHEMA",
+    # connection
+    "_connect",
+    "_iso",
+    "_parse_iso",
+    "_row_to_cert",
+    # repo
+    "Alert",
+    "AlertRepository",
+    "CertificateRepository",
+    "HostEntry",
+    "SqliteAlertRepository",
+    "SqliteCertificateRepository",
+    "SqliteHostRepository",
+    "SqliteTrustAnchorRepository",
+    "TrustAnchorEntry",
+    # queries
+    "count_dashboard_leaves",
+    "delete_certificate_cascade",
+    "group_entries_by_fingerprint",
+    "list_alerts_with_subject",
+    "list_dashboard_rows",
+    "list_scan_history",
+    "list_unified_entries",
+    "replace_scanned",
+]

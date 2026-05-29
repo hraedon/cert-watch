@@ -287,3 +287,297 @@ def upload_certificate_from_bytes(der_bytes, filename):
         return upload_certificate(tmp_path)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def test_group_entries_by_fingerprint():
+    """BC-033: scanned entries sharing a fingerprint are grouped."""
+    from cert_watch.database.queries import group_entries_by_fingerprint
+
+    entries = [
+        {
+            "id": "a",
+            "kind": "scanned",
+            "fingerprint_sha256": "fp_shared",
+            "host": "host1:443",
+            "name": "host1:443",
+            "subject": "*.example.com",
+            "issuer": "Test CA",
+            "not_before": "2026-01-01T00:00:00+00:00",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "days_remaining": 200,
+            "urgency": "healthy",
+            "leaf_urgency": "healthy",
+            "chain": [],
+            "chain_valid": True,
+            "chain_status": "public",
+            "replaces_cert_id": None,
+            "notes": "",
+            "san_dns_names": ["*.example.com"],
+            "host_id": "h1",
+            "last_scanned_at": None,
+            "scan_status": None,
+            "scan_error": None,
+            "added_at": None,
+            "owner_name": "",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_status": "pending",
+        },
+        {
+            "id": "b",
+            "kind": "scanned",
+            "fingerprint_sha256": "fp_shared",
+            "host": "host2:443",
+            "name": "host2:443",
+            "subject": "*.example.com",
+            "issuer": "Test CA",
+            "not_before": "2026-01-01T00:00:00+00:00",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "days_remaining": 200,
+            "urgency": "healthy",
+            "leaf_urgency": "healthy",
+            "chain": [],
+            "chain_valid": True,
+            "chain_status": "public",
+            "replaces_cert_id": None,
+            "notes": "",
+            "san_dns_names": ["*.example.com"],
+            "host_id": "h2",
+            "last_scanned_at": None,
+            "scan_status": None,
+            "scan_error": None,
+            "added_at": None,
+            "owner_name": "",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_status": "pending",
+        },
+        {
+            "id": "c",
+            "kind": "scanned",
+            "fingerprint_sha256": "fp_unique",
+            "host": "host3:443",
+            "name": "host3:443",
+            "subject": "unique.example.com",
+            "issuer": "Test CA",
+            "not_before": "2026-01-01T00:00:00+00:00",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "days_remaining": 300,
+            "urgency": "healthy",
+            "leaf_urgency": "healthy",
+            "chain": [],
+            "chain_valid": True,
+            "chain_status": "public",
+            "replaces_cert_id": None,
+            "notes": "",
+            "san_dns_names": [],
+            "host_id": "h3",
+            "last_scanned_at": None,
+            "scan_status": None,
+            "scan_error": None,
+            "added_at": None,
+            "owner_name": "",
+            "owner_email": "",
+            "owner_slack": "",
+            "renewal_status": "pending",
+        },
+        {
+            "id": "d",
+            "kind": "uploaded",
+            "fingerprint_sha256": "fp_upload",
+            "host": "(uploaded:file.pem)",
+            "name": "upload.example.com",
+            "subject": "upload.example.com",
+            "issuer": "Other CA",
+            "not_before": "2026-01-01T00:00:00+00:00",
+            "not_after": "2027-01-01T00:00:00+00:00",
+            "days_remaining": 365,
+            "urgency": "healthy",
+            "leaf_urgency": "healthy",
+            "chain": [],
+            "chain_valid": None,
+            "chain_status": None,
+            "replaces_cert_id": None,
+            "notes": "",
+            "san_dns_names": [],
+            "source": "uploaded",
+        },
+    ]
+    result = group_entries_by_fingerprint(entries)
+    assert len(result) == 3
+    grouped_entry = [e for e in result if e["kind"] == "grouped"][0]
+    assert grouped_entry["host_count"] == 2
+    assert grouped_entry["healthy_count"] == 2
+    assert len(grouped_entry["hosts"]) == 2
+    assert grouped_entry["subject"] == "*.example.com"
+    ungrouped_scanned = [e for e in result if e["kind"] == "scanned"]
+    assert len(ungrouped_scanned) == 1
+    assert ungrouped_scanned[0]["host"] == "host3:443"
+    uploaded = [e for e in result if e["kind"] == "uploaded"]
+    assert len(uploaded) == 1
+
+
+def test_group_entries_mixed_urgency():
+    """BC-033: group urgency reflects worst host."""
+    from cert_watch.database.queries import group_entries_by_fingerprint
+
+    base = {
+        "kind": "scanned",
+        "fingerprint_sha256": "fp_mixed",
+        "subject": "*.example.com",
+        "issuer": "Test CA",
+        "not_before": "2026-01-01T00:00:00+00:00",
+        "not_after": "2027-01-01T00:00:00+00:00",
+        "chain": [],
+        "chain_valid": True,
+        "chain_status": "public",
+        "replaces_cert_id": None,
+        "notes": "",
+        "san_dns_names": [],
+        "host_id": "h1",
+        "last_scanned_at": None,
+        "scan_status": None,
+        "scan_error": None,
+        "added_at": None,
+        "owner_name": "",
+        "owner_email": "",
+        "owner_slack": "",
+        "renewal_status": "pending",
+    }
+    entries = [
+        {
+            **base, "id": "a", "host": "h1:443", "name": "h1:443",
+            "days_remaining": 200, "urgency": "healthy",
+            "leaf_urgency": "healthy",
+        },
+        {
+            **base, "id": "b", "host": "h2:443", "name": "h2:443",
+            "days_remaining": 3, "urgency": "critical",
+            "leaf_urgency": "critical",
+        },
+    ]
+    result = group_entries_by_fingerprint(entries)
+    assert len(result) == 1
+    assert result[0]["kind"] == "grouped"
+    assert result[0]["urgency"] == "critical"
+    assert result[0]["healthy_count"] == 1
+    assert result[0]["host_count"] == 2
+
+
+def test_dashboard_grouped_by_fingerprint(tmp_path, monkeypatch):
+    """BC-033: dashboard groups hosts with same cert fingerprint."""
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add("host1.example.com", 443)
+    hosts.add("host2.example.com", 443)
+    hosts.add("host3.example.com", 443)
+
+    now = datetime.now(UTC)
+    shared_cert = Certificate(
+        subject="*.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        san_dns_names=["*.example.com"],
+        fingerprint_sha256="a" * 64,
+    )
+    unique_cert = Certificate(
+        subject="unique.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=200),
+        san_dns_names=["unique.example.com"],
+        fingerprint_sha256="b" * 64,
+    )
+
+    replace_scanned(db, "host1.example.com", 443, shared_cert, [], True)
+    replace_scanned(db, "host2.example.com", 443, shared_cert, [], True)
+    replace_scanned(db, "host3.example.com", 443, unique_cert, [], True)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert r.status_code == 200
+    assert "2 hosts" in r.text
+    assert "cw-group-header" in r.text
+    assert "group-hosts-" in r.text
+    assert "host3.example.com" in r.text
+
+
+def test_dashboard_grouped_search_matches_host(tmp_path, monkeypatch):
+    """BC-033: search matches hosts inside a group."""
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add("alpha.example.com", 443)
+    hosts.add("beta.example.com", 443)
+
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="*.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        san_dns_names=["*.example.com"],
+        fingerprint_sha256="a" * 64,
+    )
+
+    replace_scanned(db, "alpha.example.com", 443, cert, [], True)
+    replace_scanned(db, "beta.example.com", 443, cert, [], True)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/?q=beta")
+    assert r.status_code == 200
+    assert "2 hosts" in r.text
+    assert "*.example.com" in r.text
+
+
+def test_dashboard_grouped_disabled(tmp_path, monkeypatch):
+    """BC-033: grouped=0 shows individual rows."""
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add("host1.example.com", 443)
+    hosts.add("host2.example.com", 443)
+
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="*.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        san_dns_names=["*.example.com"],
+        fingerprint_sha256="a" * 64,
+    )
+
+    replace_scanned(db, "host1.example.com", 443, cert, [], True)
+    replace_scanned(db, "host2.example.com", 443, cert, [], True)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/?grouped=0")
+    assert r.status_code == 200
+    assert "2 hosts" not in r.text
+    assert "cw-group-header" not in r.text
+    assert "host1.example.com" in r.text
+    assert "host2.example.com" in r.text

@@ -14,6 +14,7 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
+    group_entries_by_fingerprint,
     list_alerts_with_subject,
     list_dashboard_rows,
     list_scan_history,
@@ -91,24 +92,32 @@ def dashboard(
     sort_by: str = "days",
     sort_order: str = "asc",
     page: int = 1,
+    grouped: int = 1,
 ) -> HTMLResponse:
     db = _db_path(request)
     entries = list_unified_entries(db)
 
+    if grouped:
+        entries = group_entries_by_fingerprint(entries)
+
     if q:
         ql = q.lower()
-        entries = [
-            e for e in entries
-            if ql in (e.get("name") or "").lower()
-            or ql in (e.get("subject") or "").lower()
-            or ql in (e.get("issuer") or "").lower()
-            or ql in (e.get("host") or "").lower()
-        ]
+
+        def _match(e: dict) -> bool:
+            fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
+            if e.get("kind") == "grouped":
+                for h in e.get("hosts", []):
+                    fields.extend([h.get("host"), h.get("name")])
+            return any(ql in (f or "").lower() for f in fields)
+
+        entries = [e for e in entries if _match(e)]
     if urgency:
         entries = [e for e in entries if e["urgency"] == urgency]
     if source:
         if source == "scanned":
-            entries = [e for e in entries if e["kind"] in ("scanned", "pending")]
+            entries = [
+                e for e in entries if e["kind"] in ("scanned", "pending", "grouped")
+            ]
         else:
             entries = [e for e in entries if e["source"] == source]
 
@@ -116,7 +125,6 @@ def dashboard(
     ctx = get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
 
-    # Server-side sorting
     _sort_keys = {
         "name": lambda e: (e.get("name") or "").lower(),
         "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
@@ -158,6 +166,7 @@ def dashboard(
             "total_entries": total,
             "has_prev": page > 1,
             "has_next": page < total_pages,
+            "grouped": grouped,
             **ctx,
         },
     )

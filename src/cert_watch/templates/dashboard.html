@@ -36,33 +36,35 @@
     <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
   {% elif name == 'x' %}
     <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+  {% elif name == 'chevron-down' %}
+    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
   {% endif %}
 {% endmacro %}
 
 {% macro stat_card(tone, icon, label, value, sub) %}
   <div class="cw-stat">
     {% if tone == 'default' %}
-      <div class="cw-stat-rail" style="background:var(--accent)"></div>
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
     {% elif tone == 'attention' %}
-      <div class="cw-stat-rail" style="background:var(--crit)"></div>
+      <div class="cw-stat-rail cw-stat-rail-crit"></div>
     {% elif tone == 'warning' %}
-      <div class="cw-stat-rail" style="background:var(--warn)"></div>
+      <div class="cw-stat-rail cw-stat-rail-warn"></div>
     {% elif tone == 'ok' %}
-      <div class="cw-stat-rail" style="background:var(--ok)"></div>
+      <div class="cw-stat-rail cw-stat-rail-ok"></div>
     {% endif %}
-    <div class="cw-stat-top" style="{% if tone == 'default' %}color:var(--accent){% elif tone == 'attention' %}color:var(--crit){% elif tone == 'warning' %}color:var(--warn){% elif tone == 'ok' %}color:var(--ok){% endif %}">
+    <div class="cw-stat-top {% if tone == 'default' %}cw-stat-top-accent{% elif tone == 'attention' %}cw-stat-top-crit{% elif tone == 'warning' %}cw-stat-top-warn{% elif tone == 'ok' %}cw-stat-top-ok{% endif %}">
       {{ svg_icon(icon, 15, 1.8) }}
-      <span class="cw-stat-label" style="color:var(--text-2)">{{ label }}</span>
+      <span class="cw-stat-label cw-stat-label-color">{{ label }}</span>
     </div>
-    <div class="cw-stat-val" style="{% if tone == 'default' %}color:var(--text){% else %}{% if tone == 'attention' %}color:var(--crit){% elif tone == 'warning' %}color:var(--warn){% elif tone == 'ok' %}color:var(--ok){% endif %}{% endif %}">{{ value }}</div>
+    <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
     {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
   </div>
 {% endmacro %}
 
 {% macro sort_link(column, label) %}
   {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
-  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" style="color:inherit;text-decoration:none">{{ label }}</a>
-  {% if sort_by == column %}<span style="margin-left:4px;opacity:.7">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
+  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="cw-sort-link">{{ label }}</a>
+  {% if sort_by == column %}<span class="cw-sort-arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -78,21 +80,21 @@
   {% endif %}
 {% endfor %}
 
-<div style="padding:22px 26px">
+<div class="cw-page-wrap">
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>
       <h1>Certificates</h1>
       <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
     </div>
-    <div style="display:flex;gap:8px">
+    <div class="cw-flex cw-gap-8">
       <a href="/api/export/certificates.csv" class="cw-btn">{{ svg_icon('download', 14) }}Export CSV</a>
       <a href="/api/export/certificates.json" class="cw-btn">{{ svg_icon('download', 14) }}Export JSON</a>
     </div>
   </div>
 
   {# ---- Stat cards ---- #}
-  <div class="cw-stats" style="margin-bottom:18px">
+  <div class="cw-stats cw-mb-18">
     {{ stat_card('default', 'shield', 'Tracked certificates', total_entries, '') }}
     {{ stat_card('attention', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
     {{ stat_card('warning', 'clock', 'Expiring ≤ 14 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
@@ -100,7 +102,7 @@
   </div>
 
   {# ---- Toolbar ---- #}
-  <form class="cw-toolbar" method="get" action="/" style="margin-bottom:14px">
+  <form method="get" action="/" class="cw-toolbar cw-mb-14">
     <div class="cw-search">
       {{ svg_icon('search', 15) }}
       <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…">
@@ -121,32 +123,41 @@
     <table class="cw-table">
       <thead>
         <tr>
-          <th class="sortable" style="padding-top:14px">{{ sort_link('name', 'Certificate') }}</th>
+          <th class="sortable cw-th-pt-14">{{ sort_link('name', 'Certificate') }}</th>
           <th class="sortable">{{ sort_link('issuer', 'Issuer') }}</th>
           <th>Source</th>
           <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
-          <th style="width:120px">Status</th>
-          <th style="width:96px"></th>
+          <th class="cw-w-120">Status</th>
+          <th class="cw-w-96"></th>
         </tr>
       </thead>
       <tbody>
         {% for e in entries %}
-          {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-          <tr class="cw-row-link" onclick="window.location='/certificates/{{ e.id }}'" style="cursor:pointer">
-            <td style="max-width:360px">
-              <div style="display:flex;align-items:center;gap:8px">
-                <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
+          {% if e.kind == 'grouped' %}
+          {# ---- Grouped entry (multiple hosts, same fingerprint) ---- #}
+          {% set urg = e.urgency %}
+          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" onclick="toggleGroup({{ e.group_id }})">
+            <td class="cw-td-mw-360">
+              <div class="cw-cert-chips">
+                <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ svg_icon('chevron-down', 14) }}</span>
+                <span class="cw-host">{{ e.name or '—' }}</span>
+                <span class="cw-chip cw-chip-hosts">{{ e.host_count }} hosts</span>
+                {% if e.healthy_count < e.host_count %}
+                  <span class="cw-chip cw-chip-incomplete">{{ e.healthy_count }}/{{ e.host_count }} healthy</span>
+                {% else %}
+                  <span class="cw-chip cw-chip-public">all healthy</span>
+                {% endif %}
                 {% if e.chain_status == 'public' %}
-                  <span class="cw-chip" style="color:var(--ok);border-color:color-mix(in srgb, var(--ok) 30%, transparent)">public</span>
+                  <span class="cw-chip cw-chip-public">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip" style="color:var(--warn);border-color:color-mix(in srgb, var(--warn) 30%, transparent);background:var(--warn-soft)">incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
-                  <span class="cw-chip" style="color:var(--ok);border-color:color-mix(in srgb, var(--ok) 30%, transparent)">renewed</span>
+                  <span class="cw-chip cw-chip-renewed">renewed</span>
                 {% endif %}
               </div>
               {% if e.san_dns_names %}
-                <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px">
+                <div class="cw-san-list">
                   {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
                   {% for san in (san_list[:2] if san_list else []) %}
                     <span class="cw-chip san">{{ san }}</span>
@@ -158,11 +169,123 @@
               {% endif %}
             </td>
             <td>
-              <div style="font-size:13px;color:var(--text);font-weight:500">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
+              <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
               <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
             </td>
             <td>
-              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-start">
+              <div class="cw-table-chip-col">
+                <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
+                {% if e.chain_valid == true %}
+                  <span class="cw-chip cw-chip-muted">{{ svg_icon('link', 11, 1.6) }}full chain</span>
+                {% elif e.chain_valid == false %}
+                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                {% endif %}
+              </div>
+            </td>
+            <td class="cw-td-minw-150">
+              <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
+              {% if e.days_remaining is not none %}
+                {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+                {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
+                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+              {% endif %}
+              {% if e.days_remaining is not none %}
+                {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
+                <div class="cw-expiry-bar-wrap">
+                  <div class="cw-bar" title="{{ e.days_remaining }} days">
+                    <i class="cw-urgency-bar" style="--tone:{{ _c }};--tone-opacity:{{ _o }};width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %}"></i>
+                  </div>
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <span class="cw-pill {{ urg }}">
+                <span class="dot"></span>
+                {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+              </span>
+            </td>
+            <td onclick="event.stopPropagation()">
+              <div class="cw-rowact">
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
+                  {{ svg_icon('chevron-right', 14) }}
+                </a>
+              </div>
+            </td>
+          </tr>
+          {# ---- Expandable host rows ---- #}
+          <tr class="cw-group-hosts" id="group-hosts-{{ e.group_id }}">
+            <td colspan="6" class="cw-group-hosts-cell">
+              {% for h in e.hosts %}
+              <div class="cw-host-row">
+                <div class="cw-host-row-info">
+                  <a href="/certificates/{{ h.id }}" class="cw-host cw-no-decoration">{{ h.host }}</a>
+                  {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
+                  <span class="cw-pill {{ h_urg }}"><span class="dot"></span>{% if h_urg == 'expired' %}Expired{% elif h_urg == 'critical' %}Critical{% elif h_urg == 'warning' %}Warning{% elif h_urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}</span>
+                  {% if h.scan_status == 'failure' %}
+                    <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
+                  {% elif h.last_scanned_at %}
+                    <span class="cw-text-text-3 cw-fz-11-5">scanned {{ h.last_scanned_at[:16] }}</span>
+                  {% endif %}
+                  {% if h.owner_name %}
+                    <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
+                  {% endif %}
+                </div>
+                <div class="cw-host-row-actions">
+                  {% if h.host_id %}
+                    <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
+                      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                      <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30">
+                        {{ svg_icon('refresh', 14) }}
+                      </button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+              {% endfor %}
+            </td>
+          </tr>
+          {% else %}
+          {# ---- Normal (non-grouped) entry ---- #}
+          {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+          <tr class="cw-row-link" onclick="window.location='/certificates/{{ e.id }}'">
+            <td class="cw-td-mw-360">
+              <div class="cw-cert-chips">
+                <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
+                {% if e.chain_status == 'public' %}
+                  <span class="cw-chip cw-chip-public">public</span>
+                {% elif e.chain_status == 'incomplete' %}
+                  <span class="cw-chip cw-chip-incomplete">incomplete</span>
+                {% endif %}
+                {% if e.replaces_cert_id %}
+                  <span class="cw-chip cw-chip-renewed">renewed</span>
+                {% endif %}
+                {% if e.renewal_status == 'in_progress' %}
+                  <span class="cw-chip cw-chip-renewing">renewing</span>
+                {% elif e.renewal_status == 'renewed' %}
+                  <span class="cw-chip cw-chip-renewed">renewed</span>
+                {% endif %}
+                {% if e.owner_name %}
+                  <span class="cw-chip cw-chip-owner">{{ e.owner_name }}</span>
+                {% endif %}
+              </div>
+              {% if e.san_dns_names %}
+                <div class="cw-san-list">
+                  {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
+                  {% for san in (san_list[:2] if san_list else []) %}
+                    <span class="cw-chip san">{{ san }}</span>
+                  {% endfor %}
+                  {% if san_list and san_list | length > 2 %}
+                    <span class="cw-chip more">+{{ san_list | length - 2 }} more</span>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </td>
+            <td>
+              <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
+              <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
+            </td>
+            <td>
+              <div class="cw-table-chip-col">
                 {% if e.source == 'scanned' %}
                   <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
                 {% elif e.source == 'uploaded' %}
@@ -172,23 +295,25 @@
                 {% endif %}
                 {% if e.source == 'scanned' %}
                   {% if e.chain_valid == true %}
-                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ svg_icon('link', 11, 1.6) }}full chain</span>
+                    <span class="cw-chip cw-chip-muted">{{ svg_icon('link', 11, 1.6) }}full chain</span>
                   {% elif e.chain_valid == false %}
-                    <span class="cw-chip" style="color:var(--warn);border-color:color-mix(in srgb, var(--warn) 30%, transparent);background:var(--warn-soft)">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                    <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
                   {% endif %}
                 {% endif %}
               </div>
             </td>
-            <td style="min-width:150px">
-              <div class="mono" style="font-size:12.5px;color:var(--text);font-weight:500">{{ e.not_after[:10] if e.not_after else '—' }}</div>
+            <td class="cw-td-minw-150">
+              <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
               {% if e.days_remaining is not none %}
-                <div class="cw-sub" style="{% if e.days_remaining < 0 %}color:var(--expired){% elif e.days_remaining <= 7 %}color:var(--crit){% elif e.days_remaining <= 14 %}color:var(--warn){% endif %}margin-bottom:6px">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+                {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+                {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
+                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
               {% if e.days_remaining is not none %}
                 {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
-                <div style="width:130px">
+                <div class="cw-expiry-bar-wrap">
                   <div class="cw-bar" title="{{ e.days_remaining }} days">
-                    <i style="width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %};background:{% if e.days_remaining < 0 %}var(--expired);opacity:.5{% elif e.days_remaining <= 7 %}var(--crit){% elif e.days_remaining <= 14 %}var(--warn){% else %}var(--ok){% endif %};border-radius:3px;display:block;height:100%"></i>
+                    <i class="cw-urgency-bar" style="--tone:{{ _c }};--tone-opacity:{{ _o }};width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %}"></i>
                   </div>
                 </div>
               {% endif %}
@@ -202,19 +327,20 @@
             <td onclick="event.stopPropagation()">
               <div class="cw-rowact">
                 {% if e.host_id %}
-                  <form method="post" action="/hosts/{{ e.host_id }}/scan" style="display:inline">
+                  <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="cw-iconbtn" title="Scan now" style="width:30px;height:30px" data-testid="scan-now-btn">
+                    <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30" data-testid="scan-now-btn">
                       {{ svg_icon('refresh', 14) }}
                     </button>
                   </form>
                 {% endif %}
-                <a href="/certificates/{{ e.id }}" class="cw-iconbtn" title="Details" style="width:30px;height:30px;text-decoration:none">
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
                   {{ svg_icon('chevron-right', 14) }}
                 </a>
               </div>
             </td>
           </tr>
+          {% endif %}
         {% endfor %}
       </tbody>
     </table>
@@ -230,7 +356,7 @@
 
   {# ---- Pagination ---- #}
   {% if total_pages > 1 %}
-    <div style="display:flex;align-items:center;gap:1rem;margin:1rem 0;font-size:13px">
+    <div class="cw-pagination">
       {% if has_prev %}
         <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">&laquo; Prev</a>
       {% endif %}
@@ -243,23 +369,23 @@
 
   {# ---- Trust anchors ---- #}
   {% if trust_anchors %}
-    <div style="margin-top:24px">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+    <div class="cw-mt-24">
+      <div class="cw-trust-anchors-header">
         {{ svg_icon('link', 16) }}
-        <span style="font-size:14px;font-weight:600">Trust anchors</span>
+        <span class="cw-fz-14 cw-fw-600">Trust anchors</span>
       </div>
       <div class="cw-panel cw-table-wrap">
         <table class="cw-table">
           <thead>
-            <tr><th>Subject</th><th>Added</th><th style="width:100px"></th></tr>
+            <tr><th>Subject</th><th>Added</th><th class="cw-w-100"></th></tr>
           </thead>
           <tbody>
             {% for a in trust_anchors %}
               <tr>
-                <td class="mono" style="font-size:12.5px">{{ a.subject }}</td>
-                <td style="font-size:12.5px;color:var(--text-2)">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
+                <td class="mono cw-fz-12-5">{{ a.subject }}</td>
+                <td class="cw-fz-12-5 cw-text-text-2">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
                 <td>
-                  <form method="post" action="/trust-anchors/{{ a.id }}/delete" style="display:inline" class="confirm-form" data-confirm="Remove this trust anchor?">
+                  <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor?">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ svg_icon('trash', 13) }}Delete</button>
                   </form>
@@ -276,30 +402,30 @@
 {# ---- Add-host slide-over ---- #}
 <div class="cw-slide-bg" id="slide-bg" onclick="closeSlide()"></div>
 <div class="cw-slide" id="slide-panel">
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px;border-bottom:1px solid var(--border)">
+  <div class="cw-slide-head">
     <div>
-      <div style="font-size:15px;font-weight:600">Add certificates</div>
-      <div style="font-size:12px;color:var(--text-3);margin-top:2px">Scan a host, upload a file, or import in bulk.</div>
+      <div class="cw-fz-15 cw-fw-600">Add certificates</div>
+      <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Scan a host, upload a file, or import in bulk.</div>
     </div>
     <button class="cw-iconbtn" onclick="closeSlide()">{{ svg_icon('x', 16) }}</button>
   </div>
-  <div style="padding:16px 20px 0">
-    <div class="cw-seg" id="add-tabs" style="width:100%;display:grid;grid-template-columns:1fr 1fr 1fr">
+  <div class="cw-p-slide-top">
+    <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs">
       <button type="button" class="on" data-tab="scan" onclick="switchTab('scan')">{{ svg_icon('server', 13) }}Scan host</button>
       <button type="button" data-tab="upload" onclick="switchTab('upload')">{{ svg_icon('file', 13) }}Upload file</button>
       <button type="button" data-tab="bulk" onclick="switchTab('bulk')">{{ svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
-  <div style="flex:1;overflow:auto;padding:20px">
+  <div class="cw-p-slide-body">
     {# Scan host tab #}
     <div id="tab-scan" class="tab-body">
-      <form method="post" action="/hosts" style="display:flex;flex-direction:column;gap:16px">
+      <form method="post" action="/hosts" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-field">
           <label class="cw-label">Hostname</label>
           <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com">
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="cw-grid-2eq">
           <div class="cw-field">
             <label class="cw-label">Port</label>
             <input class="cw-input mono" type="number" name="port" value="443" min="1" max="65535">
@@ -309,55 +435,55 @@
             <input class="cw-input mono" type="number" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
           </div>
         </div>
-        <label style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--text-2);cursor:pointer">
+        <label class="cw-checkbox-label">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
         </label>
-        <div style="flex:1"></div>
-        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
-          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('refresh', 14) }}Add &amp; scan</button>
+        <div class="cw-flex-1"></div>
+        <div class="cw-form-footer">
+          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('refresh', 14) }}Add &amp; scan</button>
         </div>
       </form>
     </div>
     {# Upload file tab #}
-    <div id="tab-upload" class="tab-body" style="display:none">
-      <form method="post" action="/upload" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:16px">
+    <div id="tab-upload" class="tab-body cw-hidden">
+      <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" onclick="document.getElementById('file-input').click()">
-          <div style="width:38px;height:38px;border-radius:10px;background:var(--panel-2);display:inline-flex;align-items:center;justify-content:center;color:var(--accent);margin-bottom:10px">{{ svg_icon('upload', 18) }}</div>
-          <div style="font-size:13.5px;font-weight:600">Drop a certificate, or <span class="cw-link">browse</span></div>
-          <div style="font-size:11.5px;color:var(--text-3);margin-top:6px">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
-          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" style="display:none">
+          <div class="cw-drop-icon">{{ svg_icon('upload', 18) }}</div>
+          <div class="cw-fz-13-5 cw-fw-600">Drop a certificate, or <span class="cw-link">browse</span></div>
+          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
+          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden">
         </div>
         <div class="cw-field">
-          <label class="cw-label">Password <span style="color:var(--text-3)">(PKCS#12 only, optional)</span></label>
+          <label class="cw-label">Password <span class="cw-text-text-3">(PKCS#12 only, optional)</span></label>
           <input class="cw-input" type="password" name="password" placeholder="optional">
         </div>
-        <div style="flex:1"></div>
-        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
-          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('upload', 14) }}Upload</button>
+        <div class="cw-flex-1"></div>
+        <div class="cw-form-footer">
+          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('upload', 14) }}Upload</button>
         </div>
       </form>
     </div>
     {# Bulk import tab #}
-    <div id="tab-bulk" class="tab-body" style="display:none">
-      <form method="post" action="/hosts/import" enctype="multipart/form-data" style="display:flex;flex-direction:column;gap:16px">
+    <div id="tab-bulk" class="tab-body cw-hidden">
+      <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" onclick="document.getElementById('csv-input').click()">
-          <div style="width:38px;height:38px;border-radius:10px;background:var(--panel-2);display:inline-flex;align-items:center;justify-content:center;color:var(--accent);margin-bottom:10px">{{ svg_icon('file', 18) }}</div>
-          <div style="font-size:13.5px;font-weight:600">Drop a CSV, or <span class="cw-link">browse</span></div>
-          <div style="font-size:11.5px;color:var(--text-3);margin-top:6px">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
-          <input type="file" id="csv-input" name="file" required accept=".csv" style="display:none">
+          <div class="cw-drop-icon">{{ svg_icon('file', 18) }}</div>
+          <div class="cw-fz-13-5 cw-fw-600">Drop a CSV, or <span class="cw-link">browse</span></div>
+          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
+          <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
         </div>
-        <div style="font-size:12.5px;color:var(--text-2);background:var(--inset);border:1px solid var(--border);border-radius:9px;padding:11px 13px;line-height:1.5">
-          <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px;color:var(--text)">{{ svg_icon('file', 13) }}<b style="font-weight:600">Example</b></div>
-          <code class="mono" style="font-size:11.5px;color:var(--text-3)">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
+        <div class="cw-example-block">
+          <div class="cw-flex cw-items-center cw-gap-6 cw-mb-6 cw-text-text">{{ svg_icon('file', 13) }}<b class="cw-fw-600">Example</b></div>
+          <code class="mono cw-fz-11-5 cw-text-text-3">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
         </div>
-        <div style="flex:1"></div>
-        <div style="display:flex;gap:10px;padding-top:16px;border-top:1px solid var(--border)">
-          <button type="button" class="cw-btn" style="flex:1;justify-content:center" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary" style="flex:1;justify-content:center">{{ svg_icon('plus', 14) }}Import</button>
+        <div class="cw-flex-1"></div>
+        <div class="cw-form-footer">
+          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('plus', 14) }}Import</button>
         </div>
       </form>
     </div>
@@ -384,6 +510,14 @@ function switchTab(tab) {
   document.getElementById('tab-' + tab).style.display = 'flex';
   document.querySelectorAll('#add-tabs button').forEach(function(b) { b.classList.remove('on'); });
   document.querySelector('#add-tabs button[data-tab="' + tab + '"]').classList.add('on');
+}
+function toggleGroup(groupId) {
+  var row = document.getElementById('group-hosts-' + groupId);
+  var chevron = document.getElementById('chevron-' + groupId);
+  if (row) {
+    row.classList.toggle('cw-hidden');
+    if (chevron) chevron.classList.toggle('cw-group-chevron-open');
+  }
 }
 document.addEventListener('submit', function(e) {
   var form = e.target;

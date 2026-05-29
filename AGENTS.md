@@ -45,35 +45,39 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-9 open breadcrumbs in agent-notes: 0 critical, 0 high, 0 medium, 9 low.
+5 open breadcrumbs: 0 critical, 0 high, 2 medium, 3 low.
 
-- **BC-026** (low) — Missing unit tests for trust anchor CA validation (BC-024 follow-up)
-- **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan
-- **BC-028** (low) — openssl s_client fallback opens second TLS connection per scan (duplicate of BC-027, keep one)
-- **BC-029** (low) — REST API pagination lacks HATEOAS navigation links
-- **BC-030** (low) — app.py decomposition (in-progress, initial split done)
-- **BC-031** (low) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-032** (low) — Structured JSON logging for observability integration
-- **BC-033** (low) — Dashboard grouping by cert fingerprint with per-host status
-- **BC-034** (low) — Owner/contact field with alert routing and renewal status
+- **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
+- **BC-035** (low) — database.py is the new monolith (1200 lines)
+- **BC-036** (medium) — No integration test for openssl s_client scan path
+- **BC-037** (low) — Dashboard template inline styles unmaintainable
 - **FEAT-006** (low) — Database migration tooling (alembic)
 
 ### Recently resolved
 
+- **BC-033** (low) — Dashboard grouping by cert fingerprint with per-host status (resolved: fingerprint-based grouping with expand/collapse, host count badge, status summary)
+
 - **BC-016** (high) — Deploy lag: code current, ops push needed for CI
 - **BC-017** (medium) — E2E test now asserts host row + scan-history failure
-- **BC-022** (medium) — openssl s_client fallback for Python 3.12 chain extraction
+- **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan (resolved: single-connection strategy)
+- **BC-028** (low) — duplicate of BC-027
+- **BC-029** (low) — REST API pagination lacks HATEOAS navigation links (resolved: added self/next/prev links)
+- **BC-030** (low) — app.py decomposition (resolved: already complete at ~121 lines)
+- **BC-032** (low) — Structured JSON logging for observability integration (resolved: `CERT_WATCH_LOG_FORMAT=json`)
+- **BC-034** (low) — Owner/contact field with alert routing and renewal status (resolved: schema + API + alerts + dashboard)
 - **BC-023** (low) — DER-based issuer/subject comparison in validate_chain_order
 - **BC-024** (low) — Trust anchor CA validation (BasicConstraints check)
 - **BC-025** (low) — Private IP rejection includes CERT_WATCH_ALLOW_PRIVATE_IPS hint
 
 ### Recently implemented features
 
+- **Fingerprint grouping (BC-033)** — Dashboard groups hosts sharing the same leaf certificate fingerprint into expandable rows with host count badge and status summary. Toggle with `grouped=0` query param.
 - **Scan retry** — `scan_host()` retries transient failures (connection refused, timeout) up to 2 times with exponential backoff.
 - **Fast scheduler retry** — When hosts have no successful scan yet, the scheduler retries every hour instead of waiting for the daily cycle.
 - **Scan result diffing** — On renewal (fingerprint change), `replace_scanned()` logs what changed (expiry shift, SAN changes, issuer change).
 - **Confirmation dialogs** — Destructive actions ("Clear results", "Delete host", "Remove trust anchor") require `confirm()` before submitting.
 - **Rate limit headers** — API responses include `X-RateLimit-Remaining`, `X-RateLimit-Limit`, and `Retry-After` (on 429).
+- **Single-connection TLS scan** — On Python < 3.13, `scan_host()` uses a single `openssl s_client` call for both leaf and chain (instead of opening a second connection). Falls back to Python TLS for leaf-only if openssl is unavailable.
 - **System CA chain validation** — `chain_status()` checks the system trust store, so LE and other public CA chains show as "public" even when the root is omitted.
 - **Scan failure UX** — Scan failures show as yellow warnings (not red errors) with human-friendly messages.
 - **Rate limit enforcement** — API middleware returns 429 on rate limit exceeded (not just headers).
@@ -85,13 +89,16 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **Webhook retry** — `process_pending()` retries failed alerts up to 3 times with exponential backoff.
 - **Host export CSV** — `GET /api/export/hosts.csv` for bulk host list export.
 - **SQL-level pagination** — `list_dashboard_rows()` accepts sort/pagination params for efficient queries.
+- **HATEOAS pagination links** — All paginated API endpoints (`/api/certificates`, `/api/hosts`, `/api/alerts`) now include `self`, `next`, `prev` links.
+- **Owner/contact and renewal status** — `hosts` table has `owner_name`, `owner_email`, `owner_slack`, `renewal_status`. Alerts route to owners. `PATCH /api/hosts/{id}/owner` to update. Dashboard shows owner chip and renewal status.
+- **Structured JSON logging** — `CERT_WATCH_LOG_FORMAT=json` env var switches from text to JSON logs with `timestamp`, `level`, `logger`, `message` fields.
 
 ## Architecture notes
 
 - **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`).
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
-- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. `store_scanned()` delegates to `replace_scanned()` for path-based calls.
-- **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. `process_pending()` tries SMTP then webhook.
+- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls.
+- **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
 - **`app.py`** — FastAPI with lifespan (scheduler start/stop), CSRF middleware, auth middleware, rate limiting.
 
