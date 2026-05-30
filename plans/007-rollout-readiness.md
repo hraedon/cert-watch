@@ -21,7 +21,7 @@ they are explicitly out of scope here. Ship Tier 1, then reassess.
 | 1 | Lock the data API behind auth | BLOCKER | ✅ done (pre-plan) |
 | 2 | Audit log (who did what, when) | BLOCKER | pending |
 | 3 | Schema migrations + backup/restore | BLOCKER | pending |
-| 4 | "Internal deployment" profile (auth-required, secure defaults) | BLOCKER | pending |
+| 4 | Auth & authz: group/role gate, Entra+MFA / LDAPS fallback / break-glass admin, DC failover, secure profile | BLOCKER | pending |
 | 5 | Operator runbook | HIGH | pending |
 | 6 | `/metrics` exposure decision + scale ceiling doc | MEDIUM | pending |
 
@@ -175,33 +175,123 @@ stalls and trust evaporates. (Supersedes FEAT-006.)
 
 ---
 
-## Phase 4 — "Internal deployment" profile (BLOCKER)
+## Phase 4 — Authentication, authorization & secure deployment (BLOCKER)
 
 ### Why
 
-The default config is open-by-default (correct for the demo, wrong for work).
-A credible rollout ships an opinionated, secure-by-default profile so an
-operator can't accidentally stand up an unauthenticated inventory.
+Today both auth paths authenticate but don't *authorize* — any valid account
+gets full access, which is only marginally better than no auth. This system
+holds sensitive (if not strictly confidential) infrastructure data, so v1
+needs real group/role gating, MFA where possible, resilience when an IdP is
+unavailable, and a secure-by-default deployment posture.
 
-### Design
+**Provider strategy:** Entra OIDC (+ MFA / conditional access) is the
+**primary** path; LDAPS is the **fallback** for shops without Entra or
+unwilling to stand up an app registration. A **local break-glass admin** is the
+cross-provider last resort.
 
-- A documented deployment profile (compose override + k8s overlay) that sets:
-  `AUTH_PROVIDER` required, `CERT_WATCH_ALLOW_PRIVATE_IPS` per policy,
-  `CERT_WATCH_LOG_FORMAT=json`, secure cookies, and a sane scan cadence.
-- **Startup warning:** if the app binds a non-loopback interface with
-  `AUTH_PROVIDER` unset, log a prominent WARNING ("running without
-  authentication — inventory API is open"). Do not hard-fail (keeps the demo
-  and local dev working), but make the exposure loud.
-- Document the auth wiring for the likely workplace IdP (Entra/LDAP) end to end,
-  including the public-path list so operators know exactly what stays open.
+### 4.1 Authorization model (all providers)
+
+- **Required group/role gate.** A successful authN grants access only if the
+  identity holds ≥1 configured allowed group/role; otherwise it is denied even
+  with valid credentials. Single "trusted operator" role for v1.
+- **Deferred:** group→role split (e.g. admin vs read-only) and per-action RBAC.
+- Each provider returns the matched groups/roles on `AuthResult`; the login
+  handler enforces the gate; the session carries `actor` + role; Phase 2's
+  audit log records `actor` and whether the login was break-glass.
+
+### 4.2 Entra OIDC (primary)
+
+- **App Roles, not the raw `groups` claim.** Define roles on the app
+  registration, assign AD groups to them, gate on the `roles` claim. This
+  sidesteps the `groups`-claim overage (>~200 groups → Entra sends a Graph
+  pointer instead of the list).
+- **Verify the ID token signature against the IdP JWKS.** The current code
+  base64-decodes the token payload and checks `iss`/`aud` on *unverified*
+  claims. Replace with real JWT signature verification (authlib/JWKS), then
+  validate `iss`, `aud`, `exp`, and nonce on the verified claims.
+- Credential: client secret or (preferred) certificate, via env / `*_FILE` /
+  secret. **Secret expiry is a known outage mode** → covered by break-glass.
+
+### 4.3 LDAPS (fallback)
+
+- **Transitive group check** via AD's `LDAP_MATCHING_RULE_IN_CHAIN` OID
+  (`1.2.840.113556.1.4.1941`) so nested membership counts:
+  `(&(sAMAccountName={user})(memberOf:1.2.840.113556.1.4.1941:=<group-DN>))`.
+- **Private-CA trust (fail closed).** AD LDAPS certs are issued by an internal
+  CA, never public PKI. Configure `ldap3.Tls(validate=ssl.CERT_REQUIRED,
+  ca_certs_file=… | ca_certs_data=…)` — `CERT_REQUIRED` is load-bearing
+  (ldap3 defaults to `CERT_NONE`, i.e. encrypted-but-unauthenticated). If
+  `ldaps://` is set with no CA, fail with a clear error rather than disabling
+  validation. Connect by the **DC FQDN that matches the cert SAN** (no IP).
+  Keep this CA **separate** from cert-watch's scan trust-anchor store — auth
+  trust must be operator-pinned, not sourced from mutable inventory data.
+- **DC failover.** `LDAP_SERVER` accepts a comma-separated list; build an
+  `ldap3.ServerPool([dc1, dc2], pool_strategy=FIRST, active=True)` sharing one
+  `Tls`, with a short `connect_timeout` so a dead DC fails fast to the next.
+  Both DCs chain to the same enterprise CA, so one CA bundle covers the pool.
+- Least-privilege bind account; `LDAP_BIND_PASSWORD_FILE`; TLS enforced.
+
+### 4.4 Local break-glass admin (cross-provider fallback)
+
+- **Why:** the primary IdP can be unavailable — DC down, Entra app secret
+  expired/misconfigured, discovery failing. A way in that depends on *no*
+  external system is required. It also bootstraps first-run setup before SSO is
+  wired.
+- **Disabled unless explicitly configured:** `CERT_WATCH_LOCAL_ADMIN_USER` +
+  `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (+ `*_FILE`). Store a **hash, never
+  plaintext** — stdlib `hashlib.scrypt` (no new dependency), per-account salt,
+  `hmac.compare_digest`. Ship a `cert-watch hash-password` CLI helper so the
+  plaintext never lands in config.
+- **Always usable when configured — NOT gated on provider health.** Rejected
+  alternative: "only honor it when the provider is down." Provider-health is
+  gameable (an attacker who can DoS the DC *forces* the fallback) and racy.
+  Security instead comes from: disabled-by-default, a single known identity, a
+  strong hash, and making every use **loud**.
+- **Every break-glass login emits a WARNING log + an audit row flagged
+  `break_glass=true`** (alert on it). Documented guidance: rotate after use.
+- It **bypasses the group gate** (no directory groups → implicit admin role)
+  and **bypasses MFA** (inherent to break-glass) — documented as the accepted
+  tradeoff, mitigated by a long random secret and alerting.
+- **Login UX:** when the provider is OIDC (redirect-based, no form), the login
+  page must *still* render a secondary local-admin username/password form when
+  a local admin is configured. Primary button = SSO; break-glass = the small
+  print.
+- **Evaluation order:** submitted username == local-admin user → verify hash
+  (works regardless of provider state) → else → provider flow → group/role gate.
+
+### 4.5 Secure deployment profile
+
+- Documented profile (compose override + k8s overlay): `AUTH_PROVIDER` required,
+  `CERT_WATCH_ALLOW_PRIVATE_IPS` per policy, `CERT_WATCH_LOG_FORMAT=json`,
+  secure cookies, sane scan cadence.
+- **Startup warning** if the app binds a non-loopback interface with
+  `AUTH_PROVIDER` unset ("running without authentication — inventory API is
+  open"). Warn loudly; don't hard-fail (keeps demo/local dev working).
+- Document the end-to-end auth wiring (Entra app registration + App Roles; LDAP
+  bind account + CA + DC pool; local admin) and the public-path list.
 
 ### Acceptance criteria
 
-- AC-1: Following the profile docs yields an auth-required deployment with no
-  unauthenticated data routes (verified against the Phase 1 rule).
-- AC-2: Unauthenticated + non-loopback bind emits the startup WARNING; test
-  asserts the warning fires.
-- AC-3: The demo / `AUTH_PROVIDER`-unset path is unchanged (still works open).
+- AC-1 (authZ): a user not in any allowed group/role is denied despite valid
+  credentials — on both the OIDC and LDAP paths.
+- AC-2 (OIDC): the ID token signature is verified against JWKS; a token with a
+  bad/unknown signing key is rejected; a missing required role is denied.
+- AC-3 (LDAPS): the connection validates against the configured private CA;
+  an untrusted or missing-CA `ldaps://` fails closed (never silent
+  `CERT_NONE`); transitive group membership is honored.
+- AC-4 (failover): with two DCs configured, an unreachable DC1 fails over to
+  DC2 within `connect_timeout` and authN still succeeds.
+- AC-5 (break-glass): disabled when unconfigured; succeeds when the configured
+  provider is unreachable; every use emits a WARNING + an audit row flagged
+  break-glass; the password is persisted only as a hash and compared in
+  constant time.
+- AC-6 (secrets): every credential — LDAP bind password, OIDC client secret,
+  local-admin hash, LDAP CA bundle — is loadable via a `*_FILE` path for
+  k8s/Docker secret mounts.
+- AC-7 (profile): the secure profile yields an auth-required deployment with no
+  unauthenticated data routes; an open non-loopback bind warns at startup; the
+  `AUTH_PROVIDER`-unset demo path is unchanged.
 
 ---
 
