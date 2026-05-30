@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
-from cert_watch.auth import SESSION_COOKIE, SESSION_TTL, NoAuthProvider, create_session
+from cert_watch.auth import SESSION_COOKIE, SESSION_TTL, NoAuthProvider, check_authz, create_session
 from cert_watch.middleware import _COOKIE_SECURE
 
 logger = logging.getLogger("cert_watch.routes.auth")
@@ -52,6 +52,15 @@ async def login_submit(
     if not result.success:
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
+        )
+    # Authorization gate: check group/role membership
+    settings = getattr(request.app.state, "settings", None)
+    allowed_groups = list(settings.allowed_groups) if settings else []
+    allowed_roles = list(settings.allowed_roles) if settings else []
+    result = check_authz(result, allowed_groups, allowed_roles)
+    if not result.success:
+        return RedirectResponse(
+            url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
     token = create_session(result.username)
     response = RedirectResponse(url="/", status_code=303)
@@ -119,6 +128,17 @@ def oauth_callback(
     if not result.success:
         response = RedirectResponse(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
+        )
+        response.delete_cookie("cw_oauth_state")
+        return response
+    # Authorization gate: check group/role membership
+    settings = getattr(request.app.state, "settings", None)
+    allowed_groups = list(settings.allowed_groups) if settings else []
+    allowed_roles = list(settings.allowed_roles) if settings else []
+    result = check_authz(result, allowed_groups, allowed_roles)
+    if not result.success:
+        response = RedirectResponse(
+            url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
         response.delete_cookie("cw_oauth_state")
         return response

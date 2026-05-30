@@ -82,7 +82,7 @@
           <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
-      <a href="/api/certificates/{{ cert_id }}" class="cw-btn">{{ svg_icon('download', 14) }}Download PEM</a>
+      <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn">{{ svg_icon('download', 14) }}Download PEM</a>
       <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-iconbtn" title="Delete">{{ svg_icon('trash', 15) }}</button>

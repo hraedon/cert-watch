@@ -6,13 +6,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import (
+    AuthResult,
     LDAPAuthProvider,
     NoAuthProvider,
     OAuthProvider,
     build_auth_provider,
+    check_authz,
     create_session,
     validate_session,
 )
+from cert_watch.config import read_secret
 
 
 def _reload_app(monkeypatch, tmp_path, **env):
@@ -439,3 +442,192 @@ def test_authenticated_user_can_access_all_routes(tmp_path, monkeypatch, _mock_l
         assert r.status_code == 200
         r = client.get("/scan-history")
         assert r.status_code == 200
+
+
+# ---------- read_secret tests ----------
+
+
+def test_read_secret_env_var(tmp_path):
+    import os
+    os.environ["TEST_SECRET_VAL"] = "from-env"
+    os.environ.pop("TEST_SECRET_VAL_FILE", None)
+    try:
+        assert read_secret("TEST_SECRET_VAL") == "from-env"
+    finally:
+        os.environ.pop("TEST_SECRET_VAL", None)
+
+
+def test_read_secret_file_variant(tmp_path):
+    import os
+    secret_file = tmp_path / "secret_pw"
+    secret_file.write_text("from-file\n")
+    os.environ.pop("TEST_SECRET_PW", None)
+    os.environ["TEST_SECRET_PW_FILE"] = str(secret_file)
+    try:
+        assert read_secret("TEST_SECRET_PW") == "from-file"
+    finally:
+        os.environ.pop("TEST_SECRET_PW_FILE", None)
+
+
+def test_read_secret_env_takes_precedence_over_file(tmp_path):
+    import os
+    secret_file = tmp_path / "secret_both"
+    secret_file.write_text("from-file\n")
+    os.environ["TEST_SECRET_BOTH"] = "from-env"
+    os.environ["TEST_SECRET_BOTH_FILE"] = str(secret_file)
+    try:
+        assert read_secret("TEST_SECRET_BOTH") == "from-env"
+    finally:
+        os.environ.pop("TEST_SECRET_BOTH", None)
+        os.environ.pop("TEST_SECRET_BOTH_FILE", None)
+
+
+def test_read_secret_file_strips_whitespace(tmp_path):
+    import os
+    secret_file = tmp_path / "secret_ws"
+    secret_file.write_text("  value with spaces  \n\n")
+    os.environ.pop("TEST_SECRET_WS", None)
+    os.environ["TEST_SECRET_WS_FILE"] = str(secret_file)
+    try:
+        assert read_secret("TEST_SECRET_WS") == "value with spaces"
+    finally:
+        os.environ.pop("TEST_SECRET_WS_FILE", None)
+
+
+def test_read_secret_returns_none_when_unset():
+    import os
+    os.environ.pop("TEST_SECRET_UNSET", None)
+    os.environ.pop("TEST_SECRET_UNSET_FILE", None)
+    assert read_secret("TEST_SECRET_UNSET") is None
+
+
+def test_read_secret_missing_file(tmp_path):
+    import os
+    os.environ.pop("TEST_SECRET_MISS", None)
+    os.environ["TEST_SECRET_MISS_FILE"] = str(tmp_path / "nonexistent")
+    try:
+        assert read_secret("TEST_SECRET_MISS") is None
+    finally:
+        os.environ.pop("TEST_SECRET_MISS_FILE", None)
+
+
+# ---------- check_authz (authorization gate) tests ----------
+
+
+def test_authz_allows_when_no_groups_or_roles_configured():
+    result = AuthResult(success=True, username="alice")
+    assert check_authz(result, [], []) == result
+
+
+def test_authz_allows_matching_group():
+    result = AuthResult(success=True, username="alice", groups=["devops", "admins"])
+    checked = check_authz(result, ["admins"], [])
+    assert checked.success is True
+    assert checked.username == "alice"
+
+
+def test_authz_allows_matching_role():
+    result = AuthResult(success=True, username="alice", roles=["viewer", "editor"])
+    checked = check_authz(result, [], ["editor"])
+    assert checked.success is True
+
+
+def test_authz_denies_no_matching_group_or_role():
+    result = AuthResult(success=True, username="alice", groups=["devops"], roles=["viewer"])
+    checked = check_authz(result, ["admins"], ["superadmin"])
+    assert checked.success is False
+    assert "not in an allowed group or role" in checked.error
+
+
+def test_authz_denies_no_groups_or_roles_on_result():
+    result = AuthResult(success=True, username="alice")
+    checked = check_authz(result, ["admins"], ["superadmin"])
+    assert checked.success is False
+
+
+def test_authz_preserves_username_on_deny():
+    result = AuthResult(success=True, username="bob", groups=["interns"])
+    checked = check_authz(result, ["admins"], [])
+    assert checked.username == "bob"
+    assert checked.success is False
+
+
+def test_authz_allows_group_or_role_match():
+    result = AuthResult(success=True, username="alice", groups=["devops"], roles=["viewer"])
+    checked = check_authz(result, ["devops"], ["superadmin"])
+    assert checked.success is True
+    checked2 = check_authz(result, ["admins"], ["viewer"])
+    assert checked2.success is True
+
+
+# ---------- AuthZ gate in login flow ----------
+
+
+def test_authz_gate_denies_user_without_group(tmp_path, monkeypatch, _mock_ldap3):
+    """When CERT_WATCH_ALLOWED_GROUPS is set, a user not in any allowed group is denied."""
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    def connection_factory(server, user=None, password=None, auto_bind=False):
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return mock_conn
+
+    _mock_ldap3.Connection = connection_factory
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+        CERT_WATCH_ALLOWED_GROUPS="admins,operators",
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.post(
+            "/login",
+            data={"username": "alice", "password": "pass"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        loc = r.headers["location"]
+        assert "access%20denied" in loc
+
+
+def test_authz_no_gate_when_no_groups_configured(tmp_path, monkeypatch, _mock_ldap3):
+    """When ALLOWED_GROUPS is empty, any authenticated user is accepted."""
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    def connection_factory(server, user=None, password=None, auto_bind=False):
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return mock_conn
+
+    _mock_ldap3.Connection = connection_factory
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.post(
+            "/login",
+            data={"username": "alice", "password": "pass"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] in ("/", "http://testserver/")

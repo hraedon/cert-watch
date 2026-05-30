@@ -95,10 +95,12 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **HATEOAS pagination links** — All paginated API endpoints (`/api/certificates`, `/api/hosts`, `/api/alerts`) now include `self`, `next`, `prev` links.
 - **Owner/contact and renewal status** — `hosts` table has `owner_name`, `owner_email`, `owner_slack`, `renewal_status`. Alerts route to owners. `PATCH /api/hosts/{id}/owner` to update. Dashboard shows owner chip and renewal status.
 - **Structured JSON logging** — `CERT_WATCH_LOG_FORMAT=json` env var switches from text to JSON logs with `timestamp`, `level`, `logger`, `message` fields.
+- **Authorization gate (Plan 010 Slice 1)** — `CERT_WATCH_ALLOWED_GROUPS` and `CERT_WATCH_ALLOWED_ROLES` env vars restrict access to members of specified groups/roles when auth is enabled. `AuthResult` carries `groups` and `roles`. `read_secret()` helper supports Docker/K8s `*_FILE` secret convention. `check_authz()` enforces the gate at login and OAuth callback.
+- **PEM download endpoint** — `GET /api/certificates/{id}/pem` returns raw PEM bytes with `Content-Disposition: attachment`. The detail page "Download PEM" button now links here instead of the JSON API.
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`).
+- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
 - **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.

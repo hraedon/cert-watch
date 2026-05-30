@@ -7,6 +7,29 @@ from pathlib import Path
 logger = logging.getLogger("cert_watch.config")
 
 
+def read_secret(name: str) -> str | None:
+    """Return the value of env var $name, or the file contents of $name_FILE.
+
+    The ``_FILE`` convention is standard in Docker/Kubernetes secret mounts:
+    the operator sets e.g. ``LDAP_BIND_PASSWORD_FILE=/run/secrets/ldap_pw``
+    instead of putting the secret value directly in the environment.
+
+    Returns ``None`` when neither is set.  When the ``_FILE`` variant is used,
+    the file contents are stripped of trailing whitespace/newlines.
+    """
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+    file_path = os.environ.get(f"{name}_FILE")
+    if file_path:
+        try:
+            return Path(file_path).read_text().strip()
+        except OSError:
+            logger.warning("read_secret: %s_FILE=%s could not be read", name, file_path)
+            return None
+    return None
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -42,6 +65,9 @@ class Settings:
     oauth_authorization_endpoint: str = ""
     oauth_token_endpoint: str = ""
     oauth_userinfo_endpoint: str = ""
+    # Authorization
+    allowed_groups: tuple[str, ...] = ()
+    allowed_roles: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,7 +111,7 @@ class Settings:
             smtp_host=os.environ.get("SMTP_HOST") or None,
             smtp_port=smtp_port,
             smtp_user=os.environ.get("SMTP_USER") or None,
-            smtp_password=os.environ.get("SMTP_PASSWORD") or None,
+            smtp_password=read_secret("SMTP_PASSWORD"),
             alert_from=os.environ.get("ALERT_FROM") or None,
             alert_recipients=recipients,
             webhook_url=webhook_url,
@@ -105,16 +131,27 @@ class Settings:
             ldap_server=os.environ.get("LDAP_SERVER", ""),
             ldap_base_dn=os.environ.get("LDAP_BASE_DN", ""),
             ldap_bind_dn=os.environ.get("LDAP_BIND_DN", ""),
-            ldap_bind_password=os.environ.get("LDAP_BIND_PASSWORD", ""),
+            ldap_bind_password=read_secret("LDAP_BIND_PASSWORD") or "",
             ldap_user_filter=os.environ.get("LDAP_USER_FILTER", "(sAMAccountName={username})"),
             ldap_start_tls=os.environ.get("LDAP_START_TLS", "0") == "1",
             oauth_client_id=os.environ.get("OAUTH_CLIENT_ID", ""),
-            oauth_client_secret=os.environ.get("OAUTH_CLIENT_SECRET", ""),
+            oauth_client_secret=read_secret("OAUTH_CLIENT_SECRET") or "",
             oauth_issuer_url=os.environ.get("OAUTH_ISSUER_URL", ""),
             oauth_scope=os.environ.get("OAUTH_SCOPE", "openid profile email"),
             oauth_authorization_endpoint=os.environ.get("OAUTH_AUTHORIZATION_ENDPOINT", ""),
             oauth_token_endpoint=os.environ.get("OAUTH_TOKEN_ENDPOINT", ""),
             oauth_userinfo_endpoint=os.environ.get("OAUTH_USERINFO_ENDPOINT", ""),
+            # Authorization
+            allowed_groups=tuple(
+                g.strip()
+                for g in os.environ.get("CERT_WATCH_ALLOWED_GROUPS", "").split(",")
+                if g.strip()
+            ),
+            allowed_roles=tuple(
+                r.strip()
+                for r in os.environ.get("CERT_WATCH_ALLOWED_ROLES", "").split(",")
+                if r.strip()
+            ),
         )
 
     def build_alert_config(self):
@@ -167,6 +204,8 @@ class Settings:
             oauth_authorization_endpoint=self.oauth_authorization_endpoint,
             oauth_token_endpoint=self.oauth_token_endpoint,
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
+            allowed_groups=list(self.allowed_groups),
+            allowed_roles=list(self.allowed_roles),
         )
 
 

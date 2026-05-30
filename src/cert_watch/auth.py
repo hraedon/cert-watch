@@ -9,19 +9,20 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+from cert_watch.config import read_secret
 
 logger = logging.getLogger("cert_watch.auth")
 
 # Session cookie config
 SESSION_COOKIE = "cw_auth"
 SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
-_signing_key = os.environ.get("CERT_WATCH_AUTH_SECRET") or secrets.token_hex(32)
-if not os.environ.get("CERT_WATCH_AUTH_SECRET"):
+_signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or secrets.token_hex(32)
+if not read_secret("CERT_WATCH_AUTH_SECRET"):
     logger.warning(
         "CERT_WATCH_AUTH_SECRET is not set; using an ephemeral random value. "
         "Sessions will be invalidated on every restart. Set CERT_WATCH_AUTH_SECRET in production."
@@ -94,6 +95,8 @@ class AuthResult:
     username: str = ""
     error: str = ""
     redirect_url: str = ""  # For OAuth: URL to redirect user to
+    groups: list[str] | None = None
+    roles: list[str] | None = None
 
 
 class AuthProvider(ABC):
@@ -400,6 +403,37 @@ class OAuthProvider(AuthProvider):
         return False
 
 
+# ---------- Authorization gate ----------
+
+
+def check_authz(
+    result: AuthResult,
+    allowed_groups: list[str],
+    allowed_roles: list[str],
+) -> AuthResult:
+    """Enforce group/role authorization gate.
+
+    If ``allowed_groups`` and ``allowed_roles`` are both empty, any
+    authenticated user is accepted (backward compat).
+
+    Otherwise the user must belong to ≥1 allowed group OR hold ≥1 allowed role.
+    On denial, returns a failed AuthResult with a descriptive error.
+    """
+    if not allowed_groups and not allowed_roles:
+        return result
+    user_groups = result.groups or []
+    user_roles = result.roles or []
+    group_match = any(g in allowed_groups for g in user_groups)
+    role_match = any(r in allowed_roles for r in user_roles)
+    if group_match or role_match:
+        return result
+    return AuthResult(
+        success=False,
+        username=result.username,
+        error="access denied: user not in an allowed group or role",
+    )
+
+
 # ---------- Factory ----------
 
 
@@ -421,6 +455,9 @@ def build_auth_provider(
     oauth_authorization_endpoint: str = "",
     oauth_token_endpoint: str = "",
     oauth_userinfo_endpoint: str = "",
+    # Authorization options
+    allowed_groups: list[str] | None = None,
+    allowed_roles: list[str] | None = None,
 ) -> AuthProvider:
     """Build an auth provider from config values. Returns NoAuthProvider if provider is empty."""
     provider = provider.lower().strip()

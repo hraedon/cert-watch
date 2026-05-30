@@ -256,3 +256,28 @@ def test_api_get_certificate_notes_field(tmp_path, monkeypatch, leaf_pem_file):
     assert r.status_code == 200
     assert "notes" in r.json()
     assert r.json()["notes"] == ""
+
+
+def test_api_download_pem(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    cert_id = store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/api/certificates/{cert_id}/pem")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/x-pem-file"
+    assert "BEGIN CERTIFICATE" in r.text
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert cert_id[:8] in r.headers["content-disposition"]
+
+
+def test_api_download_pem_not_found(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/certificates/nonexistent/pem")
+    assert r.status_code == 404

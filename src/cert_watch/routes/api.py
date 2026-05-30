@@ -91,6 +91,30 @@ def api_get_certificate(request: Request, cert_id: str) -> JSONResponse:
     })
 
 
+@router.get("/api/certificates/{cert_id}/pem")
+def api_download_pem(request: Request, cert_id: str) -> PlainTextResponse:
+    db = _db_path(request)
+
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return PlainTextResponse("not found", status_code=404)
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives.serialization import Encoding
+
+        x509_cert = x509.load_der_x509_certificate(cert.raw_der)
+        pem = x509_cert.public_bytes(Encoding.PEM)
+    except Exception:
+        return PlainTextResponse("cannot encode certificate", status_code=500)
+    filename = f"cert-{cert_id[:8]}.pem"
+    return PlainTextResponse(
+        pem.decode(),
+        media_type="application/x-pem-file",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.patch("/api/certificates/{cert_id}/notes")
 async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
     # BC-012: PATCH notes requires auth and CSRF when authentication is enabled
