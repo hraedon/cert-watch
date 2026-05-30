@@ -1,7 +1,8 @@
 """cert-watch CLI entry point.
 
-Provides ``cert-watch`` (web server) and ``cert-watch backup <path>``
-(subcommand for WAL-safe database backup).
+Provides ``cert-watch`` (web server), ``cert-watch backup <path>``
+(WAL-safe database backup), and ``cert-watch hash-password``
+(generate scrypt password hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH).
 """
 
 from __future__ import annotations
@@ -23,6 +24,11 @@ def main(argv: list[str] | None = None) -> None:
     backup_parser = sub.add_parser("backup", help="Create a WAL-safe backup of the database")
     backup_parser.add_argument("path", help="Output path for the backup file")
 
+    sub.add_parser(
+        "hash-password",
+        help="Generate scrypt hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH",
+    )
+
     args = parser.parse_args(argv)
 
     if args.command == "backup":
@@ -34,6 +40,22 @@ def main(argv: list[str] | None = None) -> None:
         init_schema(s.db_path)
         result = create_backup(s.db_path, args.path)
         print(f"Backup created: {result}")
+        return
+
+    if args.command == "hash-password":
+        import getpass
+
+        from cert_watch.auth import _scrypt_hash
+
+        password = getpass.getpass("Password: ")
+        confirm = getpass.getpass("Confirm password: ")
+        if password != confirm:
+            print("Passwords do not match.")
+            raise SystemExit(1)
+        if not password:
+            print("Password cannot be empty.")
+            raise SystemExit(1)
+        print(_scrypt_hash(password))
         return
 
     # Default: run the web server

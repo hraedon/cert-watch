@@ -45,12 +45,19 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-4 open breadcrumbs: 0 critical, 0 high, 1 medium, 3 low.
+3 open breadcrumbs: 0 critical, 0 high, 1 medium, 2 low.
 
 - **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
 - **BC-037** (low) — Dashboard template inline styles unmaintainable
-- **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro
 - **BC-039** (low) — Empty-state markup is inconsistent across templates
+
+### Recently resolved
+
+- **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro (resolved: extracted to `macros/icons.html`, all 4 templates use `{% import %}`)
+
+### Newly filed
+
+- **BC-041** (low) — Auth test _reload_app causes module state pollution for subsequent tests
 
 ### Recently resolved
 
@@ -97,10 +104,12 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **Structured JSON logging** — `CERT_WATCH_LOG_FORMAT=json` env var switches from text to JSON logs with `timestamp`, `level`, `logger`, `message` fields.
 - **Authorization gate (Plan 010 Slice 1)** — `CERT_WATCH_ALLOWED_GROUPS` and `CERT_WATCH_ALLOWED_ROLES` env vars restrict access to members of specified groups/roles when auth is enabled. `AuthResult` carries `groups` and `roles`. `read_secret()` helper supports Docker/K8s `*_FILE` secret convention. `check_authz()` enforces the gate at login and OAuth callback.
 - **PEM download endpoint** — `GET /api/certificates/{id}/pem` returns raw PEM bytes with `Content-Disposition: attachment`. The detail page "Download PEM" button now links here instead of the JSON API.
+- **Local break-glass admin (Plan 010 Slice 2)** — `CERT_WATCH_LOCAL_ADMIN_USER` and `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` enable a local admin account that works regardless of external provider state. Scrypt password hashing (`hashlib.scrypt`). `cert-watch hash-password` CLI for generating hashes. Break-glass login bypasses group/role gate (implicit admin) and emits WARNING log + audit row with `break_glass=true`. `_CompositeProvider` tries local admin first, then delegates to the primary provider. Login form shows username/password when local admin or form-login provider is configured.
+- **Shared svg_icon macro (BC-038)** — Extracted all icon macros to `templates/macros/icons.html`. All 4 main templates now use `{% import "macros/icons.html" as icons %}`.
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
+- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
 - **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.

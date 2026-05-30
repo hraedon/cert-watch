@@ -41,6 +41,18 @@
             </div>
             <button type="submit" class="cw-btn primary" class="cw-btn--expand">Sign in</button>
           </form>
+        {% elif local_admin_configured %}
+          <form method="post" action="/login">
+            <div class="cw-field" class="cw-mb-12">
+              <label class="cw-label">Username</label>
+              <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
+            </div>
+            <div class="cw-field" class="cw-mb-16">
+              <label class="cw-label">Password</label>
+              <input class="cw-input" type="password" name="password" required placeholder="password">
+            </div>
+            <button type="submit" class="cw-btn primary" class="cw-btn--expand">Sign in</button>
+          </form>
         {% endif %}
 
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
@@ -51,7 +63,7 @@
           </div>
         {% endif %}
 
-        {% if not supports_form_login and provider not in ("oauth", "entra", "azure", "oidc") %}
+        {% if not supports_form_login and not local_admin_configured and provider not in ("oauth", "entra", "azure", "oidc") %}
           <div class="cw-login-noauth">
             No authentication provider configured.
           </div>

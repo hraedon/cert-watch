@@ -68,6 +68,9 @@ class Settings:
     # Authorization
     allowed_groups: tuple[str, ...] = ()
     allowed_roles: tuple[str, ...] = ()
+    # Local break-glass admin
+    local_admin_user: str = ""
+    local_admin_password_hash: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -152,6 +155,9 @@ class Settings:
                 for r in os.environ.get("CERT_WATCH_ALLOWED_ROLES", "").split(",")
                 if r.strip()
             ),
+            # Local break-glass admin
+            local_admin_user=os.environ.get("CERT_WATCH_LOCAL_ADMIN_USER", ""),
+            local_admin_password_hash=read_secret("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH") or "",
         )
 
     def build_alert_config(self):
@@ -206,6 +212,8 @@ class Settings:
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
             allowed_groups=list(self.allowed_groups),
             allowed_roles=list(self.allowed_roles),
+            local_admin_user=self.local_admin_user,
+            local_admin_password_hash=self.local_admin_password_hash,
         )
 
 

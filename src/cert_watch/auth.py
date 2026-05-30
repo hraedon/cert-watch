@@ -1,14 +1,19 @@
-"""Authentication providers: LDAP/AD and OAuth/OIDC (Entra).
+"""Authentication providers: LDAP/AD, OAuth/OIDC (Entra), and local break-glass.
 
 When AUTH_PROVIDER is unset, NoAuthProvider allows all requests (backward compat).
+Local break-glass admin is activated by setting CERT_WATCH_LOCAL_ADMIN_USER and
+CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH — it evaluates before the primary provider
+and works regardless of external provider availability.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import time
 from abc import ABC, abstractmethod
@@ -434,6 +439,99 @@ def check_authz(
     )
 
 
+# ---------- Local break-glass admin ----------
+
+
+def _scrypt_hash(
+    password: str, *, n: int = 2**14, r: int = 8, p: int = 1, salt: bytes | None = None,
+) -> str:
+    salt = salt or os.urandom(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    return f"scrypt${n}${r}${p}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+
+def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
+    if not stored_hash or not stored_hash.startswith("scrypt$"):
+        return False
+    parts = stored_hash.split("$")
+    if len(parts) != 6:
+        return False
+    try:
+        n = int(parts[1])
+        r = int(parts[2])
+        p = int(parts[3])
+        salt = base64.b64decode(parts[4])
+        expected_dk = base64.b64decode(parts[5])
+    except (ValueError, Exception):
+        return False
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    return hmac.compare_digest(dk, expected_dk)
+
+
+class LocalAdminProvider(AuthProvider):
+    def __init__(self, username: str, password_hash: str) -> None:
+        self.username = username
+        self.password_hash = password_hash
+
+    def authenticate(self, username: str, password: str) -> AuthResult:
+        if not username or not password:
+            return AuthResult(success=False, error="username and password required")
+        if username != self.username:
+            return AuthResult(success=False, error="invalid credentials")
+        if not verify_scrypt_hash(password, self.password_hash):
+            return AuthResult(success=False, error="invalid credentials")
+        logger.warning("BREAK-GLASS LOGIN: local admin '%s' authenticated", username)
+        return AuthResult(
+            success=True,
+            username=username,
+            groups=["admins"],
+            roles=["admin"],
+        )
+
+    def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
+        return AuthResult(success=False, error="Use form login for local admin")
+
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
+        return AuthResult(success=False, error="Use form login for local admin")
+
+    @property
+    def provider_name(self) -> str:
+        return "local-admin"
+
+    @property
+    def supports_form_login(self) -> bool:
+        return True
+
+
+# ---------- Composite provider (local admin + primary) ----------
+
+
+class _CompositeProvider(AuthProvider):
+    def __init__(self, local: LocalAdminProvider, primary: AuthProvider) -> None:
+        self._local = local
+        self._primary = primary
+
+    def authenticate(self, username: str, password: str) -> AuthResult:
+        result = self._local.authenticate(username, password)
+        if result.success:
+            return result
+        return self._primary.authenticate(username, password)
+
+    def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
+        return self._primary.start_oauth_flow(redirect_uri)
+
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
+        return self._primary.complete_oauth_flow(code, redirect_uri, state)
+
+    @property
+    def provider_name(self) -> str:
+        return self._primary.provider_name
+
+    @property
+    def supports_form_login(self) -> bool:
+        return True
+
+
 # ---------- Factory ----------
 
 
@@ -458,16 +556,29 @@ def build_auth_provider(
     # Authorization options
     allowed_groups: list[str] | None = None,
     allowed_roles: list[str] | None = None,
+    # Local break-glass admin
+    local_admin_user: str = "",
+    local_admin_password_hash: str = "",
 ) -> AuthProvider:
     """Build an auth provider from config values. Returns NoAuthProvider if provider is empty."""
     provider = provider.lower().strip()
+
+    local_admin: LocalAdminProvider | None = None
+    if local_admin_user and local_admin_password_hash:
+        local_admin = LocalAdminProvider(local_admin_user, local_admin_password_hash)
+
+    primary: AuthProvider
     if not provider or provider == "none":
+        if local_admin:
+            return LocalAdminProvider(local_admin_user, local_admin_password_hash)
         return NoAuthProvider()
     if provider == "ldap":
         if not ldap_server or not ldap_base_dn:
             logger.warning("LDAP auth misconfigured: LDAP_SERVER and LDAP_BASE_DN required")
+            if local_admin:
+                return local_admin
             return NoAuthProvider()
-        return LDAPAuthProvider(
+        primary = LDAPAuthProvider(
             server_url=ldap_server,
             base_dn=ldap_base_dn,
             bind_dn=ldap_bind_dn,
@@ -475,11 +586,16 @@ def build_auth_provider(
             user_search_filter=ldap_user_filter,
             start_tls=ldap_start_tls,
         )
+        if local_admin:
+            return _CompositeProvider(local_admin, primary)
+        return primary
     if provider in ("oauth", "entra", "azure", "oidc"):
         if not oauth_client_id or not oauth_issuer_url:
             logger.warning("OAuth misconfigured: OAUTH_CLIENT_ID and OAUTH_ISSUER_URL required")
+            if local_admin:
+                return local_admin
             return NoAuthProvider()
-        return OAuthProvider(
+        primary = OAuthProvider(
             OAuthConfig(
                 client_id=oauth_client_id,
                 client_secret=oauth_client_secret,
@@ -490,5 +606,10 @@ def build_auth_provider(
                 userinfo_endpoint=oauth_userinfo_endpoint,
             )
         )
+        if local_admin:
+            return _CompositeProvider(local_admin, primary)
+        return primary
     logger.warning("Unknown AUTH_PROVIDER=%r, falling back to no auth", provider)
+    if local_admin:
+        return local_admin
     return NoAuthProvider()

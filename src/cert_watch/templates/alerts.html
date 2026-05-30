@@ -1,25 +1,7 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — alerts{% endblock %}
 
-{% macro svg_icon(name, size=16, sw=1.7) %}
-  {% if name == 'shield' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
-  {% elif name == 'clock' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'alert' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-  {% elif name == 'check-circle' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'server' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
-  {% elif name == 'bell' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 01-3.4 0"/></svg>
-  {% elif name == 'link' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
-  {% elif name == 'key' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2l-2 2"/><path d="M15 7a4 4 0 11-6 6l-6 6v3h3l6-6a4 4 0 016-6l1-1-3-3z"/></svg>
-  {% endif %}
-{% endmacro %}
+{% import "macros/icons.html" as icons %}
 
 {% block content %}
 <div class="cw-page--constrained">
@@ -30,8 +12,8 @@
       <div class="cw-page-head-sub">Expiry &amp; scan notifications sent via email and webhook.</div>
     </div>
     <div class="cw-flex cw-gap-8">
-      <span class="cw-chip cw-p-chip">{{ svg_icon('bell', 12) }}Email</span>
-      <span class="cw-chip cw-p-chip">{{ svg_icon('link', 12) }}Webhook</span>
+      <span class="cw-chip cw-p-chip">{{ icons.svg_icon('bell', 12) }}Email</span>
+      <span class="cw-chip cw-p-chip">{{ icons.svg_icon('link', 12) }}Webhook</span>
     </div>
   </div>
 
@@ -49,17 +31,17 @@
   <div class="cw-stats cw-stats-3 cw-mb-18">
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
-      <div class="cw-stat-top cw-stat-top-accent">{{ svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total alerts</span></div>
+      <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total alerts</span></div>
       <div class="cw-stat-val cw-stat-val-default">{{ ns.all_count }}</div>
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-crit"></div>
-      <div class="cw-stat-top cw-stat-top-crit">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Critical</span></div>
+      <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Critical</span></div>
       <div class="cw-stat-val cw-stat-val-crit">{{ ns.critical_count }}</div>
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-warn"></div>
-      <div class="cw-stat-top cw-stat-top-warn">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Warnings</span></div>
+      <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Warnings</span></div>
       <div class="cw-stat-val cw-stat-val-warn">{{ ns.warning_count }}</div>
     </div>
   </div>
@@ -73,7 +55,7 @@
         {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'clock' %}
         <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}">
           <div class="cw-alert-icon cw-sev-icon" style="--sev-color:{{ sev_color }};--sev-bg:{{ sev_bg }}">
-            {{ svg_icon(icon_name, 17) }}
+            {{ icons.svg_icon(icon_name, 17) }}
           </div>
           <div class="cw-alert-body">
             <div class="cw-flex cw-items-center cw-gap-8">
@@ -93,7 +75,7 @@
     </div>
   {% else %}
     <div class="cw-panel cw-empty-state">
-      <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ svg_icon('check-circle', 24) }}</div>
+      <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ icons.svg_icon('check-circle', 24) }}</div>
       <div class="cw-fz-15 cw-fw-600">No alerts recorded</div>
       <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Alerts will appear here when certificates expire or scans fail.</div>
     </div>

@@ -8,12 +8,16 @@ from fastapi.testclient import TestClient
 from cert_watch.auth import (
     AuthResult,
     LDAPAuthProvider,
+    LocalAdminProvider,
     NoAuthProvider,
     OAuthProvider,
+    _CompositeProvider,
+    _scrypt_hash,
     build_auth_provider,
     check_authz,
     create_session,
     validate_session,
+    verify_scrypt_hash,
 )
 from cert_watch.config import read_secret
 
@@ -631,3 +635,228 @@ def test_authz_no_gate_when_no_groups_configured(tmp_path, monkeypatch, _mock_ld
         )
         assert r.status_code == 303
         assert r.headers["location"] in ("/", "http://testserver/")
+
+
+# ---------- Local admin / break-glass tests ----------
+
+
+def test_scrypt_hash_roundtrip():
+    pw = "correct-horse-battery-staple"
+    h = _scrypt_hash(pw)
+    assert h.startswith("scrypt$")
+    assert verify_scrypt_hash(pw, h) is True
+    assert verify_scrypt_hash("wrong", h) is False
+
+
+def test_scrypt_hash_constant_time_compare():
+    pw = "test-password"
+    h = _scrypt_hash(pw)
+    assert verify_scrypt_hash(pw, h) is True
+    assert verify_scrypt_hash(pw + "x", h) is False
+
+
+def test_scrypt_hash_invalid_format():
+    assert verify_scrypt_hash("pw", "") is False
+    assert verify_scrypt_hash("pw", "not-scrypt") is False
+    assert verify_scrypt_hash("pw", "scrypt$bad$args") is False
+
+
+def test_scrypt_hash_custom_params():
+    pw = "custom-nrp"
+    h = _scrypt_hash(pw, n=2**4, r=1, p=1)
+    assert verify_scrypt_hash(pw, h) is True
+
+
+def test_local_admin_authenticate_success():
+    pw = "admin-secret"
+    h = _scrypt_hash(pw, n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+    result = provider.authenticate("admin", pw)
+    assert result.success is True
+    assert result.username == "admin"
+    assert "admins" in result.groups
+    assert "admin" in result.roles
+
+
+def test_local_admin_wrong_password():
+    h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+    result = provider.authenticate("admin", "wrong-pw")
+    assert result.success is False
+    assert "invalid" in result.error
+
+
+def test_local_admin_wrong_username():
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+    result = provider.authenticate("other", "pw")
+    assert result.success is False
+
+
+def test_local_admin_empty_creds():
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+    assert provider.authenticate("", "pw").success is False
+    assert provider.authenticate("admin", "").success is False
+
+
+def test_local_admin_no_oauth():
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+    assert provider.start_oauth_flow("http://x").success is False
+    assert provider.complete_oauth_flow("code", "http://x").success is False
+
+
+def test_local_admin_properties():
+    provider = LocalAdminProvider("admin", "scrypt$16384$8$1$AA==$AA==")
+    assert provider.provider_name == "local-admin"
+    assert provider.supports_form_login is True
+
+
+def test_local_admin_bypasses_group_gate(tmp_path, monkeypatch):
+    pw = "breakglass"
+    h = _scrypt_hash(pw, n=2**4, r=1, p=1)
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.post(
+            "/login",
+            data={"username": "admin", "password": pw},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert r.headers["location"] in ("/", "http://testserver/")
+
+
+def test_local_admin_wrong_password_rejected(tmp_path, monkeypatch):
+    h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.post(
+            "/login",
+            data={"username": "admin", "password": "wrong"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        assert "login" in r.headers["location"]
+
+
+def test_local_admin_disabled_when_unset(tmp_path, monkeypatch):
+    monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_USER", raising=False)
+    monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", raising=False)
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    from cert_watch import auth as auth_mod
+    importlib.reload(auth_mod)
+    provider = getattr(app_mod.app.state, "auth_provider", None)
+    assert not isinstance(provider, LocalAdminProvider)
+
+
+def test_composite_provider_tries_local_first(_mock_ldap3):
+    h = _scrypt_hash("localpw", n=2**4, r=1, p=1)
+    local = LocalAdminProvider("admin", h)
+    mock_ldap = LDAPAuthProvider("ldap://dc", "DC=x")
+    composite = _CompositeProvider(local, mock_ldap)
+    result = composite.authenticate("admin", "localpw")
+    assert result.success is True
+    assert result.username == "admin"
+
+
+def test_composite_provider_falls_through(_mock_ldap3):
+    h = _scrypt_hash("localpw", n=2**4, r=1, p=1)
+    local = LocalAdminProvider("admin", h)
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    def connection_factory(server, user=None, password=None, auto_bind=False):
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return mock_conn
+
+    _mock_ldap3.Connection = connection_factory
+    _mock_ldap3.Server.return_value = MagicMock()
+    primary = LDAPAuthProvider("ldap://dc.example.com", "DC=example,DC=com")
+    composite = _CompositeProvider(local, primary)
+    result = composite.authenticate("alice", "ldappass")
+    assert result.success is True
+    assert result.username == "alice"
+
+
+def test_build_auth_provider_local_admin_only(tmp_path, monkeypatch):
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = build_auth_provider(
+        "",
+        local_admin_user="admin",
+        local_admin_password_hash=h,
+    )
+    assert provider.provider_name == "local-admin"
+    assert provider.supports_form_login is True
+
+
+def test_build_auth_provider_local_admin_with_ldap(_mock_ldap3):
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = build_auth_provider(
+        "ldap",
+        ldap_server="ldap://dc.example.com",
+        ldap_base_dn="DC=example,DC=com",
+        local_admin_user="admin",
+        local_admin_password_hash=h,
+    )
+    assert provider.supports_form_login is True
+    result = provider.authenticate("admin", "pw")
+    assert result.success is True
+    assert result.username == "admin"
+
+
+def test_local_admin_login_creates_audit_row(tmp_path, monkeypatch):
+    import sqlite3
+
+    pw = "breakglass"
+    h = _scrypt_hash(pw, n=2**4, r=1, p=1)
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+    )
+    db_path = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.post(
+            "/login",
+            data={"username": "admin", "password": pw},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM audit_log WHERE action = 'break_glass_login'"
+    ).fetchall()
+    conn.close()
+    assert len(rows) >= 1, f"no break_glass_login audit rows found in db {db_path}"
+    import json
+    detail = json.loads(dict(rows[0])["detail"]) if rows[0]["detail"] else {}
+    assert detail.get("break_glass") is True
+
+
+def test_local_admin_login_shows_form(tmp_path, monkeypatch):
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    app_mod = _reload_app(
+        monkeypatch, tmp_path,
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.get("/login")
+        assert r.status_code == 200
+        assert "Sign in" in r.text

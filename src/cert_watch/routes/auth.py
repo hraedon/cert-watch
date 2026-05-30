@@ -27,6 +27,7 @@ def login_page(request: Request, error: str | None = None) -> HTMLResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
+    local_admin_configured = type(auth).__name__ in ("LocalAdminProvider", "_CompositeProvider")
     return templates.TemplateResponse(
         request=request,
         name="login.html",
@@ -34,6 +35,7 @@ def login_page(request: Request, error: str | None = None) -> HTMLResponse:
             "version": __version__,
             "provider": auth.provider_name,
             "supports_form_login": auth.supports_form_login,
+            "local_admin_configured": local_admin_configured,
             "error": error,
         },
     )
@@ -53,22 +55,46 @@ async def login_submit(
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
         )
-    # Authorization gate: check group/role membership
-    settings = getattr(request.app.state, "settings", None)
-    allowed_groups = list(settings.allowed_groups) if settings else []
-    allowed_roles = list(settings.allowed_roles) if settings else []
-    result = check_authz(result, allowed_groups, allowed_roles)
-    if not result.success:
-        return RedirectResponse(
-            url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
-        )
+    is_break_glass = type(auth).__name__ == "LocalAdminProvider" or (
+        type(auth).__name__ == "_CompositeProvider" and result.username == auth._local.username
+    )
+    if is_break_glass:
+        logger.warning("Break-glass login by local admin: %s", result.username)
+        try:
+            settings = getattr(request.app.state, "settings", None)
+            if settings:
+                from cert_watch.audit import record_audit
+                record_audit(
+                    settings.db_path,
+                    actor=result.username,
+                    action="break_glass_login",
+                    target_type="session",
+                    target_id=result.username,
+                    detail={"break_glass": True},
+                    source_ip=request.client.host if request.client else None,
+                )
+        except Exception:
+            logger.debug("audit log write failed for break-glass login", exc_info=True)
+    else:
+        settings = getattr(request.app.state, "settings", None)
+        allowed_groups = list(settings.allowed_groups) if settings else []
+        allowed_roles = list(settings.allowed_roles) if settings else []
+        result = check_authz(result, allowed_groups, allowed_roles)
+        if not result.success:
+            return RedirectResponse(
+                url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
+            )
     token = create_session(result.username)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
         secure=_COOKIE_SECURE,
     )
-    logger.info("user logged in: %s (%s)", result.username, auth.provider_name)
+    logger.info(
+        "user logged in: %s (%s)",
+        result.username,
+        "local-admin" if is_break_glass else auth.provider_name,
+    )
     return response
 
 

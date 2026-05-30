@@ -1,45 +1,7 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — dashboard{% endblock %}
 
-{% macro svg_icon(name, size=16, sw=1.7) %}
-  {% if name == 'shield' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
-  {% elif name == 'clock' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'alert' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-  {% elif name == 'check-circle' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'search' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 21l-4.3-4.3"/><path d="M11 19a8 8 0 100-16 8 8 0 000 16z"/></svg>
-  {% elif name == 'plus' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
-  {% elif name == 'upload' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
-  {% elif name == 'refresh' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-  {% elif name == 'server' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
-  {% elif name == 'file' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
-  {% elif name == 'globe' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M3 12h18"/><path d="M12 3a14 14 0 000 18 14 14 0 000-18z"/></svg>
-  {% elif name == 'chevron-right' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-  {% elif name == 'download' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
-  {% elif name == 'filter' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/></svg>
-  {% elif name == 'link' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 007.5.5l3-3a5 5 0 00-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 00-7.5-.5l-3 3a5 5 0 007 7l1.7-1.7"/></svg>
-  {% elif name == 'trash' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 011-1h6a1 1 0 011 1v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/></svg>
-  {% elif name == 'x' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
-  {% elif name == 'chevron-down' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
-  {% endif %}
-{% endmacro %}
+{% import "macros/icons.html" as icons %}
 
 {% macro stat_card(tone, icon, label, value, sub) %}
   <div class="cw-stat">
@@ -53,7 +15,7 @@
       <div class="cw-stat-rail cw-stat-rail-ok"></div>
     {% endif %}
     <div class="cw-stat-top {% if tone == 'default' %}cw-stat-top-accent{% elif tone == 'attention' %}cw-stat-top-crit{% elif tone == 'warning' %}cw-stat-top-warn{% elif tone == 'ok' %}cw-stat-top-ok{% endif %}">
-      {{ svg_icon(icon, 15, 1.8) }}
+      {{ icons.svg_icon(icon, 15, 1.8) }}
       <span class="cw-stat-label cw-stat-label-color">{{ label }}</span>
     </div>
     <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
@@ -88,8 +50,8 @@
       <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
     </div>
     <div class="cw-flex cw-gap-8">
-      <a href="/api/export/certificates.csv" class="cw-btn">{{ svg_icon('download', 14) }}Export CSV</a>
-      <a href="/api/export/certificates.json" class="cw-btn">{{ svg_icon('download', 14) }}Export JSON</a>
+      <a href="/api/export/certificates.csv" class="cw-btn">{{ icons.svg_icon('download', 14) }}Export CSV</a>
+      <a href="/api/export/certificates.json" class="cw-btn">{{ icons.svg_icon('download', 14) }}Export JSON</a>
     </div>
   </div>
 
@@ -104,7 +66,7 @@
   {# ---- Toolbar ---- #}
   <form method="get" action="/" class="cw-toolbar cw-mb-14">
     <div class="cw-search">
-      {{ svg_icon('search', 15) }}
+      {{ icons.svg_icon('search', 15) }}
       <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…">
     </div>
     <div class="cw-seg">
@@ -115,7 +77,7 @@
       <button type="submit" name="urgency" value="healthy" class="{% if filter_urgency == 'healthy' %}on{% endif %}">Healthy<span class="cnt">{{ ns.healthy }}</span></button>
     </div>
     <div class="cw-spacer"></div>
-    <button type="submit" name="source" value="" class="cw-btn">{{ svg_icon('filter', 14) }}Source: {{ filter_source if filter_source else 'All' }}</button>
+    <button type="submit" name="source" value="" class="cw-btn">{{ icons.svg_icon('filter', 14) }}Source: {{ filter_source if filter_source else 'All' }}</button>
   </form>
 
   {# ---- Table ---- #}
@@ -139,7 +101,7 @@
           <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" onclick="toggleGroup({{ e.group_id }})">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
-                <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ svg_icon('chevron-down', 14) }}</span>
+                <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
                 <span class="cw-host">{{ e.name or '—' }}</span>
                 <span class="cw-chip cw-chip-hosts">{{ e.host_count }} hosts</span>
                 {% if e.healthy_count < e.host_count %}
@@ -150,7 +112,7 @@
                 {% if e.chain_status == 'public' %}
                   <span class="cw-chip cw-chip-public">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
                   <span class="cw-chip cw-chip-renewed">renewed</span>
@@ -174,11 +136,11 @@
             </td>
             <td>
               <div class="cw-table-chip-col">
-                <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
+                <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
                 {% if e.chain_valid == true %}
-                  <span class="cw-chip cw-chip-muted">{{ svg_icon('link', 11, 1.6) }}full chain</span>
+                  <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
                 {% elif e.chain_valid == false %}
-                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
                 {% endif %}
               </div>
             </td>
@@ -213,7 +175,7 @@
             <td onclick="event.stopPropagation()">
               <div class="cw-rowact">
                 <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
-                  {{ svg_icon('chevron-right', 14) }}
+                  {{ icons.svg_icon('chevron-right', 14) }}
                 </a>
               </div>
             </td>
@@ -228,7 +190,7 @@
                   {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
                   <span class="cw-pill {{ h_urg }}"><span class="dot"></span>{% if h_urg == 'expired' %}Expired{% elif h_urg == 'critical' %}Critical{% elif h_urg == 'warning' %}Warning{% elif h_urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}</span>
                   {% if h.scan_status == 'failure' %}
-                    <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
+                    <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
                   {% elif h.last_scanned_at %}
                     <span class="cw-text-text-3 cw-fz-11-5">scanned {{ h.last_scanned_at[:16] }}</span>
                   {% endif %}
@@ -241,7 +203,7 @@
                     <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
                       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                       <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30">
-                        {{ svg_icon('refresh', 14) }}
+                        {{ icons.svg_icon('refresh', 14) }}
                       </button>
                     </form>
                   {% endif %}
@@ -260,7 +222,7 @@
                 {% if e.chain_status == 'public' %}
                   <span class="cw-chip cw-chip-public">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
                   <span class="cw-chip cw-chip-renewed">renewed</span>
@@ -293,17 +255,17 @@
             <td>
               <div class="cw-table-chip-col">
                 {% if e.source == 'scanned' %}
-                  <span class="cw-chip">{{ svg_icon('server', 12, 1.6) }}Scanned</span>
+                  <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
                 {% elif e.source == 'uploaded' %}
-                  <span class="cw-chip">{{ svg_icon('file', 12, 1.6) }}Uploaded</span>
+                  <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
                 {% else %}
-                  <span class="cw-chip">{{ svg_icon('globe', 12, 1.6) }}Public CT</span>
+                  <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
                 {% endif %}
                 {% if e.source == 'scanned' %}
                   {% if e.chain_valid == true %}
-                    <span class="cw-chip cw-chip-muted">{{ svg_icon('link', 11, 1.6) }}full chain</span>
+                    <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
                   {% elif e.chain_valid == false %}
-                    <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                    <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
                   {% endif %}
                 {% endif %}
               </div>
@@ -342,12 +304,12 @@
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30" data-testid="scan-now-btn">
-                      {{ svg_icon('refresh', 14) }}
+                      {{ icons.svg_icon('refresh', 14) }}
                     </button>
                   </form>
                 {% endif %}
                 <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
-                  {{ svg_icon('chevron-right', 14) }}
+                  {{ icons.svg_icon('chevron-right', 14) }}
                 </a>
               </div>
             </td>
@@ -359,7 +321,7 @@
 
     {% if not entries %}
       <div class="cw-empty">
-        <div class="cw-empty-icon">{{ svg_icon('search', 20) }}</div>
+        <div class="cw-empty-icon">{{ icons.svg_icon('search', 20) }}</div>
         <div class="cw-empty-title">No matching certificates</div>
         <div class="cw-empty-sub">Try a different search or filter.</div>
       </div>
@@ -383,7 +345,7 @@
   {% if trust_anchors %}
     <div class="cw-mt-24">
       <div class="cw-trust-anchors-header">
-        {{ svg_icon('link', 16) }}
+        {{ icons.svg_icon('link', 16) }}
         <span class="cw-fz-14 cw-fw-600">Trust anchors</span>
       </div>
       <div class="cw-panel cw-table-wrap">
@@ -399,7 +361,7 @@
                 <td>
                   <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor?">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ svg_icon('trash', 13) }}Delete</button>
+                    <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ icons.svg_icon('trash', 13) }}Delete</button>
                   </form>
                 </td>
               </tr>
@@ -419,13 +381,13 @@
       <div class="cw-fz-15 cw-fw-600">Add certificates</div>
       <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Scan a host, upload a file, or import in bulk.</div>
     </div>
-    <button class="cw-iconbtn" onclick="closeSlide()">{{ svg_icon('x', 16) }}</button>
+    <button class="cw-iconbtn" onclick="closeSlide()">{{ icons.svg_icon('x', 16) }}</button>
   </div>
   <div class="cw-p-slide-top">
     <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs">
-      <button type="button" class="on" data-tab="scan" onclick="switchTab('scan')">{{ svg_icon('server', 13) }}Scan host</button>
-      <button type="button" data-tab="upload" onclick="switchTab('upload')">{{ svg_icon('file', 13) }}Upload file</button>
-      <button type="button" data-tab="bulk" onclick="switchTab('bulk')">{{ svg_icon('upload', 13) }}Bulk import</button>
+      <button type="button" class="on" data-tab="scan" onclick="switchTab('scan')">{{ icons.svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab="upload" onclick="switchTab('upload')">{{ icons.svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab="bulk" onclick="switchTab('bulk')">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
   <div class="cw-p-slide-body">
@@ -453,7 +415,7 @@
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
           <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('refresh', 14) }}Add &amp; scan</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
         </div>
       </form>
     </div>
@@ -462,7 +424,7 @@
       <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" onclick="document.getElementById('file-input').click()">
-          <div class="cw-drop-icon">{{ svg_icon('upload', 18) }}</div>
+          <div class="cw-drop-icon">{{ icons.svg_icon('upload', 18) }}</div>
           <div class="cw-fz-13-5 cw-fw-600">Drop a certificate, or <span class="cw-link">browse</span></div>
           <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
           <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden">
@@ -474,7 +436,7 @@
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
           <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('upload', 14) }}Upload</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('upload', 14) }}Upload</button>
         </div>
       </form>
     </div>
@@ -483,19 +445,19 @@
       <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" onclick="document.getElementById('csv-input').click()">
-          <div class="cw-drop-icon">{{ svg_icon('file', 18) }}</div>
+          <div class="cw-drop-icon">{{ icons.svg_icon('file', 18) }}</div>
           <div class="cw-fz-13-5 cw-fw-600">Drop a CSV, or <span class="cw-link">browse</span></div>
           <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
           <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
         </div>
         <div class="cw-example-block">
-          <div class="cw-flex cw-items-center cw-gap-6 cw-mb-6 cw-text-text">{{ svg_icon('file', 13) }}<b class="cw-fw-600">Example</b></div>
+          <div class="cw-flex cw-items-center cw-gap-6 cw-mb-6 cw-text-text">{{ icons.svg_icon('file', 13) }}<b class="cw-fw-600">Example</b></div>
           <code class="mono cw-fz-11-5 cw-text-text-3">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
         </div>
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
           <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ svg_icon('plus', 14) }}Import</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('plus', 14) }}Import</button>
         </div>
       </form>
     </div>
@@ -504,7 +466,7 @@
 {% endblock %}
 
 {% block topbar_actions %}
-  <button class="cw-btn primary" onclick="openSlide()">{{ svg_icon('plus', 15, 2) }}Add host</button>
+  <button class="cw-btn primary" onclick="openSlide()">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
 {% endblock %}
 
 {% block scripts %}

@@ -1,19 +1,7 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — scan history{% endblock %}
 
-{% macro svg_icon(name, size=16, sw=1.7) %}
-  {% if name == 'clock' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'refresh' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
-  {% elif name == 'alert' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
-  {% elif name == 'check-circle' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
-  {% elif name == 'chevron-right' %}
-    <svg width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="{{ sw }}" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l5 5-5 5"/></svg>
-  {% endif %}
-{% endmacro %}
+{% import "macros/icons.html" as icons %}
 
 {% block content %}
 <div class="cw-page--constrained">
@@ -25,7 +13,7 @@
     </div>
     <form method="post" action="/hosts/all/scan" class="cw-inline">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Run scan now</button>
+      <button type="submit" class="cw-btn primary">{{ icons.svg_icon('refresh', 14) }}Run scan now</button>
     </form>
   </div>
 
@@ -44,18 +32,18 @@
   <div class="cw-stats cw-stats-3 cw-mb-18">
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
-      <div class="cw-stat-top cw-stat-top-accent">{{ svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Last scan</span></div>
+      <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Last scan</span></div>
       <div class="cw-stat-val cw-stat-val-default cw-fz-22">{{ ns.last_scan_time }}</div>
       <div class="cw-stat-sub">{{ ns.last_scan_status }}</div>
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-ok"></div>
-      <div class="cw-stat-top cw-stat-top-ok">{{ svg_icon('check-circle', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total scans</span></div>
+      <div class="cw-stat-top cw-stat-top-ok">{{ icons.svg_icon('check-circle', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total scans</span></div>
       <div class="cw-stat-val cw-stat-val-default">{{ history | length }}</div>
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-crit"></div>
-      <div class="cw-stat-top cw-stat-top-crit">{{ svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Failures</span></div>
+      <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Failures</span></div>
       <div class="cw-stat-val cw-stat-val-crit">{{ ns.fail_7d }}</div>
     </div>
   </div>
@@ -92,7 +80,7 @@
     </div>
   {% else %}
     <div class="cw-panel" class="cw-empty-state">
-      <div class="cw-empty-icon-circle cw-empty-icon-accent">{{ svg_icon('clock', 24) }}</div>
+      <div class="cw-empty-icon-circle cw-empty-icon-accent">{{ icons.svg_icon('clock', 24) }}</div>
       <div class="cw-fz-15 cw-fw-600">No scans recorded yet</div>
       <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Scan history will appear here after the first scan.</div>
     </div>
