@@ -108,6 +108,33 @@ CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id)
 - AC-4: With auth off, rows still record `actor="anonymous"` (no crash).
 - AC-5: Audit-write failure logs WARNING and does **not** fail the user's action.
 
+### Rejected alternative: back the audit log with regista
+
+regista's core is an immutable, append-only, **hash-chained** event log
+(`prev_event_hash = SHA-256(prev envelope + signature)`) with pluggable
+signing and RFC 3161 timestamping — a stronger audit primitive than a plain
+table. It was considered and rejected for cert-watch's audit log:
+
+- **Deployment cost.** regista requires Postgres; cert-watch's credibility
+  rests on the single-SQLite-file, single-writer deployment. We'd consume ~5%
+  of regista (the event log) and carry the work-item/claim/workflow machinery
+  as operational overhead for a need it doesn't have.
+- **Context risk.** This tool is being rolled out where agent tooling is
+  blocked over audit/provenance gaps. regista is agent-pipeline
+  infrastructure; depending on it imports the agent stack into the one tool
+  meant to be boring and standalone — a credibility cost in that room.
+- **Comparison artifact.** Coupling cert-watch (the traditional-build control
+  for software-factory-2) to the agent stack muddies that role too.
+
+The useful relationship runs the other way: cert-watch's human-action audit
+need is a clean, non-agent **proving ground** for regista's provenance model.
+
+**Optional tamper-evidence without the dependency:** if the workplace wants a
+tamper-evident trail, borrow only the *technique* — add a `prev_hash` column
+chaining each audit row to its predecessor (`SHA-256(prev_hash || canonical
+row)`). ~80% of the credibility, zero new infrastructure. Defer until it's a
+stated requirement.
+
 ---
 
 ## Phase 3 — Schema migrations + backup/restore (BLOCKER)
