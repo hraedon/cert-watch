@@ -7,7 +7,8 @@ Previously a single 1200-line module (`database.py`).  Split into:
                 `SqliteHostRepository`, `SqliteTrustAnchorRepository`)
 - `queries`    – Dashboard helpers (`list_dashboard_rows`, `list_unified_entries`,
                 `count_dashboard_leaves`), `replace_scanned`, `delete_certificate_cascade`,
-                `list_alerts_with_subject`, `list_scan_history`
+                `list_alerts_with_subject`, `list_scan_history`, `store_scan_posture`,
+                `get_posture_for_cert`
 
 All public names from the monolith are re-exported so external imports
 (`from cert_watch.database import X`) continue to work.
@@ -22,6 +23,8 @@ from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_c
 from cert_watch.database.queries import (
     count_dashboard_leaves,
     delete_certificate_cascade,
+    get_posture_for_cert,
+    get_posture_grades_for_certs,
     get_renewal_history,
     group_entries_by_fingerprint,
     list_alerts_with_subject,
@@ -29,6 +32,7 @@ from cert_watch.database.queries import (
     list_scan_history,
     list_unified_entries,
     replace_scanned,
+    store_scan_posture,
 )
 
 # Repositories & dataclasses
@@ -70,6 +74,8 @@ __all__ = [
     # queries
     "count_dashboard_leaves",
     "delete_certificate_cascade",
+    "get_posture_for_cert",
+    "get_posture_grades_for_certs",
     "get_renewal_history",
     "group_entries_by_fingerprint",
     "list_alerts_with_subject",
@@ -77,4 +83,5 @@ __all__ = [
     "list_scan_history",
     "list_unified_entries",
     "replace_scanned",
+    "store_scan_posture",
 ]

@@ -14,6 +14,7 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
+    get_posture_grades_for_certs,
     group_entries_by_fingerprint,
     list_alerts_with_subject,
     list_dashboard_rows,
@@ -145,6 +146,15 @@ def dashboard(
     start = (page - 1) * per_page
     page_entries = entries[start : start + per_page]
 
+    posture_grades: dict[str, str] = {}
+    try:
+        cert_ids = [e["id"] for e in page_entries if e.get("id")]
+        posture_grades = (
+            get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -167,6 +177,7 @@ def dashboard(
             "has_prev": page > 1,
             "has_next": page < total_pages,
             "grouped": grouped,
+            "posture_grades": posture_grades,
             **ctx,
         },
     )

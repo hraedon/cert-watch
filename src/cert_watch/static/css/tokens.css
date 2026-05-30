@@ -498,6 +498,21 @@ body {
   font-size: 11px;
   border-color: var(--border);
 }
+.cw-chip-ok {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 30%, transparent);
+  background: var(--ok-soft);
+}
+.cw-chip-warn {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+  background: var(--warn-soft);
+}
+.cw-chip-crit {
+  color: var(--crit);
+  border-color: color-mix(in srgb, var(--crit) 30%, transparent);
+  background: var(--crit-soft);
+}
 
 /* ---- PAGE CONSTRAINT ---- */
 .cw-page--constrained { padding: 22px 26px; max-width: 1080px; }

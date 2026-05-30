@@ -88,7 +88,7 @@ def test_scan_host_via_openssl_success(monkeypatch, chain_triplet):
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
-        lambda hostname, port, timeout, allow_private=True, dns_servers=(): der_chain,
+        lambda hostname, port, timeout, allow_private=True, dns_servers=(): (der_chain, "TLSv1.3"),
     )
 
     result = scan_host("example.com", 443)
@@ -104,7 +104,7 @@ def test_scan_host_via_openssl_fallback_to_leaf_only(monkeypatch, chain_triplet)
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
-        lambda *a, **kw: [],
+        lambda *a, **kw: ([], ""),
     )
 
     der_chain = [chain_triplet["leaf"].der]
@@ -124,7 +124,7 @@ def test_scan_host_via_openssl_connection_failure(monkeypatch):
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
-        lambda *a, **kw: [],
+        lambda *a, **kw: ([], ""),
     )
 
     def fake_open(hostname, port, timeout, verify=False, allow_private=True, dns_servers=()):

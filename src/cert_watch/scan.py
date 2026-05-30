@@ -68,6 +68,7 @@ class ScannedEntry:
     leaf: Certificate
     chain: list[Certificate] = field(default_factory=list)
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    protocol_version: str = ""
 
 
 def _build_dns_query(name: str, qtype: int) -> bytes:
@@ -260,24 +261,25 @@ _PEM_CERT_PATTERN = re.compile(
 )
 
 
+_PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNORECASE)
+
+
 def _scan_via_openssl(
     hostname: str, port: int, timeout: float, *, allow_private: bool = True,
     dns_servers: tuple[str, ...] = (),
-) -> list[bytes]:
-    """Extract the full certificate chain using a single openssl s_client call.
+) -> tuple[list[bytes], str]:
+    """Extract the full certificate chain and protocol version using a single
+    openssl s_client call.
 
-    This is used on Python < 3.13 where SSLSocket lacks chain access
-    methods. Instead of opening a *second* TLS connection alongside the
-    Python one (which could hit a different backend behind a load
-    balancer), we do ONE openssl s_client connection and parse the PEM
-    output for both leaf and chain.
+    Returns (der_chain, protocol_version). protocol_version is e.g.
+    'TLSv1.3' or empty string if not detected.
     """
     try:
         _family, sockaddr = _resolve_host(
             hostname, port, allow_private=allow_private, dns_servers=dns_servers,
         )
     except OSError:
-        return []
+        return [], ""
 
     host = sockaddr[0]
     try:
@@ -293,15 +295,20 @@ def _scan_via_openssl(
             timeout=timeout,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        return []
+        return [], ""
 
     if proc.returncode not in (0, 1):
-        return []
+        return [], ""
+
+    protocol_version = ""
+    proto_match = _PROTOCOL_RE.search(proc.stdout)
+    if proto_match:
+        protocol_version = proto_match.group(1).decode("ascii", errors="replace")
 
     pem_output = proc.stdout
     matches = _PEM_CERT_PATTERN.findall(pem_output)
     if not matches:
-        return []
+        return [], protocol_version
 
     result: list[bytes] = []
     for pem_b64 in matches:
@@ -311,7 +318,7 @@ def _scan_via_openssl(
         except Exception:
             continue
 
-    return result
+    return result, protocol_version
 
 
 def _has_native_chain_api() -> bool:
@@ -408,6 +415,10 @@ def _scan_host_once(
     except Exception as exc:  # noqa: BLE001
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
+    protocol_version = ""
+    with contextlib.suppress(Exception):
+        protocol_version = ssl_sock.version() or ""
+
     try:
         der_chain = _get_chain_der(ssl_sock, hostname)
     finally:
@@ -438,6 +449,7 @@ def _scan_host_once(
         leaf=leaf_parsed,
         chain=chain_certs,
         scanned_at=datetime.now(UTC),
+        protocol_version=protocol_version,
     )
 
 
@@ -455,7 +467,7 @@ def _scan_host_via_openssl(
     If openssl is unavailable or fails, falls back to the Python TLS
     connection (leaf-only, no chain).
     """
-    der_chain = _scan_via_openssl(
+    der_chain, protocol_version = _scan_via_openssl(
         hostname, port, timeout, allow_private=allow_private, dns_servers=dns_servers,
     )
 
@@ -474,6 +486,7 @@ def _scan_host_via_openssl(
                 leaf=leaf_parsed,
                 chain=chain_certs,
                 scanned_at=datetime.now(UTC),
+                protocol_version=protocol_version,
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
@@ -486,6 +499,10 @@ def _scan_host_via_openssl(
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
     except Exception as exc:  # noqa: BLE001
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
+
+    protocol_version_fb = ""
+    with contextlib.suppress(Exception):
+        protocol_version_fb = ssl_sock.version() or ""
 
     try:
         leaf = ssl_sock.getpeercert(binary_form=True)
@@ -510,6 +527,7 @@ def _scan_host_via_openssl(
         leaf=leaf_parsed,
         chain=[],
         scanned_at=datetime.now(UTC),
+        protocol_version=protocol_version_fb,
     )
 
 
@@ -518,21 +536,79 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
     (so callers can pass the db path directly and we wire up source/hostname/port).
     Removes any previous leaf + chain certs for the same (hostname, port) first to
-    avoid accumulation on repeated scans. See AC-07.
+    avoid accumulation on repeated scans. Also evaluates and stores TLS posture.
+    See AC-07.
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
-        return replace_scanned(
+        leaf_id = replace_scanned(
             repo_path_or_repo,
             hostname=entry.host,
             port=entry.port,
             leaf=entry.leaf,
             chain=entry.chain,
-            chain_valid=None,  # computed inside replace_scanned
+            chain_valid=None,
         )
+        try:
+            _evaluate_and_store_posture(
+                repo_path_or_repo, leaf_id, entry,
+            )
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("cert_watch.scan").debug(
+                "posture evaluation skipped for %s:%s", entry.host, entry.port,
+                exc_info=True,
+            )
+        return leaf_id
 
     repo = repo_path_or_repo
     leaf_id = repo.add(entry.leaf)
     for chain_cert in entry.chain:
         repo.add(chain_cert)
     return leaf_id
+
+
+def _evaluate_and_store_posture(
+    db_path: str | Path,
+    cert_id: str,
+    entry: ScannedEntry,
+) -> None:
+    """Evaluate TLS posture and store the result."""
+    from cert_watch.cert_chain import chain_status
+    from cert_watch.certificate_model import Certificate as _Cert
+    from cert_watch.database import SqliteTrustAnchorRepository
+    from cert_watch.database.queries import store_scan_posture
+    from cert_watch.posture import evaluate_posture
+
+    cert = entry.leaf
+    chain = entry.chain
+
+    init_schema(db_path)
+    anchors = [_Cert(
+        subject=a.subject, issuer=a.issuer,
+        not_before=a.not_before, not_after=a.not_after,
+        san_dns_names=a.san_dns_names,
+        fingerprint_sha256=a.fingerprint_sha256,
+        raw_der=a.raw_der,
+    ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
+
+    cs = chain_status(cert, chain, anchors) if chain else None
+
+    result = evaluate_posture(
+        cert=cert,
+        protocol_version=entry.protocol_version or None,
+        chain_status=cs,
+    )
+
+    store_scan_posture(
+        db_path=db_path,
+        cert_id=cert_id,
+        hostname=entry.host,
+        port=entry.port,
+        grade=result.grade,
+        findings=result.findings,
+        protocol_version=result.protocol_version,
+        ocsp_stapling=result.ocsp_stapling,
+        hsts=result.hsts,
+        must_staple=result.must_staple,
+    )
