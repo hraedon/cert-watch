@@ -427,3 +427,59 @@ class TestScanProtocolVersion:
         assert _PROTOCOL_RE.search(b"Protocol  : TLSv1.2").group(1) == b"TLSv1.2"
         assert _PROTOCOL_RE.search(b"Protocol  : TLSv1.0").group(1) == b"TLSv1.0"
         assert _PROTOCOL_RE.search(b"no protocol") is None
+
+
+class TestScanPosturePersistence:
+    """store_scanned() must evaluate and persist posture as a side effect.
+
+    The wiring in store_scanned swallows posture errors (best-effort), so
+    without an explicit end-to-end assertion a broken wiring would pass
+    every other test silently.
+    """
+
+    def test_store_scanned_persists_posture(self, tmp_path):
+        from cert_watch.certificate_model import parse_certificate
+        from cert_watch.scan import ScannedEntry, store_scanned
+
+        db = str(tmp_path / "cert-watch.sqlite3")
+        leaf = parse_certificate(_self_signed_cert_der())
+        entry = ScannedEntry(
+            host="example.com", port=443, leaf=leaf, chain=[],
+            protocol_version="TLSv1.3",
+        )
+
+        cert_id = store_scanned(entry, db)
+
+        posture = get_posture_for_cert(db, cert_id)
+        assert posture is not None, "store_scanned did not persist posture"
+        assert posture["grade"] in {"A", "A+", "B", "C", "F"}
+        assert posture["protocol_version"] == "TLSv1.3"
+        assert posture["findings"]
+
+
+class TestPostureLatestSelection:
+    """Both latest-row lookups must be deterministic under timestamp ties."""
+
+    def test_tie_breaks_consistently_across_lookups(self, tmp_path):
+        from cert_watch.database import get_posture_grades_for_certs
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+        same_ts = "2026-05-30T12:00:00+00:00"
+        store_scan_posture(
+            db, "cert-tie", "h", 443, "A",
+            [{"check": "x", "status": "pass", "message": "ok"}],
+            scanned_at=same_ts,
+        )
+        store_scan_posture(
+            db, "cert-tie", "h", 443, "C",
+            [{"check": "x", "status": "warn", "message": "meh"}],
+            scanned_at=same_ts,
+        )
+
+        # Exactly one grade, and the single-cert and batch lookups agree.
+        grades = get_posture_grades_for_certs(db, ["cert-tie"])
+        single = get_posture_for_cert(db, "cert-tie")
+        assert grades["cert-tie"] == single["grade"]
+        # Stable across repeated calls.
+        assert get_posture_grades_for_certs(db, ["cert-tie"]) == grades

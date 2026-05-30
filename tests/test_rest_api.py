@@ -40,6 +40,36 @@ def test_api_certificates_with_data(tmp_path, monkeypatch, leaf_pem_file):
     assert len(certs) >= 1
 
 
+def test_api_posture_returns_stored_grade(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema, store_scan_posture
+
+    init_schema(str(db))
+    store_scan_posture(
+        str(db), "cert-xyz", "example.com", 443, "B",
+        [{"check": "tls_version", "status": "warn", "message": "TLS 1.0 offered"}],
+        protocol_version="TLSv1.0",
+    )
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/certificates/cert-xyz/posture")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["cert_id"] == "cert-xyz"
+    assert data["grade"] == "B"
+    assert data["protocol_version"] == "TLSv1.0"
+    assert data["findings"][0]["check"] == "tls_version"
+
+
+def test_api_posture_no_data(tmp_path, monkeypatch):
+    app_mod = _reload_app(monkeypatch, tmp_path)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/certificates/missing/posture")
+    assert r.status_code == 200
+    assert r.json()["error"] == "no posture data"
+
+
 def test_api_certificate_by_id(tmp_path, monkeypatch, leaf_pem_file):
     app_mod = _reload_app(monkeypatch, tmp_path)
     db = tmp_path / "cert-watch.sqlite3"

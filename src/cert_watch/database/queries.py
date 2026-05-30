@@ -683,7 +683,8 @@ def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict | None:
     init_schema(db_path)
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM scan_posture WHERE cert_id = ? ORDER BY scanned_at DESC LIMIT 1",
+            "SELECT * FROM scan_posture WHERE cert_id = ? "
+            "ORDER BY scanned_at DESC, id DESC LIMIT 1",
             (cert_id,),
         ).fetchone()
     if not row:
@@ -712,14 +713,18 @@ def get_posture_grades_for_certs(
     init_schema(db_path)
     with _connect(db_path) as conn:
         ph = ",".join("?" * len(cert_ids))
+        # Pick exactly one row per cert_id — the latest by (scanned_at, id).
+        # The id tiebreaker makes the result deterministic when two scans
+        # share an identical scanned_at timestamp.
         rows = conn.execute(
             f"""SELECT sp.cert_id, sp.grade FROM scan_posture sp
-            INNER JOIN (
-                SELECT cert_id, MAX(scanned_at) AS max_scan
-                FROM scan_posture
-                WHERE cert_id IN ({ph})
-                GROUP BY cert_id
-            ) latest ON sp.cert_id = latest.cert_id AND sp.scanned_at = latest.max_scan""",
+            WHERE sp.cert_id IN ({ph})
+              AND sp.id = (
+                SELECT sp2.id FROM scan_posture sp2
+                WHERE sp2.cert_id = sp.cert_id
+                ORDER BY sp2.scanned_at DESC, sp2.id DESC
+                LIMIT 1
+              )""",
             cert_ids,
         ).fetchall()
     return {r["cert_id"]: r["grade"] for r in rows}

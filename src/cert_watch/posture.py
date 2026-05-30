@@ -217,6 +217,10 @@ def evaluate_posture(
     else:
         grade = "F"
 
+    # A+ requires TLS 1.3 + HSTS. Note: scans do not yet probe HTTP response
+    # headers, so `hsts` is only ever set when a caller passes it explicitly
+    # (e.g. the detail-page fallback). A+ is therefore unreachable from
+    # scan-stored posture until HSTS detection lands (Plan 006).
     if grade == "A" and protocol_version and "1.3" in protocol_version and hsts is True:
         grade = "A+"
 
