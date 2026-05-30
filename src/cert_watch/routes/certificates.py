@@ -16,10 +16,12 @@ from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteCertificateRepository,
+    SqliteHostRepository,
     SqliteTrustAnchorRepository,
     _connect,
     _row_to_cert,
     delete_certificate_cascade,
+    get_renewal_history,
 )
 from cert_watch.filters import (
     compute_urgency,
@@ -140,6 +142,11 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     worst_days = min([leaf_days] + all_chain_days) if all_chain_days else leaf_days
     urgency = compute_urgency(worst_days)
 
+    # Override urgency if chain issue
+    chain_issue = None
+    if cs in ("incomplete", "invalid"):
+        chain_issue = cs
+
     # Get host info if scanned
     hostname = ""
     port = 443
@@ -163,6 +170,39 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             ).fetchone()
             if scan_row:
                 last_scan = scan_row["scanned_at"]
+
+    # Get host info for operation summary
+    host_info = None
+    renewal_method_label = ""
+    renewal_method_indicator = ""
+    if hostname:
+        host_repo = SqliteHostRepository(db)
+        for h in host_repo.list_all():
+            if h.hostname == hostname and h.port == port:
+                host_info = {
+                    "owner_name": h.owner_name or None,
+                    "owner_email": h.owner_email or None,
+                    "owner_slack": h.owner_slack or None,
+                    "renewal_status": h.renewal_status,
+                    "renewal_method": h.renewal_method or "",
+                    "runbook_url": h.runbook_url or None,
+                }
+                rm = h.renewal_method or ""
+                if rm == "acme":
+                    renewal_method_label = "ACME"
+                    renewal_method_indicator = "auto-renews"
+                elif rm == "cert-manager":
+                    renewal_method_label = "cert-manager"
+                    renewal_method_indicator = "auto-renews"
+                elif rm == "manual":
+                    renewal_method_label = "Manual"
+                    renewal_method_indicator = "requires manual action"
+                elif rm:
+                    renewal_method_label = rm.capitalize()
+                break
+
+    # Get renewal history
+    renewal_history = get_renewal_history(db, cert_id)
 
     ctx = get_csrf_context(request)
     from datetime import UTC, datetime
@@ -191,6 +231,11 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "port": port,
             "last_scan": last_scan,
             "source": cert.san_dns_names,
+            "host_info": host_info,
+            "chain_issue": chain_issue,
+            "renewal_history": renewal_history,
+            "renewal_method_label": renewal_method_label,
+            "renewal_method_indicator": renewal_method_indicator,
             "now": datetime.now(UTC),
             **ctx,
         },

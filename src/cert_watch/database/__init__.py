@@ -22,6 +22,7 @@ from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_c
 from cert_watch.database.queries import (
     count_dashboard_leaves,
     delete_certificate_cascade,
+    get_renewal_history,
     group_entries_by_fingerprint,
     list_alerts_with_subject,
     list_dashboard_rows,
@@ -69,6 +70,7 @@ __all__ = [
     # queries
     "count_dashboard_leaves",
     "delete_certificate_cascade",
+    "get_renewal_history",
     "group_entries_by_fingerprint",
     "list_alerts_with_subject",
     "list_dashboard_rows",

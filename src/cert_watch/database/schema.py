@@ -73,6 +73,21 @@ CREATE TABLE IF NOT EXISTS trust_anchors (
     raw_der BLOB NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS scan_posture (
+    id TEXT PRIMARY KEY,
+    cert_id TEXT NOT NULL,
+    hostname TEXT,
+    port INTEGER,
+    grade TEXT NOT NULL,
+    protocol_version TEXT,
+    ocsp_stapling INTEGER,
+    hsts INTEGER,
+    must_staple INTEGER DEFAULT 0,
+    findings TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    FOREIGN KEY (cert_id) REFERENCES certificates(id)
+);
 """
 
 _INDEXES_SCHEMA = """
@@ -127,6 +142,16 @@ def init_schema(db_path: str | Path) -> None:
                 "ALTER TABLE hosts ADD COLUMN renewal_status"
                 " TEXT NOT NULL DEFAULT 'pending'"
             )
+        if "renewal_method" not in host_cols:
+            conn.execute(
+                "ALTER TABLE hosts ADD COLUMN renewal_method"
+                " TEXT NOT NULL DEFAULT ''"
+            )
+        if "runbook_url" not in host_cols:
+            conn.execute(
+                "ALTER TABLE hosts ADD COLUMN runbook_url"
+                " TEXT NOT NULL DEFAULT ''"
+            )
         # trust_anchors migration
         ta_cols = {r[1] for r in conn.execute("PRAGMA table_info(trust_anchors)").fetchall()}
         if not ta_cols:
@@ -145,6 +170,26 @@ def init_schema(db_path: str | Path) -> None:
                 )
                 """
             )
+
+        # 2b. scan_posture table (Plan 006 Phase 1)
+        sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
+        if not sp_cols:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS scan_posture (
+                    id TEXT PRIMARY KEY,
+                    cert_id TEXT NOT NULL,
+                    hostname TEXT,
+                    port INTEGER,
+                    grade TEXT NOT NULL,
+                    protocol_version TEXT,
+                    ocsp_stapling INTEGER,
+                    hsts INTEGER,
+                    must_staple INTEGER DEFAULT 0,
+                    findings TEXT NOT NULL,
+                    scanned_at TEXT NOT NULL,
+                    FOREIGN KEY (cert_id) REFERENCES certificates(id)
+                )
+            """)
 
         # 3. Create indexes only after columns are guaranteed to exist
         conn.executescript(_INDEXES_SCHEMA)

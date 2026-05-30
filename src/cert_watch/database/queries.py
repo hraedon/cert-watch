@@ -434,6 +434,8 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
             "owner_email": dict(h).get("owner_email", ""),
             "owner_slack": dict(h).get("owner_slack", ""),
             "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_method": dict(h).get("renewal_method", ""),
+            "runbook_url": dict(h).get("runbook_url", ""),
         }
         if host_key in scanned_map:
             row = scanned_map[host_key]
@@ -574,3 +576,41 @@ def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:
         })
 
     return result
+
+
+def get_renewal_history(
+    db_path: str | Path, cert_id: str, limit: int = 10
+) -> list[dict]:
+    """Walk the replaces_cert_id chain backwards from this cert.
+
+    Returns list of dicts oldest-first: [{id, subject, fingerprint_sha256,
+    not_before, not_after, replaces_cert_id, created_at, is_current}, ...].
+    The given cert_id is marked is_current=True.
+    """
+    init_schema(db_path)
+    entries: list[dict] = []
+    current_id = cert_id
+    seen: set[str] = set()
+    while current_id and current_id not in seen and len(entries) < limit:
+        seen.add(current_id)
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT id, subject, fingerprint_sha256, not_before, not_after, "
+                "replaces_cert_id, created_at FROM certificates WHERE id = ?",
+                (current_id,),
+            ).fetchone()
+        if not row:
+            break
+        entries.append({
+            "id": row["id"],
+            "subject": row["subject"],
+            "fingerprint_sha256": dict(row).get("fingerprint_sha256", ""),
+            "not_before": row["not_before"],
+            "not_after": row["not_after"],
+            "replaces_cert_id": row["replaces_cert_id"],
+            "created_at": row["created_at"],
+            "is_current": row["id"] == cert_id,
+        })
+        current_id = row["replaces_cert_id"]
+    entries.reverse()
+    return entries

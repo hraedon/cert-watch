@@ -150,7 +150,7 @@
                 {% if e.chain_status == 'public' %}
                   <span class="cw-chip cw-chip-public">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
                   <span class="cw-chip cw-chip-renewed">renewed</span>
@@ -254,7 +254,7 @@
                 {% if e.chain_status == 'public' %}
                   <span class="cw-chip cw-chip-public">public</span>
                 {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">incomplete</span>
+                  <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 11, 1.7) }}incomplete</span>
                 {% endif %}
                 {% if e.replaces_cert_id %}
                   <span class="cw-chip cw-chip-renewed">renewed</span>
@@ -519,6 +519,23 @@ function toggleGroup(groupId) {
     if (chevron) chevron.classList.toggle('cw-group-chevron-open');
   }
 }
+function capChips(containerSelector, maxChips) {
+  document.querySelectorAll(containerSelector).forEach(function(el) {
+    var chips = el.querySelectorAll('.cw-chip');
+    if (chips.length > maxChips) {
+      for (var i = maxChips; i < chips.length; i++) {
+        chips[i].style.display = 'none';
+      }
+      var more = document.createElement('span');
+      more.className = 'cw-chip cw-chip-muted';
+      more.textContent = '+' + (chips.length - maxChips) + ' more';
+      el.appendChild(more);
+    }
+  });
+}
+document.addEventListener('DOMContentLoaded', function() {
+  capChips('.cw-cert-chips', 4);
+});
 document.addEventListener('submit', function(e) {
   var form = e.target;
   if (form.classList.contains('confirm-form')) {

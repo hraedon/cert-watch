@@ -53,6 +53,11 @@
           <span class="dot"></span>
           {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
         </span>
+        {% if chain_issue == 'incomplete' %}
+          <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 12, 1.7) }}Chain incomplete</span>
+        {% elif chain_issue == 'invalid' %}
+          <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 12, 1.7) }}Chain invalid</span>
+        {% endif %}
       </div>
       <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
         {% if cert.source == 'scanned' %}
@@ -74,7 +79,7 @@
           <button type="submit" class="cw-btn primary">{{ svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
-      <a href="/api/certificates/{{ cert_id }}" class="cw-btn">{{ svg_icon('download', 14) }}Download</a>
+      <a href="/api/certificates/{{ cert_id }}" class="cw-btn">{{ svg_icon('download', 14) }}Download PEM</a>
       <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-iconbtn" title="Delete">{{ svg_icon('trash', 15) }}</button>
@@ -86,6 +91,52 @@
   <div class="cw-layout-16-1">
     {# ---- Left column ---- #}
     <div>
+      {# Operational Summary #}
+      {% if host_info %}
+      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+        <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Operational summary</div>
+        <div class="cw-grid-2-16-22">
+          <div>
+            <div class="cw-detail-label">Owner</div>
+            <div class="mono cw-fz-12-5 cw-text-text">{{ host_info.owner_name or '—' }}</div>
+          </div>
+          <div>
+            <div class="cw-detail-label">Renewal</div>
+            <div class="mono cw-fz-12-5 cw-text-text">
+              {{ renewal_method_label }}
+              {% if renewal_method_indicator %}
+                <span class="cw-chip cw-chip-{{ 'renewed' if renewal_method_indicator == 'auto-renews' else 'incomplete' }}">{{ renewal_method_indicator }}</span>
+              {% endif %}
+            </div>
+          </div>
+          {% if host_info.runbook_url %}
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">Runbook</div>
+            <div class="mono cw-fz-12-5">
+              <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
+            </div>
+          </div>
+          {% endif %}
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">Chain status</div>
+            <div class="mono cw-fz-12-5 cw-text-text">
+              {% if chain_status == 'public' or chain_status == 'private' %}
+                <span class="cw-chip cw-chip-public">Verified to trusted root</span>
+              {% elif chain_status == 'incomplete' %}
+                <span class="cw-chip cw-chip-incomplete">⚠ Incomplete — server missing intermediate(s)</span>
+              {% elif chain_status == 'self-signed' %}
+                <span class="cw-chip">Self-signed</span>
+              {% elif chain_status == 'invalid' %}
+                <span class="cw-chip cw-chip-incomplete">✗ Chain validation failed</span>
+              {% else %}
+                <span class="cw-chip cw-chip-muted">Unknown</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
       {# Validity meter #}
       <div class="cw-panel cw-panel--p-16-18 cw-mb-16">
         <div class="cw-flex cw-justify-between cw-items-end cw-mb-12">
@@ -99,10 +150,6 @@
               {% if days_remaining >= 0 %}<span class="cw-fz-14 cw-text-text-2">days</span>{% endif %}
             </div>
           </div>
-          <span class="cw-pill {{ urgency }}">
-            <span class="dot"></span>
-            {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% else %}Healthy{% endif %}
-          </span>
         </div>
         {# Progress bar #}
         {% set issued_days = cert.not_before | int if cert.not_before else 0 %}
@@ -111,6 +158,7 @@
         {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
         <div class="cw-validity-bar-track">
           <div class="cw-urgency-bar-fill" style="width:{{ pct }}%;--tone:{{ _tone }}"></div>
+          <div class="cw-validity-now-marker" style="left:{{ pct }}%"></div>
         </div>
         <div class="cw-flex cw-justify-between cw-mt-8 cw-fz-11-5 mono">
           <span class="cw-text-text-3">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
@@ -137,14 +185,39 @@
         </div>
       </div>
 
+      {# Renewal history #}
+      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
+          {{ svg_icon('refresh', 15) }}
+          <span class="cw-fz-13-5 cw-fw-600">Renewal history</span>
+        </div>
+        {% if renewal_history %}
+          {% for rh in renewal_history %}
+            <div class="cw-chain-node cw-mb-10">
+              <div class="cw-chain-dot {% if rh.is_current %}cw-border-accent{% else %}cw-border-text-2{% endif %}"></div>
+              {% if not loop.last %}<div class="cw-chain-line"></div>{% endif %}
+              <div class="cw-panel cw-panel--p-11-13">
+                <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
+                  <span class="cw-fz-12-5 mono cw-text-text">
+                    {{ rh.not_before[:10] if rh.not_before else '—' }}
+                    {% if rh.is_current %}<span class="cw-chip cw-chip-public">current</span>{% endif %}
+                  </span>
+                  <a href="/certificates/{{ rh.id }}" class="cw-chip">
+                    {{ rh.fingerprint_sha256[:8] if rh.fingerprint_sha256 else '—' }}…
+                  </a>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        {% else %}
+          <div class="cw-fz-12 cw-text-text-3">No renewal history</div>
+        {% endif %}
+      </div>
+
       {# Certificate details #}
       <div class="cw-panel cw-panel--p-16-18">
         <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Certificate details</div>
         <div class="cw-grid-2-16-22">
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">SUBJECT</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.subject }}</div>
-          </div>
           <div class="cw-col-span-2">
             <div class="cw-detail-label">ISSUER</div>
             <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.issuer }}</div>
@@ -263,7 +336,7 @@
       {% set _banner_map = {
         'public': ('var(--ok-soft)', 'var(--ok)'),
         'private': ('var(--ok-soft)', 'var(--ok)'),
-        'incomplete': ('var(--warn-soft)', 'var(--warn)'),
+        'incomplete': ('var(--crit-soft)', 'var(--crit)'),
         'self-signed': ('var(--accent-soft)', 'var(--accent)'),
         'invalid': ('var(--crit-soft)', 'var(--crit)')
       } %}

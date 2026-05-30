@@ -52,6 +52,8 @@ class HostEntry:
     owner_email: str = ""
     owner_slack: str = ""
     renewal_status: str = "pending"
+    renewal_method: str = ""
+    runbook_url: str = ""
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -366,6 +368,8 @@ class SqliteHostRepository:
         owner_email: str = "",
         owner_slack: str = "",
         renewal_status: str = "pending",
+        renewal_method: str = "",
+        runbook_url: str = "",
     ) -> str:
         import sqlite3
         host_id = str(uuid.uuid4())
@@ -374,12 +378,14 @@ class SqliteHostRepository:
                 conn.execute(
                     "INSERT INTO hosts"
                     " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
-                    "  owner_name, owner_email, owner_slack, renewal_status, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "  owner_name, owner_email, owner_slack, renewal_status,"
+                    "  renewal_method, runbook_url, added_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         host_id, hostname, port, threshold_days, tags,
                         scan_interval_hours, owner_name, owner_email,
-                        owner_slack, renewal_status, _iso(datetime.now(UTC)),
+                        owner_slack, renewal_status, renewal_method,
+                        runbook_url, _iso(datetime.now(UTC)),
                     ),
                 )
                 conn.commit()
@@ -406,6 +412,8 @@ class SqliteHostRepository:
                 owner_email=dict(r).get("owner_email", ""),
                 owner_slack=dict(r).get("owner_slack", ""),
                 renewal_status=dict(r).get("renewal_status", "pending"),
+                renewal_method=dict(r).get("renewal_method", ""),
+                runbook_url=dict(r).get("runbook_url", ""),
                 added_at=_parse_iso(r["added_at"]),
             )
             for r in rows
@@ -427,6 +435,8 @@ class SqliteHostRepository:
             owner_email=dict(r).get("owner_email", ""),
             owner_slack=dict(r).get("owner_slack", ""),
             renewal_status=dict(r).get("renewal_status", "pending"),
+            renewal_method=dict(r).get("renewal_method", ""),
+            runbook_url=dict(r).get("runbook_url", ""),
             added_at=_parse_iso(r["added_at"]),
         )
 
@@ -500,6 +510,42 @@ class SqliteHostRepository:
             if owner_slack is not None:
                 sets.append("owner_slack = ?")
                 params.append(owner_slack)
+            if renewal_status is not None:
+                sets.append("renewal_status = ?")
+                params.append(renewal_status)
+            if not sets:
+                return True
+            params.append(host_id)
+            conn.execute(
+                f"UPDATE hosts SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+        return True
+
+    def update_renewal(
+        self,
+        host_id: str,
+        *,
+        renewal_method: str | None = None,
+        runbook_url: str | None = None,
+        renewal_status: str | None = None,
+    ) -> bool:
+        """Update renewal_method, runbook_url, and renewal_status for a host."""
+        with _connect(self.db_path) as conn:
+            r = conn.execute(
+                "SELECT id FROM hosts WHERE id = ?", (host_id,)
+            ).fetchone()
+            if not r:
+                return False
+            sets: list[str] = []
+            params: list = []
+            if renewal_method is not None:
+                sets.append("renewal_method = ?")
+                params.append(renewal_method)
+            if runbook_url is not None:
+                sets.append("runbook_url = ?")
+                params.append(runbook_url)
             if renewal_status is not None:
                 sets.append("renewal_status = ?")
                 params.append(renewal_status)

@@ -493,7 +493,9 @@ body {
   border-color: var(--border);
 }
 .cw-chip-muted {
+  background: var(--panel-2);
   color: var(--text-3);
+  font-size: 11px;
   border-color: var(--border);
 }
 
@@ -733,6 +735,16 @@ body {
 /* ---- VALIDITY BAR ---- */
 .cw-validity-bar-track { position: relative; height: 8px; border-radius: 5px; background: var(--inset); overflow: hidden; }
 .cw-validity-bar-fill  { position: absolute; inset: 0; border-radius: 5px; }
+.cw-validity-now-marker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: var(--text);
+  border-radius: 1px;
+  z-index: 2;
+  opacity: 0.6;
+}
 
 /* ---- GAPS ---- */
 .cw-gap-7, .cw-gap-10   { gap: var(--space-2); }

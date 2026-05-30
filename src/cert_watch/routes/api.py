@@ -192,6 +192,20 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
                 status_code=400,
             )
 
+    valid_methods = {"", "acme", "cert-manager", "manual"}
+    renewal_method = body.get("renewal_method")
+    if renewal_method is not None and renewal_method not in valid_methods:
+        return JSONResponse(
+            content={"error": f"renewal_method must be one of {valid_methods}"},
+            status_code=400,
+        )
+    runbook_url = body.get("runbook_url")
+    if runbook_url is not None and not isinstance(runbook_url, str):
+        return JSONResponse(
+            content={"error": "runbook_url must be a string"},
+            status_code=400,
+        )
+
     db = _db_path(request)
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
@@ -205,6 +219,12 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
         owner_slack=body.get("owner_slack"),
         renewal_status=renewal_status,
     )
+    if renewal_method is not None or runbook_url is not None:
+        repo.update_renewal(
+            host_id,
+            renewal_method=renewal_method,
+            runbook_url=runbook_url,
+        )
     updated = repo.get(host_id)
     return JSONResponse(content={
         "id": host_id,
@@ -212,6 +232,8 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
         "owner_email": updated.owner_email,
         "owner_slack": updated.owner_slack,
         "renewal_status": updated.renewal_status,
+        "renewal_method": updated.renewal_method,
+        "runbook_url": updated.runbook_url,
     })
 
 
