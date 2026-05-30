@@ -25,6 +25,10 @@ they are explicitly out of scope here. Ship Tier 1, then reassess.
 | 5 | Operator runbook | HIGH | pending |
 | 6 | `/metrics` exposure decision + scale ceiling doc | MEDIUM | pending |
 
+Each pending phase has its own implementation plan: **008** (audit log),
+**009** (schema migrations + backup/restore), **010** (auth hardening),
+**011** (operator runbook + ops decisions, covers Phases 5–6).
+
 ### Non-goals
 
 - New posture phases, CT work, fleet lenses, or export features.
