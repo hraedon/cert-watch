@@ -46,7 +46,7 @@ def evaluate_posture(
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
 
     findings: list[Finding] = []
-    grade_penalty = 0
+    grade_severity = 0  # 0=A, 1=B, 2=C, 3=F (most severe finding wins)
 
     try:
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)
@@ -64,7 +64,7 @@ def evaluate_posture(
                     check="rsa_key_size", status="fail",
                     message=f"RSA key size {key.key_size} < 2048 bits",
                 ))
-                grade_penalty += 2
+                grade_severity = max(grade_severity, 2)
             else:
                 findings.append(Finding(
                     check="rsa_key_size", status="pass",
@@ -77,7 +77,7 @@ def evaluate_posture(
                     check="ecdsa_curve", status="fail",
                     message=f"Weak ECDSA curve {curve_name}",
                 ))
-                grade_penalty += 2
+                grade_severity = max(grade_severity, 2)
             else:
                 findings.append(Finding(
                     check="ecdsa_curve", status="pass",
@@ -104,7 +104,7 @@ def evaluate_posture(
                 check="sha1_signature", status="fail",
                 message="SHA-1 signature algorithm",
             ))
-            grade_penalty += 2
+            grade_severity = max(grade_severity, 2)
         else:
             findings.append(Finding(
                 check="sha1_signature", status="pass",
@@ -128,7 +128,11 @@ def evaluate_posture(
             message=f"Validity {validity_days} days within limit",
         ))
 
-    if cert.subject == cert.issuer:
+    try:
+        is_self_signed = x509_cert.subject == x509_cert.issuer
+    except Exception:
+        is_self_signed = cert.subject == cert.issuer
+    if is_self_signed:
         findings.append(Finding(
             check="self_signed", status="warn",
             message="Self-signed certificate in production position",
@@ -157,7 +161,7 @@ def evaluate_posture(
             ))
     else:
         findings.append(Finding(
-            check="ocsp_must_staple", status="pass",
+            check="ocsp_must_staple", status="info",
             message="OCSP Must-Staple not required",
         ))
 
@@ -166,13 +170,13 @@ def evaluate_posture(
             check="chain_completeness", status="warn",
             message="Incomplete chain - server missing intermediate(s)",
         ))
-        grade_penalty += 1
+        grade_severity = max(grade_severity, 1)
     elif chain_status == "invalid":
         findings.append(Finding(
             check="chain_completeness", status="fail",
             message="Chain validation failed",
         ))
-        grade_penalty += 2
+        grade_severity = max(grade_severity, 2)
     else:
         findings.append(Finding(
             check="chain_completeness", status="pass",
@@ -186,7 +190,7 @@ def evaluate_posture(
                 check="tls_version", status="warn",
                 message=f"TLS {protocol_version} offered - consider disabling",
             ))
-            grade_penalty += 1
+            grade_severity = max(grade_severity, 1)
         else:
             findings.append(Finding(
                 check="tls_version", status="pass",
@@ -204,14 +208,17 @@ def evaluate_posture(
             message="HSTS header present",
         ))
 
-    if grade_penalty == 0:
+    if grade_severity == 0:
         grade = "A"
-    elif grade_penalty == 1:
+    elif grade_severity == 1:
         grade = "B"
-    elif grade_penalty == 2:
+    elif grade_severity == 2:
         grade = "C"
     else:
         grade = "F"
+
+    if grade == "A" and protocol_version and "1.3" in protocol_version and hsts is True:
+        grade = "A+"
 
     return PostureResult(
         grade=grade,

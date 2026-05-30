@@ -199,10 +199,16 @@
               {% endif %}
             </td>
             <td>
-              <span class="cw-pill {{ urg }}">
-                <span class="dot"></span>
-                {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-              </span>
+              <div class="cw-flex cw-items-center cw-gap-6">
+                <span class="cw-pill {{ urg }}">
+                  <span class="dot"></span>
+                  {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+                </span>
+                {% set pg = posture_grades.get(e.id) if posture_grades else None %}
+                {% if pg %}
+                <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }}">{{ pg }}</span>
+                {% endif %}
+              </div>
             </td>
             <td onclick="event.stopPropagation()">
               <div class="cw-rowact">
@@ -319,10 +325,16 @@
               {% endif %}
             </td>
             <td>
-              <span class="cw-pill {{ urg }}">
-                <span class="dot"></span>
-                {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-              </span>
+              <div class="cw-flex cw-items-center cw-gap-6">
+                <span class="cw-pill {{ urg }}">
+                  <span class="dot"></span>
+                  {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+                </span>
+                {% set pg = posture_grades.get(e.id) if posture_grades else None %}
+                {% if pg %}
+                <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }}">{{ pg }}</span>
+                {% endif %}
+              </div>
             </td>
             <td onclick="event.stopPropagation()">
               <div class="cw-rowact">
@@ -521,15 +533,23 @@ function toggleGroup(groupId) {
 }
 function capChips(containerSelector, maxChips) {
   document.querySelectorAll(containerSelector).forEach(function(el) {
-    var chips = el.querySelectorAll('.cw-chip');
-    if (chips.length > maxChips) {
-      for (var i = maxChips; i < chips.length; i++) {
-        chips[i].style.display = 'none';
+    var chips = el.querySelectorAll('.cw-chip:not(.cw-san-list .cw-chip)');
+    var sanContainer = el.querySelector('.cw-san-list');
+    if (sanContainer) {
+      var sanChips = sanContainer.querySelectorAll('.cw-chip');
+      var statusChips = chips.length;
+      var sanBudget = Math.max(0, maxChips - statusChips);
+      if (sanChips.length > sanBudget) {
+        for (var i = sanBudget; i < sanChips.length; i++) {
+          sanChips[i].style.display = 'none';
+        }
+        if (sanChips.length > sanBudget) {
+          var more = document.createElement('span');
+          more.className = 'cw-chip cw-chip-muted';
+          more.textContent = '+' + (sanChips.length - sanBudget) + ' more';
+          sanContainer.appendChild(more);
+        }
       }
-      var more = document.createElement('span');
-      more.className = 'cw-chip cw-chip-muted';
-      more.textContent = '+' + (chips.length - maxChips) + ' more';
-      el.appendChild(more);
     }
   });
 }

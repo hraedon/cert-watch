@@ -279,6 +279,9 @@ def _build_dashboard_rows(
         leaf_cert = _row_to_cert(leaf)
         chain_certs = [_row_to_cert(c) for c in chain]
         _chain_status = chain_status(leaf_cert, chain_certs, anchors)
+        row_urgency = _urgency(min_days)
+        if _chain_status in ("incomplete", "invalid") and row_urgency == "healthy":
+            row_urgency = "warning"
         dash.append(
             {
                 "id": leaf["id"],
@@ -289,7 +292,7 @@ def _build_dashboard_rows(
                 "not_before": leaf["not_before"],
                 "not_after": leaf["not_after"],
                 "days_remaining": leaf_days,
-                "urgency": _urgency(min_days),
+                "urgency": row_urgency,
                 "leaf_urgency": _urgency(leaf_days),
                 "chain": chain_view,
                 "chain_valid": (
@@ -573,6 +576,8 @@ def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:
             "owner_email": first.get("owner_email", ""),
             "owner_slack": first.get("owner_slack", ""),
             "renewal_status": first.get("renewal_status", "pending"),
+            "renewal_method": first.get("renewal_method", ""),
+            "runbook_url": first.get("runbook_url", ""),
         })
 
     return result
@@ -614,3 +619,107 @@ def get_renewal_history(
         current_id = row["replaces_cert_id"]
     entries.reverse()
     return entries
+
+
+def store_scan_posture(
+    db_path: str | Path,
+    cert_id: str,
+    hostname: str | None,
+    port: int | None,
+    grade: str,
+    findings: list[dict],
+    protocol_version: str = "",
+    ocsp_stapling: bool | None = None,
+    hsts: bool | None = None,
+    must_staple: bool = False,
+    scanned_at: str | None = None,
+) -> str:
+    """Store a posture evaluation result in the scan_posture table.
+
+    Returns the posture entry id.
+    """
+    from cert_watch.posture import Finding
+
+    init_schema(db_path)
+    posture_id = str(uuid.uuid4())
+    if scanned_at is None:
+        scanned_at = _iso(datetime.now(UTC))
+
+    findings_json = json.dumps([
+        {"check": f.check, "status": f.status, "message": f.message}
+        if isinstance(f, Finding) else f
+        for f in findings
+    ])
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """INSERT INTO scan_posture
+            (id, cert_id, hostname, port, grade, protocol_version,
+             ocsp_stapling, hsts, must_staple, findings, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                posture_id,
+                cert_id,
+                hostname,
+                port,
+                grade,
+                protocol_version,
+                1 if ocsp_stapling is True else (0 if ocsp_stapling is False else None),
+                1 if hsts is True else (0 if hsts is False else None),
+                1 if must_staple else 0,
+                findings_json,
+                scanned_at,
+            ),
+        )
+        conn.commit()
+    return posture_id
+
+
+def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict | None:
+    """Get the most recent posture evaluation for a certificate.
+
+    Returns a dict with grade, findings, protocol_version, etc. or None.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM scan_posture WHERE cert_id = ? ORDER BY scanned_at DESC LIMIT 1",
+            (cert_id,),
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["findings"] = (
+            json.loads(d["findings"])
+            if isinstance(d["findings"], str)
+            else d["findings"]
+        )
+    except (json.JSONDecodeError, TypeError):
+        d["findings"] = []
+    return d
+
+
+def get_posture_grades_for_certs(
+    db_path: str | Path, cert_ids: list[str]
+) -> dict[str, str]:
+    """Get the latest posture grade for each cert_id.
+
+    Returns {cert_id: grade} for certs that have posture data.
+    """
+    if not cert_ids:
+        return {}
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        ph = ",".join("?" * len(cert_ids))
+        rows = conn.execute(
+            f"""SELECT sp.cert_id, sp.grade FROM scan_posture sp
+            INNER JOIN (
+                SELECT cert_id, MAX(scanned_at) AS max_scan
+                FROM scan_posture
+                WHERE cert_id IN ({ph})
+                GROUP BY cert_id
+            ) latest ON sp.cert_id = latest.cert_id AND sp.scanned_at = latest.max_scan""",
+            cert_ids,
+        ).fetchall()
+    return {r["cert_id"]: r["grade"] for r in rows}

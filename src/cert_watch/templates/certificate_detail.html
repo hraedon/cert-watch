@@ -53,6 +53,9 @@
           <span class="dot"></span>
           {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
         </span>
+        {% if posture %}
+        <span class="cw-chip cw-chip-{{ 'ok' if posture.grade in ('A', 'A+') else 'warn' if posture.grade == 'B' else 'incomplete' if posture.grade == 'C' else 'crit' }}">{{ posture.grade }}</span>
+        {% endif %}
         {% if chain_issue == 'incomplete' %}
           <span class="cw-chip cw-chip-incomplete">{{ svg_icon('alert', 12, 1.7) }}Chain incomplete</span>
         {% elif chain_issue == 'invalid' %}
@@ -134,6 +137,57 @@
             </div>
           </div>
         </div>
+      </div>
+      {% endif %}
+
+      {# Security posture #}
+      {% if posture %}
+      {% set pg = posture.grade %}
+      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-14">
+          {{ svg_icon('shield', 15) }}
+          <span class="cw-fz-13-5 cw-fw-600">Security posture</span>
+          <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }}" style="margin-left:auto">{{ pg }}</span>
+        </div>
+        <div class="cw-flex cw-flex-col cw-gap-6">
+          {% for f in posture.findings %}
+          {% if f.status == 'pass' %}
+          <div class="cw-flex cw-items-start cw-gap-8">
+            <span class="cw-fz-12 cw-text-text-ok" style="min-width:16px">{{ svg_icon('check', 13) }}</span>
+            <div>
+              <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
+            </div>
+          </div>
+          {% elif f.status == 'warn' %}
+          <div class="cw-flex cw-items-start cw-gap-8">
+            <span class="cw-fz-12 cw-text-text-warn" style="min-width:16px">{{ svg_icon('alert', 13, 1.7) }}</span>
+            <div>
+              <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
+            </div>
+          </div>
+          {% elif f.status == 'fail' %}
+          <div class="cw-flex cw-items-start cw-gap-8">
+            <span class="cw-fz-12 cw-text-text-crit" style="min-width:16px">{{ svg_icon('alert', 13, 1.7) }}</span>
+            <div>
+              <span class="cw-fz-12-5 cw-text-text cw-fw-600">{{ f.message }}</span>
+            </div>
+          </div>
+          {% elif f.status == 'info' %}
+          <div class="cw-flex cw-items-start cw-gap-8">
+            <span class="cw-fz-12 cw-text-text-3" style="min-width:16px">—</span>
+            <div>
+              <span class="cw-fz-12-5 cw-text-text-3">{{ f.message }}</span>
+            </div>
+          </div>
+          {% endif %}
+          {% endfor %}
+        </div>
+        {% if posture.protocol_version %}
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mt-10">
+          <span class="cw-fz-11 cw-text-text-3">TLS version:</span>
+          <span class="cw-chip">{{ posture.protocol_version }}</span>
+        </div>
+        {% endif %}
       </div>
       {% endif %}
 

@@ -16,7 +16,6 @@ from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteCertificateRepository,
-    SqliteHostRepository,
     SqliteTrustAnchorRepository,
     _connect,
     _row_to_cert,
@@ -176,33 +175,61 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     renewal_method_label = ""
     renewal_method_indicator = ""
     if hostname:
-        host_repo = SqliteHostRepository(db)
-        for h in host_repo.list_all():
-            if h.hostname == hostname and h.port == port:
-                host_info = {
-                    "owner_name": h.owner_name or None,
-                    "owner_email": h.owner_email or None,
-                    "owner_slack": h.owner_slack or None,
-                    "renewal_status": h.renewal_status,
-                    "renewal_method": h.renewal_method or "",
-                    "runbook_url": h.runbook_url or None,
-                }
-                rm = h.renewal_method or ""
-                if rm == "acme":
-                    renewal_method_label = "ACME"
-                    renewal_method_indicator = "auto-renews"
-                elif rm == "cert-manager":
-                    renewal_method_label = "cert-manager"
-                    renewal_method_indicator = "auto-renews"
-                elif rm == "manual":
-                    renewal_method_label = "Manual"
-                    renewal_method_indicator = "requires manual action"
-                elif rm:
-                    renewal_method_label = rm.capitalize()
-                break
+        with _connect(db) as conn:
+            host_row = conn.execute(
+                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchone()
+        if host_row:
+            h = dict(host_row)
+            host_info = {
+                "owner_name": h.get("owner_name") or None,
+                "owner_email": h.get("owner_email") or None,
+                "owner_slack": h.get("owner_slack") or None,
+                "renewal_status": h.get("renewal_status", "pending"),
+                "renewal_method": h.get("renewal_method", ""),
+                "runbook_url": h.get("runbook_url") or None,
+            }
+            rm = h.get("renewal_method", "")
+            if rm == "acme":
+                renewal_method_label = "ACME"
+                renewal_method_indicator = "auto-renews"
+            elif rm == "cert-manager":
+                renewal_method_label = "cert-manager"
+                renewal_method_indicator = "auto-renews"
+            elif rm == "manual":
+                renewal_method_label = "Manual"
+                renewal_method_indicator = "requires manual action"
+            elif rm:
+                renewal_method_label = rm.capitalize()
 
     # Get renewal history
     renewal_history = get_renewal_history(db, cert_id)
+
+    # Get posture evaluation
+    from cert_watch.database import get_posture_for_cert
+    from cert_watch.posture import evaluate_posture
+    posture = get_posture_for_cert(db, cert_id)
+    posture_data = None
+    if posture:
+        posture_data = posture
+    else:
+        try:
+            cs_for_posture = cs
+            result = evaluate_posture(cert=cert, chain_status=cs_for_posture)
+            posture_data = {
+                "grade": result.grade,
+                "findings": [
+                    {"check": f.check, "status": f.status, "message": f.message}
+                    for f in result.findings
+                ],
+                "protocol_version": result.protocol_version,
+                "ocsp_stapling": result.ocsp_stapling,
+                "hsts": result.hsts,
+                "must_staple": result.must_staple,
+            }
+        except Exception:  # noqa: BLE001
+            pass
 
     ctx = get_csrf_context(request)
     from datetime import UTC, datetime
@@ -237,9 +264,30 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "renewal_method_label": renewal_method_label,
             "renewal_method_indicator": renewal_method_indicator,
             "now": datetime.now(UTC),
+            "posture": posture_data,
             **ctx,
         },
     )
+
+
+@router.get("/api/certificates/{cert_id}/posture")
+def certificate_posture_api(request: Request, cert_id: str) -> dict:
+    """Return the latest posture evaluation for a certificate as JSON."""
+    db = _db_path(request)
+    from cert_watch.database import get_posture_for_cert
+    posture = get_posture_for_cert(db, cert_id)
+    if posture is None:
+        return {"error": "no posture data", "cert_id": cert_id}
+    return {
+        "cert_id": cert_id,
+        "grade": posture["grade"],
+        "findings": posture["findings"],
+        "protocol_version": posture.get("protocol_version", ""),
+        "ocsp_stapling": posture.get("ocsp_stapling"),
+        "hsts": posture.get("hsts"),
+        "must_staple": posture.get("must_staple", False),
+        "scanned_at": posture.get("scanned_at", ""),
+    }
 
 
 @router.post("/certificates/{cert_id}/delete")
