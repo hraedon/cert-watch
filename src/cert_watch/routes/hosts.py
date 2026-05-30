@@ -12,6 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
+from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import check_csrf, check_rate_limit
@@ -104,10 +105,18 @@ async def add_host(
     host_repo = SqliteHostRepository(db)
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     scanned = 0
+    actor = resolve_actor(request)
+    source_ip = resolve_source_ip(request)
     for p in ports:
-        host_repo.add(
+        host_id = host_repo.add(
             hostname, p, threshold_days=threshold_days, tags=tags,
             scan_interval_hours=scan_interval_hours,
+        )
+        record_audit(
+            db, actor=actor, action="host.add",
+            target_type="host", target_id=host_id,
+            detail={"hostname": hostname, "port": p},
+            source_ip=source_ip,
         )
         result = scan_host(
             hostname, p, allow_private=s.allow_private, dns_servers=s.dns_servers,
@@ -210,6 +219,14 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     # Scan hosts concurrently
     allow_priv = s.allow_private
     dns_srv = s.dns_servers
+    actor = resolve_actor(request)
+    source_ip = resolve_source_ip(request)
+    record_audit(
+        db, actor=actor, action="host.import",
+        target_type="host", target_id="bulk",
+        detail={"filename": file.filename, "rows": len(scan_jobs), "errors": len(errors)},
+        source_ip=source_ip,
+    )
 
     def _scan_one(job: tuple[str, int, int | None]) -> tuple[str, int, object]:
         hostname, port, _ = job
@@ -254,6 +271,11 @@ async def delete_host(request: Request, host_id: str) -> RedirectResponse:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path(request)
     SqliteHostRepository(db).delete(host_id)
+    record_audit(
+        db, actor=resolve_actor(request), action="host.delete",
+        target_type="host", target_id=host_id,
+        source_ip=resolve_source_ip(request),
+    )
     logger.info("deleted host %s", host_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -271,6 +293,12 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    record_audit(
+        db, actor=resolve_actor(request), action="host.scan",
+        target_type="host", target_id=host_id,
+        detail={"hostname": host.hostname, "port": host.port},
+        source_ip=resolve_source_ip(request),
+    )
     s = _get_settings(request)
     result = scan_host(
         host.hostname, host.port,

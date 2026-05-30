@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — audit log{% endblock %}
+
+{% block content %}
+<div class="cw-page--constrained">
+  <div class="cw-page-head">
+    <div>
+      <h1>Audit log</h1>
+      <div class="cw-page-head-sub">Append-only record of state-changing actions. No edit or delete path.</div>
+    </div>
+  </div>
+
+  {# ---- Filters ---- #}
+  <form method="get" action="/audit" class="cw-panel cw-mb-18" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+    <label class="cw-fz-13 cw-text-text-2">Target type
+      <select name="target_type" class="cw-input" style="width:auto;">
+        <option value="">All</option>
+        <option value="host" {% if filter_target_type == 'host' %}selected{% endif %}>Host</option>
+        <option value="certificate" {% if filter_target_type == 'certificate' %}selected{% endif %}>Certificate</option>
+        <option value="trust_anchor" {% if filter_target_type == 'trust_anchor' %}selected{% endif %}>Trust anchor</option>
+        <option value="owner" {% if filter_target_type == 'owner' %}selected{% endif %}>Owner</option>
+      </select>
+    </label>
+    <label class="cw-fz-13 cw-text-text-2">Actor
+      <input type="text" name="actor" value="{{ filter_actor }}" class="cw-input" style="width:140px;" placeholder="username">
+    </label>
+    <button type="submit" class="cw-btn primary sm">Filter</button>
+    {% if filter_target_type or filter_actor %}
+      <a href="/audit" class="cw-btn ghost sm">Clear</a>
+    {% endif %}
+  </form>
+
+  {# ---- Audit table ---- #}
+  {% if rows %}
+    <div class="cw-panel cw-table-wrap">
+      <table class="cw-table">
+        <thead>
+          <tr>
+            <th class="cw-th-pt-14">When</th>
+            <th>Actor</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Detail</th>
+            <th>Source IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+            <tr>
+              <td class="mono cw-fz-12-5 cw-text-text">{{ r.ts[:19] if r.ts else '—' }}</td>
+              <td class="cw-fz-12-5 cw-text-text-2">{{ r.actor or 'anonymous' }}</td>
+              <td><span class="cw-pill neutral"><span class="dot"></span>{{ r.action }}</span></td>
+              <td class="cw-fz-12-5">{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-text-text-3 mono">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
+              <td class="cw-fz-12 cw-text-text-3 cw-td-mw-300">{{ r.detail or '' }}</td>
+              <td class="mono cw-fz-12 cw-text-text-3">{{ r.source_ip or '' }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# ---- Pagination ---- #}
+    {% if total_pages > 1 %}
+      <div class="cw-pagination cw-mt-12">
+        {% if has_prev %}
+          <a href="/audit?page={{ page - 1 }}{% if filter_target_type %}&target_type={{ filter_target_type }}{% endif %}{% if filter_actor %}&actor={{ filter_actor }}{% endif %}" class="cw-btn ghost sm">&larr; Previous</a>
+        {% endif %}
+        <span class="cw-fz-13 cw-text-text-2">Page {{ page }} of {{ total_pages }} ({{ total }} entries)</span>
+        {% if has_next %}
+          <a href="/audit?page={{ page + 1 }}{% if filter_target_type %}&target_type={{ filter_target_type }}{% endif %}{% if filter_actor %}&actor={{ filter_actor }}{% endif %}" class="cw-btn ghost sm">Next &rarr;</a>
+        {% endif %}
+      </div>
+    {% endif %}
+  {% else %}
+    <div class="cw-panel">
+      <div class="cw-empty-icon-circle cw-empty-icon-accent">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+      </div>
+      <div class="cw-fz-15 cw-fw-600">No audit events recorded</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Audit entries will appear here when state-changing actions are performed.</div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,10 +1,19 @@
-"""Schema DDL and migration logic."""
+"""Schema DDL and migration logic.
+
+The entry point is ``init_schema(db_path)`` which:
+1. Calls ``ensure_base(db_path)`` to create all core tables and indexes.
+2. Calls ``run_pending_migrations(db_path)`` to apply numbered migrations.
+
+For existing databases (upgraded from pre-migration versions), the runner
+stamps the baseline (0001) automatically so subsequent migrations apply
+cleanly.
+"""
 from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
 
-_TABLES_SCHEMA = """
+_BASE_TABLES = """
 CREATE TABLE IF NOT EXISTS certificates (
     id TEXT PRIMARY KEY,
     subject TEXT NOT NULL,
@@ -58,6 +67,8 @@ CREATE TABLE IF NOT EXISTS hosts (
     owner_email TEXT NOT NULL DEFAULT '',
     owner_slack TEXT NOT NULL DEFAULT '',
     renewal_status TEXT NOT NULL DEFAULT 'pending',
+    renewal_method TEXT NOT NULL DEFAULT '',
+    runbook_url TEXT NOT NULL DEFAULT '',
     added_at TEXT NOT NULL,
     UNIQUE(hostname, port)
 );
@@ -88,35 +99,52 @@ CREATE TABLE IF NOT EXISTS scan_posture (
     scanned_at TEXT NOT NULL,
     FOREIGN KEY (cert_id) REFERENCES certificates(id)
 );
+
+CREATE TABLE IF NOT EXISTS audit_log (
+    id TEXT PRIMARY KEY,
+    ts TEXT NOT NULL,
+    actor TEXT,
+    action TEXT NOT NULL,
+    target_type TEXT,
+    target_id TEXT,
+    detail TEXT,
+    source_ip TEXT
+);
 """
 
-_INDEXES_SCHEMA = """
+_BASE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);
 CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
 CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_cert ON alerts(cert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
+CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
+CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id);
 """
 
 _initialized_paths: set[str] = set()
 
 
-def init_schema(db_path: str | Path) -> None:
-    """Create all tables if they do not exist. Idempotent. See AC-06.
+def ensure_base(db_path: str | Path) -> None:
+    """Create all core tables and indexes if they don't exist.
 
-    Tracks initialized paths so repeat calls for the same database
-    return immediately after the first successful initialization.
+    This is the "base schema" — the tables and columns that existed before
+    the migration system was introduced. For fresh databases, this creates
+    everything. For existing databases, this is a no-op (IF NOT EXISTS).
+
+    Also handles column migrations for databases created before certain columns
+    were added — these are idempotent ALTER TABLE ADD COLUMN statements that
+    are no-ops if the column already exists.
     """
     path = Path(db_path)
-    path_str = str(path)
-    if path_str in _initialized_paths:
-        return
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(path)) as conn:
-        # 1. Create tables first (no-op if they already exist)
-        conn.executescript(_TABLES_SCHEMA)
+        # 1. Create tables (no-op if they already exist)
+        conn.executescript(_BASE_TABLES)
 
-        # 2. Migrate columns that may be missing on existing databases
+        # 2. Migrate columns that may be missing on existing databases.
+        # These are the pre-migration PRAGMA guards carried forward for
+        # backward compatibility with DBs created before the column was added.
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         if "chain_valid" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
@@ -152,49 +180,11 @@ def init_schema(db_path: str | Path) -> None:
                 "ALTER TABLE hosts ADD COLUMN runbook_url"
                 " TEXT NOT NULL DEFAULT ''"
             )
-        # trust_anchors migration
-        ta_cols = {r[1] for r in conn.execute("PRAGMA table_info(trust_anchors)").fetchall()}
-        if not ta_cols:
-            conn.execute(
-                """
-                CREATE TABLE trust_anchors (
-                    id TEXT PRIMARY KEY,
-                    subject TEXT NOT NULL,
-                    issuer TEXT NOT NULL,
-                    not_before TEXT NOT NULL,
-                    not_after TEXT NOT NULL,
-                    san_dns_names TEXT NOT NULL,
-                    fingerprint_sha256 TEXT NOT NULL,
-                    raw_der BLOB NOT NULL,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
 
-        # 2b. scan_posture table (Plan 006 Phase 1)
-        sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
-        if not sp_cols:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS scan_posture (
-                    id TEXT PRIMARY KEY,
-                    cert_id TEXT NOT NULL,
-                    hostname TEXT,
-                    port INTEGER,
-                    grade TEXT NOT NULL,
-                    protocol_version TEXT,
-                    ocsp_stapling INTEGER,
-                    hsts INTEGER,
-                    must_staple INTEGER DEFAULT 0,
-                    findings TEXT NOT NULL,
-                    scanned_at TEXT NOT NULL,
-                    FOREIGN KEY (cert_id) REFERENCES certificates(id)
-                )
-            """)
+        # 3. Create indexes
+        conn.executescript(_BASE_INDEXES)
 
-        # 3. Create indexes only after columns are guaranteed to exist
-        conn.executescript(_INDEXES_SCHEMA)
-
-        # 4. Idempotent unique-index migration for hosts(hostname, port) — BC-019
+        # 4. Ensure unique index on hosts(hostname, port) — BC-019
         indexes = {r[1] for r in conn.execute("PRAGMA index_list('hosts')").fetchall()}
         if "ux_hosts_hostname_port" not in indexes:
             conn.execute(
@@ -211,4 +201,24 @@ def init_schema(db_path: str | Path) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_hostname_port ON hosts(hostname, port)"
             )
         conn.commit()
+
+
+def init_schema(db_path: str | Path) -> None:
+    """Initialize the database schema and run pending migrations.
+
+    Idempotent: repeat calls for the same path return immediately after the
+    first successful initialization. Creates core tables via ``ensure_base``,
+    then applies any pending numbered migrations via the migration runner.
+    """
+    path_str = str(Path(db_path).resolve())
+    if path_str in _initialized_paths:
+        return
+
+    ensure_base(db_path)
+
+    # Import the registry to register all migrations, then run pending.
+    import cert_watch.migrations.registry  # noqa: F401 — side-effect: registers migrations
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    run_pending_migrations(db_path, backup=True)
     _initialized_paths.add(path_str)

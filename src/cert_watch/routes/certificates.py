@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
+from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
@@ -297,6 +298,11 @@ async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     db = _db_path(request)
     delete_certificate_cascade(db, cert_id)
+    record_audit(
+        db, actor=resolve_actor(request), action="cert.delete",
+        target_type="certificate", target_id=cert_id,
+        source_ip=resolve_source_ip(request),
+    )
     logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -318,6 +324,12 @@ async def update_certificate_notes(
     if repo.get_by_id(cert_id) is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     repo.update_notes(cert_id, notes)
+    record_audit(
+        db, actor=resolve_actor(request), action="cert.update_notes",
+        target_type="certificate", target_id=cert_id,
+        detail={"notes_length": len(notes)},
+        source_ip=resolve_source_ip(request),
+    )
     logger.info("updated notes for certificate %s", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -358,6 +370,12 @@ async def upload(
             )
         entry.file_name = file.filename or entry.file_name
         store_uploaded(entry, db)
+        record_audit(
+            db, actor=resolve_actor(request), action="cert.upload",
+            target_type="certificate", target_id="upload",
+            detail={"filename": file.filename or "unknown"},
+            source_ip=resolve_source_ip(request),
+        )
         logger.info("uploaded certificate: %s", file.filename or "unknown")
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -400,7 +418,13 @@ async def add_trust_anchor(
             )
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)
-        repo.add(entry.leaf)
+        anchor_id = repo.add(entry.leaf)
+        record_audit(
+            db, actor=resolve_actor(request), action="trust_anchor.add",
+            target_type="trust_anchor", target_id=anchor_id,
+            detail={"subject": entry.leaf.subject},
+            source_ip=resolve_source_ip(request),
+        )
         logger.info("uploaded trust anchor: %s", entry.leaf.subject)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -415,5 +439,10 @@ async def delete_trust_anchor(request: Request, anchor_id: str) -> RedirectRespo
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
     repo.delete(anchor_id)
+    record_audit(
+        db, actor=resolve_actor(request), action="trust_anchor.delete",
+        target_type="trust_anchor", target_id=anchor_id,
+        source_ip=resolve_source_ip(request),
+    )
     logger.info("deleted trust anchor %s", anchor_id)
     return RedirectResponse(url="/", status_code=303)

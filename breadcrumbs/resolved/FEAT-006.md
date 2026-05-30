@@ -2,8 +2,9 @@
 
 **Type:** feature
 **Severity:** low
-**Status:** new
+**Status:** resolved
 **Filed:** 2026-05-29
+**Resolved:** 2026-05-30
 
 ## Problem
 
@@ -21,3 +22,7 @@ Schema migrations are currently handled by ad-hoc `ALTER TABLE ... ADD COLUMN` s
 3. `init_schema()` should check the current Alembic revision and stamp it rather than running raw DDL.
 4. Keep SQLite as the default — Alembic supports SQLite's limited ALTER TABLE via batch operations.
 5. This is a prerequisite for BC-031 (multi-database support).
+
+## Resolution (2026-05-30)
+
+Resolved by Plan 009: implemented a minimal in-repo migration runner instead of Alembic. The single-SQLite-file, single-writer deployment shape made Alembic overkill — a hand-rolled runner with `schema_version` table, numbered `m000X_*.py` migrations, and `run_pending_migrations()` is sufficient. The runner auto-stamps the baseline for existing DBs, creates pre-migration backups via `VACUUM INTO`, and supports the `cert-watch backup` CLI subcommand. See `src/cert_watch/migrations/` and Plan 009 for details.

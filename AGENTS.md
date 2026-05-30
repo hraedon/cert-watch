@@ -45,18 +45,18 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-7 open breadcrumbs: 0 critical, 0 high, 3 medium, 4 low.
+4 open breadcrumbs: 0 critical, 0 high, 1 medium, 3 low.
 
 - **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-035** (medium) — database.py is the new monolith (1200 lines)
 - **BC-037** (low) — Dashboard template inline styles unmaintainable
 - **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro
 - **BC-039** (low) — Empty-state markup is inconsistent across templates
-- **BC-040** (medium) — Working tree shows ~1,136 lines removed from database.py without commit
-- **FEAT-006** (low) — Database migration tooling (alembic)
 
 ### Recently resolved
 
+- **BC-035** (medium) — database.py monolith decomposed into database/ package (resolved: schema.py + repo.py + queries.py + connection.py + migration runner)
+- **BC-040** (medium) — Working tree uncommitted database.py decomposition (resolved: already committed in prior session)
+- **FEAT-006** (low) — Database migration tooling (resolved: Plan 009 — minimal in-repo migration runner instead of Alembic)
 - **BC-033** (low) — Dashboard grouping by cert fingerprint with per-host status (resolved: fingerprint-based grouping with expand/collapse, host count badge, status summary)
 - **BC-036** (medium) — No integration test for openssl s_client scan path (resolved: 3 integration tests with real TLS server + openssl subprocess)
 

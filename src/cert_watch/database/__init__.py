@@ -49,13 +49,14 @@ from cert_watch.database.repo import (
 )
 
 # Schema / connection
-from cert_watch.database.schema import _INDEXES_SCHEMA, _TABLES_SCHEMA, init_schema
+from cert_watch.database.schema import _BASE_INDEXES, _BASE_TABLES, ensure_base, init_schema
 
 __all__ = [
     # schema
     "init_schema",
-    "_TABLES_SCHEMA",
-    "_INDEXES_SCHEMA",
+    "ensure_base",
+    "_BASE_TABLES",
+    "_BASE_INDEXES",
     # connection
     "_connect",
     "_iso",

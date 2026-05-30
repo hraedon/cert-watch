@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.alerts import Alert, send_webhook
+from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.database import (
@@ -118,6 +119,12 @@ async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
     if len(notes) > 10000:
         return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
     repo.update_notes(cert_id, notes)
+    record_audit(
+        _db_path(request), actor=resolve_actor(request), action="cert.update_notes",
+        target_type="certificate", target_id=cert_id,
+        detail={"notes_length": len(notes)},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"id": cert_id, "notes": notes})
 
 
@@ -225,6 +232,18 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
             renewal_method=renewal_method,
             runbook_url=runbook_url,
         )
+    record_audit(
+        _db_path(request), actor=resolve_actor(request), action="owner.update",
+        target_type="host", target_id=host_id,
+        detail={
+            "owner_name": body.get("owner_name"),
+            "owner_email": body.get("owner_email"),
+            "owner_slack": body.get("owner_slack"),
+            "renewal_status": renewal_status,
+            "renewal_method": renewal_method,
+        },
+        source_ip=resolve_source_ip(request),
+    )
     updated = repo.get(host_id)
     return JSONResponse(content={
         "id": host_id,
