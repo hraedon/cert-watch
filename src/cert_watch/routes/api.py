@@ -413,7 +413,7 @@ def ct_reconciliation(request: Request, domain: str = ""):
             content={"error": "domain query parameter is required"},
             status_code=400,
         )
-    s = Settings.from_env()
+    s = _get_settings(request)
     from cert_watch.ct_monitor import ct_reconciliation as ct_recon
 
     result = ct_recon(s.db_path, domain)

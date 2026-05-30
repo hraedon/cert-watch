@@ -473,6 +473,10 @@ class SqliteHostRepository:
                     f"DELETE FROM alerts WHERE cert_id IN ({placeholders})",
                     all_cert_ids,
                 )
+                conn.execute(
+                    f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})",
+                    all_cert_ids,
+                )
             conn.execute(
                 "DELETE FROM certificates WHERE hostname = ? AND port = ?",
                 (hostname, port),

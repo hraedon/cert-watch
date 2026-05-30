@@ -45,19 +45,19 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-5 open breadcrumbs: 0 critical, 1 high, 2 medium, 2 low.
+4 open breadcrumbs: 0 critical, 0 high, 2 medium, 2 low.
 
 - **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-037** (low) — Dashboard template inline styles unmaintainable
-- **BC-039** (low) — Empty-state markup is inconsistent across templates
-
-### Open (higher severity, deferred this session)
-
-- **BC-042** (medium) — posture.py has zero test coverage and scan_posture table is never populated
-- **BC-043** (high) — OAuth ID token signature not verified (JWKS) — Plan 010 Slice 4 deferred
+- **BC-044** (medium) — Unbounded scan_history and alerts queries load all rows into memory
+- **BC-045** (low) — OAuth state smuggled in AuthResult.error field
+- **BC-046** (low) — init_schema called redundantly on every repository instantiation
 
 ### Recently resolved
 
+- **BC-043** (high) — OAuth ID token signature not verified (resolved: full JWKS verification via joserfc + authlib.oidc.core.CodeIDToken; 11 new tests covering valid/wrong key/expired/issuer/audience rejection)
+- **BC-042** (medium) — posture.py test coverage and scan_posture wiring (resolved: 37 tests covering all grading rules, storage, tie-breaking; store_scanned() calls _evaluate_and_store_posture())
+- **BC-039** (low) — Empty-state markup inconsistent across templates (resolved: standardized on .cw-panel.cw-empty-state pattern; fixed duplicate class attribute bug in scan_history.html)
+- **BC-037** (low) — Dashboard inline styles unmaintainable (resolved: all static inline styles extracted to CSS classes in tokens.css; only dynamic CSS custom property bindings remain)
 - **BC-041** (low) — Auth test _reload_app module state pollution (resolved: autouse fixture saves/restores config/auth/app module dicts; root cause was class-identity drift from importlib.reload)
 - **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro (resolved: extracted to `macros/icons.html`, all 4 templates use `{% import %}`)
 - **BC-035** (medium) — database.py monolith decomposed into database/ package (resolved: schema.py + repo.py + queries.py + connection.py + migration runner)
@@ -105,12 +105,18 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **PEM download endpoint** — `GET /api/certificates/{id}/pem` returns raw PEM bytes with `Content-Disposition: attachment`. The detail page "Download PEM" button now links here instead of the JSON API.
 - **Local break-glass admin (Plan 010 Slice 2)** — `CERT_WATCH_LOCAL_ADMIN_USER` and `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` enable a local admin account that works regardless of external provider state. Scrypt password hashing (`hashlib.scrypt`). `cert-watch hash-password` CLI for generating hashes. Break-glass login bypasses group/role gate (implicit admin) and emits WARNING log + audit row with `break_glass=true`. `_CompositeProvider` tries local admin first, then delegates to the primary provider. Login form shows username/password when local admin or form-login provider is configured.
 - **Shared svg_icon macro (BC-038)** — Extracted all icon macros to `templates/macros/icons.html`. All 4 main templates now use `{% import "macros/icons.html" as icons %}`.
+- **Fleet dashboard lenses (Plan 006 Phase 5)** — Dashboard pivot views: `?view=issuer`, `?view=owner`, `?view=renewal_method`. Groups entries with aggregate stats (count, worst urgency, earliest expiry). Expandable detail rows per group. `list_fleet_pivot()` in queries.py.
+- **JWKS cache TTL** — `OAuthProvider` JWKS cache now expires after a configurable TTL (default 24h, `CERT_WATCH_JWKS_CACHE_TTL`). On `InvalidKeyIdError`, the cache is force-refreshed and token verification retried once.
+- **CT reconciliation (Plan 006 Phase 3)** — `ct_reconciliation()` compares CT log hostnames against tracked hosts for a domain. `GET /api/ct/reconciliation?domain=…` returns tracked/ct/gap hostnames and coverage percentage. 8 tests with mocked crt.sh.
+- **Audit log (Plan 008)** — Append-only `audit_log` table, `record_audit()` helper, all mutating routes instrumented. `GET /audit` (HTML) and `GET /api/audit` (JSON, paginated, filterable). Break-glass logins flagged `break_glass=true`.
+- **Operator runbook (Plan 011)** — `docs/runbook.md` covers deploy, upgrade (with auto-migration backup), backup/restore, scan troubleshooting, full config reference, auth wiring, secure profile, metrics exposure decision, scale ceiling with BC-031 trigger.
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
+- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
-- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls.
+- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
+- **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. 37 unit + integration tests.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
 - **`app.py`** — FastAPI with lifespan (scheduler start/stop), CSRF middleware, auth middleware, rate limiting.

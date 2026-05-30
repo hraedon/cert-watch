@@ -842,3 +842,19 @@ body {
   flex-shrink: 0;
 }
 
+/* ---- MISC UTILITY ---- */
+.cw-ml-auto { margin-left: auto; }
+.cw-min-w-16 { min-width: 16px; }
+.cw-w-auto { width: auto; }
+.cw-w-140 { width: 140px; }
+
+/* ---- PIVOT TABLE (fleet lenses) ---- */
+.cw-seg-sm button {
+  font-size: 11.5px;
+  padding: 4px 9px;
+}
+.cw-pivot-detail { display: none; }
+.cw-pivot-detail.cw-open { display: table-row; }
+.cw-pivot-detail-cell { padding: 0 12px 12px 12px; }
+.cw-table-pivot td { cursor: pointer; }
+

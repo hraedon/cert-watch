@@ -14,10 +14,10 @@
 </head>
 <body>
   <div class="cw-app">
-    <div class="cw-page" class="cw-login-center">
+    <div class="cw-page cw-login-center">
       <div class="cw-panel cw-form-panel">
         <div class="cw-login-intro">
-          <div class="cw-mark" class="cw-login-mark">
+          <div class="cw-mark cw-login-mark">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
           </div>
           <h2 class="cw-login-title">Sign in to cert-watch</h2>
@@ -31,33 +31,33 @@
 
         {% if supports_form_login %}
           <form method="post" action="/login">
-            <div class="cw-field" class="cw-mb-12">
+            <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
               <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
             </div>
-            <div class="cw-field" class="cw-mb-16">
+            <div class="cw-field cw-mb-16">
               <label class="cw-label">Password</label>
               <input class="cw-input" type="password" name="password" required placeholder="password">
             </div>
-            <button type="submit" class="cw-btn primary" class="cw-btn--expand">Sign in</button>
+            <button type="submit" class="cw-btn primary cw-btn--expand">Sign in</button>
           </form>
         {% elif local_admin_configured %}
           <form method="post" action="/login">
-            <div class="cw-field" class="cw-mb-12">
+            <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
               <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
             </div>
-            <div class="cw-field" class="cw-mb-16">
+            <div class="cw-field cw-mb-16">
               <label class="cw-label">Password</label>
               <input class="cw-input" type="password" name="password" required placeholder="password">
             </div>
-            <button type="submit" class="cw-btn primary" class="cw-btn--expand">Sign in</button>
+            <button type="submit" class="cw-btn primary cw-btn--expand">Sign in</button>
           </form>
         {% endif %}
 
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
           <div class="cw-login-oauth-wrap">
-            <a href="/auth/login" class="cw-btn primary" class="cw-btn--expand cw-no-decoration">
+            <a href="/auth/login" class="cw-btn primary cw-btn--expand cw-no-decoration">
               Sign in with {{ provider | title }}
             </a>
           </div>
@@ -71,26 +71,5 @@
       </div>
     </div>
   </div>
-  <script>
-    (function() {
-      var btn = document.getElementById('theme-toggle');
-      if (!btn) return;
-      function updateIcons() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var d = document.getElementById('theme-icon-dark');
-        var l = document.getElementById('theme-icon-light');
-        if (d) d.style.display = dark ? 'none' : 'block';
-        if (l) l.style.display = dark ? 'block' : 'none';
-      }
-      updateIcons();
-      btn.addEventListener('click', function() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var next = dark ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('cw-theme', next);
-        updateIcons();
-      });
-    })();
-  </script>
 </body>
 </html>

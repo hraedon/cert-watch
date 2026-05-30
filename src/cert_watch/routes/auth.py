@@ -146,8 +146,16 @@ def oauth_callback(
         )
         response.delete_cookie("cw_oauth_state")
         return response
-    # BC-009: verify state parameter
     signed_state = request.cookies.get("cw_oauth_state", "")
+    if signed_state:
+        from cert_watch.auth import _verify_state as _verify_oauth_state
+        cookie_raw = _verify_oauth_state(signed_state)
+        if cookie_raw is None or cookie_raw != state:
+            response = RedirectResponse(
+                url="/login?error=OAuth+state+mismatch", status_code=303
+            )
+            response.delete_cookie("cw_oauth_state")
+            return response
     base = str(request.base_url).rstrip("/")
     redirect_uri = f"{base}/auth/callback"
     result = auth.complete_oauth_flow(code, redirect_uri, state=signed_state)

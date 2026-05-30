@@ -144,6 +144,13 @@ def replace_scanned(
                 "certificate renewed for %s:%s — %s",
                 hostname, port, "; ".join(changes),
             )
+        with _connect(db_path) as conn:
+            conn.execute(
+                "UPDATE hosts SET renewal_status = 'pending' "
+                "WHERE hostname = ? AND port = ? AND renewal_status = 'renewed'",
+                (hostname, port),
+            )
+            conn.commit()
 
     return leaf_id
 
@@ -188,6 +195,9 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
         placeholders = ",".join("?" * len(all_ids))
         conn.execute(
             f"DELETE FROM alerts WHERE cert_id IN ({placeholders})", all_ids
+        )
+        conn.execute(
+            f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})", all_ids
         )
         conn.execute("DELETE FROM certificates WHERE parent_cert_id = ?", (cert_id,))
         conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
@@ -494,6 +504,59 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
 
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
+
+
+def list_fleet_pivot(
+    db_path: str | Path,
+    pivot: str,
+) -> list[dict]:
+    from cert_watch.filters import friendly_issuer
+
+    entries = list_unified_entries(db_path)
+
+    _METHOD_LABELS = {
+        "acme": "ACME",
+        "cert-manager": "cert-manager",
+        "manual": "Manual",
+    }
+
+    groups: dict[str, list[dict]] = {}
+    for e in entries:
+        if pivot == "issuer":
+            raw = e.get("issuer") or ""
+            key = friendly_issuer(raw) if raw else "Unknown"
+        elif pivot == "owner":
+            key = e.get("owner_name") or "Unassigned"
+        elif pivot == "renewal_method":
+            raw = e.get("renewal_method") or ""
+            key = _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
+        else:
+            key = "Unknown"
+        groups.setdefault(key, []).append(e)
+
+    result: list[dict] = []
+    for key, group_entries in groups.items():
+        worst = "gray"
+        for u in _URGENCY_ORDER:
+            if any(e.get("urgency") == u for e in group_entries):
+                worst = u
+                break
+        days_list = [
+            e["days_remaining"]
+            for e in group_entries
+            if e.get("days_remaining") is not None
+        ]
+        earliest = min(days_list) if days_list else None
+        result.append({
+            "key": key,
+            "count": len(group_entries),
+            "worst_urgency": worst,
+            "earliest_expiry": earliest,
+            "entries": group_entries,
+        })
+
+    result.sort(key=lambda g: g["count"], reverse=True)
+    return result
 
 
 def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:

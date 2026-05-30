@@ -354,6 +354,7 @@ class OAuthConfig:
     authorization_endpoint: str = ""
     token_endpoint: str = ""
     userinfo_endpoint: str = ""
+    jwks_uri: str = ""
 
 
 class OAuthProvider(AuthProvider):
@@ -362,6 +363,9 @@ class OAuthProvider(AuthProvider):
     def __init__(self, config: OAuthConfig) -> None:
         self.config = config
         self._discovered: dict[str, str] = {}
+        self._jwks: dict | None = None
+        self._jwks_fetched_at: float = 0.0
+        self._jwks_ttl: int = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
         try:
             from authlib.integrations.requests_client import OAuth2Session  # noqa: F401
         except ImportError:
@@ -379,6 +383,8 @@ class OAuthProvider(AuthProvider):
                 "authorization_endpoint": self.config.authorization_endpoint,
                 "token_endpoint": self.config.token_endpoint,
                 "userinfo_endpoint": self.config.userinfo_endpoint,
+                "jwks_uri": self.config.jwks_uri,
+                "id_token_signing_alg_values_supported": "RS256",
             }
             return self._discovered
         import urllib.request
@@ -392,16 +398,139 @@ class OAuthProvider(AuthProvider):
                 "authorization_endpoint": data["authorization_endpoint"],
                 "token_endpoint": data["token_endpoint"],
                 "userinfo_endpoint": data.get("userinfo_endpoint", ""),
+                "jwks_uri": data.get("jwks_uri", self.config.jwks_uri),
+                "id_token_signing_alg_values_supported": ",".join(
+                    data.get("id_token_signing_alg_values_supported", ["RS256"])
+                ),
             }
         except Exception as exc:
             logger.warning("OIDC discovery failed: %s", exc)
-            # Fall back to explicit config
             self._discovered = {
                 "authorization_endpoint": self.config.authorization_endpoint,
                 "token_endpoint": self.config.token_endpoint,
                 "userinfo_endpoint": self.config.userinfo_endpoint,
+                "jwks_uri": self.config.jwks_uri,
+                "id_token_signing_alg_values_supported": "RS256",
             }
         return self._discovered
+
+    def _fetch_jwks(self, *, force: bool = False) -> dict | None:
+        """Fetch and cache JWKS from the IdP's jwks_uri."""
+        if (
+            self._jwks is not None
+            and not force
+            and (time.monotonic() - self._jwks_fetched_at) < self._jwks_ttl
+        ):
+            return self._jwks
+        endpoints = self._discover()
+        jwks_uri = endpoints.get("jwks_uri", "")
+        if not jwks_uri:
+            return None
+        import urllib.request
+
+        try:
+            req = urllib.request.Request(jwks_uri, headers={"User-Agent": "cert-watch"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                self._jwks = json.loads(resp.read())
+                self._jwks_fetched_at = time.monotonic()
+        except Exception as exc:
+            logger.warning("JWKS fetch failed: %s", exc)
+            return None
+        return self._jwks
+
+    def _verify_id_token(
+        self,
+        id_token: str,
+        access_token: str | None = None,
+        nonce: str | None = None,
+    ) -> dict | None:
+        """Verify an OIDC ID token using JWKS. Returns validated claims or None."""
+        try:
+            from joserfc import jwt as _jwt
+            from joserfc.jwk import KeySet
+        except ImportError:
+            try:
+                from authlib.jose import jwt as _jwt
+                KeySet = None
+            except ImportError:
+                logger.warning("Neither joserfc nor authlib.jose available for JWT verification")
+                return None
+
+        jwks = self._fetch_jwks()
+        if jwks is None:
+            logger.warning("JWKS unavailable — cannot verify ID token signature")
+            return None
+
+        endpoints = self._discover()
+        alg_values = endpoints.get(
+            "id_token_signing_alg_values_supported", "RS256"
+        ).split(",")
+
+        issuer = self.config.issuer_url.rstrip("/")
+
+        try:
+            if KeySet is not None:
+                key_set = KeySet.import_key_set(jwks)
+                token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
+                raw_claims = token.claims
+            else:
+                from authlib.jose import JsonWebKey
+                key_set = JsonWebKey.import_key_set(jwks)
+                data = _jwt.decode(id_token, key=key_set)
+                raw_claims = data
+
+            claims_options = {
+                "iss": {"essential": True, "value": issuer},
+                "aud": {"essential": True, "value": self.config.client_id},
+            }
+            claims_params: dict = {"client_id": self.config.client_id}
+            if nonce:
+                claims_params["nonce"] = nonce
+
+            try:
+                from authlib.oidc.core import CodeIDToken
+
+                oidt = CodeIDToken(raw_claims, {}, claims_options, claims_params)
+                if access_token:
+                    oidt.params["access_token"] = access_token
+                oidt.validate(leeway=120)
+            except ImportError:
+                _validate_claims_manual(raw_claims, issuer, self.config.client_id, nonce)
+
+            return dict(raw_claims)
+        except Exception as exc:
+            if KeySet is not None:
+                try:
+                    from joserfc.errors import InvalidKeyIdError
+                    if isinstance(exc, InvalidKeyIdError):
+                        fresh_jwks = self._fetch_jwks(force=True)
+                        if fresh_jwks:
+                            key_set = KeySet.import_key_set(fresh_jwks)
+                            token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
+                            raw_claims = token.claims
+                            claims_options = {
+                                "iss": {"essential": True, "value": issuer},
+                                "aud": {"essential": True, "value": self.config.client_id},
+                            }
+                            claims_params = {"client_id": self.config.client_id}
+                            if nonce:
+                                claims_params["nonce"] = nonce
+                            try:
+                                from authlib.oidc.core import CodeIDToken
+                                oidt = CodeIDToken(raw_claims, {}, claims_options, claims_params)
+                                if access_token:
+                                    oidt.params["access_token"] = access_token
+                                oidt.validate(leeway=120)
+                            except ImportError:
+                                _validate_claims_manual(
+                                    raw_claims, issuer,
+                                    self.config.client_id, nonce,
+                                )
+                            return dict(raw_claims)
+                except Exception:
+                    pass
+            logger.warning("ID token verification failed: %s", exc)
+            return None
 
     def authenticate(self, username: str, password: str) -> AuthResult:
         return AuthResult(
@@ -453,34 +582,29 @@ class OAuthProvider(AuthProvider):
                 code=code,
                 redirect_uri=redirect_uri,
             )
-            # Try to get username from ID token claims or userinfo
             username = ""
-            id_token = token.get("id_token")
-            if id_token:
+            id_token_str = token.get("id_token")
+            if id_token_str:
                 try:
-                    # Decode without verification for claims (authlib handles verification)
-                    import base64
-
-                    parts = id_token.split(".")
-                    if len(parts) >= 2:
-                        claims = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
-                        # BC-015/014: verify iss and aud claims
-                        expected_iss = self.config.issuer_url.rstrip("/")
-                        actual_iss = claims.get("iss", "").rstrip("/")
-                        if actual_iss and expected_iss and actual_iss != expected_iss:
-                            return AuthResult(success=False, error="ID token issuer mismatch")
-                        aud = claims.get("aud", "")
-                        if isinstance(aud, list):
-                            aud = aud[0] if aud else ""
-                        if aud and aud != self.config.client_id:
-                            return AuthResult(success=False, error="ID token audience mismatch")
+                    claims = self._verify_id_token(
+                        id_token_str,
+                        access_token=token.get("access_token"),
+                    )
+                    if claims:
                         username = (
                             claims.get("preferred_username")
                             or claims.get("email")
                             or claims.get("sub", "")
                         )
+                    else:
+                        logger.warning(
+                            "ID token JWKS verification failed; falling back to userinfo"
+                        )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "ID token verification error; falling back to userinfo",
+                        exc_info=True,
+                    )
             if not username:
                 userinfo_endpoint = endpoints.get("userinfo_endpoint", "")
                 if userinfo_endpoint:
@@ -506,6 +630,26 @@ class OAuthProvider(AuthProvider):
     @property
     def supports_form_login(self) -> bool:
         return False
+
+
+def _validate_claims_manual(
+    claims: dict, expected_issuer: str, expected_audience: str, nonce: str | None,
+) -> None:
+    """Manual OIDC claim validation for environments without authlib.oidc.core."""
+    import time
+
+    iss = claims.get("iss", "").rstrip("/")
+    if iss != expected_issuer:
+        raise ValueError(f"issuer mismatch: {iss} != {expected_issuer}")
+    aud = claims.get("aud", "")
+    aud_list = aud if isinstance(aud, list) else [aud]
+    if expected_audience not in aud_list:
+        raise ValueError(f"audience mismatch: {aud} does not contain {expected_audience}")
+    exp = claims.get("exp")
+    if exp and exp < time.time() - 120:
+        raise ValueError("ID token has expired")
+    if nonce and claims.get("nonce") != nonce:
+        raise ValueError("nonce mismatch")
 
 
 # ---------- Authorization gate ----------

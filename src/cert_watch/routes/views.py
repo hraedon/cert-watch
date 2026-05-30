@@ -18,6 +18,7 @@ from cert_watch.database import (
     group_entries_by_fingerprint,
     list_alerts_with_subject,
     list_dashboard_rows,
+    list_fleet_pivot,
     list_scan_history,
     list_unified_entries,
 )
@@ -94,12 +95,16 @@ def dashboard(
     sort_order: str = "asc",
     page: int = 1,
     grouped: int = 1,
+    view: str = "",
 ) -> HTMLResponse:
     db = _db_path(request)
-    entries = list_unified_entries(db)
+    all_entries = list_unified_entries(db)
 
-    if grouped:
-        entries = group_entries_by_fingerprint(entries)
+    pivot_groups = None
+    if view in ("issuer", "owner", "renewal_method"):
+        pivot_groups = list_fleet_pivot(db, view)
+
+    entries = group_entries_by_fingerprint(all_entries) if grouped else all_entries
 
     if q:
         ql = q.lower()
@@ -159,7 +164,10 @@ def dashboard(
         request=request,
         name="dashboard.html",
         context={
-            "entries": page_entries,
+            "entries": [] if pivot_groups else page_entries,
+            "all_entries": all_entries,
+            "pivot_groups": pivot_groups,
+            "pivot_view": view if pivot_groups else "",
             "trust_anchors": anchors,
             "version": __version__,
             "error": error,

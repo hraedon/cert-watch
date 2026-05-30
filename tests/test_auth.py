@@ -1,5 +1,8 @@
 import importlib
+import json
+import os
 import sys
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -1090,3 +1093,525 @@ def test_ldap_connect_timeout_config(_mock_ldap3):
     _mock_ldap3.Server.assert_called_once()
     call_kwargs = _mock_ldap3.Server.call_args[1]
     assert call_kwargs.get("connect_timeout") == 10
+
+
+# ---------- OAuth JWKS verification (Plan 010 Slice 4 / BC-043) ----------
+
+_AUTHLIB_MODS = (
+    "authlib",
+    "authlib.integrations",
+    "authlib.integrations.requests_client",
+)
+
+
+def _inject_mock_authlib(mock_authlib):
+    """Context manager: inject a mock authlib module, cleanup on exit."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _ctx():
+        sys.modules["authlib"] = mock_authlib
+        sys.modules["authlib.integrations"] = mock_authlib.integrations
+        rc = mock_authlib.integrations.requests_client
+        sys.modules["authlib.integrations.requests_client"] = rc
+        try:
+            yield
+        finally:
+            for mod in _AUTHLIB_MODS:
+                sys.modules.pop(mod, None)
+
+    return _ctx()
+
+
+def _generate_rsa_jwk(kid: str = "key-1") -> tuple:
+    """Generate an RSA key pair and return (private_key, jwk_dict, jwks_response)."""
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = key.public_key()
+    pub_numbers = pub.public_numbers()
+
+    def _b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    n_bytes = pub_numbers.n.to_bytes((pub_numbers.n.bit_length() + 7) // 8, "big")
+    e_bytes = pub_numbers.e.to_bytes((pub_numbers.e.bit_length() + 7) // 8, "big")
+
+    jwk = {
+        "kty": "RSA",
+        "kid": kid,
+        "use": "sig",
+        "alg": "RS256",
+        "n": _b64url(n_bytes),
+        "e": _b64url(e_bytes),
+    }
+    jwks = {"keys": [jwk]}
+    return key, jwk, jwks
+
+
+def _sign_jwt(payload: dict, private_key, kid: str = "key-1", algorithm: str = "RS256") -> str:
+    """Sign a JWT with the given private key."""
+    from joserfc import jwt as _jwt
+    from joserfc.jwk import RSAKey
+
+    jwk_key = RSAKey.import_key(private_key, parameters={"kid": kid})
+    return _jwt.encode({"alg": algorithm, "kid": kid}, payload, jwk_key)
+
+
+def _make_oauth_provider(
+    issuer: str = "https://login.example.com",
+    client_id: str = "test-client",
+    jwks: dict | None = None,
+) -> OAuthProvider:
+    """Create an OAuthProvider with pre-seeded discovery + JWKS."""
+    from cert_watch.auth import OAuthConfig
+
+    config = OAuthConfig(
+        client_id=client_id,
+        client_secret="secret",
+        issuer_url=issuer,
+        authorization_endpoint=f"{issuer}/authorize",
+        token_endpoint=f"{issuer}/token",
+        userinfo_endpoint=f"{issuer}/userinfo",
+        jwks_uri=f"{issuer}/.well-known/jwks.json",
+    )
+    provider = OAuthProvider.__new__(OAuthProvider)
+    provider.config = config
+    provider._discovered = {
+        "authorization_endpoint": f"{issuer}/authorize",
+        "token_endpoint": f"{issuer}/token",
+        "userinfo_endpoint": f"{issuer}/userinfo",
+        "jwks_uri": f"{issuer}/.well-known/jwks.json",
+        "id_token_signing_alg_values_supported": "RS256",
+    }
+    provider._jwks = jwks
+    provider._jwks_fetched_at = time.monotonic()
+    provider._jwks_ttl = 86400
+    return provider
+
+
+class TestOAuthJWKSVerification:
+
+    def test_valid_token_verified(self):
+        key, jwk, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "alice",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, key)
+        result = provider._verify_id_token(token)
+        assert result is not None
+        assert result["preferred_username"] == "alice"
+        assert result["sub"] == "user-123"
+
+    def test_token_signed_with_wrong_key_rejected(self):
+        _, _, jwks = _generate_rsa_jwk(kid="good-key")
+        wrong_key, _, _ = _generate_rsa_jwk(kid="bad-key")
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "attacker",
+            "preferred_username": "eve",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, wrong_key, kid="bad-key")
+        result = provider._verify_id_token(token)
+        assert result is None
+
+    def test_expired_token_rejected(self):
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "alice",
+            "exp": int(time.time()) - 3600,
+            "iat": int(time.time()) - 7200,
+        }
+        token = _sign_jwt(claims, key)
+        result = provider._verify_id_token(token)
+        assert result is None
+
+    def test_issuer_mismatch_rejected(self):
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://evil.example.com",
+            "aud": "test-client",
+            "sub": "attacker",
+            "preferred_username": "eve",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, key)
+        result = provider._verify_id_token(token)
+        assert result is None
+
+    def test_audience_mismatch_rejected(self):
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "wrong-client-id",
+            "sub": "attacker",
+            "preferred_username": "eve",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, key)
+        result = provider._verify_id_token(token)
+        assert result is None
+
+    def test_no_jwks_returns_none(self):
+        provider = _make_oauth_provider(jwks=None)
+        result = provider._verify_id_token("some.token.value")
+        assert result is None
+
+    def test_malformed_token_returns_none(self):
+        _, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+        result = provider._verify_id_token("not-a-jwt")
+        assert result is None
+
+    def test_valid_token_with_roles_claim(self):
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "bob",
+            "roles": ["CertWatch.Admin", "CertWatch.Viewer"],
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, key)
+        result = provider._verify_id_token(token)
+        assert result is not None
+        assert "CertWatch.Admin" in result.get("roles", [])
+
+    def test_complete_flow_uses_verified_claims(self):
+        """End-to-end test: complete_oauth_flow verifies the ID token via JWKS."""
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "alice@example.com",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        id_token = _sign_jwt(claims, key)
+
+        mock_oauth_session = MagicMock()
+        mock_oauth_session.fetch_token.return_value = {
+            "access_token": "at-123",
+            "token_type": "Bearer",
+            "id_token": id_token,
+        }
+
+        mock_authlib = MagicMock()
+        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        with _inject_mock_authlib(mock_authlib):
+            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            assert result.success is True
+            assert result.username == "alice@example.com"
+
+    def test_complete_flow_forged_token_falls_back_to_userinfo(self):
+        """When JWKS verification fails, complete_oauth_flow falls back to userinfo."""
+        _, _, jwks = _generate_rsa_jwk(kid="good-key")
+        wrong_key, _, _ = _generate_rsa_jwk(kid="bad-key")
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "attacker",
+            "preferred_username": "eve",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        id_token = _sign_jwt(claims, wrong_key, kid="bad-key")
+
+        mock_oauth_session = MagicMock()
+        mock_oauth_session.fetch_token.return_value = {
+            "access_token": "at-123",
+            "token_type": "Bearer",
+            "id_token": id_token,
+        }
+        mock_userinfo_resp = MagicMock()
+        mock_userinfo_resp.status_code = 200
+        mock_userinfo_resp.json.return_value = {"preferred_username": "real-user"}
+        mock_oauth_session.get.return_value = mock_userinfo_resp
+
+        mock_authlib = MagicMock()
+        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        with _inject_mock_authlib(mock_authlib):
+            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            assert result.success is True
+            assert result.username == "real-user"
+
+    def test_complete_flow_no_id_token_uses_userinfo(self):
+        """When no ID token is returned, userinfo endpoint is used."""
+        provider = _make_oauth_provider(jwks=None)
+
+        mock_oauth_session = MagicMock()
+        mock_oauth_session.fetch_token.return_value = {
+            "access_token": "at-123",
+            "token_type": "Bearer",
+        }
+        mock_userinfo_resp = MagicMock()
+        mock_userinfo_resp.status_code = 200
+        mock_userinfo_resp.json.return_value = {"email": "bob@example.com"}
+        mock_oauth_session.get.return_value = mock_userinfo_resp
+
+        mock_authlib = MagicMock()
+        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        with _inject_mock_authlib(mock_authlib):
+            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            assert result.success is True
+            assert result.username == "bob@example.com"
+
+
+class TestValidateClaimsManual:
+
+    def test_valid_claims(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+        }
+        _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_issuer_mismatch_raises(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://evil.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+        }
+        with pytest.raises(ValueError, match="issuer"):
+            _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_audience_mismatch_raises(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "wrong-client",
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+        }
+        with pytest.raises(ValueError, match="audience"):
+            _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_audience_list_with_match(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": ["test-client", "other-client"],
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+        }
+        _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_expired_raises(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) - 3600,
+        }
+        with pytest.raises(ValueError, match="expired"):
+            _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_nonce_mismatch_raises(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+            "nonce": "abc123",
+        }
+        with pytest.raises(ValueError, match="nonce"):
+            _validate_claims_manual(
+                claims, "https://login.example.com", "test-client", "wrong-nonce"
+            )
+
+    def test_nonce_match_succeeds(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) + 3600,
+            "nonce": "abc123",
+        }
+        _validate_claims_manual(claims, "https://login.example.com", "test-client", "abc123")
+
+
+class TestJWKSCacheTTL:
+
+    def test_jwks_refetched_after_ttl_expires(self, monkeypatch):
+        key, jwk, jwks_old = _generate_rsa_jwk(kid="key-1")
+        _, _, jwks_new = _generate_rsa_jwk(kid="key-2")
+
+        provider = _make_oauth_provider(jwks=jwks_old)
+        assert provider._jwks is jwks_old
+
+        provider._jwks_ttl = 100
+
+        now = provider._jwks_fetched_at
+
+        monkeypatch.setattr(time, "monotonic", lambda: now + 50)
+        result = provider._fetch_jwks()
+        assert result is jwks_old
+
+        fetch_count = 0
+
+        def fake_urlopen(req, timeout=10):
+            nonlocal fetch_count
+            fetch_count += 1
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(jwks_new).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        import urllib.request
+        monkeypatch.setattr(time, "monotonic", lambda: now + 200)
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        result = provider._fetch_jwks()
+        assert result["keys"][0]["kid"] == "key-2"
+        assert fetch_count == 1
+        assert provider._jwks["keys"][0]["kid"] == "key-2"
+
+    def test_jwks_not_refetched_within_ttl(self, monkeypatch):
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+        provider._jwks_ttl = 86400
+
+        import urllib.request
+        call_count = 0
+        original_urlopen = urllib.request.urlopen
+
+        def counting_urlopen(*a, **kw):
+            nonlocal call_count
+            call_count += 1
+            return original_urlopen(*a, **kw)
+
+        monkeypatch.setattr(urllib.request, "urlopen", counting_urlopen)
+        result = provider._fetch_jwks()
+        assert result is jwks
+        assert call_count == 0
+
+    def test_invalid_key_id_triggers_jwks_refetch_and_retry(self, monkeypatch):
+        old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
+        new_key, _, jwks_new = _generate_rsa_jwk(kid="new-key")
+
+        provider = _make_oauth_provider(jwks=jwks_old)
+        provider._jwks_ttl = 86400
+
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "alice",
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        token = _sign_jwt(claims, new_key, kid="new-key")
+
+        fetch_count = 0
+
+        def fake_urlopen(req, timeout=10):
+            nonlocal fetch_count
+            fetch_count += 1
+            resp = MagicMock()
+            resp.read.return_value = json.dumps(jwks_new).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = MagicMock(return_value=False)
+            return resp
+
+        import urllib.request
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+
+        result = provider._verify_id_token(token)
+        assert result is not None
+        assert result["preferred_username"] == "alice"
+        assert fetch_count == 1
+
+    def test_jwks_ttl_from_env_var(self, monkeypatch):
+        monkeypatch.setenv("CERT_WATCH_JWKS_CACHE_TTL", "3600")
+        import importlib
+
+        import cert_watch.auth as auth_mod
+        from cert_watch.auth import OAuthConfig
+        importlib.reload(auth_mod)
+        config = OAuthConfig(
+            client_id="c",
+            client_secret="s",
+            issuer_url="https://example.com",
+        )
+        provider = auth_mod.OAuthProvider(config)
+        assert provider._jwks_ttl == 3600
+
+    def test_jwks_default_ttl(self):
+        from cert_watch.auth import OAuthConfig
+        config = OAuthConfig(
+            client_id="c",
+            client_secret="s",
+            issuer_url="https://example.com",
+        )
+        provider = OAuthProvider.__new__(OAuthProvider)
+        provider.config = config
+        provider._discovered = {}
+        provider._jwks = None
+        provider._jwks_fetched_at = 0.0
+        provider._jwks_ttl = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
+        assert provider._jwks_ttl == 86400

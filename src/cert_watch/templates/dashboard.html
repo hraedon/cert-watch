@@ -31,8 +31,9 @@
 
 {% block content %}
 {# ---- Compute stats ---- #}
+{% set _stat_entries = all_entries if all_entries is defined else entries %}
 {% set ns = namespace(expired=0, critical=0, warning=0, healthy=0, total=0) %}
-{% for e in entries %}
+{% for e in _stat_entries %}
   {% set u = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
   {% set ns.total = ns.total + 1 %}
   {% if u == 'expired' %}{% set ns.expired = ns.expired + 1 %}
@@ -76,12 +77,67 @@
       <button type="submit" name="urgency" value="warning" class="{% if filter_urgency == 'warning' %}on{% endif %}">Warning<span class="cnt">{{ ns.warning }}</span></button>
       <button type="submit" name="urgency" value="healthy" class="{% if filter_urgency == 'healthy' %}on{% endif %}">Healthy<span class="cnt">{{ ns.healthy }}</span></button>
     </div>
+    <div class="cw-seg cw-seg-sm">
+      <button type="submit" name="view" value="" class="{% if not pivot_view %}on{% endif %}">All</button>
+      <button type="submit" name="view" value="issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}">By issuer</button>
+      <button type="submit" name="view" value="owner" class="{% if pivot_view == 'owner' %}on{% endif %}">By owner</button>
+      <button type="submit" name="view" value="renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}">By method</button>
+    </div>
     <div class="cw-spacer"></div>
     <button type="submit" name="source" value="" class="cw-btn">{{ icons.svg_icon('filter', 14) }}Source: {{ filter_source if filter_source else 'All' }}</button>
   </form>
 
   {# ---- Table ---- #}
   <div class="cw-panel cw-table-wrap">
+    {% if pivot_groups %}
+    <table class="cw-table cw-table-pivot">
+      <thead>
+        <tr>
+          <th>{{ pivot_view | capitalize }}{{ ' / Method' if pivot_view == 'renewal_method' else '' }}</th>
+          <th>Certs</th>
+          <th>Worst status</th>
+          <th>Earliest expiry</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in pivot_groups %}
+        <tr class="cw-row-link" onclick="togglePivotGroup({{ loop.index }})">
+          <td class="cw-fw-600">{{ g.key }}</td>
+          <td>{{ g.count }}</td>
+          <td>
+            <span class="cw-pill {{ g.worst_urgency }}">
+              <span class="dot"></span>
+              {% if g.worst_urgency == 'expired' %}Expired{% elif g.worst_urgency == 'critical' %}Critical{% elif g.worst_urgency == 'warning' %}Warning{% elif g.worst_urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+            </span>
+          </td>
+          <td>
+            {% if g.earliest_expiry is not none %}
+              <span class="mono cw-fz-12-5">{{ g.earliest_expiry }} days</span>
+            {% else %}
+              —
+            {% endif %}
+          </td>
+        </tr>
+        <tr class="cw-pivot-detail" id="pivot-detail-{{ loop.index }}">
+          <td colspan="4" class="cw-pivot-detail-cell">
+            {% for e in g.entries %}
+            <div class="cw-host-row">
+              <div class="cw-host-row-info">
+                <a href="/certificates/{{ e.id }}" class="cw-host cw-no-decoration">{{ e.name or e.host or '—' }}</a>
+                {% set e_urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+                <span class="cw-pill {{ e_urg }}"><span class="dot"></span>{% if e_urg == 'expired' %}Expired{% elif e_urg == 'critical' %}Critical{% elif e_urg == 'warning' %}Warning{% elif e_urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}</span>
+                {% if e.days_remaining is not none %}
+                  <span class="cw-text-text-3 cw-fz-11-5">{{ e.days_remaining }} days</span>
+                {% endif %}
+              </div>
+            </div>
+            {% endfor %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
     <table class="cw-table">
       <thead>
         <tr>
@@ -318,8 +374,9 @@
         {% endfor %}
       </tbody>
     </table>
+    {% endif %}
 
-    {% if not entries %}
+    {% if not entries and not pivot_groups %}
       <div class="cw-empty">
         <div class="cw-empty-icon">{{ icons.svg_icon('search', 20) }}</div>
         <div class="cw-empty-title">No matching certificates</div>
@@ -492,6 +549,10 @@ function toggleGroup(groupId) {
     row.classList.toggle('cw-open');
     if (chevron) chevron.classList.toggle('cw-group-chevron-open');
   }
+}
+function togglePivotGroup(idx) {
+  var row = document.getElementById('pivot-detail-' + idx);
+  if (row) row.classList.toggle('cw-open');
 }
 function capChips(containerSelector, maxChips) {
   document.querySelectorAll(containerSelector).forEach(function(el) {
