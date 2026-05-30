@@ -114,12 +114,15 @@ Authentication is disabled by default. Set `AUTH_PROVIDER` to enable.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `AUTH_PROVIDER` | — | Set to `ldap` |
-| `LDAP_SERVER` | — | LDAP server URL (e.g. `ldap://dc.example.com`) |
+| `LDAP_SERVER` | — | LDAP server URL(s), comma-separated for DC failover (e.g. `ldap://dc1.example.com,ldap://dc2.example.com`) |
 | `LDAP_BASE_DN` | — | Base DN for user search |
 | `LDAP_BIND_DN` | — | Service account DN for search phase |
 | `LDAP_BIND_PASSWORD` | — | Service account password |
 | `LDAP_USER_FILTER` | `(sAMAccountName={username})` | Search filter; `{username}` is replaced |
 | `LDAP_START_TLS` | `0` | Set `1` to use StartTLS |
+| `LDAP_CA_CERT` | — | CA cert for LDAPS (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
+| `LDAP_REQUIRED_GROUPS` | — | Comma-separated group DNs; transitive membership check |
+| `LDAP_CONNECT_TIMEOUT` | `5` | LDAP connection timeout (seconds) |
 
 Requires: `pip install cert-watch[auth-ldap]`
 
@@ -159,6 +162,7 @@ All JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/api/hosts` | List tracked hosts |
 | `GET` | `/api/alerts` | List alerts |
 | `GET` | `/ct-lookup/{domain}` | Certificate Transparency lookup |
+| `GET` | `/api/ct/reconciliation?domain=` | CT reconciliation (coverage gaps) |
 | `POST` | `/hosts` | Add host (form) |
 | `POST` | `/hosts/import` | Bulk import CSV |
 | `POST` | `/hosts/{id}/scan` | Trigger immediate scan |
@@ -188,7 +192,7 @@ src/cert_watch/
   upload.py            Certificate file upload/parse
   templates/           Jinja2 HTML templates
   static/              CSS
-tests/                 pytest suite (142 tests)
+tests/                 pytest suite (368 tests)
 docs/spec/             Work-item specs (one per FR)
 deploy/
   k8s/                 Kustomize manifests

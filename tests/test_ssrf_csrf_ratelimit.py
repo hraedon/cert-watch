@@ -10,16 +10,6 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-
-def _reload_app(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
-    return app_mod
-
-
 # ── SSRF: scan._is_blocked_ip ──────────────────────────────────────────────
 
 def test_is_blocked_ip_loopback():

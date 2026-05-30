@@ -1,21 +1,8 @@
-import importlib
-
 from fastapi.testclient import TestClient
 
 
-def _reload_app(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
-
-
-def test_api_certificates_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_certificates_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates")
     assert r.status_code == 200
@@ -24,8 +11,8 @@ def test_api_certificates_empty(tmp_path, monkeypatch):
     assert "pagination" in data
 
 
-def test_api_certificates_with_data(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_certificates_with_data(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -40,8 +27,8 @@ def test_api_certificates_with_data(tmp_path, monkeypatch, leaf_pem_file):
     assert len(certs) >= 1
 
 
-def test_api_posture_returns_stored_grade(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_posture_returns_stored_grade(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
 
@@ -62,16 +49,16 @@ def test_api_posture_returns_stored_grade(tmp_path, monkeypatch):
     assert data["findings"][0]["check"] == "tls_version"
 
 
-def test_api_posture_no_data(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_posture_no_data(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/missing/posture")
     assert r.status_code == 200
     assert r.json()["error"] == "no posture data"
 
 
-def test_api_certificate_by_id(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_certificate_by_id(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import store_uploaded, upload_certificate
 
@@ -89,15 +76,15 @@ def test_api_certificate_by_id(tmp_path, monkeypatch, leaf_pem_file):
     assert "days_until_expiry" in data
 
 
-def test_api_certificate_not_found(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_certificate_not_found(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/nonexistent")
     assert r.status_code == 404
 
 
-def test_api_hosts_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_hosts_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/hosts")
     assert r.status_code == 200
@@ -106,8 +93,8 @@ def test_api_hosts_empty(tmp_path, monkeypatch):
     assert "pagination" in data
 
 
-def test_api_hosts_with_data(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_hosts_with_data(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteHostRepository
 
@@ -120,8 +107,8 @@ def test_api_hosts_with_data(tmp_path, monkeypatch):
     assert hosts[0]["hostname"] == "api.example.com"
 
 
-def test_api_alerts_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_alerts_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/alerts")
     assert r.status_code == 200
@@ -130,8 +117,8 @@ def test_api_alerts_empty(tmp_path, monkeypatch):
     assert "pagination" in data
 
 
-def test_api_export_csv_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_export_csv_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/export/certificates.csv")
     assert r.status_code == 200
@@ -143,8 +130,8 @@ def test_api_export_csv_empty(tmp_path, monkeypatch):
     assert "subject" in lines[0]
 
 
-def test_api_export_csv_with_data(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_export_csv_with_data(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -160,8 +147,8 @@ def test_api_export_csv_with_data(tmp_path, monkeypatch, leaf_pem_file):
     assert "leaf.example.com" in lines[1]
 
 
-def test_api_export_json_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_export_json_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/export/certificates.json")
     assert r.status_code == 200
@@ -170,8 +157,8 @@ def test_api_export_json_empty(tmp_path, monkeypatch):
     assert "attachment" in r.headers.get("content-disposition", "")
 
 
-def test_api_export_json_with_data(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_export_json_with_data(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -190,9 +177,9 @@ def test_api_export_json_with_data(tmp_path, monkeypatch, leaf_pem_file):
     assert "urgency" in cert
 
 
-def test_api_patch_notes(tmp_path, monkeypatch, leaf_pem_file):
+def test_api_patch_notes(tmp_path, reload_app, leaf_pem_file):
     """FEAT-013: PATCH /api/certificates/{id}/notes should update notes."""
-    app_mod = _reload_app(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -215,8 +202,8 @@ def test_api_patch_notes(tmp_path, monkeypatch, leaf_pem_file):
     assert r.json()["notes"] == "staging cert"
 
 
-def test_api_patch_notes_not_found(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_patch_notes_not_found(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.patch(
             "/api/certificates/nonexistent/notes",
@@ -225,8 +212,8 @@ def test_api_patch_notes_not_found(tmp_path, monkeypatch):
     assert r.status_code == 404
 
 
-def test_api_patch_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_patch_notes_too_long(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -242,8 +229,8 @@ def test_api_patch_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
     assert r.status_code == 400
 
 
-def test_api_get_certificate_notes_field(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_get_certificate_notes_field(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -258,8 +245,8 @@ def test_api_get_certificate_notes_field(tmp_path, monkeypatch, leaf_pem_file):
     assert r.json()["notes"] == ""
 
 
-def test_api_download_pem(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_download_pem(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 
@@ -276,8 +263,8 @@ def test_api_download_pem(tmp_path, monkeypatch, leaf_pem_file):
     assert cert_id[:8] in r.headers["content-disposition"]
 
 
-def test_api_download_pem_not_found(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_api_download_pem_not_found(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/nonexistent/pem")
     assert r.status_code == 404

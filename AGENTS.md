@@ -45,22 +45,21 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-3 open breadcrumbs: 0 critical, 0 high, 1 medium, 2 low.
+5 open breadcrumbs: 0 critical, 1 high, 2 medium, 2 low.
 
 - **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
 - **BC-037** (low) — Dashboard template inline styles unmaintainable
 - **BC-039** (low) — Empty-state markup is inconsistent across templates
 
+### Open (higher severity, deferred this session)
+
+- **BC-042** (medium) — posture.py has zero test coverage and scan_posture table is never populated
+- **BC-043** (high) — OAuth ID token signature not verified (JWKS) — Plan 010 Slice 4 deferred
+
 ### Recently resolved
 
+- **BC-041** (low) — Auth test _reload_app module state pollution (resolved: autouse fixture saves/restores config/auth/app module dicts; root cause was class-identity drift from importlib.reload)
 - **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro (resolved: extracted to `macros/icons.html`, all 4 templates use `{% import %}`)
-
-### Newly filed
-
-- **BC-041** (low) — Auth test _reload_app causes module state pollution for subsequent tests
-
-### Recently resolved
-
 - **BC-035** (medium) — database.py monolith decomposed into database/ package (resolved: schema.py + repo.py + queries.py + connection.py + migration runner)
 - **BC-040** (medium) — Working tree uncommitted database.py decomposition (resolved: already committed in prior session)
 - **FEAT-006** (low) — Database migration tooling (resolved: Plan 009 — minimal in-repo migration runner instead of Alembic)

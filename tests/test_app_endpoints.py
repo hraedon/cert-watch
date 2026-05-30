@@ -7,17 +7,8 @@ import importlib
 from fastapi.testclient import TestClient
 
 
-def _reload_app(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
-    return app_mod
-
-
-def test_delete_host_removes_host_and_certs(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_delete_host_removes_host_and_certs(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from cert_watch.database import SqliteHostRepository
@@ -46,8 +37,8 @@ def test_delete_host_removes_host_and_certs(tmp_path, monkeypatch, leaf_pem_file
     assert rows[0] == 0
 
 
-def test_delete_certificate_removes_leaf_and_chain(tmp_path, monkeypatch, chain_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_delete_certificate_removes_leaf_and_chain(tmp_path, reload_app, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from cert_watch.upload import store_uploaded, upload_certificate
@@ -68,8 +59,8 @@ def test_delete_certificate_removes_leaf_and_chain(tmp_path, monkeypatch, chain_
     assert after == 0
 
 
-def test_scan_now_calls_scan_host(tmp_path, monkeypatch, self_signed_leaf):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_scan_now_calls_scan_host(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from cert_watch.database import SqliteHostRepository
@@ -93,11 +84,11 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, self_signed_leaf):
     assert called["args"] == ("scan-target.example.com", 443)
 
 
-def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
+def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch, reload_app):
     """Regression: scan-now used to silently swallow ScanError, leaving the user
     with no UI feedback. Failure must redirect with ?warning= AND write a failure
     row to scan_history so the user can see what happened."""
-    app_mod = _reload_app(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from cert_watch.database import SqliteHostRepository
@@ -127,24 +118,24 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch):
     assert rows[0][1] == "connection refused"
 
 
-def test_scan_now_404_redirect_on_unknown_host(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_scan_now_404_redirect_on_unknown_host(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.post("/hosts/does-not-exist/scan", follow_redirects=False)
     assert r.status_code == 303
     assert "error" in r.headers["location"]
 
 
-def test_alerts_view_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_alerts_view_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/alerts")
     assert r.status_code == 200
     assert "No alerts recorded" in r.text
 
 
-def test_alerts_view_lists_existing(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_alerts_view_lists_existing(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     init_schema(db)
@@ -163,16 +154,16 @@ def test_alerts_view_lists_existing(tmp_path, monkeypatch):
     assert "m" in r.text  # alert message is displayed
 
 
-def test_scan_history_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_scan_history_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/scan-history")
     assert r.status_code == 200
     assert "No scans recorded" in r.text
 
 
-def test_scan_history_lists_records(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_scan_history_lists_records(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema
     from cert_watch.scheduler import ScanHistory, record_scan_history
@@ -192,8 +183,8 @@ def test_scan_history_lists_records(tmp_path, monkeypatch):
     assert "timeout" in r.text
 
 
-def test_dashboard_lists_tracked_hosts(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_dashboard_lists_tracked_hosts(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteHostRepository
     SqliteHostRepository(db).add("tracked.example.com", 8443)
@@ -252,9 +243,9 @@ def test_lifespan_respects_sched_env(tmp_path, monkeypatch):
     assert captured["minute"] == 15
 
 
-def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, self_signed_leaf):
+def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app, self_signed_leaf):
     """FEAT-008: common_ports flag should scan multiple TLS ports."""
-    app_mod = _reload_app(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from cert_watch.database import SqliteHostRepository

@@ -22,17 +22,34 @@ from cert_watch.auth import (
 from cert_watch.config import read_secret
 
 
-def _reload_app(monkeypatch, tmp_path, **env):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    for k, v in env.items():
-        monkeypatch.setenv(k, v)
-    from cert_watch import config as _config
+@pytest.fixture(autouse=True)
+def _restore_modules():
+    """Ensure cert_watch.config/auth/app module state is restored after every test.
 
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
+    _reload_app uses importlib.reload which replaces module-level classes
+    (e.g. NoAuthProvider).  If cert_watch.middleware still holds a reference
+    to the OLD class, isinstance() checks in auth_middleware fail, causing
+    401s in subsequent test modules.  Saving and restoring all three modules
+    prevents this class-identity drift.
+    """
+    import cert_watch.app as _app
+    import cert_watch.auth as _auth
+    import cert_watch.config as _cfg
 
-    importlib.reload(app_mod)
-    return app_mod
+    saved_cfg = dict(vars(_cfg))
+    saved_auth = dict(vars(_auth))
+    saved_app = dict(vars(_app))
+    saved_app_state_auth = getattr(_app.app.state, "auth_provider", None)
+    saved_app_state_settings = getattr(_app.app.state, "settings", None)
+    yield
+    vars(_cfg).clear()
+    vars(_cfg).update(saved_cfg)
+    vars(_auth).clear()
+    vars(_auth).update(saved_auth)
+    vars(_app).clear()
+    vars(_app).update(saved_app)
+    _app.app.state.auth_provider = saved_app_state_auth
+    _app.app.state.settings = saved_app_state_settings
 
 
 @pytest.fixture
@@ -45,6 +62,10 @@ def _mock_ldap3():
     mock_ldap3.utils = MagicMock()
     mock_ldap3.utils.conv = MagicMock()
     mock_ldap3.utils.conv.escape_filter_chars = lambda x: x
+    mock_ldap3.Tls = MagicMock()
+    mock_ldap3.ServerPool = MagicMock()
+    mock_ldap3.FIRST = "FIRST"
+    mock_ldap3.NONE = "NONE"
     sys.modules["ldap3"] = mock_ldap3
     sys.modules["ldap3.core"] = mock_ldap3.core
     sys.modules["ldap3.core.exceptions"] = mock_ldap3.core.exceptions
@@ -120,7 +141,7 @@ def test_ldap_authenticate_success(_mock_ldap3):
     mock_user_conn = MagicMock()
     mock_user_conn.unbind = MagicMock()
 
-    def connection_factory(server, user=None, password=None, auto_bind=False):
+    def connection_factory(server, user=None, password=None, auto_bind=False, **kw):
         if user == "CN=alice,DC=example,DC=com":
             return mock_user_conn
         return mock_conn
@@ -164,7 +185,7 @@ def test_ldap_authenticate_bad_password(_mock_ldap3):
     mock_conn.entries = [mock_entry]
     mock_conn.unbind = MagicMock()
 
-    def connection_factory(server, user=None, password=None, auto_bind=False):
+    def connection_factory(server, user=None, password=None, auto_bind=False, **kw):
         if user == "CN=alice,DC=example,DC=com":
             raise _mock_ldap3.core.exceptions.LDAPBindError("invalid creds")
         return mock_conn
@@ -318,8 +339,8 @@ def test_build_ldap_with_config(_mock_ldap3):
 # ---------- HTTP auth middleware tests ----------
 
 
-def test_no_auth_all_routes_open(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_no_auth_all_routes_open(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/")
         assert r.status_code == 200
@@ -335,9 +356,8 @@ def test_no_auth_all_routes_open(tmp_path, monkeypatch):
         assert r.status_code == 200
 
 
-def test_auth_enabled_redirects_to_login(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_auth_enabled_redirects_to_login(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -368,9 +388,8 @@ def test_auth_enabled_redirects_to_login(tmp_path, monkeypatch, _mock_ldap3):
         assert r.status_code == 401
 
 
-def test_auth_enabled_ui_redirect(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_auth_enabled_ui_redirect(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -380,9 +399,8 @@ def test_auth_enabled_ui_redirect(tmp_path, monkeypatch, _mock_ldap3):
         assert r.status_code == 303
 
 
-def test_login_page_rendered(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_login_page_rendered(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -393,17 +411,16 @@ def test_login_page_rendered(tmp_path, monkeypatch, _mock_ldap3):
         assert "Sign in" in r.text
 
 
-def test_login_page_redirects_when_no_auth(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_login_page_redirects_when_no_auth(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/login", follow_redirects=False)
         assert r.status_code == 303
         assert r.headers["location"] in ("/", "http://testserver/")
 
 
-def test_logout_clears_cookie(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_logout_clears_cookie(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -414,9 +431,8 @@ def test_logout_clears_cookie(tmp_path, monkeypatch, _mock_ldap3):
         assert "cw_auth" in r.headers.get("set-cookie", "")
 
 
-def test_auth_user_displayed_in_header(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_auth_user_displayed_in_header(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -430,9 +446,8 @@ def test_auth_user_displayed_in_header(tmp_path, monkeypatch, _mock_ldap3):
         assert "Logout" in r.text
 
 
-def test_authenticated_user_can_access_all_routes(tmp_path, monkeypatch, _mock_ldap3):
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+def test_authenticated_user_can_access_all_routes(reload_app, _mock_ldap3):
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -567,7 +582,7 @@ def test_authz_allows_group_or_role_match():
 # ---------- AuthZ gate in login flow ----------
 
 
-def test_authz_gate_denies_user_without_group(tmp_path, monkeypatch, _mock_ldap3):
+def test_authz_gate_denies_user_without_group(reload_app, _mock_ldap3):
     """When CERT_WATCH_ALLOWED_GROUPS is set, a user not in any allowed group is denied."""
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -577,7 +592,7 @@ def test_authz_gate_denies_user_without_group(tmp_path, monkeypatch, _mock_ldap3
     mock_user_conn = MagicMock()
     mock_user_conn.unbind = MagicMock()
 
-    def connection_factory(server, user=None, password=None, auto_bind=False):
+    def connection_factory(server, user=None, password=None, auto_bind=False, **kw):
         if user == "CN=alice,DC=example,DC=com":
             return mock_user_conn
         return mock_conn
@@ -585,8 +600,7 @@ def test_authz_gate_denies_user_without_group(tmp_path, monkeypatch, _mock_ldap3
     _mock_ldap3.Connection = connection_factory
     _mock_ldap3.Server.return_value = MagicMock()
 
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -603,7 +617,7 @@ def test_authz_gate_denies_user_without_group(tmp_path, monkeypatch, _mock_ldap3
         assert "access%20denied" in loc
 
 
-def test_authz_no_gate_when_no_groups_configured(tmp_path, monkeypatch, _mock_ldap3):
+def test_authz_no_gate_when_no_groups_configured(reload_app, _mock_ldap3):
     """When ALLOWED_GROUPS is empty, any authenticated user is accepted."""
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -613,7 +627,7 @@ def test_authz_no_gate_when_no_groups_configured(tmp_path, monkeypatch, _mock_ld
     mock_user_conn = MagicMock()
     mock_user_conn.unbind = MagicMock()
 
-    def connection_factory(server, user=None, password=None, auto_bind=False):
+    def connection_factory(server, user=None, password=None, auto_bind=False, **kw):
         if user == "CN=alice,DC=example,DC=com":
             return mock_user_conn
         return mock_conn
@@ -621,8 +635,7 @@ def test_authz_no_gate_when_no_groups_configured(tmp_path, monkeypatch, _mock_ld
     _mock_ldap3.Connection = connection_factory
     _mock_ldap3.Server.return_value = MagicMock()
 
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
@@ -713,11 +726,10 @@ def test_local_admin_properties():
     assert provider.supports_form_login is True
 
 
-def test_local_admin_bypasses_group_gate(tmp_path, monkeypatch):
+def test_local_admin_bypasses_group_gate(reload_app):
     pw = "breakglass"
     h = _scrypt_hash(pw, n=2**4, r=1, p=1)
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         CERT_WATCH_LOCAL_ADMIN_USER="admin",
         CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
     )
@@ -731,10 +743,9 @@ def test_local_admin_bypasses_group_gate(tmp_path, monkeypatch):
         assert r.headers["location"] in ("/", "http://testserver/")
 
 
-def test_local_admin_wrong_password_rejected(tmp_path, monkeypatch):
+def test_local_admin_wrong_password_rejected(reload_app):
     h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         CERT_WATCH_LOCAL_ADMIN_USER="admin",
         CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
     )
@@ -748,10 +759,10 @@ def test_local_admin_wrong_password_rejected(tmp_path, monkeypatch):
         assert "login" in r.headers["location"]
 
 
-def test_local_admin_disabled_when_unset(tmp_path, monkeypatch):
+def test_local_admin_disabled_when_unset(monkeypatch, reload_app):
     monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_USER", raising=False)
     monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", raising=False)
-    app_mod = _reload_app(monkeypatch, tmp_path)
+    app_mod = reload_app()
     from cert_watch import auth as auth_mod
     importlib.reload(auth_mod)
     provider = getattr(app_mod.app.state, "auth_provider", None)
@@ -779,7 +790,7 @@ def test_composite_provider_falls_through(_mock_ldap3):
     mock_user_conn = MagicMock()
     mock_user_conn.unbind = MagicMock()
 
-    def connection_factory(server, user=None, password=None, auto_bind=False):
+    def connection_factory(server, user=None, password=None, auto_bind=False, **kw):
         if user == "CN=alice,DC=example,DC=com":
             return mock_user_conn
         return mock_conn
@@ -819,13 +830,12 @@ def test_build_auth_provider_local_admin_with_ldap(_mock_ldap3):
     assert result.username == "admin"
 
 
-def test_local_admin_login_creates_audit_row(tmp_path, monkeypatch):
+def test_local_admin_login_creates_audit_row(tmp_path, reload_app):
     import sqlite3
 
     pw = "breakglass"
     h = _scrypt_hash(pw, n=2**4, r=1, p=1)
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         CERT_WATCH_LOCAL_ADMIN_USER="admin",
         CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
     )
@@ -849,10 +859,9 @@ def test_local_admin_login_creates_audit_row(tmp_path, monkeypatch):
     assert detail.get("break_glass") is True
 
 
-def test_local_admin_login_shows_form(tmp_path, monkeypatch):
+def test_local_admin_login_shows_form(reload_app):
     h = _scrypt_hash("pw", n=2**4, r=1, p=1)
-    app_mod = _reload_app(
-        monkeypatch, tmp_path,
+    app_mod = reload_app(
         CERT_WATCH_LOCAL_ADMIN_USER="admin",
         CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
     )
@@ -860,3 +869,224 @@ def test_local_admin_login_shows_form(tmp_path, monkeypatch):
         r = client.get("/login")
         assert r.status_code == 200
         assert "Sign in" in r.text
+
+
+# ---------- LDAPS hardening (Plan 010 Slice 3) ----------
+
+
+def test_ldaps_missing_ca_cert_warns(_mock_ldap3, caplog):
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+    )
+    mock_conn = MagicMock()
+    mock_conn.entries = []
+    mock_conn.unbind = MagicMock()
+    _mock_ldap3.Connection = MagicMock(return_value=mock_conn)
+    _mock_ldap3.Server.return_value = MagicMock()
+    _mock_ldap3.ServerPool.return_value = MagicMock()
+
+    import logging
+    with caplog.at_level(logging.WARNING, logger="cert_watch.auth"):
+        provider._build_tls()
+    assert any("LDAPS without LDAP_CA_CERT" in r.message for r in caplog.records)
+
+
+def test_ldaps_ca_cert_builds_tls_with_cert_required(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+        ca_cert="-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----",
+    )
+    _mock_ldap3.Server.return_value = MagicMock()
+    tls, servers = provider._build_tls()
+    _mock_ldap3.Tls.assert_called_once()
+    tls_kwargs = _mock_ldap3.Tls.call_args[1]
+    assert tls_kwargs.get("validate") is not None
+    assert "CERT_REQUIRED" in str(tls_kwargs.get("validate")) or tls_kwargs.get("validate") != 0
+
+
+def test_ldaps_ca_cert_file_path(_mock_ldap3, tmp_path):
+    cert_file = tmp_path / "ca.pem"
+    cert_file.write_text("-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----")
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        ca_cert=str(cert_file),
+    )
+    resolved = provider._resolve_ca_cert()
+    assert resolved is not None
+    assert resolved == cert_file
+
+
+def test_ldaps_ca_cert_inline_data(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        ca_cert="-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----",
+    )
+    assert provider._resolve_ca_cert() is None
+
+
+def test_ldap_dc_failover_multiple_servers(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc1.example.com,ldap://dc2.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+        connect_timeout=3,
+    )
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+    _mock_ldap3.Connection = MagicMock(return_value=mock_conn)
+
+    tls, servers = provider._build_tls()
+    assert len(servers) == 2
+    assert _mock_ldap3.Server.call_count == 2
+
+
+def test_ldap_dc_failover_auth_succeeds_on_second_dc(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc1.example.com,ldap://dc2.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+    )
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    mock_pool = MagicMock()
+    _mock_ldap3.ServerPool.return_value = mock_pool
+
+    def connection_factory(server, user=None, password=None, auto_bind=False, use_ssl=False):
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return mock_conn
+
+    _mock_ldap3.Connection = connection_factory
+
+    result = provider.authenticate("alice", "correct_password")
+    assert result.success is True
+    assert result.username == "alice"
+    _mock_ldap3.ServerPool.assert_called_once()
+
+
+def test_ldap_group_filter_non_member_denied(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+        required_groups=["CN=CertWatchAdmins,DC=example,DC=com"],
+    )
+    mock_conn = MagicMock()
+    mock_conn.entries = []
+    mock_conn.unbind = MagicMock()
+    _mock_ldap3.Connection = MagicMock(return_value=mock_conn)
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    result = provider.authenticate("outsider", "pass")
+    assert result.success is False
+    assert "group" in result.error.lower()
+
+
+def test_ldap_group_filter_member_admitted(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+        required_groups=["CN=CertWatchAdmins,DC=example,DC=com"],
+    )
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_entry.memberOf = MagicMock()
+    mock_entry.memberOf.values = ["CN=CertWatchAdmins,DC=example,DC=com"]
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    def connection_factory(server, user=None, password=None, auto_bind=False, use_ssl=False):
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return mock_conn
+
+    _mock_ldap3.Connection = connection_factory
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    result = provider.authenticate("alice", "correct_password")
+    assert result.success is True
+    assert result.username == "alice"
+    assert "CN=CertWatchAdmins,DC=example,DC=com" in result.groups
+
+
+def test_ldap_group_filter_search_includes_chain_oid(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.example.com",
+        base_dn="DC=example,DC=com",
+        required_groups=["CN=Admins,DC=example,DC=com", "CN=Operators,DC=example,DC=com"],
+    )
+    mock_conn = MagicMock()
+    mock_entry = MagicMock()
+    mock_entry.distinguishedName = "CN=alice,DC=example,DC=com"
+    mock_entry.memberOf = MagicMock()
+    mock_entry.memberOf.values = ["CN=Admins,DC=example,DC=com"]
+    mock_conn.entries = [mock_entry]
+    mock_conn.unbind = MagicMock()
+
+    mock_user_conn = MagicMock()
+    mock_user_conn.unbind = MagicMock()
+
+    captured_filter = {}
+
+    def connection_factory(server, user=None, password=None, auto_bind=False, use_ssl=False):
+        conn = MagicMock()
+
+        def fake_search(base_dn, search_filter, **kwargs):
+            captured_filter["value"] = search_filter
+            conn.entries = [mock_entry]
+
+        conn.search = fake_search
+        conn.unbind = MagicMock()
+        if user == "CN=alice,DC=example,DC=com":
+            return mock_user_conn
+        return conn
+
+    _mock_ldap3.Connection = connection_factory
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    result = provider.authenticate("alice", "pass")
+    assert result.success is True
+    sf = captured_filter.get("value", "")
+    assert "1.2.840.113556.1.4.1941" in sf
+    assert "Admins" in sf
+    assert "Operators" in sf
+
+
+def test_ldap_connect_timeout_config(_mock_ldap3):
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.example.com",
+        base_dn="DC=example,DC=com",
+        connect_timeout=10,
+    )
+    _mock_ldap3.Server.return_value = MagicMock()
+    _, servers = provider._build_tls()
+    _mock_ldap3.Server.assert_called_once()
+    call_kwargs = _mock_ldap3.Server.call_args[1]
+    assert call_kwargs.get("connect_timeout") == 10

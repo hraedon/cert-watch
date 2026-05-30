@@ -1,21 +1,8 @@
-import importlib
-
 from fastapi.testclient import TestClient
 
 
-def _reload_app(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
-
-
-def test_metrics_empty(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_metrics_empty(reload_app):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 200
@@ -26,8 +13,8 @@ def test_metrics_empty(tmp_path, monkeypatch):
     assert "cert_watch_certificates_expired 0" in text
 
 
-def test_metrics_with_data(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_metrics_with_data(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
 

@@ -58,6 +58,9 @@ class Settings:
     ldap_bind_password: str = ""
     ldap_user_filter: str = "(sAMAccountName={username})"
     ldap_start_tls: bool = False
+    ldap_ca_cert: str = ""
+    ldap_required_groups: tuple[str, ...] = ()
+    ldap_connect_timeout: int = 5
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_issuer_url: str = ""
@@ -91,6 +94,7 @@ class Settings:
         sched_hour_str = os.environ.get("CERT_WATCH_SCHED_HOUR", "6")
         sched_min_str = os.environ.get("CERT_WATCH_SCHED_MIN", "0")
         smtp_port_str = os.environ.get("SMTP_PORT", "587")
+        ldap_connect_timeout_str = os.environ.get("LDAP_CONNECT_TIMEOUT", "5")
         try:
             sched_hour = int(sched_hour_str)
         except ValueError:
@@ -106,6 +110,10 @@ class Settings:
         except ValueError:
             logger.warning("Invalid SMTP_PORT=%r, using default 587", smtp_port_str)
             smtp_port = 587
+        try:
+            ldap_connect_timeout = int(ldap_connect_timeout_str)
+        except ValueError:
+            ldap_connect_timeout = 5
         return cls(
             db_path=data_dir / "cert-watch.sqlite3",
             data_dir=data_dir,
@@ -137,6 +145,13 @@ class Settings:
             ldap_bind_password=read_secret("LDAP_BIND_PASSWORD") or "",
             ldap_user_filter=os.environ.get("LDAP_USER_FILTER", "(sAMAccountName={username})"),
             ldap_start_tls=os.environ.get("LDAP_START_TLS", "0") == "1",
+            ldap_ca_cert=read_secret("LDAP_CA_CERT") or "",
+            ldap_required_groups=tuple(
+                g.strip()
+                for g in os.environ.get("LDAP_REQUIRED_GROUPS", "").split(",")
+                if g.strip()
+            ),
+            ldap_connect_timeout=ldap_connect_timeout,
             oauth_client_id=os.environ.get("OAUTH_CLIENT_ID", ""),
             oauth_client_secret=read_secret("OAUTH_CLIENT_SECRET") or "",
             oauth_issuer_url=os.environ.get("OAUTH_ISSUER_URL", ""),
@@ -203,6 +218,9 @@ class Settings:
             ldap_bind_password=self.ldap_bind_password,
             ldap_user_filter=self.ldap_user_filter,
             ldap_start_tls=self.ldap_start_tls,
+            ldap_ca_cert=self.ldap_ca_cert,
+            ldap_required_groups=list(self.ldap_required_groups),
+            ldap_connect_timeout=self.ldap_connect_timeout,
             oauth_client_id=self.oauth_client_id,
             oauth_client_secret=self.oauth_client_secret,
             oauth_issuer_url=self.oauth_issuer_url,

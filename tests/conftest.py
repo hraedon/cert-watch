@@ -202,13 +202,40 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
-    # Reload Settings module-level singleton to pick this up if imported.
     import importlib
 
     from cert_watch import config as _config
 
     importlib.reload(_config)
     yield
+
+
+@pytest.fixture
+def reload_app(monkeypatch, tmp_path):
+    """Return a helper that reloads cert_watch.config and cert_watch.app.
+
+    Usage::
+
+        app_mod = reload_app()                # basic reload
+        app_mod = reload_app(AUTH_PROVIDER=... )  # with extra env vars
+
+    The ``monkeypatch`` fixture ensures env vars are restored after the test.
+    """
+    import importlib
+
+    def _reload(**env):
+        monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+        for k, v in env.items():
+            monkeypatch.setenv(k, v)
+        from cert_watch import config as _config
+
+        importlib.reload(_config)
+        from cert_watch import app as app_mod
+
+        importlib.reload(app_mod)
+        return app_mod
+
+    return _reload
 
 
 # Also export the private builder for tests that want a custom expiry.

@@ -1,21 +1,8 @@
 from fastapi.testclient import TestClient
 
 
-def _reload_app(monkeypatch, tmp_path):
-    import importlib
-
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
-
-
-def test_import_hosts_csv(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_import_hosts_csv(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteHostRepository
 
@@ -35,8 +22,8 @@ def test_import_hosts_csv(tmp_path, monkeypatch):
     assert "bulk2.example.com" in hostnames
 
 
-def test_import_hosts_csv_default_port(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_import_hosts_csv_default_port(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteHostRepository
 
@@ -54,8 +41,8 @@ def test_import_hosts_csv_default_port(tmp_path, monkeypatch):
     assert any(h.hostname == "portless.example.com" and h.port == 443 for h in hosts)
 
 
-def test_import_hosts_csv_bad_port(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_import_hosts_csv_bad_port(reload_app):
+    app_mod = reload_app()
 
     csv_content = "hostname,port\nbad.example.com,notaport\n"
     with TestClient(app_mod.app) as client:
@@ -68,8 +55,8 @@ def test_import_hosts_csv_bad_port(tmp_path, monkeypatch):
     assert "error" in r.headers["location"]
 
 
-def test_import_hosts_empty_csv(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_import_hosts_empty_csv(reload_app):
+    app_mod = reload_app()
 
     csv_content = "hostname,port\n"
     with TestClient(app_mod.app) as client:
@@ -81,8 +68,8 @@ def test_import_hosts_empty_csv(tmp_path, monkeypatch):
     assert r.status_code == 303
 
 
-def test_import_hosts_too_large(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_import_hosts_too_large(reload_app):
+    app_mod = reload_app()
 
     big = "hostname\n" + "a.com\n" * 2_000_000
     with TestClient(app_mod.app) as client:
@@ -95,8 +82,8 @@ def test_import_hosts_too_large(tmp_path, monkeypatch):
     assert "too%20large" in r.headers["location"]
 
 
-def test_upload_cert_too_large(tmp_path, monkeypatch):
-    app_mod = _reload_app(monkeypatch, tmp_path)
+def test_upload_cert_too_large(reload_app):
+    app_mod = reload_app()
 
     big_content = b"x" * (10 * 1024 * 1024 + 1)
     with TestClient(app_mod.app) as client:
