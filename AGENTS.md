@@ -37,7 +37,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **PKCS#12 (`.pfx`) and PKCS#7 (`.p7b`/`.p7c`) support extends the original spec.**
 - **Auth is optional.** When `AUTH_PROVIDER` is unset, all routes are open (backward compat). Set to `ldap` or `oauth`/`entra` to enable. Auth deps (`ldap3`, `authlib`) are optional extras, not core requirements. Tests mock the import layer.
 - **Empty-state must not error.** The dashboard renders an "empty state" message when no certificates exist.
-- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/api/*`, `/static` stay open for monitoring when auth is enabled.
+- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/static`, and the login flow (`/login`, `/auth/*`) stay open when auth is enabled. **`/api/*` requires auth** — the data API (cert/host inventory, CSV export, posture) returns `401` to unauthenticated callers so it can't be used to enumerate the fleet. `/metrics` is currently still open; see Plan 007 for hardening it.
 - **Environment-driven config.** All settings via env vars (see README). No config files.
 - **`CERT_WATCH_ALLOW_PRIVATE_IPS`** — defaults to `1` (private IP scanning enabled). Set to `0` to block RFC 1918 / ULA hosts. Loopback and link-local remain blocked regardless.
 - **`CERT_WATCH_DNS_SERVERS`** — comma-separated list of DNS server IPs for hostname resolution during scans. When set, queries are sent directly to these servers (UDP port 53, A/AAAA records) instead of using the system resolver. Falls back to system resolver if custom DNS returns no results. Useful for resolving internal hostnames via domain controllers.

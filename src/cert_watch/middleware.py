@@ -149,10 +149,13 @@ _PUBLIC_PATHS = frozenset({
 
 
 def is_public_path(path: str) -> bool:
+    # NOTE: /api/* is intentionally NOT public. The data API (cert/host
+    # inventory, CSV export, posture) requires auth when AUTH_PROVIDER is set;
+    # unauthenticated API requests get a 401 (see auth_middleware). Only
+    # liveness/scrape and the login flow stay open.
     return (
         path in _PUBLIC_PATHS
         or path.startswith("/static/")
-        or path.startswith("/api/")
         or path.startswith("/metrics")
     )
 
@@ -197,8 +200,9 @@ async def csrf_session_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     """Enforce authentication when AUTH_PROVIDER is configured.
 
-    Public paths (/healthz, /metrics, /api/*, /static, /login, /auth/*) are exempt.
-    Unauthenticated UI requests redirect to /login; API requests get 401.
+    Public paths (/healthz, /metrics, /static, /login, /auth/*) are exempt.
+    The /api/* data routes require auth: unauthenticated API requests get a
+    401, unauthenticated UI requests redirect to /login.
     """
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):

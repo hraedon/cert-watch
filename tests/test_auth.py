@@ -344,15 +344,21 @@ def test_auth_enabled_redirects_to_login(tmp_path, monkeypatch, _mock_ldap3):
         assert r.status_code == 303
         assert "/login" in r.headers["location"]
 
-        # Public routes stay open
+        # Monitoring/login routes stay open
         r = client.get("/healthz")
         assert r.status_code == 200
 
         r = client.get("/metrics")
         assert r.status_code == 200
 
+        # Data API requires auth: unauthenticated requests get a 401, not the
+        # inventory. (Regression guard for the previously-public /api/* gap.)
         r = client.get("/api/certificates")
-        assert r.status_code == 200
+        assert r.status_code == 401
+        assert r.json()["error"] == "unauthenticated"
+
+        r = client.get("/api/export/hosts.csv")
+        assert r.status_code == 401
 
 
 def test_auth_enabled_ui_redirect(tmp_path, monkeypatch, _mock_ldap3):
