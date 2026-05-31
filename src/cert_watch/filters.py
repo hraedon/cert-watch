@@ -44,14 +44,19 @@ def _relative(days: int) -> str:
 
 
 def compute_urgency(days_remaining: int | None) -> str:
-    """Compute urgency bucket from days until expiry."""
+    """Compute urgency bucket from days until expiry.
+
+    Thresholds per wi_fr01_dashboard AC-02:
+      Red    (< 7 days), Yellow (< 30 days), Green (>= 30 days).
+    An explicit "expired" tier is added for already-expired certs.
+    """
     if days_remaining is None:
         return "gray"
     if days_remaining < 0:
         return "expired"
-    if days_remaining <= 7:
+    if days_remaining < 7:
         return "critical"
-    if days_remaining <= 14:
+    if days_remaining < 30:
         return "warning"
     return "healthy"
 

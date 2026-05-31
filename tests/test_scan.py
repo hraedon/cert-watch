@@ -26,14 +26,25 @@ def _fake_ssl_socket(der_chain: list[bytes]) -> MagicMock:
     return sock
 
 
+def _fake_open_ok(der_chain):
+    def _open(hostname, port, timeout, **kw):
+        return _fake_ssl_socket(der_chain)
+    return _open
+
+
+def _fake_open_err(exc):
+    def _open(hostname, port, timeout, **kw):
+        raise exc
+    return _open
+
+
 def test_scan_host_success_native(monkeypatch, chain_triplet):
     """Test native Python TLS path (Python 3.13+ chain API)."""
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
 
-    def fake_open(hostname, port, timeout, verify=False, allow_private=False, dns_servers=()):
-        return _fake_ssl_socket(der_chain)
-
-    monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
+    )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
 
     result = scan_host("example.com", 443)
@@ -48,10 +59,10 @@ def test_scan_host_success_native(monkeypatch, chain_triplet):
 
 def test_scan_host_connection_failure_native(monkeypatch):
     """Test that connection errors are reported correctly on native path."""
-    def fake_open(hostname, port, timeout, verify=False, allow_private=False, dns_servers=()):
-        raise ConnectionRefusedError("refused")
-
-    monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        _fake_open_err(ConnectionRefusedError("refused")),
+    )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
 
     result = scan_host("nowhere.invalid", 443)
@@ -60,10 +71,10 @@ def test_scan_host_connection_failure_native(monkeypatch):
 
 
 def test_scan_host_timeout_native(monkeypatch):
-    def fake_open(hostname, port, timeout, verify=False, allow_private=False, dns_servers=()):
-        raise TimeoutError("timed out")
-
-    monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        _fake_open_err(TimeoutError("timed out")),
+    )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
 
     result = scan_host("slow.invalid", 443)
@@ -71,10 +82,9 @@ def test_scan_host_timeout_native(monkeypatch):
 
 
 def test_scan_host_no_cert_native(monkeypatch):
-    def fake_open(hostname, port, timeout, verify=False, allow_private=False, dns_servers=()):
-        return _fake_ssl_socket([])
-
-    monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection", _fake_open_ok([]),
+    )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
 
     result = scan_host("noisy.invalid", 443)
@@ -88,7 +98,7 @@ def test_scan_host_via_openssl_success(monkeypatch, chain_triplet):
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
-        lambda hostname, port, timeout, allow_private=True, dns_servers=(): (der_chain, "TLSv1.3"),
+        lambda *a, **kw: (der_chain, "TLSv1.3"),
     )
 
     result = scan_host("example.com", 443)
@@ -109,9 +119,7 @@ def test_scan_host_via_openssl_fallback_to_leaf_only(monkeypatch, chain_triplet)
 
     der_chain = [chain_triplet["leaf"].der]
     monkeypatch.setattr(
-        "cert_watch.scan._open_tls_connection",
-        lambda h, p, t, verify=False, allow_private=True, dns_servers=():
-            _fake_ssl_socket(der_chain),
+        "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
     )
 
     result = scan_host("example.com", 443)
@@ -127,10 +135,10 @@ def test_scan_host_via_openssl_connection_failure(monkeypatch):
         lambda *a, **kw: ([], ""),
     )
 
-    def fake_open(hostname, port, timeout, verify=False, allow_private=True, dns_servers=()):
-        raise ConnectionRefusedError("refused")
-
-    monkeypatch.setattr("cert_watch.scan._open_tls_connection", fake_open)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        _fake_open_err(ConnectionRefusedError("refused")),
+    )
 
     result = scan_host("nowhere.invalid", 443)
     assert isinstance(result, ScanError)
@@ -141,9 +149,7 @@ def test_store_scanned_with_db_path(tmp_path, chain_triplet, monkeypatch):
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
     monkeypatch.setattr(
-        "cert_watch.scan._open_tls_connection",
-        lambda h, p, t, verify=False, allow_private=False, dns_servers=():
-            _fake_ssl_socket(der_chain),
+        "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
     )
     result = scan_host("example.com", 443)
     assert isinstance(result, ScannedEntry)

@@ -29,6 +29,18 @@ logger = logging.getLogger("cert_watch.routes.api")
 router = APIRouter()
 
 
+def _require_api_auth(request: Request) -> JSONResponse | None:
+    """Check route-level auth for API endpoints. Returns error response or None."""
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return None
+    token = request.cookies.get(SESSION_COOKIE, "")
+    username = validate_session(token)
+    if not username:
+        return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+    return None
+
+
 def _pagination_links(request: Request, path: str, page: int, limit: int, total: int) -> dict:
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0
@@ -52,6 +64,8 @@ def _db_path(request: Request) -> Path:
 
 @router.get("/api/certificates")
 def api_list_certificates(request: Request, page: int = 1, limit: int = 50) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)
@@ -72,6 +86,8 @@ def api_list_certificates(request: Request, page: int = 1, limit: int = 50) -> J
 
 @router.get("/api/certificates/{cert_id}")
 def api_get_certificate(request: Request, cert_id: str) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
 
     repo = SqliteCertificateRepository(db)
@@ -158,6 +174,8 @@ async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
 
 @router.get("/api/hosts")
 def api_list_hosts(request: Request, page: int = 1, limit: int = 50) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
     repo = SqliteHostRepository(db)
     limit = min(max(limit, 1), 200)
@@ -285,6 +303,8 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
 
 @router.get("/api/alerts")
 def api_list_alerts(request: Request, page: int = 1, limit: int = 50) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)
@@ -308,6 +328,8 @@ def api_list_alerts(request: Request, page: int = 1, limit: int = 50) -> JSONRes
 @router.get("/api/export/certificates.csv")
 def api_export_certificates_csv(request: Request) -> PlainTextResponse:
     """Export all certificates as CSV for compliance reporting."""
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
     rows = list_dashboard_rows(db)
     output = io.StringIO()
@@ -355,6 +377,8 @@ def api_export_certificates_csv(request: Request) -> PlainTextResponse:
 @router.get("/api/export/certificates.json")
 def api_export_certificates_json(request: Request) -> JSONResponse:
     """Export all certificates as JSON for compliance reporting."""
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
     rows = list_dashboard_rows(db)
     return JSONResponse(

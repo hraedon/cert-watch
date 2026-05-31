@@ -117,7 +117,7 @@ def test_dashboard_filter_by_urgency(tmp_path, monkeypatch, leaf_pem_file, expir
     with TestClient(app_mod.app) as client:
         r = client.get("/?urgency=critical")
     assert r.status_code == 200
-    # expiring_soon (5d) is critical (<=7); self_signed (365d) is healthy
+    # expiring_soon (5d) is critical (< 7); self_signed (365d) is healthy
     assert "expiring.example.com" in r.text
 
 

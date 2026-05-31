@@ -299,9 +299,9 @@ def _build_dashboard_rows(
     def _urgency(days: int) -> str:
         if days < 0:
             return "expired"
-        if days <= 7:
+        if days < 7:
             return "critical"
-        if days <= 14:
+        if days < 30:
             return "warning"
         return "healthy"
 

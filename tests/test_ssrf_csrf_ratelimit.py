@@ -129,7 +129,7 @@ def test_app_is_blocked_host_private(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("10.0.0.1", None)),
     ])
-    assert _is_blocked_host("internal.corp", allow_private=False) is not None
+    assert _is_blocked_host("internal.corp", allow_private=False)[0] is not None
 
 
 def test_app_is_blocked_host_public(monkeypatch):
@@ -137,7 +137,7 @@ def test_app_is_blocked_host_public(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", None)),
     ])
-    assert _is_blocked_host("example.com") is None
+    assert _is_blocked_host("example.com")[0] is None
 
 
 def test_app_is_blocked_host_unresolvable(monkeypatch):
@@ -147,7 +147,7 @@ def test_app_is_blocked_host_unresolvable(monkeypatch):
         raise socket.gaierror("nope")
 
     monkeypatch.setattr(socket, "getaddrinfo", _raise)
-    assert _is_blocked_host("nonexistent.invalid") is None
+    assert _is_blocked_host("nonexistent.invalid")[0] is None
 
 
 # ── CSRF: token validation ─────────────────────────────────────────────────

@@ -27,8 +27,9 @@ logger = logging.getLogger("cert_watch.auth")
 # Session cookie config
 SESSION_COOKIE = "cw_auth"
 SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
-_signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or secrets.token_hex(32)
-if not read_secret("CERT_WATCH_AUTH_SECRET"):
+_signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or None
+if not _signing_key:
+    _signing_key = secrets.token_hex(32)
     logger.warning(
         "CERT_WATCH_AUTH_SECRET is not set; using an ephemeral random value. "
         "Sessions will be invalidated on every restart. Set CERT_WATCH_AUTH_SECRET in production."
@@ -598,13 +599,14 @@ class OAuthProvider(AuthProvider):
                             or claims.get("sub", "")
                         )
                     else:
-                        logger.warning(
-                            "ID token JWKS verification failed; falling back to userinfo"
+                        return AuthResult(
+                            success=False,
+                            error="ID token verification failed; refusing userinfo fallback",
                         )
-                except Exception:
-                    logger.warning(
-                        "ID token verification error; falling back to userinfo",
-                        exc_info=True,
+                except Exception as exc:
+                    return AuthResult(
+                        success=False,
+                        error=f"ID token verification error: {exc}",
                     )
             if not username:
                 userinfo_endpoint = endpoints.get("userinfo_endpoint", "")

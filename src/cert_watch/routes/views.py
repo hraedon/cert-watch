@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -12,21 +13,20 @@ from fastapi.templating import Jinja2Templates
 from cert_watch import __version__, ct_lookup
 from cert_watch.config import Settings
 from cert_watch.database import (
-    SqliteHostRepository,
     SqliteTrustAnchorRepository,
     _total_alerts,
     _total_scan_history,
+    get_posture_grades_for_certs,
     group_entries_by_fingerprint,
     list_alerts_with_subject,
-    list_dashboard_rows,
     list_fleet_pivot,
     list_scan_history,
     list_unified_entries,
     list_unified_entries_page,
 )
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import register_filters
-from cert_watch.middleware import check_rate_limit, get_csrf_context
+from cert_watch.middleware import check_metrics_token, check_rate_limit, get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -50,25 +50,23 @@ def healthz(request: Request) -> dict:
     db = _db_path(request)
     checks: dict[str, str] = {}
     ok = True
-    # DB connectivity
+    # DB connectivity + last scan (targeted query, no full table load)
     try:
-        import sqlite3
-        with sqlite3.connect(str(db), timeout=5) as conn:
+        with _connect(db) as conn:
             conn.execute("SELECT 1")
+            scan_row = conn.execute(
+                "SELECT scanned_at, status FROM scan_history "
+                "ORDER BY scanned_at DESC LIMIT 1"
+            ).fetchone()
         checks["database"] = "ok"
+        if scan_row:
+            checks["last_scan"] = scan_row["scanned_at"]
+            checks["last_scan_status"] = scan_row["status"]
+        else:
+            checks["last_scan"] = "none"
     except Exception as exc:
         checks["database"] = f"error: {exc}"
         ok = False
-    # Last scan
-    try:
-        rows = list_scan_history(db)
-        if rows:
-            checks["last_scan"] = rows[0].get("scanned_at", "unknown")
-            checks["last_scan_status"] = rows[0].get("status", "unknown")
-        else:
-            checks["last_scan"] = "none"
-    except Exception:
-        checks["last_scan"] = "unavailable"
     # Scheduler
     from cert_watch.scheduler import _scheduler_thread
     if _scheduler_thread is not None and _scheduler_thread.is_alive():
@@ -182,11 +180,15 @@ def dashboard(
     ctx = get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
 
+    display_entries = [] if pivot_groups else page_entries
+    cert_ids = [e["id"] for e in display_entries if e.get("id")]
+    posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "entries": [] if pivot_groups else page_entries,
+            "entries": display_entries,
             "all_entries": page_entries if pivot_groups else page_entries,
             "pivot_groups": pivot_groups,
             "pivot_view": view if pivot_groups else "",
@@ -207,7 +209,7 @@ def dashboard(
             "has_prev": page > 1,
             "has_next": page < total_pages,
             "grouped": grouped,
-            "posture_grades": {},
+            "posture_grades": posture_grades,
             **ctx,
         },
     )
@@ -318,26 +320,43 @@ def caa_check_view(request: Request, domain: str) -> dict:
 
 @router.get("/metrics", response_class=PlainTextResponse)
 def metrics(request: Request) -> str:
+    if not check_metrics_token(request):
+        return PlainTextResponse("unauthorized", status_code=401)
     db = _db_path(request)
-    rows = list_dashboard_rows(db)
-    hosts = SqliteHostRepository(db).list_all()
     lines: list[str] = []
-    lines.append("# HELP cert_watch_cert_expiry_days Days until certificate expiry")
-    lines.append("# TYPE cert_watch_cert_expiry_days gauge")
-    for r in rows:
-        host_label = r["host"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        subject_label = r["subject"].replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        lines.append(
-            f'cert_watch_cert_expiry_days{{host="{host_label}",'
-            f'subject="{subject_label}"}} {r["days_remaining"]}'
+    with _connect(db) as conn:
+        lines.append("# HELP cert_watch_cert_expiry_days Days until certificate expiry")
+        lines.append("# TYPE cert_watch_cert_expiry_days gauge")
+        cert_rows = conn.execute(
+            "SELECT hostname, port, subject, not_after FROM certificates WHERE is_leaf = 1"
+        ).fetchall()
+        for r in cert_rows:
+            host_label = (
+                f'{r["hostname"]}:{r["port"]}' if r["hostname"] else "(uploaded)"
+            ).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            subject_label = (
+                r["subject"]
+                .replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+            )
+            not_after = _parse_iso(r["not_after"])
+            days = (not_after - datetime.now(UTC)).days
+            lines.append(
+                f'cert_watch_cert_expiry_days{{host="{host_label}",'
+                f'subject="{subject_label}"}} {days}'
+            )
+        total_certs = len(cert_rows)
+        expired = sum(
+            1 for r in cert_rows
+            if (_parse_iso(r["not_after"]) - datetime.now(UTC)).days < 0
         )
+        hosts_row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
+        total_hosts = hosts_row[0] if hosts_row else 0
     lines.append("# HELP cert_watch_hosts_tracked Number of tracked hosts")
     lines.append("# TYPE cert_watch_hosts_tracked gauge")
-    lines.append(f"cert_watch_hosts_tracked {len(hosts)}")
+    lines.append(f"cert_watch_hosts_tracked {total_hosts}")
     lines.append("# HELP cert_watch_certificates_tracked Number of certificate groups")
     lines.append("# TYPE cert_watch_certificates_tracked gauge")
-    lines.append(f"cert_watch_certificates_tracked {len(rows)}")
-    expired = sum(1 for r in rows if r["days_remaining"] < 0)
+    lines.append(f"cert_watch_certificates_tracked {total_certs}")
     lines.append("# HELP cert_watch_certificates_expired Number of expired certificates")
     lines.append("# TYPE cert_watch_certificates_expired gauge")
     lines.append(f"cert_watch_certificates_expired {expired}")

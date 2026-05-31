@@ -37,10 +37,12 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **PKCS#12 (`.pfx`) and PKCS#7 (`.p7b`/`.p7c`) support extends the original spec.**
 - **Auth is optional.** When `AUTH_PROVIDER` is unset, all routes are open (backward compat). Set to `ldap` or `oauth`/`entra` to enable. Auth deps (`ldap3`, `authlib`) are optional extras, not core requirements. Tests mock the import layer.
 - **Empty-state must not error.** The dashboard renders an "empty state" message when no certificates exist.
-- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/static`, and the login flow (`/login`, `/auth/*`) stay open when auth is enabled. **`/api/*` requires auth** — the data API (cert/host inventory, CSV export, posture) returns `401` to unauthenticated callers so it can't be used to enumerate the fleet. `/metrics` is currently still open; see Plan 007 for hardening it.
+- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/static`, and the login flow (`/login`, `/auth/*`) stay open when auth is enabled. **`/api/*` requires auth** — route-level checks in addition to middleware (BC-057). `/metrics` can be gated with `CERT_WATCH_METRICS_TOKEN` for bearer token auth (BC-056).
 - **Environment-driven config.** All settings via env vars (see README). No config files.
 - **`CERT_WATCH_ALLOW_PRIVATE_IPS`** — defaults to `1` (private IP scanning enabled). Set to `0` to block RFC 1918 / ULA hosts. Loopback and link-local remain blocked regardless.
 - **`CERT_WATCH_DNS_SERVERS`** — comma-separated list of DNS server IPs for hostname resolution during scans. When set, queries are sent directly to these servers (UDP port 53, A/AAAA records) instead of using the system resolver. Falls back to system resolver if custom DNS returns no results. Useful for resolving internal hostnames via domain controllers.
+- **`CERT_WATCH_TRUST_PROXY`** — set to `1` to extract client IP from `X-Forwarded-For` / `X-Real-IP` headers for rate limiting. Optionally configure `CERT_WATCH_TRUSTED_PROXIES` (comma-separated IPs) to trust specific proxy IPs.
+- **`CERT_WATCH_METRICS_TOKEN`** — when set, `/metrics` requires `Authorization: Bearer <token>` header. Without this, `/metrics` is open (backward compat).
 - **Spec acceptance criteria are the boundary.** Don't add features beyond the spec without a tracked breadcrumb or plan entry.
 
 ## Known issues (open breadcrumbs)
@@ -53,12 +55,19 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ### Recently resolved
 
+- **BC-058** (medium) — OAuth userinfo fallback bypasses ID token verification (resolved: auth fails instead of silently falling back to userinfo when ID token verification fails)
+- **BC-056** (medium) — /metrics endpoint exposes internal infrastructure without authentication (resolved: `CERT_WATCH_METRICS_TOKEN` gates with bearer token auth)
+- **BC-055** (medium) — Rate limiter trusts X-Forwarded-For implicitly (resolved: `CERT_WATCH_TRUST_PROXY` + `CERT_WATCH_TRUSTED_PROXIES` env vars)
+- **BC-054** (medium) — Empty string accepted as valid auth/CSRF secret (resolved: empty strings treated as unset)
+- **BC-053** (medium) — DNS rebinding window between SSRF check and TLS connection (resolved: pinned IP from SSRF check passed through to scan)
+- **BC-052** (medium) — /healthz loads full scan_history into memory (resolved: targeted SQL `ORDER BY scanned_at DESC LIMIT 1`)
+- **BC-057** (low) — /api/audit endpoint has no route-level auth enforcement (resolved: all API read endpoints have route-level auth checks)
+- **BC-050** (low) — /metrics endpoint loads full inventory into memory (resolved: targeted SQL queries for cert/host counts)
+- **BC-051** (low) — A+ posture grade unreachable from scans (resolved: `_probe_hsts()` HTTP HEAD check on port 443)
 - **BC-047** (medium) — Dashboard and healthz still load full inventory into memory (resolved: `healthz` uses targeted `COUNT(*)` queries; `list_unified_entries_page()` applies filtering/sorting/pagination so only the page slice is materialized; `grouped=0` fast path avoids loading full dataset)
-- **BC-051** (low) — New `oauth_state` field on `AuthResult` may break existing test mocks (resolved: regression tests + AGENTS.md docs update)
-- **BC-050** (low) — Missing database indexes for `scan_history` and `alerts` pagination (resolved: added `idx_scan_history_scanned_at`, `idx_alerts_created_at`, `idx_alerts_status_created` to schema + regression test)
-- **BC-044** (medium) — Unbounded `scan_history` and `alerts` queries load all rows into memory (resolved: SQL-level pagination, `list_alerts_with_subject` and `list_scan_history` accept `page`/`limit`; total count helpers; HTML pagination controls)
 - **BC-045** (low) — OAuth state smuggled in `AuthResult.error` field (resolved: dedicated `oauth_state` field; all callers updated)
 - **BC-046** (low) — `init_schema` called redundantly on every repository instantiation (resolved: `SqliteHostRepository` and `SqliteCertificateRepository` no longer auto-call `init_schema`; callers/tests explicitly initialize)
+- **BC-044** (medium) — Unbounded `scan_history` and `alerts` queries load all rows into memory (resolved: SQL-level pagination, `list_alerts_with_subject` and `list_scan_history` accept `page`/`limit`; total count helpers; HTML pagination controls)
 - **BC-042** (medium) — posture.py test coverage and scan_posture wiring (resolved: 37 tests covering all grading rules, storage, tie-breaking; store_scanned() calls _evaluate_and_store_posture())
 - **BC-039** (low) — Empty-state markup inconsistent across templates (resolved: standardized on .cw-panel.cw-empty-state pattern; fixed duplicate class attribute bug in scan_history.html)
 - **BC-037** (low) — Dashboard inline styles unmaintainable (resolved: all static inline styles extracted to CSS classes in tokens.css; only dynamic CSS custom property bindings remain)
@@ -84,6 +93,15 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ### Recently implemented features
 
+- **HSTS probe during scans (BC-051)** — `scan_host()` now makes an HTTP HEAD request on port 443 to detect `Strict-Transport-Security` header via `_probe_hsts()`. HSTS result passed to `evaluate_posture()`. A+ posture grade now achievable from scans.
+- **DNS rebinding prevention (BC-053)** — `_is_blocked_host_check()` returns a pinned IP from SSRF check. `scan_host()` accepts `pinned_ip` parameter, passing it through to `_open_tls_connection()` and `_scan_via_openssl()`. Both add-host and CSV import flows pin the resolved IP.
+- **Proxy-aware rate limiting (BC-055)** — `CERT_WATCH_TRUST_PROXY=1` enables X-Forwarded-For extraction for rate limiting. `CERT_WATCH_TRUSTED_PROXIES` limits which proxy IPs to trust. `_extract_client_ip()` in middleware.py.
+- **Metrics bearer token auth (BC-056)** — `CERT_WATCH_METRICS_TOKEN` env var gates `/metrics` with `Authorization: Bearer <token>`. Backward compatible: unset = open. `check_metrics_token()` helper in middleware.py.
+- **Route-level API auth (BC-057)** — All API read endpoints (`/api/certificates`, `/api/hosts`, `/api/alerts`, `/api/audit`, `/api/export/*`) have route-level auth checks via `_require_api_auth()`. Defense-in-depth on top of middleware.
+- **Targeted /healthz query (BC-052)** — `/healthz` now uses `SELECT scanned_at, status FROM scan_history ORDER BY scanned_at DESC LIMIT 1` instead of `list_scan_history()`. Uses cached `_connect()` instead of throwaway connection.
+- **Targeted /metrics query (BC-050)** — `/metrics` now iterates a cursor over leaf certificates instead of calling `list_dashboard_rows()`. Host/cert/expired counts via targeted SQL.
+- **Empty secret rejection (BC-054)** — `CERT_WATCH_AUTH_SECRET` and `CERT_WATCH_CSRF_SECRET` treat empty strings as unset, falling back to `secrets.token_hex(32)`.
+- **OAuth ID token enforcement (BC-058)** — When an ID token is present but verification fails, authentication is rejected rather than silently falling back to the userinfo endpoint. Userinfo is only used when no ID token was returned.
 - **Fingerprint grouping (BC-033)** — Dashboard groups hosts sharing the same leaf certificate fingerprint into expandable rows with host count badge and status summary. Toggle with `grouped=0` query param.
 - **Scan retry** — `scan_host()` retries transient failures (connection refused, timeout) up to 2 times with exponential backoff.
 - **Fast scheduler retry** — When hosts have no successful scan yet, the scheduler retries every hour instead of waiting for the daily cycle.
@@ -117,13 +135,14 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
+- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). When ID token verification fails, auth is rejected rather than silently falling back to userinfo (BC-058). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Empty `CERT_WATCH_AUTH_SECRET`/`CERT_WATCH_CSRF_SECRET` treated as unset (BC-054). Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
-- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
-- **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. 37 unit + integration tests.
+- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. Accepts `pinned_ip` parameter to prevent DNS rebinding (BC-053). `_probe_hsts()` checks for HSTS header on port 443 (BC-051). On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
+- **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. A+ requires TLS 1.3 + HSTS (now achievable via `_probe_hsts()`). 37 unit + integration tests.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
 - **`app.py`** — FastAPI with lifespan (scheduler start/stop), CSRF middleware, auth middleware, rate limiting.
+- **`middleware.py`** — CSRF protection, rate limiting (in-memory sliding window), auth middleware. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level.
 
 ## Breadcrumbs / memory
 

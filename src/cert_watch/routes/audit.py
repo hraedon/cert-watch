@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
 from cert_watch.audit import count_audit, list_audit
+from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.filters import register_filters
 
@@ -74,6 +75,11 @@ def api_audit(
     page: int = 1,
     limit: int = 50,
 ) -> JSONResponse:
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is not None and not isinstance(auth, NoAuthProvider):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if not validate_session(token):
+            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     db = _db_path(request)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)

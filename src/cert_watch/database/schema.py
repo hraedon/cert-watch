@@ -121,6 +121,7 @@ CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
 CREATE INDEX IF NOT EXISTS idx_scan_history_scanned_at ON scan_history(scanned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_scan_posture_cert_scanned ON scan_posture(cert_id, scanned_at DESC);
 """
 
 _initialized_paths: set[str] = set()

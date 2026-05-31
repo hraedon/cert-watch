@@ -1357,8 +1357,8 @@ class TestOAuthJWKSVerification:
             assert result.success is True
             assert result.username == "alice@example.com"
 
-    def test_complete_flow_forged_token_falls_back_to_userinfo(self):
-        """When JWKS verification fails, complete_oauth_flow falls back to userinfo."""
+    def test_complete_flow_forged_token_rejected_not_userinfo(self):
+        """When JWKS verification fails, rejects instead of falling back to userinfo (BC-058)."""
         _, _, jwks = _generate_rsa_jwk(kid="good-key")
         wrong_key, _, _ = _generate_rsa_jwk(kid="bad-key")
         provider = _make_oauth_provider(jwks=jwks)
@@ -1389,8 +1389,8 @@ class TestOAuthJWKSVerification:
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
         with _inject_mock_authlib(mock_authlib):
             result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
-            assert result.success is True
-            assert result.username == "real-user"
+            assert result.success is False
+            assert "ID token verification failed" in result.error
 
     def test_complete_flow_no_id_token_uses_userinfo(self):
         """When no ID token is returned, userinfo endpoint is used."""

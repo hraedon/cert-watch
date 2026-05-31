@@ -13,6 +13,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import check_csrf, check_rate_limit
@@ -37,15 +38,20 @@ def _db_path(request: Request) -> Path:
 
 def _is_blocked_host_check(
     hostname: str, *, allow_private: bool = True, dns_servers: tuple[str, ...] = (),
-) -> str | None:
-    """SSRF pre-check for the add-host form."""
+) -> tuple[str | None, str | None]:
+    """SSRF pre-check for the add-host form.
+
+    Returns (error_message_or_None, pinned_ip_or_None).
+    When no error is found the pinned_ip is the first allowed address
+    so the subsequent scan can connect to the same IP (prevents DNS rebinding).
+    """
     import ipaddress
 
     from cert_watch.scan import _PRIVATE_NETWORKS, _is_blocked_ip, resolve_hostname
 
     infos = resolve_hostname(hostname, 0, dns_servers=dns_servers)
     if not infos:
-        return None
+        return None, None
     for _family, sockaddr in infos:
         ip_str = sockaddr[0]
         if ip_str is None:
@@ -64,10 +70,11 @@ def _is_blocked_host_check(
             if is_private and not allow_private:
                 return (
                     f"hostname resolves to blocked address {ip}. "
-                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs."
+                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs.",
+                    None,
                 )
-            return f"hostname resolves to blocked address {ip}"
-    return None
+            return f"hostname resolves to blocked address {ip}", None
+    return None, ip_str
 
 
 @router.post("/hosts")
@@ -96,7 +103,7 @@ async def add_host(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     s = _get_settings(request)
-    ssrf_err = _is_blocked_host_check(
+    ssrf_err, pinned_ip = _is_blocked_host_check(
         hostname, allow_private=s.allow_private, dns_servers=s.dns_servers,
     )
     if ssrf_err:
@@ -120,6 +127,7 @@ async def add_host(
         )
         result = scan_host(
             hostname, p, allow_private=s.allow_private, dns_servers=s.dns_servers,
+            pinned_ip=pinned_ip,
         )
         if not isinstance(result, ScanError):
             store_scanned(result, db)
@@ -195,7 +203,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
                 continue
-        ssrf_err = _is_blocked_host_check(
+        ssrf_err, row_pinned_ip = _is_blocked_host_check(
             hostname, allow_private=s.allow_private, dns_servers=s.dns_servers,
         )
         if ssrf_err:
@@ -214,7 +222,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             hostname, port, threshold_days=threshold, tags=row_tags,
             scan_interval_hours=interval_hours,
         )
-        scan_jobs.append((hostname, port, threshold))
+        scan_jobs.append((hostname, port, threshold, row_pinned_ip))
 
     # Scan hosts concurrently
     allow_priv = s.allow_private
@@ -228,9 +236,13 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         source_ip=source_ip,
     )
 
-    def _scan_one(job: tuple[str, int, int | None]) -> tuple[str, int, object]:
-        hostname, port, _ = job
-        result = scan_host(hostname, port, allow_private=allow_priv, dns_servers=dns_srv)
+    def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, object]:
+        hostname, port, _, pinned = job
+        result = scan_host(
+            hostname, port,
+            allow_private=allow_priv, dns_servers=dns_srv,
+            pinned_ip=pinned,
+        )
         return hostname, port, result
 
     imported = 0
@@ -330,6 +342,11 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
 @router.get("/api/export/hosts.csv")
 def api_export_hosts_csv(request: Request) -> PlainTextResponse:
     """Export all tracked hosts as CSV."""
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is not None and not isinstance(auth, NoAuthProvider):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if not validate_session(token):
+            return PlainTextResponse("unauthenticated", status_code=401)
     db = _db_path(request)
     hosts = SqliteHostRepository(db).list_all()
     output = io.StringIO()

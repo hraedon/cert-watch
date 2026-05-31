@@ -21,6 +21,7 @@ from cert_watch.database import init_schema, replace_scanned
 DEFAULT_TIMEOUT = 10.0
 SCAN_RETRIES = 2
 SCAN_RETRY_BACKOFF = 1.0
+HSTS_TIMEOUT = 5.0
 
 # Always blocked: loopback, link-local, unspecified
 _ALWAYS_BLOCKED_NETWORKS = [
@@ -39,6 +40,29 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("fc00::/7"),
 ]
+
+
+def _probe_hsts(hostname: str, port: int) -> bool | None:
+    """Check if an HTTPS server sends Strict-Transport-Security.
+
+    Returns True if HSTS header found, False if not found, None on error.
+    """
+    if port != 443:
+        return None
+    try:
+        import http.client
+
+        conn = http.client.HTTPSConnection(
+            hostname, port, timeout=HSTS_TIMEOUT,
+            context=ssl.create_default_context(),
+        )
+        conn.request("HEAD", "/")
+        resp = conn.getresponse()
+        hsts_header = resp.getheader("Strict-Transport-Security")
+        conn.close()
+        return hsts_header is not None
+    except Exception:
+        return None
 
 
 def _is_blocked_ip(
@@ -69,6 +93,7 @@ class ScannedEntry:
     chain: list[Certificate] = field(default_factory=list)
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     protocol_version: str = ""
+    hsts: bool | None = None
 
 
 def _build_dns_query(name: str, qtype: int) -> bytes:
@@ -202,6 +227,7 @@ def _resolve_host(
 def _open_tls_connection(
     hostname: str, port: int, timeout: float, *, verify: bool = False,
     allow_private: bool = True, dns_servers: tuple[str, ...] = (),
+    pinned_ip: str | None = None,
 ):
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
     ctx = ssl.create_default_context()
@@ -211,10 +237,19 @@ def _open_tls_connection(
     else:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    _family, sockaddr = _resolve_host(
-        hostname, port, allow_private=allow_private, dns_servers=dns_servers,
-    )
-    sock = socket.socket(_family, socket.SOCK_STREAM)
+    if pinned_ip:
+        import ipaddress as _ip
+
+        ip = _ip.ip_address(pinned_ip)
+        family = socket.AF_INET6 if isinstance(ip, _ip.IPv6Address) else socket.AF_INET
+        sockaddr = (pinned_ip, port, 0, 0) if family == socket.AF_INET6 else (pinned_ip, port)
+        if _is_blocked_ip(ip, allow_private=allow_private):
+            raise OSError(f"pinned IP {pinned_ip} is a blocked address")
+    else:
+        _family, sockaddr = _resolve_host(
+            hostname, port, allow_private=allow_private, dns_servers=dns_servers,
+        )
+    sock = socket.socket(family if pinned_ip else _family, socket.SOCK_STREAM)
     sock.settimeout(timeout)
     sock.connect(sockaddr)
     return ctx.wrap_socket(sock, server_hostname=hostname)
@@ -266,7 +301,7 @@ _PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNOREC
 
 def _scan_via_openssl(
     hostname: str, port: int, timeout: float, *, allow_private: bool = True,
-    dns_servers: tuple[str, ...] = (),
+    dns_servers: tuple[str, ...] = (), pinned_ip: str | None = None,
 ) -> tuple[list[bytes], str]:
     """Extract the full certificate chain and protocol version using a single
     openssl s_client call.
@@ -275,13 +310,20 @@ def _scan_via_openssl(
     'TLSv1.3' or empty string if not detected.
     """
     try:
-        _family, sockaddr = _resolve_host(
-            hostname, port, allow_private=allow_private, dns_servers=dns_servers,
-        )
+        if pinned_ip:
+            import ipaddress as _ip
+
+            ip = _ip.ip_address(pinned_ip)
+            if _is_blocked_ip(ip, allow_private=allow_private):
+                return [], ""
+            host = pinned_ip
+        else:
+            _family, sockaddr = _resolve_host(
+                hostname, port, allow_private=allow_private, dns_servers=dns_servers,
+            )
+            host = sockaddr[0]
     except OSError:
         return [], ""
-
-    host = sockaddr[0]
     try:
         proc = subprocess.run(
             [
@@ -366,6 +408,7 @@ def scan_host(
     allow_private: bool = True,
     dns_servers: tuple[str, ...] = (),
     retries: int = SCAN_RETRIES,
+    pinned_ip: str | None = None,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06."""
     last_error: ScanError | None = None
@@ -373,6 +416,7 @@ def scan_host(
         result = _scan_host_once(
             hostname, port, timeout=timeout, verify=verify,
             allow_private=allow_private, dns_servers=dns_servers,
+            pinned_ip=pinned_ip,
         )
         if isinstance(result, ScannedEntry):
             return result
@@ -391,6 +435,7 @@ def _scan_host_once(
     verify: bool = False,
     allow_private: bool = True,
     dns_servers: tuple[str, ...] = (),
+    pinned_ip: str | None = None,
 ) -> ScannedEntry | ScanError:
     """Single TLS handshake attempt — no retry logic.
 
@@ -403,12 +448,13 @@ def _scan_host_once(
         return _scan_host_via_openssl(
             hostname, port, timeout=timeout,
             allow_private=allow_private, dns_servers=dns_servers,
+            pinned_ip=pinned_ip,
         )
 
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=verify, allow_private=allow_private,
-            dns_servers=dns_servers,
+            dns_servers=dns_servers, pinned_ip=pinned_ip,
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
@@ -443,6 +489,8 @@ def _scan_host_once(
             cp.is_leaf = False
             chain_certs.append(cp)
 
+    hsts = _probe_hsts(hostname, port)
+
     return ScannedEntry(
         host=hostname,
         port=port,
@@ -450,6 +498,7 @@ def _scan_host_once(
         chain=chain_certs,
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version,
+        hsts=hsts,
     )
 
 
@@ -460,6 +509,7 @@ def _scan_host_via_openssl(
     timeout: float,
     allow_private: bool,
     dns_servers: tuple[str, ...],
+    pinned_ip: str | None = None,
 ) -> ScannedEntry | ScanError:
     """Scan using openssl s_client only — one connection for both leaf and chain.
 
@@ -469,6 +519,7 @@ def _scan_host_via_openssl(
     """
     der_chain, protocol_version = _scan_via_openssl(
         hostname, port, timeout, allow_private=allow_private, dns_servers=dns_servers,
+        pinned_ip=pinned_ip,
     )
 
     if der_chain:
@@ -487,6 +538,7 @@ def _scan_host_via_openssl(
                 chain=chain_certs,
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
+                hsts=_probe_hsts(hostname, port),
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
@@ -494,6 +546,7 @@ def _scan_host_via_openssl(
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=False,
             allow_private=allow_private, dns_servers=dns_servers,
+            pinned_ip=pinned_ip,
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
@@ -528,6 +581,7 @@ def _scan_host_via_openssl(
         chain=[],
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
+        hsts=_probe_hsts(hostname, port),
     )
 
 
@@ -598,6 +652,7 @@ def _evaluate_and_store_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
         chain_status=cs,
+        hsts=entry.hsts,
     )
 
     store_scan_posture(

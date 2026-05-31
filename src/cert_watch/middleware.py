@@ -22,7 +22,10 @@ _COOKIE_SECURE = os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") == "1"
 
 # ---------- CSRF protection (double-submit cookie) ----------
 
-_CSRF_SECRET = os.environ.get("CERT_WATCH_CSRF_SECRET") or secrets.token_hex(32)
+_csrf_secret_val = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
+if not _csrf_secret_val:
+    _csrf_secret_val = secrets.token_hex(32)
+_CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 8  # 8 hours
 
 
@@ -66,6 +69,30 @@ _rate_last_activity: dict[str, float] = {}
 _rate_last_sweep = 0.0
 _RATE_SWEEP_INTERVAL = 300.0
 _RATE_WINDOW_TTL = 600.0  # evict windows inactive for 10 minutes
+
+_TRUST_PROXY = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
+_TRUSTED_PROXIES = frozenset(
+    p.strip() for p in os.environ.get("CERT_WATCH_TRUSTED_PROXIES", "").split(",") if p.strip()
+)
+
+
+def _extract_client_ip(request: Request) -> str:
+    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured."""
+    if not _TRUST_PROXY:
+        return request.client.host if request.client else "unknown"
+    xff = request.headers.get("x-forwarded-for", "")
+    if xff:
+        parts = [p.strip() for p in xff.split(",")]
+        if _TRUSTED_PROXIES:
+            for part in reversed(parts):
+                if part not in _TRUSTED_PROXIES:
+                    return part
+        else:
+            return parts[0] if parts else (request.client.host if request.client else "unknown")
+    real_ip = request.headers.get("x-real-ip", "")
+    if real_ip:
+        return real_ip
+    return request.client.host if request.client else "unknown"
 
 
 def _sweep_rate_windows() -> None:
@@ -147,24 +174,40 @@ _PUBLIC_PATHS = frozenset({
     "/healthz", "/login", "/auth/callback", "/auth/logout",
 })
 
+_METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None
+
 
 def is_public_path(path: str) -> bool:
     # NOTE: /api/* is intentionally NOT public. The data API (cert/host
     # inventory, CSV export, posture) requires auth when AUTH_PROVIDER is set;
     # unauthenticated API requests get a 401 (see auth_middleware). Only
     # liveness/scrape and the login flow stay open.
-    return (
-        path in _PUBLIC_PATHS
-        or path.startswith("/static/")
-        or path.startswith("/metrics")
-    )
+    if path in _PUBLIC_PATHS:
+        return True
+    if path.startswith("/static/"):
+        return True
+    return path.startswith("/metrics")
+
+
+def check_metrics_token(request: Request) -> bool:
+    """Check bearer token for /metrics when CERT_WATCH_METRICS_TOKEN is set.
+
+    Returns True if the request is authorized (or no token is configured).
+    """
+    if not _METRICS_TOKEN:
+        return True
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        return hmac.compare_digest(token, _METRICS_TOKEN)
+    return False
 
 
 async def rate_limit_headers_middleware(request: Request, call_next):
     """Enforce rate limits on API routes and add X-RateLimit headers."""
     if not request.url.path.startswith("/api/"):
         return await call_next(request)
-    client = request.client.host if request.client else "unknown"
+    client = _extract_client_ip(request)
     key = f"api:{client}"
     if not check_rate_limit(key, 60, 60):
         remaining, retry_after = get_rate_remaining(key, 60, 60)
