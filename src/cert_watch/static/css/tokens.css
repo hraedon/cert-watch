@@ -856,5 +856,11 @@ body {
 .cw-pivot-detail { display: none; }
 .cw-pivot-detail.cw-open { display: table-row; }
 .cw-pivot-detail-cell { padding: 0 12px 12px 12px; }
+.cw-pivot-loading {
+  color: var(--color-text-3);
+  font-size: var(--fz-12-5);
+  font-style: italic;
+  padding: 4px 0;
+}
 .cw-table-pivot td { cursor: pointer; }
 

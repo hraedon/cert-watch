@@ -614,9 +614,15 @@ def list_fleet_pivot(
     db_path: str | Path,
     pivot: str,
 ) -> list[dict]:
+    """Return fleet pivot groups using SQL-level aggregation.
+
+    Each group has ``key``, ``count``, ``worst_urgency``, ``earliest_expiry``.
+    The ``entries`` field is ``None`` — use :func:`get_pivot_group_entries`
+    to fetch entries for a specific group on demand (BC-048).
+    """
     from cert_watch.filters import friendly_issuer
 
-    entries = list_unified_entries(db_path)
+    init_schema(db_path)
 
     _METHOD_LABELS = {
         "acme": "ACME",
@@ -624,7 +630,129 @@ def list_fleet_pivot(
         "manual": "Manual",
     }
 
-    groups: dict[str, list[dict]] = {}
+    # Determine the grouping column for scanned leaf certs
+    if pivot == "issuer":
+        group_col = "c.issuer"
+    elif pivot == "owner":
+        group_col = "COALESCE(h.owner_name, '')"
+    elif pivot == "renewal_method":
+        group_col = "COALESCE(h.renewal_method, '')"
+    else:
+        group_col = "'unknown'"
+
+    with _connect(db_path) as conn:
+        # Scanned hosts: aggregate per group from leaf certificates
+        rows = conn.execute(
+            f"""
+            SELECT {group_col} AS grp,
+                   CAST(MIN(CASE
+                        WHEN c.not_after < datetime('now') THEN 0
+                        ELSE CAST(
+                            (julianday(c.not_after) - julianday('now'))
+                            AS INTEGER
+                        )
+                   END) AS INTEGER) AS min_days,
+                   COUNT(*) AS cnt
+            FROM certificates c
+            JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+            WHERE c.is_leaf = 1
+            GROUP BY grp
+            """
+        ).fetchall()
+
+        # Pending hosts: hosts with no leaf certificate
+        # For issuer pivot, pending hosts have no cert so group by "Unknown"
+        pending_group_col = "''" if pivot == "issuer" else group_col
+        pending_rows = conn.execute(
+            f"""
+            SELECT {pending_group_col} AS grp,
+                   COUNT(*) AS cnt
+            FROM hosts h
+            WHERE NOT EXISTS (
+                SELECT 1 FROM certificates c
+                WHERE c.hostname = h.hostname AND c.port = h.port AND c.is_leaf = 1
+            )
+            GROUP BY grp
+            """
+        ).fetchall()
+
+    result: list[dict] = []
+
+    for r in rows:
+        d = dict(r)
+        raw_key = d["grp"] or ""
+        min_days = d["min_days"]
+
+        if min_days is not None and min_days < 0:
+            urgency = "expired"
+        elif min_days is not None and min_days < 7:
+            urgency = "critical"
+        elif min_days is not None and min_days < 30:
+            urgency = "warning"
+        else:
+            urgency = "healthy"
+
+        result.append({
+            "key": raw_key,
+            "count": d["cnt"],
+            "worst_urgency": urgency,
+            "earliest_expiry": min_days,
+            "entries": None,
+        })
+
+    for r in pending_rows:
+        d = dict(r)
+        raw_key = d["grp"] or ""
+        existing = next((g for g in result if g["key"] == raw_key), None)
+        if existing:
+            existing["count"] += d["cnt"]
+            if existing["worst_urgency"] == "healthy":
+                existing["worst_urgency"] = "gray"
+        else:
+            result.append({
+                "key": raw_key,
+                "count": d["cnt"],
+                "worst_urgency": "gray",
+                "earliest_expiry": None,
+                "entries": None,
+            })
+
+    # Apply friendly labels to group keys
+    for g in result:
+        raw = g["key"] or ""
+        if pivot == "issuer":
+            g["key"] = friendly_issuer(raw) if raw else "Unknown"
+        elif pivot == "owner":
+            g["key"] = raw or "Unassigned"
+        elif pivot == "renewal_method":
+            g["key"] = _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
+
+    result.sort(key=lambda g: g["count"], reverse=True)
+    return result
+
+
+def get_pivot_group_entries(
+    db_path: str | Path,
+    pivot: str,
+    group_key: str,
+) -> list[dict]:
+    """Return unified entries for a single pivot group.
+
+    Used to lazily load entries when a pivot group is expanded (BC-048).
+    ``group_key`` is the *friendly* key as displayed in the pivot table
+    (e.g. "Let's Encrypt", "alice", "ACME").
+    """
+    from cert_watch.filters import friendly_issuer
+
+    _METHOD_LABELS = {
+        "acme": "ACME",
+        "cert-manager": "cert-manager",
+        "manual": "Manual",
+    }
+
+    # Build entries from scanned + pending hosts
+    entries = list_unified_entries(db_path)
+
     for e in entries:
         if pivot == "issuer":
             raw = e.get("issuer") or ""
@@ -636,31 +764,9 @@ def list_fleet_pivot(
             key = _METHOD_LABELS.get(raw, raw) if raw else "Unknown"
         else:
             key = "Unknown"
-        groups.setdefault(key, []).append(e)
+        e["_pivot_key"] = key
 
-    result: list[dict] = []
-    for key, group_entries in groups.items():
-        worst = "gray"
-        for u in _URGENCY_ORDER:
-            if any(e.get("urgency") == u for e in group_entries):
-                worst = u
-                break
-        days_list = [
-            e["days_remaining"]
-            for e in group_entries
-            if e.get("days_remaining") is not None
-        ]
-        earliest = min(days_list) if days_list else None
-        result.append({
-            "key": key,
-            "count": len(group_entries),
-            "worst_urgency": worst,
-            "earliest_expiry": earliest,
-            "entries": group_entries,
-        })
-
-    result.sort(key=lambda g: g["count"], reverse=True)
-    return result
+    return [e for e in entries if e.get("_pivot_key") == group_key]
 
 
 def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:

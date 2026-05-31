@@ -19,6 +19,7 @@ from cert_watch.database import (
 )
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
+    _init_rate_db,
     auth_middleware,
     csrf_session_middleware,
     rate_limit_headers_middleware,
@@ -81,6 +82,7 @@ async def lifespan(app: FastAPI):
     s = Settings.from_env()
     _setup_logging(log_format=s.log_format)
     init_schema(s.db_path)
+    _init_rate_db(s.db_path)
     auth = s.build_auth_provider()
     app.state.auth_provider = auth
     app.state.settings = s

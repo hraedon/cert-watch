@@ -106,19 +106,45 @@ def dashboard(
 ) -> HTMLResponse:
     db = _db_path(request)
 
-    # Pivot views still load the full dataset (BC-048)
+    # Pivot views use SQL-level aggregation (BC-048)
     pivot_groups = None
+    pivot_stats = None
     if view in ("issuer", "owner", "renewal_method"):
         pivot_groups = list_fleet_pivot(db, view)
 
     per_page = 25
     if pivot_groups:
-        # When a pivot view is active, compute stats from the full dataset
-        # because pivot_groups already loaded everything.
-        all_entries = list_unified_entries(db)
-        page_entries = all_entries
-        total = len(all_entries)
+        # Pivot view: compute stats from SQL (no full inventory load)
+        total = sum(g["count"] for g in pivot_groups)
+        page_entries = []
         total_pages = 1
+        # Urgency distribution via targeted SQL
+        with _connect(db) as conn:
+            rows = conn.execute(
+                """SELECT
+                    SUM(CASE WHEN c.not_after < datetime('now') THEN 1 ELSE 0 END) AS expired,
+                    SUM(CASE WHEN c.not_after >= datetime('now')
+                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 7
+                        THEN 1 ELSE 0 END) AS critical,
+                    SUM(CASE WHEN c.not_after >= datetime('now')
+                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 7
+                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 30
+                        THEN 1 ELSE 0 END) AS warning,
+                    SUM(CASE WHEN c.not_after >= datetime('now')
+                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 30
+                        THEN 1 ELSE 0 END) AS healthy
+                FROM certificates c
+                WHERE c.is_leaf = 1
+                """
+            ).fetchone()
+        r = dict(rows)
+        # Add pending hosts count (no cert = gray, not counted in urgency buckets)
+        pivot_stats = {
+            "expired": r.get("expired") or 0,
+            "critical": r.get("critical") or 0,
+            "warning": r.get("warning") or 0,
+            "healthy": r.get("healthy") or 0,
+        }
     elif grouped:
         # Grouping requires the full filtered set so cross-host search within
         # a fingerprint group works (e.g. searching "beta" finds a group that
@@ -191,6 +217,7 @@ def dashboard(
             "entries": display_entries,
             "all_entries": page_entries if pivot_groups else page_entries,
             "pivot_groups": pivot_groups,
+            "pivot_stats": pivot_stats,
             "pivot_view": view if pivot_groups else "",
             "trust_anchors": anchors,
             "version": __version__,

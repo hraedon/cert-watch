@@ -447,3 +447,31 @@ def ct_reconciliation(request: Request, domain: str = ""):
         "coverage_pct": result.coverage_pct,
         "error": result.error or None,
     })
+
+
+@router.get("/api/pivot/{pivot}/{group_key:path}")
+def api_pivot_group_entries(request: Request, pivot: str, group_key: str) -> JSONResponse:
+    """Return entries for a single pivot group (lazy-loaded, BC-048).
+
+    Used by the dashboard to load group details on expand without
+    materializing the full inventory.
+    """
+    if err := _require_api_auth(request):
+        return err
+    if pivot not in ("issuer", "owner", "renewal_method"):
+        return JSONResponse(
+            content={"error": f"invalid pivot: {pivot}"},
+            status_code=400,
+        )
+    db = _db_path(request)
+    from cert_watch.database import get_pivot_group_entries
+
+    entries = get_pivot_group_entries(db, pivot, group_key)
+    # Strip internal _pivot_key field
+    for e in entries:
+        e.pop("_pivot_key", None)
+    return JSONResponse(content={
+        "pivot": pivot,
+        "group_key": group_key,
+        "entries": entries,
+    })

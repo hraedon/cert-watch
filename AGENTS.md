@@ -47,14 +47,14 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-3 open breadcrumbs: 0 critical, 0 high, 3 medium, 0 low.
+1 open breadcrumb: 0 critical, 0 high, 1 medium (deferred), 0 low.
 
-- **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-048** (medium) — Fleet pivot views (`?view=issuer`, `?view=owner`, `?view=renewal_method`) load full inventory into memory
-- **BC-049** (medium) — In-memory rate limiting is not shared across multiple workers
+- **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
 
 ### Recently resolved
 
+- **BC-048** (medium) — Fleet pivot views load full inventory into memory (resolved: SQL-level GROUP BY aggregation for summaries; entries lazy-loaded via `/api/pivot/{pivot}/{key}` on expand; `get_pivot_group_entries()` helper)
+- **BC-049** (medium) — In-memory rate limiting not shared across workers (resolved: SQLite-backed `rate_limits` table with JSON timestamps; `_init_rate_db()` at startup; graceful fallback to in-memory on DB errors)
 - **BC-058** (medium) — OAuth userinfo fallback bypasses ID token verification (resolved: auth fails instead of silently falling back to userinfo when ID token verification fails)
 - **BC-056** (medium) — /metrics endpoint exposes internal infrastructure without authentication (resolved: `CERT_WATCH_METRICS_TOKEN` gates with bearer token auth)
 - **BC-055** (medium) — Rate limiter trusts X-Forwarded-For implicitly (resolved: `CERT_WATCH_TRUST_PROXY` + `CERT_WATCH_TRUSTED_PROXIES` env vars)
@@ -117,6 +117,8 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **Per-host scan scheduling** — `scan_interval_hours` column allows different scan frequencies per host.
 - **Webhook test endpoint** — `POST /api/webhook/test` sends a test payload to verify webhook config.
 - **Expiry digest mode** — `ALERT_DIGEST_ONLY=1` sends a single daily summary instead of per-cert alerts.
+- **SQLite rate limiting (BC-049)** — `rate_limits` table stores sliding-window timestamps as JSON. `_init_rate_db()` at startup configures DB path. `check_rate_limit()` uses SQLite for cross-worker sharing with graceful in-memory fallback on DB errors. Migration 0003.
+- **Fleet pivot lazy loading (BC-048)** — `list_fleet_pivot()` uses SQL-level GROUP BY for summaries (count, worst urgency, earliest expiry). Entries loaded on demand via `GET /api/pivot/{pivot}/{key}`. Dashboard template fetches group entries via AJAX on expand.
 - **Webhook retry** — `process_pending()` retries failed alerts up to 3 times with exponential backoff.
 - **Host export CSV** — `GET /api/export/hosts.csv` for bulk host list export.
 - **SQL-level pagination** — `list_dashboard_rows()` accepts sort/pagination params for efficient queries.
@@ -142,7 +144,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
 - **`app.py`** — FastAPI with lifespan (scheduler start/stop), CSRF middleware, auth middleware, rate limiting.
-- **`middleware.py`** — CSRF protection, rate limiting (in-memory sliding window), auth middleware. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level.
+- **`middleware.py`** — CSRF protection, rate limiting (SQLite-backed sliding window, BC-049), auth middleware. `_init_rate_db(db_path)` at startup. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level.
 
 ## Breadcrumbs / memory
 

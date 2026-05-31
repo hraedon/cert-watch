@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import collections
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
+import sqlite3
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -61,14 +63,14 @@ def get_session_id(request: Request) -> str:
     return secrets.token_hex(16)
 
 
-# ---------- Rate limiting (in-memory sliding window) ----------
+# ---------- Rate limiting (SQLite-backed sliding window, BC-049) ----------
 
 _rate_lock = threading.Lock()
-_rate_windows: dict[str, collections.deque] = {}
-_rate_last_activity: dict[str, float] = {}
-_rate_last_sweep = 0.0
-_RATE_SWEEP_INTERVAL = 300.0
-_RATE_WINDOW_TTL = 600.0  # evict windows inactive for 10 minutes
+_rate_db_path: Path | None = None
+# In-memory cache for reduced DB I/O (per-key, synced to SQLite)
+_rate_cache: dict[str, list[float]] = {}
+_RATE_CACHE_TTL = 10.0  # seconds before cache entry is considered stale
+_RATE_STALE_TTL = 600.0  # evict rows stale for 10 minutes
 
 _TRUST_PROXY = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
 _TRUSTED_PROXIES = frozenset(
@@ -95,47 +97,131 @@ def _extract_client_ip(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
-def _sweep_rate_windows() -> None:
-    """Remove entries with empty windows or stale last activity."""
-    now = datetime.now(UTC).timestamp()
-    for key in list(_rate_windows):
-        if not _rate_windows[key] or (now - _rate_last_activity.get(key, 0)) > _RATE_WINDOW_TTL:
-            _rate_windows.pop(key, None)
-            _rate_last_activity.pop(key, None)
+def _init_rate_db(db_path: Path | str) -> None:
+    """Initialize the rate limit database path. Called at app startup."""
+    global _rate_db_path
+    _rate_db_path = Path(db_path)
+
+
+def _load_timestamps(conn: sqlite3.Connection, key: str, cutoff: float) -> list[float]:
+    """Load and filter timestamps for a rate limit key from SQLite."""
+    row = conn.execute(
+        "SELECT timestamps FROM rate_limits WHERE key = ?", (key,)
+    ).fetchone()
+    if not row:
+        return []
+    try:
+        all_ts = json.loads(row[0])
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return [t for t in all_ts if t >= cutoff]
+
+
+def _save_timestamps(conn: sqlite3.Connection, key: str, timestamps: list[float]) -> None:
+    """Save timestamps for a rate limit key to SQLite."""
+    now_iso = datetime.now(UTC).isoformat()
+    ts_json = json.dumps(timestamps)
+    conn.execute(
+        "INSERT OR REPLACE INTO rate_limits (key, timestamps, updated_at) "
+        "VALUES (?, ?, ?)",
+        (key, ts_json, now_iso),
+    )
+
+
+def _cleanup_stale(conn: sqlite3.Connection) -> None:
+    """Remove rate limit entries that haven't been updated recently."""
+    stale_before = (
+        datetime.now(UTC).timestamp() - _RATE_STALE_TTL
+    )
+    stale_iso = datetime.fromtimestamp(stale_before, tz=UTC).isoformat()
+    conn.execute(
+        "DELETE FROM rate_limits WHERE updated_at < ?", (stale_iso,)
+    )
 
 
 def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
-    """Return True if request is allowed, False if rate-limited."""
-    global _rate_last_sweep
+    """Return True if request is allowed, False if rate-limited.
+
+    Uses SQLite for persistence so rate limits are shared across workers (BC-049).
+    Falls back to in-memory mode when no database is configured.
+    """
     now = datetime.now(UTC).timestamp()
+    cutoff = now - window_seconds
+
+    if _rate_db_path is None:
+        # Fallback: in-memory only (single-worker mode)
+        with _rate_lock:
+            if key not in _rate_cache:
+                _rate_cache[key] = []
+            ts = [t for t in _rate_cache[key] if t >= cutoff]
+            if len(ts) >= max_requests:
+                _rate_cache[key] = ts
+                return False
+            ts.append(now)
+            _rate_cache[key] = ts
+            return True
+
     with _rate_lock:
-        if now - _rate_last_sweep > _RATE_SWEEP_INTERVAL:
-            _sweep_rate_windows()
-            _rate_last_sweep = now
-        if key not in _rate_windows:
-            _rate_windows[key] = collections.deque()
-        window = _rate_windows[key]
-        cutoff = now - window_seconds
-        while window and window[0] < cutoff:
-            window.popleft()
-        if len(window) >= max_requests:
-            return False
-        window.append(now)
-        _rate_last_activity[key] = now
-        return True
+        try:
+            from cert_watch.database.connection import _connect
+            from cert_watch.database.schema import init_schema
+
+            init_schema(_rate_db_path)
+            with _connect(_rate_db_path) as conn:
+                # Periodic cleanup of stale entries
+                cache_ts = _rate_cache.get(key)
+                if cache_ts is not None and now - min(cache_ts, default=now) < _RATE_CACHE_TTL:
+                    # Use cached timestamps (still valid within cache TTL)
+                    ts = [t for t in cache_ts if t >= cutoff]
+                else:
+                    ts = _load_timestamps(conn, key, cutoff)
+
+                if len(ts) >= max_requests:
+                    _rate_cache[key] = ts
+                    _save_timestamps(conn, key, ts)
+                    conn.commit()
+                    return False
+
+                ts.append(now)
+                _rate_cache[key] = ts
+                _save_timestamps(conn, key, ts)
+                conn.commit()
+                return True
+        except Exception:
+            logger.debug("rate limit DB error, falling back to in-memory", exc_info=True)
+            # Fallback to in-memory on DB errors
+            if key not in _rate_cache:
+                _rate_cache[key] = []
+            ts = [t for t in _rate_cache[key] if t >= cutoff]
+            if len(ts) >= max_requests:
+                _rate_cache[key] = ts
+                return False
+            ts.append(now)
+            _rate_cache[key] = ts
+            return True
 
 
 def get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tuple[int, int]:
     """Return (remaining, retry_after_seconds) for the given rate limit window."""
     now = datetime.now(UTC).timestamp()
-    with _rate_lock:
-        window = _rate_windows.get(key, collections.deque())
-        cutoff = now - window_seconds
-        count = sum(1 for t in window if t >= cutoff)
-        remaining = max(0, max_requests - count)
-        oldest = min((t for t in window if t >= cutoff), default=now)
-        retry_after = max(0, int(window_seconds - (now - oldest)))
-        return remaining, retry_after
+    cutoff = now - window_seconds
+
+    if _rate_db_path is not None:
+        try:
+            from cert_watch.database.connection import _connect
+
+            with _connect(_rate_db_path) as conn:
+                ts = _load_timestamps(conn, key, cutoff)
+        except Exception:
+            ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
+    else:
+        ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
+
+    count = len(ts)
+    remaining = max(0, max_requests - count)
+    oldest = min(ts, default=now)
+    retry_after = max(0, int(window_seconds - (now - oldest)))
+    return remaining, retry_after
 
 
 async def check_csrf(request: Request) -> str | None:

@@ -31,17 +31,28 @@
 
 {% block content %}
 {# ---- Compute stats ---- #}
-{% set _stat_entries = all_entries if all_entries is defined else entries %}
-{% set ns = namespace(expired=0, critical=0, warning=0, healthy=0, total=0) %}
-{% for e in _stat_entries %}
-  {% set u = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-  {% set ns.total = ns.total + 1 %}
-  {% if u == 'expired' %}{% set ns.expired = ns.expired + 1 %}
-  {% elif u == 'critical' %}{% set ns.critical = ns.critical + 1 %}
-  {% elif u == 'warning' %}{% set ns.warning = ns.warning + 1 %}
-  {% elif u == 'healthy' %}{% set ns.healthy = ns.healthy + 1 %}
-  {% endif %}
-{% endfor %}
+{% if pivot_stats %}
+  {# Pivot view: stats from SQL aggregation (BC-048) #}
+  {% set ns = namespace(
+      expired=pivot_stats.expired,
+      critical=pivot_stats.critical,
+      warning=pivot_stats.warning,
+      healthy=pivot_stats.healthy,
+      total=total_entries
+  ) %}
+{% else %}
+  {% set _stat_entries = all_entries if all_entries is defined else entries %}
+  {% set ns = namespace(expired=0, critical=0, warning=0, healthy=0, total=0) %}
+  {% for e in _stat_entries %}
+    {% set u = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+    {% set ns.total = ns.total + 1 %}
+    {% if u == 'expired' %}{% set ns.expired = ns.expired + 1 %}
+    {% elif u == 'critical' %}{% set ns.critical = ns.critical + 1 %}
+    {% elif u == 'warning' %}{% set ns.warning = ns.warning + 1 %}
+    {% elif u == 'healthy' %}{% set ns.healthy = ns.healthy + 1 %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
 
 <div class="cw-page-wrap">
   {# ---- Page header ---- #}
@@ -118,20 +129,11 @@
             {% endif %}
           </td>
         </tr>
-        <tr class="cw-pivot-detail" id="pivot-detail-{{ loop.index }}">
+        <tr class="cw-pivot-detail" id="pivot-detail-{{ loop.index }}" data-pivot="{{ pivot_view }}" data-group-key="{{ g.key }}">
           <td colspan="4" class="cw-pivot-detail-cell">
-            {% for e in g.entries %}
-            <div class="cw-host-row">
-              <div class="cw-host-row-info">
-                <a href="/certificates/{{ e.id }}" class="cw-host cw-no-decoration">{{ e.name or e.host or '—' }}</a>
-                {% set e_urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-                <span class="cw-pill {{ e_urg }}"><span class="dot"></span>{% if e_urg == 'expired' %}Expired{% elif e_urg == 'critical' %}Critical{% elif e_urg == 'warning' %}Warning{% elif e_urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}</span>
-                {% if e.days_remaining is not none %}
-                  <span class="cw-text-text-3 cw-fz-11-5">{{ e.days_remaining }} days</span>
-                {% endif %}
-              </div>
+            <div class="cw-pivot-loading" id="pivot-loading-{{ loop.index }}">
+              Click to load {{ g.count }} certificate{{ 's' if g.count != 1 else '' }}...
             </div>
-            {% endfor %}
           </td>
         </tr>
         {% endfor %}
@@ -552,6 +554,54 @@ function toggleGroup(groupId) {
 }
 function togglePivotGroup(idx) {
   var row = document.getElementById('pivot-detail-' + idx);
+  if (!row) return;
+
+  var loadingEl = document.getElementById('pivot-loading-' + idx);
+  if (loadingEl && !row.classList.contains('cw-loaded')) {
+    // First expand: fetch entries via AJAX (BC-048 lazy loading)
+    row.classList.add('cw-open');
+    var pivot = row.getAttribute('data-pivot');
+    var groupKey = row.getAttribute('data-group-key');
+    var detailCell = loadingEl.parentElement;
+    loadingEl.textContent = 'Loading...';
+
+    fetch('/api/pivot/' + encodeURIComponent(pivot) + '/' + encodeURIComponent(groupKey))
+      .then(function(res) { return res.json(); })
+      .then(function(data) {
+        var html = '';
+        (data.entries || []).forEach(function(e) {
+          var urg = '';
+          var urgLabel = 'Unknown';
+          if (e.days_remaining != null) {
+            if (e.days_remaining < 0) { urg = 'expired'; urgLabel = 'Expired'; }
+            else if (e.days_remaining < 7) { urg = 'critical'; urgLabel = 'Critical'; }
+            else if (e.days_remaining < 30) { urg = 'warning'; urgLabel = 'Warning'; }
+            else { urg = 'healthy'; urgLabel = 'Healthy'; }
+          } else {
+            urg = 'gray'; urgLabel = 'Pending';
+          }
+          var daysHtml = e.days_remaining != null
+            ? '<span class="cw-text-text-3 cw-fz-11-5">' + e.days_remaining + ' days</span>'
+            : '';
+          var name = e.name || e.host || '—';
+          var link = e.id ? '<a href="/certificates/' + e.id + '" class="cw-host cw-no-decoration">' + name + '</a>' : name;
+          html += '<div class="cw-host-row">'
+            + '<div class="cw-host-row-info">'
+            + link
+            + ' <span class="cw-pill ' + urg + '"><span class="dot"></span>' + urgLabel + '</span>'
+            + daysHtml
+            + '</div></div>';
+        });
+        detailCell.innerHTML = html;
+        row.classList.add('cw-loaded');
+      })
+      .catch(function(err) {
+        loadingEl.textContent = 'Failed to load: ' + err.message;
+      });
+    return;
+  }
+
+  // Subsequent toggles: just show/hide
   if (row) row.classList.toggle('cw-open');
 }
 function capChips(containerSelector, maxChips) {

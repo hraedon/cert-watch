@@ -143,6 +143,10 @@ def test_backup_restore_round_trip(tmp_path: Path) -> None:
     backup = create_backup(db, tmp_path / "backup.sqlite3")
 
     # Restore: stop (no-op), replace file, start (verify)
+    # Also remove WAL/SHM artifacts so the restored DB isn't confused
+    # by stale journal files from the connection cache (BC-049).
+    for artifact in (db.with_suffix(".sqlite3-wal"), db.with_suffix(".sqlite3-shm")):
+        artifact.unlink(missing_ok=True)
     db.unlink()
     backup.rename(db)
 
