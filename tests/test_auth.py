@@ -444,7 +444,7 @@ def test_logout_clears_cookie(reload_app, _mock_ldap3):
         LDAP_BASE_DN="DC=example,DC=com",
     )
     with TestClient(app_mod.app, raise_server_exceptions=False) as client:
-        r = client.get("/auth/logout", follow_redirects=False)
+        r = client.post("/auth/logout", follow_redirects=False)
         assert r.status_code == 303
         assert "cw_auth" in r.headers.get("set-cookie", "")
 

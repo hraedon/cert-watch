@@ -46,7 +46,7 @@ def evaluate_posture(
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
 
     findings: list[Finding] = []
-    grade_severity = 0  # 0=A, 1=B, 2=C, 3=F (most severe finding wins)
+    grade_severity = 0  # 0=A, 1=B, 2=C (F reserved for parse failures above)
 
     try:
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)

@@ -110,6 +110,8 @@ def api_get_certificate(request: Request, cert_id: str) -> JSONResponse:
 
 @router.get("/api/certificates/{cert_id}/pem")
 def api_download_pem(request: Request, cert_id: str) -> PlainTextResponse:
+    if err := _require_api_auth(request):
+        return err
     db = _db_path(request)
 
     repo = SqliteCertificateRepository(db)
@@ -393,6 +395,8 @@ def api_export_certificates_json(request: Request) -> JSONResponse:
 @router.post("/api/webhook/test")
 async def api_webhook_test(request: Request) -> JSONResponse:
     """Send a test payload to the configured webhook URL."""
+    if err := _require_api_auth(request):
+        return err
     settings = _get_settings(request)
     webhook_cfg = settings.build_webhook_config()
     if webhook_cfg is None:
@@ -429,6 +433,8 @@ def ct_reconciliation(request: Request, domain: str = ""):
 
     Returns JSON with tracked/ct hostnames, coverage percentage, and gaps.
     """
+    if err := _require_api_auth(request):
+        return err
     if not domain:
         return JSONResponse(
             content={"error": "domain query parameter is required"},

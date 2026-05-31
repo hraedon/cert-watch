@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
 from cert_watch.auth import SESSION_COOKIE, SESSION_TTL, NoAuthProvider, check_authz, create_session
-from cert_watch.middleware import _COOKIE_SECURE
+from cert_watch.middleware import _COOKIE_SECURE, check_csrf, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.auth")
 
@@ -47,6 +47,11 @@ async def login_submit(
     username: str = Form(...),
     password: str = Form(...),
 ) -> RedirectResponse:
+    client_ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(f"login:{client_ip}", 10, 300):
+        return RedirectResponse(
+            url="/login?error=rate+limited:+too+many+login+attempts", status_code=303
+        )
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
@@ -138,24 +143,34 @@ def oauth_callback(
         response = RedirectResponse(
             url=f"/login?error={quote(error)}", status_code=303
         )
-        response.delete_cookie("cw_oauth_state")
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
         return response
     if not code:
         response = RedirectResponse(
             url="/login?error=no+authorization+code", status_code=303
         )
-        response.delete_cookie("cw_oauth_state")
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
         return response
     signed_state = request.cookies.get("cw_oauth_state", "")
-    if signed_state:
-        from cert_watch.auth import _verify_state as _verify_oauth_state
-        cookie_raw = _verify_oauth_state(signed_state)
-        if cookie_raw is None or cookie_raw != state:
-            response = RedirectResponse(
-                url="/login?error=OAuth+state+mismatch", status_code=303
-            )
-            response.delete_cookie("cw_oauth_state")
-            return response
+    if not signed_state:
+        response = RedirectResponse(
+            url="/login?error=OAuth+state+cookie+missing", status_code=303
+        )
+        return response
+    from cert_watch.auth import _verify_state as _verify_oauth_state
+    cookie_raw = _verify_oauth_state(signed_state)
+    if cookie_raw is None or cookie_raw != state:
+        response = RedirectResponse(
+            url="/login?error=OAuth+state+mismatch", status_code=303
+        )
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
+        return response
     base = str(request.base_url).rstrip("/")
     redirect_uri = f"{base}/auth/callback"
     result = auth.complete_oauth_flow(code, redirect_uri, state=signed_state)
@@ -163,7 +178,9 @@ def oauth_callback(
         response = RedirectResponse(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
         )
-        response.delete_cookie("cw_oauth_state")
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
         return response
     # Authorization gate: check group/role membership
     settings = getattr(request.app.state, "settings", None)
@@ -174,11 +191,15 @@ def oauth_callback(
         response = RedirectResponse(
             url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
-        response.delete_cookie("cw_oauth_state")
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
         return response
     token = create_session(result.username)
     response = RedirectResponse(url="/", status_code=303)
-    response.delete_cookie("cw_oauth_state")
+    response.delete_cookie(
+        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+    )
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
         secure=_COOKIE_SECURE,
@@ -187,8 +208,13 @@ def oauth_callback(
     return response
 
 
-@router.get("/auth/logout")
-def logout(request: Request) -> RedirectResponse:
+@router.post("/auth/logout")
+async def logout(request: Request) -> RedirectResponse:
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     response = RedirectResponse(url="/login", status_code=303)
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(
+        SESSION_COOKIE, httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+    )
     return response

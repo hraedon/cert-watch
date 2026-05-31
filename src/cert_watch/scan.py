@@ -5,8 +5,8 @@ from __future__ import annotations
 import base64
 import contextlib
 import ipaddress
-import random
 import re
+import secrets
 import socket
 import ssl
 import struct
@@ -56,10 +56,12 @@ def _probe_hsts(hostname: str, port: int) -> bool | None:
             hostname, port, timeout=HSTS_TIMEOUT,
             context=ssl.create_default_context(),
         )
-        conn.request("HEAD", "/")
-        resp = conn.getresponse()
-        hsts_header = resp.getheader("Strict-Transport-Security")
-        conn.close()
+        try:
+            conn.request("HEAD", "/")
+            resp = conn.getresponse()
+            hsts_header = resp.getheader("Strict-Transport-Security")
+        finally:
+            conn.close()
         return hsts_header is not None
     except Exception:
         return None
@@ -99,7 +101,7 @@ class ScannedEntry:
 def _build_dns_query(name: str, qtype: int) -> bytes:
     header = struct.pack(
         "!HHHHHH",
-        random.randint(0, 65535),
+        secrets.randbelow(65536),
         0x0100,
         1,
         0,
@@ -151,9 +153,11 @@ def _resolve_with_dns(
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                 sock.settimeout(timeout)
-                sock.sendto(query, (server, 53))
-                response, _ = sock.recvfrom(4096)
-                sock.close()
+                try:
+                    sock.sendto(query, (server, 53))
+                    response, _ = sock.recvfrom(4096)
+                finally:
+                    sock.close()
             except (TimeoutError, OSError):
                 continue
             if len(response) < 12:
@@ -251,8 +255,12 @@ def _open_tls_connection(
         )
     sock = socket.socket(family if pinned_ip else _family, socket.SOCK_STREAM)
     sock.settimeout(timeout)
-    sock.connect(sockaddr)
-    return ctx.wrap_socket(sock, server_hostname=hostname)
+    try:
+        sock.connect(sockaddr)
+        return ctx.wrap_socket(sock, server_hostname=hostname)
+    except Exception:
+        sock.close()
+        raise
 
 
 def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:

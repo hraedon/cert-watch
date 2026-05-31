@@ -1,6 +1,7 @@
 """Database connection helpers."""
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import threading
@@ -18,24 +19,60 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     Reuses one connection per (thread, db_path) pair. WAL mode and
     busy_timeout are set once on first connect; they persist in the
     database file and connection respectively.
+
+    Detects external database file replacement (e.g. restore from backup)
+    by comparing inode, size, and mtime. Stale connections are discarded
+    automatically.
     """
     path_str = str(db_path)
     cache = getattr(_conn_local, "connections", None)
     if cache is None:
         cache = {}
         _conn_local.connections = cache
+    meta = getattr(_conn_local, "connection_meta", None)
+    if meta is None:
+        meta = {}
+        _conn_local.connection_meta = meta
+
     conn = cache.get(path_str)
+    current_stat = None
+    with contextlib.suppress(OSError, FileNotFoundError):
+        current_stat = Path(db_path).stat()
+
     if conn is not None:
         try:
             conn.execute("SELECT 1")
-            return conn
+            cached_stat = meta.get(path_str)
+            if current_stat is None:
+                # File disappeared; discard cached connection.
+                pass
+            elif cached_stat is not None:
+                if (
+                    current_stat.st_ino,
+                    current_stat.st_size,
+                    current_stat.st_mtime,
+                ) == cached_stat:
+                    return conn
+            else:
+                # No cached stat yet; record it and reuse.
+                meta[path_str] = (
+                    current_stat.st_ino,
+                    current_stat.st_size,
+                    current_stat.st_mtime,
+                )
+                return conn
         except Exception:
-            cache.pop(path_str, None)
+            pass
+        cache.pop(path_str, None)
+        meta.pop(path_str, None)
+
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     cache[path_str] = conn
+    if current_stat:
+        meta[path_str] = (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime)
     return conn
 
 

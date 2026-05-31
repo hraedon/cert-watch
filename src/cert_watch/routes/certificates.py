@@ -8,11 +8,12 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
@@ -271,9 +272,14 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     )
 
 
-@router.get("/api/certificates/{cert_id}/posture")
-def certificate_posture_api(request: Request, cert_id: str) -> dict:
+@router.get("/api/certificates/{cert_id}/posture", response_model=None)
+def certificate_posture_api(request: Request, cert_id: str):
     """Return the latest posture evaluation for a certificate as JSON."""
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is not None and not isinstance(auth, NoAuthProvider):
+        token = request.cookies.get(SESSION_COOKIE, "")
+        if not validate_session(token):
+            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     db = _db_path(request)
     from cert_watch.database import get_posture_for_cert
     posture = get_posture_for_cert(db, cert_id)

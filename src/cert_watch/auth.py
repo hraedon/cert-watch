@@ -222,7 +222,14 @@ class LDAPAuthProvider(AuthProvider):
                 else:
                     tls_kwargs["ca_certs_data"] = self.ca_cert
             else:
-                tls_kwargs["validate"] = ssl.CERT_REQUIRED if is_ldaps else ssl.CERT_NONE
+                tls_kwargs["validate"] = ssl.CERT_REQUIRED
+
+            if self.start_tls and not is_ldaps and not self.ca_cert:
+                logger.warning(
+                    "STARTTLS without LDAP_CA_CERT — validating against system trust "
+                    "store only; private-CA servers will fail. "
+                    "Set LDAP_CA_CERT or LDAP_CA_CERT_FILE to pin your CA."
+                )
 
             if is_ldaps and not self.ca_cert:
                 logger.warning(
@@ -604,9 +611,10 @@ class OAuthProvider(AuthProvider):
                             error="ID token verification failed; refusing userinfo fallback",
                         )
                 except Exception as exc:
+                    logger.warning("ID token verification error: %s", exc)
                     return AuthResult(
                         success=False,
-                        error=f"ID token verification error: {exc}",
+                        error="ID token verification failed",
                     )
             if not username:
                 userinfo_endpoint = endpoints.get("userinfo_endpoint", "")
@@ -624,7 +632,7 @@ class OAuthProvider(AuthProvider):
             return AuthResult(success=True, username=username)
         except Exception as exc:
             logger.warning("OAuth token exchange failed: %s", exc)
-            return AuthResult(success=False, error=f"OAuth authentication failed: {exc}")
+            return AuthResult(success=False, error="OAuth authentication failed")
 
     @property
     def provider_name(self) -> str:

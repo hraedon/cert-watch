@@ -500,35 +500,18 @@ def list_unified_entries_page(
     return entries, total
 
 
-def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
-    init_schema(db_path)
-    with _connect(db_path) as conn:
-        cert_rows = conn.execute(
-            "SELECT * FROM certificates ORDER BY created_at"
-        ).fetchall()
-        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
-        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
-        # Only fetch the latest scan per host directly in SQL (BC-028)
-        scan_rows = conn.execute(
-            """
-            SELECT hostname, port, status, scanned_at, error_message
-            FROM scan_history sh1
-            WHERE scanned_at = (
-                SELECT MAX(scanned_at)
-                FROM scan_history sh2
-                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
-            )
-            """
-        ).fetchall()
-
-    dash = _build_dashboard_rows(cert_rows, anchor_rows)
-
-    # Latest scan per host
+def _build_unified_from_dash(
+    dash: list[dict],
+    host_rows: list,
+    scan_rows: list,
+    *,
+    include_uploaded: bool = True,
+) -> list[dict]:
+    """Build unified entries from dashboard rows, host rows, and scan rows."""
     latest_scan: dict[tuple[str, int], dict] = {
         (r["hostname"], r["port"]): dict(r) for r in scan_rows
     }
 
-    # Map scanned certs by host key
     scanned_map: dict[str, dict] = {}
     uploaded: list[dict] = []
     for c in dash:
@@ -537,7 +520,6 @@ def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
         else:
             uploaded.append(c)
 
-    # Host id lookup for scanned/pending entries
     host_id_map: dict[tuple[str, int], str] = {
         (h["hostname"], h["port"]): h["id"] for h in host_rows
     }
@@ -595,16 +577,113 @@ def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
                 }
             )
 
-    for u in uploaded:
-        u["kind"] = "uploaded"
-        u["name"] = u["subject"]
-        u["last_scanned_at"] = None
-        u["scan_status"] = None
-        u["scan_error"] = None
-        u["added_at"] = None
-        entries.append(u)
+    if include_uploaded:
+        for u in uploaded:
+            u["kind"] = "uploaded"
+            u["name"] = u["subject"]
+            u["last_scanned_at"] = None
+            u["scan_status"] = None
+            u["scan_error"] = None
+            u["added_at"] = None
+            entries.append(u)
 
     return entries
+
+
+def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        cert_rows = conn.execute(
+            "SELECT * FROM certificates ORDER BY created_at"
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+        # Only fetch the latest scan per host directly in SQL (BC-028)
+        scan_rows = conn.execute(
+            """
+            SELECT hostname, port, status, scanned_at, error_message
+            FROM scan_history sh1
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at)
+                FROM scan_history sh2
+                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+            )
+            """
+        ).fetchall()
+
+    dash = _build_dashboard_rows(cert_rows, anchor_rows)
+    return _build_unified_from_dash(dash, host_rows, scan_rows)
+
+
+def _load_unified_filtered(
+    db_path: str | Path,
+    *,
+    host_where: str | None = None,
+    host_params: tuple = (),
+) -> list[dict]:
+    """Load unified entries for scanned/pending hosts, optionally filtered.
+
+    Uses SQL-level filtering via an EXISTS subquery on the *hosts* table so
+    only matching rows are materialised.  Uploaded certificates are excluded.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        if host_where:
+            host_rows = conn.execute(
+                f"SELECT * FROM hosts WHERE {host_where} ORDER BY added_at",
+                host_params,
+            ).fetchall()
+        else:
+            host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+
+        if host_where:
+            exists_clause = (
+                f"EXISTS (SELECT 1 FROM hosts h WHERE h.hostname = c.hostname "
+                f"AND h.port = c.port AND {host_where})"
+            )
+        else:
+            exists_clause = "c.hostname IS NOT NULL"
+
+        cert_rows = conn.execute(
+            f"SELECT * FROM certificates c WHERE c.is_leaf = 1 "
+            f"AND {exists_clause} ORDER BY created_at",
+            host_params,
+        ).fetchall()
+        leaf_ids = [r["id"] for r in cert_rows]
+        if leaf_ids:
+            ph = ",".join("?" * len(leaf_ids))
+            chain_rows = conn.execute(
+                f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph})",
+                leaf_ids,
+            ).fetchall()
+        else:
+            chain_rows = []
+
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+        if host_where:
+            scan_exists = (
+                f"EXISTS (SELECT 1 FROM hosts h WHERE h.hostname = sh1.hostname "
+                f"AND h.port = sh1.port AND {host_where})"
+            )
+        else:
+            scan_exists = "1=1"
+        scan_rows = conn.execute(
+            f"""
+            SELECT hostname, port, status, scanned_at, error_message
+            FROM scan_history sh1
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at)
+                FROM scan_history sh2
+                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+            )
+            AND {scan_exists}
+            """,
+            host_params,
+        ).fetchall()
+
+    dash = _build_dashboard_rows(list(cert_rows) + list(chain_rows), anchor_rows)
+    return _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
 
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
@@ -741,6 +820,9 @@ def get_pivot_group_entries(
     Used to lazily load entries when a pivot group is expanded (BC-048).
     ``group_key`` is the *friendly* key as displayed in the pivot table
     (e.g. "Let's Encrypt", "alice", "ACME").
+
+    Uses SQL-level filtering so only matching hosts and their certs are
+    materialised at fleet scale.
     """
     from cert_watch.filters import friendly_issuer
 
@@ -750,8 +832,34 @@ def get_pivot_group_entries(
         "manual": "Manual",
     }
 
-    # Build entries from scanned + pending hosts
-    entries = list_unified_entries(db_path)
+    # Map the friendly group_key back to raw DB values for SQL filtering
+    if pivot == "issuer":
+        entries = _load_unified_filtered(db_path)
+    elif pivot == "owner":
+        if group_key == "Unassigned":
+            host_where = "COALESCE(h.owner_name, '') = ? OR h.owner_name IS NULL"
+            host_params = ("",)
+        else:
+            host_where = "h.owner_name = ?"
+            host_params = (group_key,)
+        entries = _load_unified_filtered(db_path, host_where=host_where, host_params=host_params)
+    elif pivot == "renewal_method":
+        if group_key == "Unknown":
+            host_where = "COALESCE(h.renewal_method, '') = ? OR h.renewal_method IS NULL"
+            host_params = ("",)
+        else:
+            # Reverse-label lookup: accept any raw value that maps to the friendly label
+            raw_methods = [k for k, v in _METHOD_LABELS.items() if v == group_key]
+            if raw_methods:
+                ph = ",".join("?" * len(raw_methods))
+                host_where = f"h.renewal_method IN ({ph})"
+                host_params = tuple(raw_methods)
+            else:
+                host_where = "h.renewal_method = ?"
+                host_params = (group_key,)
+        entries = _load_unified_filtered(db_path, host_where=host_where, host_params=host_params)
+    else:
+        entries = _load_unified_filtered(db_path)
 
     for e in entries:
         if pivot == "issuer":

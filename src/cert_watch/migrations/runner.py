@@ -72,6 +72,10 @@ def _backup(db_path: str | Path, backup_path: str | Path | None = None) -> Path:
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(str(db_path)) as conn:
         conn.execute("VACUUM INTO ?", (str(backup_path),))
+    # Remove any stale WAL/SHM artifacts so the backup is a clean standalone file.
+    for suffix in ("-wal", "-shm"):
+        artifact = backup_path.parent / (backup_path.name + suffix)
+        artifact.unlink(missing_ok=True)
     logger.info("backed up %s -> %s", db_path, backup_path)
     return backup_path
 

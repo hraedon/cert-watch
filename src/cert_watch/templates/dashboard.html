@@ -552,6 +552,20 @@ function toggleGroup(groupId) {
     if (chevron) chevron.classList.toggle('cw-group-chevron-open');
   }
 }
+function cwUrgency(daysRemaining) {
+  if (daysRemaining == null) return { urgency: 'gray', label: 'Pending' };
+  if (daysRemaining < 0) return { urgency: 'expired', label: 'Expired' };
+  if (daysRemaining < 7) return { urgency: 'critical', label: 'Critical' };
+  if (daysRemaining < 30) return { urgency: 'warning', label: 'Warning' };
+  return { urgency: 'healthy', label: 'Healthy' };
+}
+
+function escHtml(s) {
+  var d = document.createElement('div');
+  d.appendChild(document.createTextNode(s == null ? '' : String(s)));
+  return d.innerHTML;
+}
+
 function togglePivotGroup(idx) {
   var row = document.getElementById('pivot-detail-' + idx);
   if (!row) return;
@@ -570,25 +584,16 @@ function togglePivotGroup(idx) {
       .then(function(data) {
         var html = '';
         (data.entries || []).forEach(function(e) {
-          var urg = '';
-          var urgLabel = 'Unknown';
-          if (e.days_remaining != null) {
-            if (e.days_remaining < 0) { urg = 'expired'; urgLabel = 'Expired'; }
-            else if (e.days_remaining < 7) { urg = 'critical'; urgLabel = 'Critical'; }
-            else if (e.days_remaining < 30) { urg = 'warning'; urgLabel = 'Warning'; }
-            else { urg = 'healthy'; urgLabel = 'Healthy'; }
-          } else {
-            urg = 'gray'; urgLabel = 'Pending';
-          }
+          var u = cwUrgency(e.days_remaining);
           var daysHtml = e.days_remaining != null
-            ? '<span class="cw-text-text-3 cw-fz-11-5">' + e.days_remaining + ' days</span>'
+            ? '<span class="cw-text-text-3 cw-fz-11-5">' + escHtml(e.days_remaining) + ' days</span>'
             : '';
-          var name = e.name || e.host || '—';
-          var link = e.id ? '<a href="/certificates/' + e.id + '" class="cw-host cw-no-decoration">' + name + '</a>' : name;
+          var name = escHtml(e.name || e.host || '\u2014');
+          var link = e.id ? '<a href="/certificates/' + escHtml(e.id) + '" class="cw-host cw-no-decoration">' + name + '</a>' : name;
           html += '<div class="cw-host-row">'
             + '<div class="cw-host-row-info">'
             + link
-            + ' <span class="cw-pill ' + urg + '"><span class="dot"></span>' + urgLabel + '</span>'
+            + ' <span class="cw-pill ' + escHtml(u.urgency) + '"><span class="dot"></span>' + escHtml(u.label) + '</span>'
             + daysHtml
             + '</div></div>';
         });

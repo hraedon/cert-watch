@@ -36,7 +36,10 @@
       {% if auth_user %}
         <div class="cw-user-info">
           <span>{{ auth_user }}</span>
-          <a href="/auth/logout" class="cw-btn ghost sm">Logout</a>
+          <form method="post" action="/auth/logout" style="display:inline">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="cw-btn ghost sm">Logout</button>
+          </form>
         </div>
       {% endif %}
       <button class="cw-iconbtn" id="theme-toggle" title="Toggle theme">

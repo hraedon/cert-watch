@@ -52,6 +52,8 @@ def _is_blocked_host_check(
     infos = resolve_hostname(hostname, 0, dns_servers=dns_servers)
     if not infos:
         return None, None
+    pinned_ip = None
+    blocked_info = None
     for _family, sockaddr in infos:
         ip_str = sockaddr[0]
         if ip_str is None:
@@ -67,6 +69,13 @@ def _is_blocked_host_check(
                 else ip
             )
             is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
+            blocked_info = (ip, is_private)
+            continue
+        pinned_ip = ip_str
+        break
+    if pinned_ip is None:
+        if blocked_info is not None:
+            ip, is_private = blocked_info
             if is_private and not allow_private:
                 return (
                     f"hostname resolves to blocked address {ip}. "
@@ -74,7 +83,8 @@ def _is_blocked_host_check(
                     None,
                 )
             return f"hostname resolves to blocked address {ip}", None
-    return None, ip_str
+        return None, None
+    return None, pinned_ip
 
 
 @router.post("/hosts")

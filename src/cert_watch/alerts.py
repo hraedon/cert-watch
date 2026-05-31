@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import smtplib
@@ -250,8 +249,14 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
             s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         with s:
             if config.smtp_port != 465:
-                with contextlib.suppress(smtplib.SMTPNotSupportedError):
+                try:
                     s.starttls()
+                except smtplib.SMTPNotSupportedError:
+                    alert.error_message = (
+                        "STARTTLS not supported by SMTP server; "
+                        "refusing to send credentials in cleartext"
+                    )
+                    return False
             if config.smtp_user:
                 s.login(config.smtp_user, config.smtp_password)
             s.send_message(msg)
@@ -369,8 +374,15 @@ def send_expiry_digest(
                 s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
             with s:
                 if config.smtp_port != 465:
-                    with contextlib.suppress(smtplib.SMTPNotSupportedError):
+                    try:
                         s.starttls()
+                    except smtplib.SMTPNotSupportedError:
+                        logger.warning(
+                            "digest email aborted: STARTTLS not supported by %s:%s; "
+                            "refusing to send credentials in cleartext",
+                            config.smtp_host, config.smtp_port,
+                        )
+                        return False
                 if config.smtp_user:
                     s.login(config.smtp_user, config.smtp_password)
                 s.send_message(msg)

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib
 import ipaddress
+import json
 import socket
+import sqlite3
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,3 +251,35 @@ def test_rate_limit_per_ip_isolation():
     check_rate_limit(key_a, 1, 60)
     assert not check_rate_limit(key_a, 1, 60)
     assert check_rate_limit(key_b, 1, 60)
+
+
+# ── Cross-worker SQLite-backed rate limiting (BC-049) ────────────────────
+
+def test_cross_worker_rate_limit_shared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two workers sharing the same SQLite DB enforce a shared limit."""
+    from cert_watch.database.schema import init_schema
+    from cert_watch.middleware import _init_rate_db, check_rate_limit
+
+    db = tmp_path / "rate_limits.sqlite3"
+    init_schema(db)
+    _init_rate_db(db)
+
+    # Monkeypatch away the in-memory fallback cache so we always hit SQLite
+    monkeypatch.setattr("cert_watch.middleware._rate_cache", {})
+
+    key = f"cross_worker:{time.time()}"
+
+    # Worker A consumes both allowed requests
+    assert check_rate_limit(key, 2, 60)
+    assert check_rate_limit(key, 2, 60)
+
+    # Worker B (same DB) should be blocked
+    assert not check_rate_limit(key, 2, 60)
+
+    # Verify the DB row exists with two timestamps
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute(
+            "SELECT timestamps FROM rate_limits WHERE key = ?", (key,)
+        ).fetchone()
+    assert row is not None
+    assert len(json.loads(row[0])) == 2
