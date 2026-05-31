@@ -101,6 +101,7 @@ class AuthResult:
     username: str = ""
     error: str = ""
     redirect_url: str = ""  # For OAuth: URL to redirect user to
+    oauth_state: str = ""  # Signed OAuth state for callback verification (BC-045)
     groups: list[str] | None = None
     roles: list[str] | None = None
 
@@ -556,7 +557,7 @@ class OAuthProvider(AuthProvider):
         uri, state = client.create_authorization_url(
             authorization_endpoint, redirect_uri=redirect_uri
         )
-        return AuthResult(success=True, redirect_url=uri, error=_sign_state(state))
+        return AuthResult(success=True, redirect_url=uri, oauth_state=_sign_state(state))
 
     def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         try:

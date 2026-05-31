@@ -80,5 +80,18 @@
       <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Alerts will appear here when certificates expire or scans fail.</div>
     </div>
   {% endif %}
+
+  {# ---- Pagination ---- #}
+  {% if total_pages > 1 %}
+    <div class="cw-pagination cw-mt-18">
+      {% if has_prev %}
+        <a href="/alerts?page={{ page - 1 }}" class="cw-btn sm">&laquo; Prev</a>
+      {% endif %}
+      <span class="cw-muted">Page {{ page }} of {{ total_pages }}</span>
+      {% if has_next %}
+        <a href="/alerts?page={{ page + 1 }}" class="cw-btn sm">Next &raquo;</a>
+      {% endif %}
+    </div>
+  {% endif %}
 </div>
 {% endblock %}

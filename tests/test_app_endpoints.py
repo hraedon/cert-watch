@@ -11,10 +11,11 @@ def test_delete_host_removes_host_and_certs(tmp_path, reload_app, leaf_pem_file)
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
-    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database import SqliteHostRepository, init_schema
     from cert_watch.scan import ScannedEntry, store_scanned
     from cert_watch.upload import upload_certificate
 
+    init_schema(db)
     entry = upload_certificate(leaf_pem_file)
     host_repo = SqliteHostRepository(db)
     hid = host_repo.add("delete-me.example.com", 443)
@@ -63,8 +64,9 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, reload_app, self_signed
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
-    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database import SqliteHostRepository, init_schema
     from cert_watch.scan import ScannedEntry
+    init_schema(db)
     host_repo = SqliteHostRepository(db)
     hid = host_repo.add("scan-target.example.com", 443)
 
@@ -91,8 +93,9 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
-    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database import SqliteHostRepository, init_schema
     from cert_watch.scan import ScanError
+    init_schema(db)
     hid = SqliteHostRepository(db).add("refused.example.com", 443)
 
     def fake_scan_host(hostname, port=443, **kw):
@@ -186,7 +189,8 @@ def test_scan_history_lists_records(tmp_path, reload_app):
 def test_dashboard_lists_tracked_hosts(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database import SqliteHostRepository, init_schema
+    init_schema(db)
     SqliteHostRepository(db).add("tracked.example.com", 8443)
     with TestClient(app_mod.app) as client:
         r = client.get("/")

@@ -96,8 +96,9 @@ def test_api_hosts_empty(reload_app):
 def test_api_hosts_with_data(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database import SqliteHostRepository, init_schema
 
+    init_schema(db)
     SqliteHostRepository(db).add("api.example.com", 443)
     with TestClient(app_mod.app) as client:
         r = client.get("/api/hosts")

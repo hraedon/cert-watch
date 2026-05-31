@@ -12,6 +12,8 @@ from cert_watch.database import (
 
 @pytest.fixture
 def alert_repo(tmp_path):
+    from cert_watch.database.schema import init_schema
+    init_schema(tmp_path / "cw.sqlite3")
     return SqliteAlertRepository(tmp_path / "cw.sqlite3")
 
 

@@ -82,8 +82,25 @@ def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
         assert "idx_cert_replaces" in idx
 
 
+def test_init_schema_creates_scan_history_and_alerts_indexes(tmp_path):
+    """BC-050: scan_history and alerts must have indexes on scanned_at / created_at."""
+    db = tmp_path / "indexes.sqlite3"
+    init_schema(db)
+    import sqlite3
+
+    with sqlite3.connect(str(db)) as conn:
+        for table, idx_name in (
+            ("scan_history", "idx_scan_history_scanned_at"),
+            ("alerts", "idx_alerts_created_at"),
+            ("alerts", "idx_alerts_status_created"),
+        ):
+            idx = {r[1] for r in conn.execute(f"PRAGMA index_list('{table}')").fetchall()}
+            assert idx_name in idx, f"{idx_name} missing on {table}"
+
+
 def test_add_and_get_certificate(tmp_path, self_signed_leaf):
     db = tmp_path / "cw.sqlite3"
+    init_schema(db)
     repo = SqliteCertificateRepository(db, source="uploaded")
     cert = parse_certificate(self_signed_leaf.der)
     cert_id = repo.add(cert)
@@ -96,6 +113,7 @@ def test_add_and_get_certificate(tmp_path, self_signed_leaf):
 
 def test_list_all_and_expiring_within(tmp_path, self_signed_leaf, expiring_soon_leaf):
     db = tmp_path / "cw.sqlite3"
+    init_schema(db)
     repo = SqliteCertificateRepository(db, source="uploaded")
     repo.add(parse_certificate(self_signed_leaf.der))
     repo.add(parse_certificate(expiring_soon_leaf.der))
@@ -106,6 +124,7 @@ def test_list_all_and_expiring_within(tmp_path, self_signed_leaf, expiring_soon_
 
 def test_update_expiry_and_delete(tmp_path, self_signed_leaf):
     db = tmp_path / "cw.sqlite3"
+    init_schema(db)
     repo = SqliteCertificateRepository(db, source="uploaded")
     cid = repo.add(parse_certificate(self_signed_leaf.der))
     new = datetime.now(UTC) + timedelta(days=1)
@@ -118,6 +137,7 @@ def test_update_expiry_and_delete(tmp_path, self_signed_leaf):
 
 def test_alert_repository_lifecycle(tmp_path):
     db = tmp_path / "cw.sqlite3"
+    init_schema(db)
     arepo = SqliteAlertRepository(db)
     a = Alert(
         cert_id="cert-1",
@@ -143,6 +163,7 @@ def test_update_notes(tmp_path, self_signed_leaf):
     from cert_watch.certificate_model import Certificate
 
     db = tmp_path / "test.sqlite3"
+    init_schema(db)
     cert = parse_certificate(self_signed_leaf.der)
     assert isinstance(cert, Certificate)
     repo = SqliteCertificateRepository(db, source="test")
@@ -232,3 +253,63 @@ def test_list_unified_entries_scanned_pending_uploaded(tmp_path, self_signed_lea
     assert uploaded["kind"] == "uploaded"
     assert uploaded["source"] == "uploaded"
     assert uploaded["name"] == cert.subject
+
+
+def test_list_unified_entries_page_pagination(tmp_path, self_signed_leaf):
+    """BC-047: list_unified_entries_page returns paginated slice + total count."""
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import list_unified_entries_page
+    from cert_watch.database.schema import init_schema
+    from cert_watch.scan import ScannedEntry, store_scanned
+
+    db = tmp_path / "page.sqlite3"
+    init_schema(db)
+
+    host_repo = SqliteHostRepository(db)
+    host_repo.add("a.example.com", 443)
+    host_repo.add("b.example.com", 443)
+
+    cert = parse_certificate(self_signed_leaf.der)
+    assert isinstance(cert, Certificate)
+
+    entry = ScannedEntry(host="a.example.com", port=443, leaf=cert, chain=[])
+    store_scanned(entry, db)
+    entry2 = ScannedEntry(host="b.example.com", port=443, leaf=cert, chain=[])
+    store_scanned(entry2, db)
+
+    cert_repo = SqliteCertificateRepository(db, source="uploaded")
+    cert_repo.add(cert)
+
+    # page 1, limit 2
+    rows, total = list_unified_entries_page(db, offset=0, limit=2)
+    assert len(rows) == 2
+    assert total == 3  # 2 scanned + 1 uploaded
+
+    # page 2, limit 2
+    rows2, total2 = list_unified_entries_page(db, offset=2, limit=2)
+    assert len(rows2) == 1
+    assert total2 == 3
+
+    # filtering by q
+    rows_q, total_q = list_unified_entries_page(db, offset=0, limit=10, q="a.example")
+    assert total_q == 1
+    assert rows_q[0]["host"] == "a.example.com:443"
+
+    # filtering by source
+    rows_src, total_src = list_unified_entries_page(db, offset=0, limit=10, source="scanned")
+    assert total_src == 2
+    for r in rows_src:
+        assert r["kind"] in ("scanned", "pending")
+
+    # sorting by days (default)
+    rows_days, _ = list_unified_entries_page(
+        db, offset=0, limit=10, sort_by="days", sort_order="asc"
+    )
+    # All three entries have the same cert, so days_remaining are identical.
+    assert len(rows_days) == 3
+
+    # sorting by expiry desc
+    rows_exp, _ = list_unified_entries_page(
+        db, offset=0, limit=10, sort_by="expiry", sort_order="desc"
+    )
+    assert len(rows_exp) == 3

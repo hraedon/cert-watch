@@ -156,6 +156,8 @@ def test_store_scanned_with_db_path(tmp_path, chain_triplet, monkeypatch):
 
 def test_store_scanned_with_repo(tmp_path, self_signed_leaf):
     db = tmp_path / "cw.sqlite3"
+    from cert_watch.database.schema import init_schema
+    init_schema(db)
     repo = SqliteCertificateRepository(db, source="scanned")
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])

@@ -85,7 +85,7 @@ All configuration is via environment variables.
 | `CERT_WATCH_SCHED_HOUR` | `6` | Hour to run daily scan (UTC) |
 | `CERT_WATCH_SCHED_MIN` | `0` | Minute to run daily scan |
 | `CERT_WATCH_TLS_VERIFY` | `0` | Set `1` to verify TLS certificates when scanning |
-| `CERT_WATCH_ALLOW_PRIVATE_IPS` | `0` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
+| `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
 
 ### Alerts (SMTP)
 

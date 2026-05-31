@@ -79,10 +79,23 @@
       </table>
     </div>
   {% else %}
-    <div class="cw-panel" class="cw-empty-state">
+    <div class="cw-panel cw-empty-state">
       <div class="cw-empty-icon-circle cw-empty-icon-accent">{{ icons.svg_icon('clock', 24) }}</div>
       <div class="cw-fz-15 cw-fw-600">No scans recorded yet</div>
       <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Scan history will appear here after the first scan.</div>
+    </div>
+  {% endif %}
+
+  {# ---- Pagination ---- #}
+  {% if total_pages > 1 %}
+    <div class="cw-pagination cw-mt-18">
+      {% if has_prev %}
+        <a href="/scan-history?page={{ page - 1 }}" class="cw-btn sm">&laquo; Prev</a>
+      {% endif %}
+      <span class="cw-muted">Page {{ page }} of {{ total_pages }}</span>
+      {% if has_next %}
+        <a href="/scan-history?page={{ page + 1 }}" class="cw-btn sm">Next &raquo;</a>
+      {% endif %}
     </div>
   {% endif %}
 </div>

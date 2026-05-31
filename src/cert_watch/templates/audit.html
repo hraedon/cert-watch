@@ -11,9 +11,9 @@
   </div>
 
   {# ---- Filters ---- #}
-  <form method="get" action="/audit" class="cw-panel cw-mb-18" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;">
+  <form method="get" action="/audit" class="cw-panel cw-mb-18 cw-flex cw-wrap cw-items-center cw-gap-12">
     <label class="cw-fz-13 cw-text-text-2">Target type
-      <select name="target_type" class="cw-input" style="width:auto;">
+      <select name="target_type" class="cw-input cw-w-auto">
         <option value="">All</option>
         <option value="host" {% if filter_target_type == 'host' %}selected{% endif %}>Host</option>
         <option value="certificate" {% if filter_target_type == 'certificate' %}selected{% endif %}>Certificate</option>
@@ -22,7 +22,7 @@
       </select>
     </label>
     <label class="cw-fz-13 cw-text-text-2">Actor
-      <input type="text" name="actor" value="{{ filter_actor }}" class="cw-input" style="width:140px;" placeholder="username">
+      <input type="text" name="actor" value="{{ filter_actor }}" class="cw-input cw-w-140" placeholder="username">
     </label>
     <button type="submit" class="cw-btn primary sm">Filter</button>
     {% if filter_target_type or filter_actor %}
@@ -72,7 +72,7 @@
       </div>
     {% endif %}
   {% else %}
-    <div class="cw-panel">
+    <div class="cw-panel cw-empty-state">
       <div class="cw-empty-icon-circle cw-empty-icon-accent">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
       </div>

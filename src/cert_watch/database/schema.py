@@ -118,8 +118,9 @@ CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
 CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_cert ON alerts(cert_id);
 CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
-CREATE INDEX IF NOT EXISTS idx_audit_ts ON audit_log(ts);
-CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id);
+CREATE INDEX IF NOT EXISTS idx_scan_history_scanned_at ON scan_history(scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC);
 """
 
 _initialized_paths: set[str] = set()

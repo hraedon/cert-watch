@@ -14,14 +14,17 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
-    get_posture_grades_for_certs,
+    _total_alerts,
+    _total_scan_history,
     group_entries_by_fingerprint,
     list_alerts_with_subject,
     list_dashboard_rows,
     list_fleet_pivot,
     list_scan_history,
     list_unified_entries,
+    list_unified_entries_page,
 )
+from cert_watch.database.connection import _connect
 from cert_watch.filters import register_filters
 from cert_watch.middleware import check_rate_limit, get_csrf_context
 
@@ -74,10 +77,16 @@ def healthz(request: Request) -> dict:
         checks["scheduler"] = "not running"
     # Certificate counts
     try:
-        dash_rows = list_dashboard_rows(db)
-        checks["certificates"] = str(len(dash_rows))
-        expired = sum(1 for r in dash_rows if r.get("days_remaining", 0) < 0)
-        checks["expired"] = str(expired)
+        with _connect(db) as conn:
+            total_row = conn.execute(
+                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+            ).fetchone()
+            expired_row = conn.execute(
+                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 "
+                "AND julianday(not_after) <= julianday('now')"
+            ).fetchone()
+        checks["certificates"] = str(total_row[0] if total_row else 0)
+        checks["expired"] = str(expired_row[0] if expired_row else 0)
     except Exception:
         pass
     return {"status": "ok" if ok else "degraded", "version": __version__, "checks": checks}
@@ -98,74 +107,87 @@ def dashboard(
     view: str = "",
 ) -> HTMLResponse:
     db = _db_path(request)
-    all_entries = list_unified_entries(db)
 
+    # Pivot views still load the full dataset (BC-048)
     pivot_groups = None
     if view in ("issuer", "owner", "renewal_method"):
         pivot_groups = list_fleet_pivot(db, view)
 
-    entries = group_entries_by_fingerprint(all_entries) if grouped else all_entries
+    per_page = 25
+    if pivot_groups:
+        # When a pivot view is active, compute stats from the full dataset
+        # because pivot_groups already loaded everything.
+        all_entries = list_unified_entries(db)
+        page_entries = all_entries
+        total = len(all_entries)
+        total_pages = 1
+    elif grouped:
+        # Grouping requires the full filtered set so cross-host search within
+        # a fingerprint group works (e.g. searching "beta" finds a group that
+        # also contains "alpha").  BC-047 does not yet optimise this path.
+        all_entries = list_unified_entries(db)
+        entries = group_entries_by_fingerprint(all_entries)
+        if q:
+            ql = q.lower()
 
-    if q:
-        ql = q.lower()
+            def _match(e: dict) -> bool:
+                fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
+                if e.get("kind") == "grouped":
+                    for h in e.get("hosts", []):
+                        fields.extend([h.get("host"), h.get("name")])
+                return any(ql in (f or "").lower() for f in fields)
 
-        def _match(e: dict) -> bool:
-            fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
-            if e.get("kind") == "grouped":
-                for h in e.get("hosts", []):
-                    fields.extend([h.get("host"), h.get("name")])
-            return any(ql in (f or "").lower() for f in fields)
-
-        entries = [e for e in entries if _match(e)]
-    if urgency:
-        entries = [e for e in entries if e["urgency"] == urgency]
-    if source:
-        if source == "scanned":
-            entries = [
-                e for e in entries if e["kind"] in ("scanned", "pending", "grouped")
-            ]
-        else:
-            entries = [e for e in entries if e["source"] == source]
+            entries = [e for e in entries if _match(e)]
+        if urgency:
+            entries = [e for e in entries if e.get("urgency") == urgency]
+        if source:
+            if source == "scanned":
+                entries = [e for e in entries if e.get("kind") in ("scanned", "pending", "grouped")]
+            else:
+                entries = [e for e in entries if e.get("source") == source]
+        _sort_keys = {
+            "name": lambda e: (e.get("name") or "").lower(),
+            "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
+            "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
+            "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
+            "days": lambda e: (
+                e["days_remaining"] if e.get("days_remaining") is not None else 9999
+            ),
+        }
+        key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
+        reverse = sort_order == "desc"
+        entries.sort(key=key_fn, reverse=reverse)
+        total = len(entries)
+        total_pages = max((total + per_page - 1) // per_page, 1)
+        page = max(1, min(page, total_pages))
+        start = (page - 1) * per_page
+        page_entries = entries[start : start + per_page]
+    else:
+        # Fast path: no grouping, no pivot — paginate at the raw level.
+        offset = (page - 1) * per_page
+        page_entries, total = list_unified_entries_page(
+            db,
+            offset=offset,
+            limit=per_page,
+            q=q,
+            urgency=urgency,
+            source=source,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        total_pages = max((total + per_page - 1) // per_page, 1)
+        page = max(1, min(page, total_pages))
 
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     ctx = get_csrf_context(request)
     auth_user = request.scope.get("auth_user", "")
-
-    _sort_keys = {
-        "name": lambda e: (e.get("name") or "").lower(),
-        "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
-        "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
-        "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
-        "days": lambda e: (
-            e["days_remaining"] if e["days_remaining"] is not None else 9999
-        ),
-    }
-    key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
-    reverse = sort_order == "desc"
-    entries.sort(key=key_fn, reverse=reverse)
-
-    per_page = 25
-    total = len(entries)
-    total_pages = max((total + per_page - 1) // per_page, 1)
-    page = max(1, min(page, total_pages))
-    start = (page - 1) * per_page
-    page_entries = entries[start : start + per_page]
-
-    posture_grades: dict[str, str] = {}
-    try:
-        cert_ids = [e["id"] for e in page_entries if e.get("id")]
-        posture_grades = (
-            get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
-        )
-    except Exception:  # noqa: BLE001
-        pass
 
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
             "entries": [] if pivot_groups else page_entries,
-            "all_entries": all_entries,
+            "all_entries": page_entries if pivot_groups else page_entries,
             "pivot_groups": pivot_groups,
             "pivot_view": view if pivot_groups else "",
             "trust_anchors": anchors,
@@ -185,16 +207,20 @@ def dashboard(
             "has_prev": page > 1,
             "has_next": page < total_pages,
             "grouped": grouped,
-            "posture_grades": posture_grades,
+            "posture_grades": {},
             **ctx,
         },
     )
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_view(request: Request) -> HTMLResponse:
+def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
     db = _db_path(request)
-    rows = list_alerts_with_subject(db)
+    per_page = 50
+    total = _total_alerts(db)
+    total_pages = max((total + per_page - 1) // per_page, 1)
+    page = max(1, min(page, total_pages))
+    rows = list_alerts_with_subject(db, page=page, limit=per_page)
     auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
@@ -204,14 +230,22 @@ def alerts_view(request: Request) -> HTMLResponse:
             "version": __version__,
             "auth_user": auth_user,
             "active_page": "alerts",
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
         },
     )
 
 
 @router.get("/scan-history", response_class=HTMLResponse)
-def scan_history_view(request: Request) -> HTMLResponse:
+def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     db = _db_path(request)
-    rows = list_scan_history(db)
+    per_page = 50
+    total = _total_scan_history(db)
+    total_pages = max((total + per_page - 1) // per_page, 1)
+    page = max(1, min(page, total_pages))
+    rows = list_scan_history(db, page=page, limit=per_page)
     auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
@@ -221,6 +255,10 @@ def scan_history_view(request: Request) -> HTMLResponse:
             "version": __version__,
             "auth_user": auth_user,
             "active_page": "scans",
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
         },
     )
 

@@ -17,6 +17,7 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
+    _total_alerts,
     count_dashboard_leaves,
     list_alerts_with_subject,
     list_dashboard_rows,
@@ -158,13 +159,12 @@ async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
 @router.get("/api/hosts")
 def api_list_hosts(request: Request, page: int = 1, limit: int = 50) -> JSONResponse:
     db = _db_path(request)
-    hosts = SqliteHostRepository(db).list_all()
+    repo = SqliteHostRepository(db)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)
-    total = len(hosts)
-    start = (page - 1) * limit
-    end = start + limit
-    page_hosts = hosts[start:end]
+    total = repo.count_all()
+    offset = (page - 1) * limit
+    page_hosts = repo.list_page(offset=offset, limit=limit)
     return JSONResponse(content={
         "hosts": [
             {
@@ -286,15 +286,12 @@ async def api_update_host_owner(host_id: str, request: Request) -> JSONResponse:
 @router.get("/api/alerts")
 def api_list_alerts(request: Request, page: int = 1, limit: int = 50) -> JSONResponse:
     db = _db_path(request)
-    rows = list_alerts_with_subject(db)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)
-    total = len(rows)
-    start = (page - 1) * limit
-    end = start + limit
-    page_rows = rows[start:end]
+    total = _total_alerts(db)
+    rows = list_alerts_with_subject(db, page=page, limit=limit)
     return JSONResponse(content={
-        "alerts": page_rows,
+        "alerts": rows,
         "pagination": {
             "page": page,
             "limit": limit,

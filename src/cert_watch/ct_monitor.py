@@ -103,17 +103,11 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
         rows = conn.execute(
             "SELECT DISTINCT hostname FROM hosts WHERE hostname IS NOT NULL"
         ).fetchall()
-        known_fps = {
-            r["fingerprint_sha256"]
-            for r in conn.execute(
-                "SELECT fingerprint_sha256 FROM certificates"
-            ).fetchall()
-        }
-        known_serial_issuer: set[tuple[str, str]] = set()
 
     checked = 0
     new = 0
     errors = 0
+    known_serial_issuer: set[tuple[str, str]] = set()
     for row in rows:
         hostname = row["hostname"]
         checked += 1
@@ -124,7 +118,7 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
             continue
         for entry in result:
             dedup_key = (entry.serial_number, entry.issuer_name)
-            if dedup_key not in known_fps and dedup_key not in known_serial_issuer:
+            if dedup_key not in known_serial_issuer:
                 known_serial_issuer.add(dedup_key)
                 new += 1
                 logger.info(

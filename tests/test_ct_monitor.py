@@ -242,9 +242,10 @@ def test_ct_reconciliation_empty_ct_results(tmp_path):
 
 def test_api_ct_reconciliation(tmp_path, reload_app):
     app_mod = reload_app()
-    from cert_watch.database import SqliteHostRepository
-
-    SqliteHostRepository(tmp_path / "cert-watch.sqlite3").add("app.example.com", 443)
+    from cert_watch.database import SqliteHostRepository, init_schema
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add("app.example.com", 443)
 
     mock_entry = MagicMock()
     mock_entry.common_name = "app.example.com"

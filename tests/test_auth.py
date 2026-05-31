@@ -106,6 +106,21 @@ def test_validate_session_expired(monkeypatch):
     assert validate_session(token) is None
 
 
+# ---------- AuthResult dataclass tests (BC-051 regression) ----------
+
+
+def test_authresult_oauth_state_explicit():
+    r = AuthResult(success=True, redirect_url="https://example.com", oauth_state="signed-state")
+    assert r.oauth_state == "signed-state"
+    assert r.success is True
+
+
+def test_authresult_oauth_state_default():
+    r = AuthResult(success=True, error="something")
+    assert r.oauth_state == ""
+    assert r.success is True
+
+
 # ---------- NoAuth provider tests ----------
 
 

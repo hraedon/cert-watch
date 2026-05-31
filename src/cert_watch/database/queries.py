@@ -205,29 +205,71 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
     return True
 
 
-def list_alerts_with_subject(db_path: str | Path) -> list[dict]:
-    """Return alerts joined with the cert subject, newest first."""
+def list_alerts_with_subject(db_path: str | Path, *, page: int = 1, limit: int = 0) -> list[dict]:
+    """Return alerts joined with the cert subject, newest first.
+
+    When ``limit > 0``, applies SQL-level pagination.
+    """
     init_schema(db_path)
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
-                   a.sent_at, a.error_message, a.message, c.subject AS subject
-            FROM alerts a
-            LEFT JOIN certificates c ON c.id = a.cert_id
-            ORDER BY a.created_at DESC
-            """
-        ).fetchall()
+        if limit > 0:
+            offset = max(0, (page - 1) * limit)
+            rows = conn.execute(
+                """
+                SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
+                       a.sent_at, a.error_message, a.message, c.subject AS subject
+                FROM alerts a
+                LEFT JOIN certificates c ON c.id = a.cert_id
+                ORDER BY a.created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
+                       a.sent_at, a.error_message, a.message, c.subject AS subject
+                FROM alerts a
+                LEFT JOIN certificates c ON c.id = a.cert_id
+                ORDER BY a.created_at DESC
+                """
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
-def list_scan_history(db_path: str | Path) -> list[dict]:
-    """Return scan_history rows, newest first."""
+# ---------- Pagination helpers ----------
+
+
+def _total_alerts(db_path: str | Path) -> int:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
+    return row[0] if row else 0
+
+
+def _total_scan_history(db_path: str | Path) -> int:
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()
+    return row[0] if row else 0
+
+
+def list_scan_history(db_path: str | Path, *, page: int = 1, limit: int = 0) -> list[dict]:
+    """Return scan_history rows, newest first.
+
+    When ``limit > 0``, applies SQL-level pagination.
+    """
     init_schema(db_path)
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT * FROM scan_history ORDER BY scanned_at DESC"
-        ).fetchall()
+        if limit > 0:
+            offset = max(0, (page - 1) * limit)
+            rows = conn.execute(
+                "SELECT * FROM scan_history ORDER BY scanned_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM scan_history ORDER BY scanned_at DESC"
+            ).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -397,6 +439,68 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
     Each entry has a ``kind`` of ``scanned``, ``uploaded``, or ``pending``.
     Pending hosts carry cert fields set to ``None`` and urgency ``gray``.
     """
+    return _list_unified_entries_raw(db_path)
+
+
+def list_unified_entries_page(
+    db_path: str | Path,
+    *,
+    offset: int = 0,
+    limit: int = 0,
+    q: str | None = None,
+    urgency: str | None = None,
+    source: str | None = None,
+    sort_by: str = "days",
+    sort_order: str = "asc",
+) -> tuple[list[dict], int]:
+    """Return a paginated slice of unified entries plus the total count.
+
+    Filtering and sorting are applied in Python, but only the requested slice
+    is returned.  This is a stepping-stone toward full SQL-level pagination
+    (see BC-047).
+    """
+    entries = _list_unified_entries_raw(db_path)
+
+    if q:
+        ql = q.lower()
+
+        def _match(e: dict) -> bool:
+            fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
+            if e.get("kind") == "grouped":
+                for h in e.get("hosts", []):
+                    fields.extend([h.get("host"), h.get("name")])
+            return any(ql in (f or "").lower() for f in fields)
+
+        entries = [e for e in entries if _match(e)]
+    if urgency:
+        entries = [e for e in entries if e.get("urgency") == urgency]
+    if source:
+        if source == "scanned":
+            entries = [e for e in entries if e.get("kind") in ("scanned", "pending", "grouped")]
+        else:
+            entries = [e for e in entries if e.get("source") == source]
+
+    _sort_keys = {
+        "name": lambda e: (e.get("name") or "").lower(),
+        "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
+        "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
+        "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
+        "days": lambda e: (
+            e["days_remaining"] if e.get("days_remaining") is not None else 9999
+        ),
+    }
+    key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
+    reverse = sort_order == "desc"
+    entries.sort(key=key_fn, reverse=reverse)
+
+    total = len(entries)
+    if limit > 0:
+        start = max(0, offset)
+        entries = entries[start : start + limit]
+    return entries, total
+
+
+def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
     init_schema(db_path)
     with _connect(db_path) as conn:
         cert_rows = conn.execute(

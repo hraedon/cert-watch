@@ -112,10 +112,10 @@ def oauth_start(request: Request) -> RedirectResponse:
         )
     response = RedirectResponse(url=result.redirect_url, status_code=303)
     # BC-009: store signed state in a cookie for callback verification
-    if result.error:
+    if result.oauth_state:
         response.set_cookie(
             "cw_oauth_state",
-            result.error,
+            result.oauth_state,
             httponly=True,
             samesite="lax",
             max_age=600,

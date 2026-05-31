@@ -21,6 +21,8 @@ from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_c
 
 # Dashboard & utility queries
 from cert_watch.database.queries import (
+    _total_alerts,
+    _total_scan_history,
     count_dashboard_leaves,
     delete_certificate_cascade,
     get_posture_for_cert,
@@ -32,6 +34,7 @@ from cert_watch.database.queries import (
     list_fleet_pivot,
     list_scan_history,
     list_unified_entries,
+    list_unified_entries_page,
     replace_scanned,
     store_scan_posture,
 )
@@ -74,6 +77,8 @@ __all__ = [
     "SqliteTrustAnchorRepository",
     "TrustAnchorEntry",
     # queries
+    "_total_alerts",
+    "_total_scan_history",
     "count_dashboard_leaves",
     "delete_certificate_cascade",
     "get_posture_for_cert",
@@ -85,6 +90,7 @@ __all__ = [
     "list_fleet_pivot",
     "list_scan_history",
     "list_unified_entries",
+    "list_unified_entries_page",
     "replace_scanned",
     "store_scan_posture",
 ]

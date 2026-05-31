@@ -45,16 +45,20 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-4 open breadcrumbs: 0 critical, 0 high, 2 medium, 2 low.
+3 open breadcrumbs: 0 critical, 0 high, 3 medium, 0 low.
 
 - **BC-031** (medium) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-044** (medium) — Unbounded scan_history and alerts queries load all rows into memory
-- **BC-045** (low) — OAuth state smuggled in AuthResult.error field
-- **BC-046** (low) — init_schema called redundantly on every repository instantiation
+- **BC-048** (medium) — Fleet pivot views (`?view=issuer`, `?view=owner`, `?view=renewal_method`) load full inventory into memory
+- **BC-049** (medium) — In-memory rate limiting is not shared across multiple workers
 
 ### Recently resolved
 
-- **BC-043** (high) — OAuth ID token signature not verified (resolved: full JWKS verification via joserfc + authlib.oidc.core.CodeIDToken; 11 new tests covering valid/wrong key/expired/issuer/audience rejection)
+- **BC-047** (medium) — Dashboard and healthz still load full inventory into memory (resolved: `healthz` uses targeted `COUNT(*)` queries; `list_unified_entries_page()` applies filtering/sorting/pagination so only the page slice is materialized; `grouped=0` fast path avoids loading full dataset)
+- **BC-051** (low) — New `oauth_state` field on `AuthResult` may break existing test mocks (resolved: regression tests + AGENTS.md docs update)
+- **BC-050** (low) — Missing database indexes for `scan_history` and `alerts` pagination (resolved: added `idx_scan_history_scanned_at`, `idx_alerts_created_at`, `idx_alerts_status_created` to schema + regression test)
+- **BC-044** (medium) — Unbounded `scan_history` and `alerts` queries load all rows into memory (resolved: SQL-level pagination, `list_alerts_with_subject` and `list_scan_history` accept `page`/`limit`; total count helpers; HTML pagination controls)
+- **BC-045** (low) — OAuth state smuggled in `AuthResult.error` field (resolved: dedicated `oauth_state` field; all callers updated)
+- **BC-046** (low) — `init_schema` called redundantly on every repository instantiation (resolved: `SqliteHostRepository` and `SqliteCertificateRepository` no longer auto-call `init_schema`; callers/tests explicitly initialize)
 - **BC-042** (medium) — posture.py test coverage and scan_posture wiring (resolved: 37 tests covering all grading rules, storage, tie-breaking; store_scanned() calls _evaluate_and_store_posture())
 - **BC-039** (low) — Empty-state markup inconsistent across templates (resolved: standardized on .cw-panel.cw-empty-state pattern; fixed duplicate class attribute bug in scan_history.html)
 - **BC-037** (low) — Dashboard inline styles unmaintainable (resolved: all static inline styles extracted to CSS classes in tokens.css; only dynamic CSS custom property bindings remain)
@@ -113,7 +117,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups` and `roles` for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
+- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
 - **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
 - **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. 37 unit + integration tests.

@@ -9,7 +9,6 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso
-from cert_watch.database.schema import init_schema
 
 # ---------- dataclasses ----------
 
@@ -92,7 +91,6 @@ class SqliteCertificateRepository(CertificateRepository):
         replaces_cert_id: str | None = None,
     ) -> None:
         self.db_path = Path(db_path)
-        init_schema(self.db_path)
         self.source = source
         self.hostname = hostname
         self.port = port
@@ -207,7 +205,6 @@ class AlertRepository(ABC):
 class SqliteAlertRepository(AlertRepository):
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
-        init_schema(self.db_path)
 
     def create(self, alert: Alert) -> str:
         alert_id = alert.id or str(uuid.uuid4())
@@ -291,7 +288,6 @@ class SqliteTrustAnchorRepository:
 
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
-        init_schema(self.db_path)
 
     def add(self, cert: Certificate) -> str:
         anchor_id = str(uuid.uuid4())
@@ -355,7 +351,6 @@ class SqliteTrustAnchorRepository:
 class SqliteHostRepository:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
-        init_schema(self.db_path)
 
     def add(
         self,
@@ -418,6 +413,37 @@ class SqliteHostRepository:
             )
             for r in rows
         ]
+
+    def list_page(self, *, offset: int = 0, limit: int = 50) -> list[HostEntry]:
+        """Return a paginated slice of hosts ordered by `added_at`."""
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM hosts ORDER BY added_at LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [
+            HostEntry(
+                id=r["id"],
+                hostname=r["hostname"],
+                port=r["port"],
+                threshold_days=dict(r).get("threshold_days"),
+                tags=dict(r).get("tags", ""),
+                scan_interval_hours=dict(r).get("scan_interval_hours"),
+                owner_name=dict(r).get("owner_name", ""),
+                owner_email=dict(r).get("owner_email", ""),
+                owner_slack=dict(r).get("owner_slack", ""),
+                renewal_status=dict(r).get("renewal_status", "pending"),
+                renewal_method=dict(r).get("renewal_method", ""),
+                runbook_url=dict(r).get("runbook_url", ""),
+                added_at=_parse_iso(r["added_at"]),
+            )
+            for r in rows
+        ]
+
+    def count_all(self) -> int:
+        with _connect(self.db_path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
+        return row[0] if row else 0
 
     def get(self, host_id: str) -> HostEntry | None:
         with _connect(self.db_path) as conn:
