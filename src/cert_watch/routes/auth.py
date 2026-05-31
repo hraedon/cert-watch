@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
 from cert_watch.auth import SESSION_COOKIE, SESSION_TTL, NoAuthProvider, check_authz, create_session
-from cert_watch.middleware import _COOKIE_SECURE, check_csrf, check_rate_limit
+from cert_watch.middleware import _COOKIE_SECURE, _extract_client_ip, check_csrf, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.auth")
 
@@ -47,7 +47,7 @@ async def login_submit(
     username: str = Form(...),
     password: str = Form(...),
 ) -> RedirectResponse:
-    client_ip = request.client.host if request.client else "unknown"
+    client_ip = _extract_client_ip(request)
     if not check_rate_limit(f"login:{client_ip}", 10, 300):
         return RedirectResponse(
             url="/login?error=rate+limited:+too+many+login+attempts", status_code=303
