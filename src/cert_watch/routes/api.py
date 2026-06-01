@@ -19,10 +19,12 @@ from cert_watch.database import (
     SqliteHostRepository,
     _total_alerts,
     count_dashboard_leaves,
+    distinct_tags,
     list_alerts_with_subject,
     list_dashboard_rows,
 )
 from cert_watch.middleware import check_csrf
+from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
 
@@ -46,6 +48,36 @@ def _require_api_auth(request: Request) -> JSONResponse | None:
     username = validate_session(token)
     if not username:
         return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+    return None
+
+
+async def _require_api_write(request: Request) -> JSONResponse | None:
+    """Auth + CSRF gate for mutating API endpoints (no-op when auth is off)."""
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return None
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if not validate_session(token):
+        return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return JSONResponse(content={"error": csrf_err}, status_code=403)
+    return None
+
+
+def _tags_from_body(body: object) -> str | None:
+    """Extract tags from a request body as a normalized csv string.
+
+    Accepts ``{"tags": ["a", "b"]}`` or ``{"tags": "a,b"}``. Returns None when
+    the shape is invalid (caller turns that into a 400).
+    """
+    if not isinstance(body, dict) or "tags" not in body:
+        return None
+    raw = body["tags"]
+    if isinstance(raw, str):
+        return format_tags(parse_tags(raw))
+    if isinstance(raw, list) and all(isinstance(t, str) for t in raw):
+        return format_tags(raw)
     return None
 
 
@@ -113,6 +145,8 @@ def api_get_certificate(request: Request, cert_id: str) -> JSONResponse:
         "is_leaf": cert.is_leaf,
         "days_until_expiry": cert.days_until_expiry(),
         "notes": cert.notes,
+        "tags": parse_tags(repo.get_tags(cert_id)),
+        "effective_tags": repo.effective_tags(cert_id),
     })
 
 
@@ -177,6 +211,71 @@ async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
         source_ip=resolve_source_ip(request),
     )
     return JSONResponse(content={"id": cert_id, "notes": notes})
+
+
+# ---------- Tags (plan 013) ----------
+
+
+@router.get("/api/tags")
+def api_list_tags(request: Request) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
+    return JSONResponse(content={"tags": distinct_tags(_db_path(request))})
+
+
+@router.put("/api/certificates/{cert_id}/tags")
+async def api_set_cert_tags(cert_id: str, request: Request) -> JSONResponse:
+    if err := await _require_api_write(request):
+        return err
+    db = _db_path(request)
+    repo = SqliteCertificateRepository(db)
+    if repo.get_by_id(cert_id) is None:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+    tags = _tags_from_body(body)
+    if tags is None:
+        return JSONResponse(
+            content={"error": "tags must be a string or list of strings"}, status_code=400
+        )
+    repo.set_tags(cert_id, tags)
+    record_audit(
+        db, actor=resolve_actor(request), action="cert.set_tags",
+        target_type="certificate", target_id=cert_id,
+        detail={"tags": tags}, source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={
+        "id": cert_id,
+        "tags": parse_tags(tags),
+        "effective_tags": repo.effective_tags(cert_id),
+    })
+
+
+@router.put("/api/hosts/{host_id}/tags")
+async def api_set_host_tags(host_id: str, request: Request) -> JSONResponse:
+    if err := await _require_api_write(request):
+        return err
+    db = _db_path(request)
+    repo = SqliteHostRepository(db)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+    tags = _tags_from_body(body)
+    if tags is None:
+        return JSONResponse(
+            content={"error": "tags must be a string or list of strings"}, status_code=400
+        )
+    if not repo.set_tags(host_id, tags):
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    record_audit(
+        db, actor=resolve_actor(request), action="host.set_tags",
+        target_type="host", target_id=host_id,
+        detail={"tags": tags}, source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={"id": host_id, "tags": parse_tags(tags)})
 
 
 # ---------- Hosts ----------

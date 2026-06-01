@@ -185,6 +185,46 @@ class SqliteCertificateRepository(CertificateRepository):
             )
             conn.commit()
 
+    def get_tags(self, cert_id: str) -> str:
+        """Return the cert's own (normalized) tag string, or '' if not found."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tags FROM certificates WHERE id = ?", (cert_id,)
+            ).fetchone()
+        return format_tags(parse_tags(row["tags"])) if row else ""
+
+    def set_tags(self, cert_id: str, tags: str) -> None:
+        """Set the cert's own tags (normalized before storage)."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        now = _iso(datetime.now(UTC))
+        normalized = format_tags(parse_tags(tags))
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE certificates SET tags = ?, updated_at = ? WHERE id = ?",
+                (normalized, now, cert_id),
+            )
+            conn.commit()
+
+    def effective_tags(self, cert_id: str) -> list[str]:
+        """Cert's own tags unioned with its host's tags (plan 013 inheritance)."""
+        from cert_watch.tags import merge_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT c.tags AS cert_tags, h.tags AS host_tags"
+                " FROM certificates c"
+                " LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port"
+                " WHERE c.id = ?",
+                (cert_id,),
+            ).fetchone()
+        if not row:
+            return []
+        d = dict(row)
+        return merge_tags(d.get("cert_tags"), d.get("host_tags"))
+
 
 # ---------- Alert Repository ----------
 
@@ -552,6 +592,18 @@ class SqliteHostRepository:
             )
             conn.commit()
         return True
+
+    def set_tags(self, host_id: str, tags: str) -> bool:
+        """Set a host's tags (normalized before storage). Returns False if no such host."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        normalized = format_tags(parse_tags(tags))
+        with _connect(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE hosts SET tags = ? WHERE id = ?", (normalized, host_id)
+            )
+            conn.commit()
+        return cur.rowcount > 0
 
     def update_renewal(
         self,

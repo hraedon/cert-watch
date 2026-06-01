@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     chain_valid INTEGER,
     replaces_cert_id TEXT,
     notes TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

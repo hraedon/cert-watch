@@ -16,7 +16,7 @@ cert-watch is a "traditional"-build comparison point for [software-factory-2](ht
 
 1. **Read the spec.** `docs/spec/wi_*.md` — one file per FR or interface module, with explicit acceptance criteria. The spec is the contract.
 2. **Read the scaffold.** `src/cert_watch/` — `app.py` (FastAPI), `templates/`, `static/`, plus feature modules: `certificate_model.py`, `cert_chain.py`, `database.py`, `scan.py`, `upload.py`, `alerts.py`, `scheduler.py`, `auth.py`, `ct_lookup.py`, `config.py`.
-3. **Note the deploy story.** See `deploy/` (k8s + Argo CD, docker compose, systemd). Argo CD watches `deploy/k8s/`; CI bumps the image tag there on every merge to `main`. Do not commit changes to `deploy/k8s/kustomization.yaml` in feature PRs.
+3. **Note the deploy story.** See `deploy/` (k8s + Argo CD, docker compose, systemd, IIS). Argo CD watches `deploy/k8s/`; CI bumps the image tag there on every merge to `main`. Do not commit changes to `deploy/k8s/kustomization.yaml` in feature PRs. Windows/IIS hosting (`deploy/iis/`, `scripts/install-windows.ps1`) fronts uvicorn via HttpPlatformHandler or an ARR reverse proxy; the app is cross-platform (the only OS-specific bit is the `CERT_WATCH_DATA_DIR` default — see `config._default_data_dir`).
 
 ## Build / test / lint
 

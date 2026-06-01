@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 logger = logging.getLogger("cert_watch.config")
 
@@ -30,6 +30,29 @@ def read_secret(name: str) -> str | None:
     return None
 
 
+def _default_data_dir_str(os_name: str, programdata: str | None) -> str:
+    """Compute the default data-dir path string for *os_name*.
+
+    Split out from :func:`_default_data_dir` so the platform branch is testable
+    on any host (building a concrete ``WindowsPath`` is impossible on POSIX, so
+    we join with ``PureWindowsPath`` and return a plain string).
+    """
+    if os_name == "nt":
+        base = programdata or r"C:\ProgramData"
+        return str(PureWindowsPath(base, "cert-watch"))
+    return "/var/lib/cert-watch"
+
+
+def _default_data_dir() -> Path:
+    """Platform-appropriate default data directory.
+
+    Always overridable via ``CERT_WATCH_DATA_DIR``. On Windows there is no
+    ``/var`` hierarchy, so default to ``%PROGRAMDATA%\\cert-watch`` (normally
+    ``C:\\ProgramData\\cert-watch``); on POSIX keep ``/var/lib/cert-watch``.
+    """
+    return Path(_default_data_dir_str(os.name, os.environ.get("PROGRAMDATA")))
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -50,6 +73,7 @@ class Settings:
     allow_private: bool = True
     dns_servers: tuple[str, ...] = ()
     log_format: str = "text"
+    audit_retention_days: int = 90
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -79,7 +103,8 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
-        data_dir = Path(os.environ.get("CERT_WATCH_DATA_DIR", "/var/lib/cert-watch"))
+        env_data_dir = os.environ.get("CERT_WATCH_DATA_DIR")
+        data_dir = Path(env_data_dir) if env_data_dir else _default_data_dir()
         recipients = tuple(
             r.strip()
             for r in os.environ.get("ALERT_RECIPIENTS", "").split(",")
@@ -116,6 +141,15 @@ class Settings:
             ldap_connect_timeout = int(ldap_connect_timeout_str)
         except ValueError:
             ldap_connect_timeout = 5
+        audit_retention_str = os.environ.get("CERT_WATCH_AUDIT_RETENTION_DAYS", "90")
+        try:
+            audit_retention_days = int(audit_retention_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_AUDIT_RETENTION_DAYS=%r, using default 90",
+                audit_retention_str,
+            )
+            audit_retention_days = 90
         return cls(
             db_path=data_dir / "cert-watch.sqlite3",
             data_dir=data_dir,
@@ -131,6 +165,7 @@ class Settings:
             webhook_headers=webhook_headers,
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
             alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
+            audit_retention_days=audit_retention_days,
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),

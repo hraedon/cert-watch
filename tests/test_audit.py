@@ -16,7 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-from cert_watch.audit import count_audit, list_audit, record_audit, resolve_actor, resolve_source_ip
+from cert_watch.audit import (
+    count_audit,
+    list_audit,
+    purge_old_audit,
+    record_audit,
+    resolve_actor,
+    resolve_source_ip,
+)
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -24,6 +31,7 @@ from cert_watch.database import (
     delete_certificate_cascade,
     init_schema,
 )
+from cert_watch.database.connection import _connect
 
 
 @pytest.fixture
@@ -129,6 +137,51 @@ def test_audit_row_survives_cascade_delete(db_path: Path) -> None:
     delete_certificate_cascade(db_path, cert_id)
     rows = list_audit(db_path, target_type="certificate", target_id=cert_id)
     assert len(rows) == 1
+
+
+# ---------- Retention (Plan 012 §4.3) ----------
+
+def _insert_audit_at(db_path: Path, *, days_ago: int, actor: str = "alice") -> None:
+    """Insert an audit row with a backdated timestamp."""
+    ts = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO audit_log"
+            " (id, ts, actor, action, target_type, target_id, detail, source_ip)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (f"row-{days_ago}-{actor}", ts, actor, "host.add", "host", "h1", None, None),
+        )
+        conn.commit()
+
+
+def test_purge_old_audit_deletes_old_retains_recent(db_path: Path) -> None:
+    _insert_audit_at(db_path, days_ago=200, actor="old")
+    _insert_audit_at(db_path, days_ago=10, actor="recent")
+    deleted = purge_old_audit(db_path, retention_days=90)
+    assert deleted == 1
+    remaining = list_audit(db_path)
+    assert {r["actor"] for r in remaining} == {"recent"}
+
+
+def test_purge_old_audit_boundary(db_path: Path) -> None:
+    # Just inside the window is kept; well outside is removed.
+    _insert_audit_at(db_path, days_ago=89, actor="inside")
+    _insert_audit_at(db_path, days_ago=91, actor="outside")
+    deleted = purge_old_audit(db_path, retention_days=90)
+    assert deleted == 1
+    assert {r["actor"] for r in list_audit(db_path)} == {"inside"}
+
+
+def test_purge_old_audit_disabled_when_non_positive(db_path: Path) -> None:
+    _insert_audit_at(db_path, days_ago=999)
+    assert purge_old_audit(db_path, retention_days=0) == 0
+    assert purge_old_audit(db_path, retention_days=-5) == 0
+    assert count_audit(db_path) == 1
+
+
+def test_purge_old_audit_never_raises(db_path: Path) -> None:
+    # Missing table / bad path is swallowed (best-effort), returning 0.
+    assert purge_old_audit("/nonexistent/dir/db.sqlite3", retention_days=90) == 0
 
 
 def test_resolve_actor_no_auth() -> None:

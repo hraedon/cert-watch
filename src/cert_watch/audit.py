@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cert_watch.database.connection import _connect
@@ -42,6 +42,30 @@ def record_audit(
             action, target_type, target_id, actor,
             exc_info=True,
         )
+
+
+def purge_old_audit(db_path: str | Path, retention_days: int) -> int:
+    """Delete audit rows older than *retention_days*. Returns the count deleted.
+
+    A non-positive ``retention_days`` disables purging (returns 0). Best-effort:
+    logs WARNING on failure but never raises, mirroring :func:`record_audit`.
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    try:
+        with _connect(db_path) as conn:
+            cur = conn.execute("DELETE FROM audit_log WHERE ts < ?", (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            logger.info(
+                "purged %d audit rows older than %d days", deleted, retention_days
+            )
+        return deleted
+    except Exception:
+        logger.warning("audit purge failed", exc_info=True)
+        return 0
 
 
 def list_audit(

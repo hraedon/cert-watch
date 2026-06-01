@@ -11,6 +11,19 @@ from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_c
 from cert_watch.database.schema import init_schema
 
 
+def distinct_tags(db_path: str | Path) -> list[str]:
+    """Return the sorted set of distinct tags across all hosts and certificates."""
+    from cert_watch.tags import merge_tags
+
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT tags FROM hosts UNION ALL SELECT tags FROM certificates"
+        ).fetchall()
+    all_tags = merge_tags(*[r["tags"] for r in rows])
+    return sorted(all_tags, key=str.casefold)
+
+
 def replace_scanned(
     db_path: str | Path,
     hostname: str,
