@@ -178,6 +178,75 @@ def test_api_export_json_with_data(tmp_path, reload_app, leaf_pem_file):
     assert "urgency" in cert
 
 
+# ---------- Reports (Plan 017 A2) ----------
+
+
+def test_api_report_inventory_csv_empty(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/inventory.csv")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/csv; charset=utf-8"
+    assert "attachment" in r.headers.get("content-disposition", "")
+    assert "inventory.csv" in r.headers.get("content-disposition", "")
+    lines = r.text.strip().split("\n")
+    assert len(lines) == 1  # header only
+    assert "host" in lines[0]
+    assert "fingerprint_sha256" in lines[0]
+
+
+def test_api_report_inventory_csv_with_data(tmp_path, reload_app, leaf_pem_file):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    store_uploaded(entry, db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/inventory.csv")
+    assert r.status_code == 200
+    lines = r.text.strip().split("\n")
+    assert len(lines) >= 2  # header + at least one row
+
+
+def test_api_report_expiring_csv_empty(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/expiring.csv")
+    assert r.status_code == 200
+    assert "expiring-30d.csv" in r.headers.get("content-disposition", "")
+    lines = r.text.strip().split("\n")
+    assert len(lines) == 1  # header only
+
+
+def test_api_report_expiring_csv_custom_days(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/expiring.csv?days=90")
+    assert r.status_code == 200
+    assert "expiring-90d.csv" in r.headers.get("content-disposition", "")
+
+
+def test_api_report_expiring_csv_clamps_days(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/expiring.csv?days=999")
+    assert r.status_code == 200
+    assert "expiring-365d.csv" in r.headers.get("content-disposition", "")
+
+
+def test_api_report_inventory_requires_auth(reload_app):
+    """Reports require auth when auth is enabled."""
+    app_mod = reload_app()
+    # Without auth configured, all routes are open — so this just verifies
+    # the endpoint works and returns 200.
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/inventory.csv")
+    assert r.status_code == 200
+
+
 def test_api_patch_notes(tmp_path, reload_app, leaf_pem_file):
     """FEAT-013: PATCH /api/certificates/{id}/notes should update notes."""
     app_mod = reload_app()

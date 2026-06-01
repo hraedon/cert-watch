@@ -777,6 +777,85 @@ def api_export_certificates_json(request: Request) -> JSONResponse:
     )
 
 
+# ---------- Reports (Plan 017 A2) ----------
+
+
+@router.get("/api/reports/inventory.csv")
+def api_report_inventory_csv(request: Request) -> PlainTextResponse:
+    """Full certificate inventory as CSV for audit/compliance reporting."""
+    if err := _require_api_auth(request):
+        return err
+    db = _db_path(request)
+    rows = list_dashboard_rows(db)
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "host", "port", "source", "subject", "issuer", "not_before",
+        "not_after", "days_remaining", "urgency", "chain_valid",
+        "fingerprint_sha256", "tags",
+    ])
+    for r in rows:
+        writer.writerow([
+            _csv_safe(r.get("host", "")),
+            _csv_safe(r.get("port", "")),
+            _csv_safe(r.get("source", "")),
+            _csv_safe(r.get("subject", "")),
+            _csv_safe(r.get("issuer", "")),
+            _csv_safe(r.get("not_before", "")),
+            _csv_safe(r.get("not_after", "")),
+            _csv_safe(r.get("days_remaining", "")),
+            _csv_safe(r.get("urgency", "")),
+            _csv_safe(r.get("chain_valid", "")),
+            _csv_safe(r.get("fingerprint_sha256", "")),
+            _csv_safe(r.get("tags", "")),
+        ])
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=inventory.csv"},
+    )
+
+
+@router.get("/api/reports/expiring.csv")
+def api_report_expiring_csv(
+    request: Request,
+    days: int = 30,
+) -> PlainTextResponse:
+    """Certificates expiring within *days* days as CSV."""
+    if err := _require_api_auth(request):
+        return err
+    days = max(1, min(days, 365))
+    db = _db_path(request)
+    rows = list_dashboard_rows(db)
+    expiring = [
+        r for r in rows
+        if isinstance(r.get("days_remaining"), (int, float)) and r["days_remaining"] <= days
+    ]
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "host", "port", "subject", "issuer", "not_after",
+        "days_remaining", "urgency", "owner", "tags",
+    ])
+    for r in expiring:
+        writer.writerow([
+            _csv_safe(r.get("host", "")),
+            _csv_safe(r.get("port", "")),
+            _csv_safe(r.get("subject", "")),
+            _csv_safe(r.get("issuer", "")),
+            _csv_safe(r.get("not_after", "")),
+            _csv_safe(r.get("days_remaining", "")),
+            _csv_safe(r.get("urgency", "")),
+            _csv_safe(r.get("owner_name", "")),
+            _csv_safe(r.get("tags", "")),
+        ])
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=expiring-{days}d.csv"},
+    )
+
+
 # ---------- Webhook test ----------
 
 
