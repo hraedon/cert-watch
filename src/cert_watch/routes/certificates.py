@@ -11,7 +11,7 @@ from fastapi import APIRouter, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from cert_watch import __version__
+from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.cert_chain import validate_is_ca_certificate
@@ -242,7 +242,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         context={
             "cert": cert,
             "cert_id": cert_id,
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "auth_user": request.scope.get("auth_user", ""),
             "active_page": "dashboard",
             "key_type": key_type_str,

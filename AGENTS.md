@@ -2,6 +2,12 @@
 
 Conventions and quick reference for agents (and humans) working on cert-watch.
 
+## Versioning
+
+Version comes from `git describe --tags --abbrev=0` at Docker build time, injected via `GIT_TAG` and `GIT_COMMIT` build args. The Dockerfile writes these to `src/cert_watch/_version.txt`, and `__init__.py` reads it at import time. The UI shows `v{version} ({commit})` in the header.
+
+When tagging a release, update both `pyproject.toml` version and `src/cert_watch/_version.txt` to match the new tag. The release workflow also stamps `_version.txt` at build time from `GIT_TAG`, so the file in the repo is a fallback for local dev.
+
 ## Why this project exists
 
 cert-watch is a "traditional"-build comparison point for [software-factory-2](https://github.com/hraedon/software-factory-2). Same MVP spec; hand-rolled (or single-shot agent-built) instead of factory-orchestrated. The repo at `hraedon/cert-watch-factory-failed` is the prior factory attempt — kept for comparison, not for reuse.

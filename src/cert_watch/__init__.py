@@ -1,1 +1,21 @@
-__version__ = "0.3.0"
+__version__ = "0.2.0"
+__commit__ = ""
+
+
+def _load_runtime_version() -> tuple[str, str]:
+    try:
+        from importlib.resources import files
+
+        vf = files("cert_watch").joinpath("_version.txt")
+        if vf.is_file():
+            content = vf.read_text().strip()
+            parts = content.split("\n")
+            ver = parts[0] if parts else ""
+            commit = parts[1] if len(parts) > 1 else ""
+            return ver or __version__, commit
+    except Exception:
+        pass
+    return __version__, __commit__
+
+
+__version__, __commit__ = _load_runtime_version()

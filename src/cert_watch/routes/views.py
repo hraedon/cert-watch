@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
-from cert_watch import __version__, ct_lookup
+from cert_watch import __commit__, __version__, ct_lookup
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
@@ -92,7 +92,12 @@ def healthz(request: Request) -> dict:
         checks["expired"] = str(expired_row[0] if expired_row else 0)
     except Exception:
         pass
-    return {"status": "ok" if ok else "degraded", "version": __version__, "checks": checks}
+    return {
+        "status": "ok" if ok else "degraded",
+        "version": __version__,
+        "commit": __commit__,
+        "checks": checks,
+    }
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -225,7 +230,7 @@ def dashboard(
             "pivot_stats": pivot_stats,
             "pivot_view": view if pivot_groups else "",
             "trust_anchors": anchors,
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "error": error,
             "warning": warning,
             "auth_user": auth_user,
@@ -261,7 +266,7 @@ def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
         name="alerts.html",
         context={
             "alerts": rows,
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "auth_user": auth_user,
             "active_page": "alerts",
             "page": page,
@@ -286,7 +291,7 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
         name="scan_history.html",
         context={
             "history": rows,
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "auth_user": auth_user,
             "active_page": "scans",
             "page": page,

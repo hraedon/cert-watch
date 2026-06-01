@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim AS builder
 
+ARG GIT_TAG=0.2.0
+ARG GIT_COMMIT=unknown
+
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
     PYTHONDONTWRITEBYTECODE=1
@@ -11,6 +14,8 @@ ENV PATH="/opt/venv/bin:$PATH"
 
 COPY pyproject.toml README.md ./
 COPY src ./src
+
+RUN printf '%s\n%s\n' "$GIT_TAG" "$GIT_COMMIT" > src/cert_watch/_version.txt
 RUN pip install --no-cache-dir .
 
 FROM python:3.12-slim AS runtime

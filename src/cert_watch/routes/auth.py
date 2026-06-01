@@ -10,7 +10,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from cert_watch import __version__
+from cert_watch import __commit__, __version__
 from cert_watch.auth import (
     SESSION_COOKIE,
     SESSION_TTL,
@@ -40,7 +40,7 @@ def login_page(request: Request, error: str | None = None) -> HTMLResponse:
         request=request,
         name="login.html",
         context={
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "provider": auth.provider_name,
             "supports_form_login": auth.supports_form_login,
             "local_admin_configured": local_admin_configured,

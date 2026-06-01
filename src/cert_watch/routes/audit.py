@@ -9,7 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
-from cert_watch import __version__
+from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
@@ -52,7 +52,7 @@ def audit_page(
         name="audit.html",
         context={
             "rows": rows,
-            "version": __version__,
+            "version": __version__, "commit": __commit__,
             "auth_user": auth_user,
             "active_page": "audit",
             "filter_target_type": target_type,

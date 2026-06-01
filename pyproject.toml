@@ -1,6 +1,6 @@
 [project]
 name = "cert-watch"
-version = "0.3.0"
+version = "0.2.0"
 description = "Track expirations of TLS certificates from scanned hosts and uploaded files (PEM/DER/PKCS#12)."
 readme = "README.md"
 requires-python = ">=3.12"

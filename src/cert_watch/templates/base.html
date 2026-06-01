@@ -23,7 +23,7 @@
           </svg>
         </div>
         <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
-        <span class="cw-ver">v{{ version }}</span>
+        <span class="cw-ver">v{{ version }}{% if commit %} <span class="cw-muted">({{ commit }})</span>{% endif %}</span>
       </a>
       <nav class="cw-nav">
         <a href="/" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
