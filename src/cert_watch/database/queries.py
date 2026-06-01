@@ -1018,6 +1018,7 @@ def store_scan_posture(
     ocsp_stapling: bool | None = None,
     hsts: bool | None = None,
     must_staple: bool = False,
+    tls_verified: bool | None = None,
     scanned_at: str | None = None,
 ) -> str:
     """Store a posture evaluation result in the scan_posture table.
@@ -1041,8 +1042,8 @@ def store_scan_posture(
         conn.execute(
             """INSERT INTO scan_posture
             (id, cert_id, hostname, port, grade, protocol_version,
-             ocsp_stapling, hsts, must_staple, findings, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             ocsp_stapling, hsts, must_staple, tls_verified, findings, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 posture_id,
                 cert_id,
@@ -1053,6 +1054,7 @@ def store_scan_posture(
                 1 if ocsp_stapling is True else (0 if ocsp_stapling is False else None),
                 1 if hsts is True else (0 if hsts is False else None),
                 1 if must_staple else 0,
+                1 if tls_verified is True else (0 if tls_verified is False else None),
                 findings_json,
                 scanned_at,
             ),

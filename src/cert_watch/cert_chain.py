@@ -84,20 +84,23 @@ _SYSTEM_CA_BUNDLE_PATHS = [
     "/etc/ssl/cert.pem",
 ]
 
-_system_ca_subjects_cache: set[bytes] | None = None
+_system_ca_cache: tuple[set[bytes], dict[bytes, list[x509.Certificate]]] | None = None
 
 
-def _load_system_ca_subjects() -> set[bytes]:
-    """Lazy-load DER-encoded subject bytes from the system CA trust store.
+def _load_system_ca_cache() -> tuple[set[bytes], dict[bytes, list[x509.Certificate]]]:
+    """Lazy-load system CA trust store as (subject_set, subject_to_certs).
 
-    Returns an empty set if no system CA bundle is found (e.g. minimal
-    containers).  The result is cached after the first call.
+    The subject set enables fast name lookups; the dict provides full
+    x509.Certificate objects for signature verification (BC-069).
+    Returns (empty set, empty dict) if no system CA bundle is found.
+    Cached after the first call.
     """
-    global _system_ca_subjects_cache
-    if _system_ca_subjects_cache is not None:
-        return _system_ca_subjects_cache
+    global _system_ca_cache
+    if _system_ca_cache is not None:
+        return _system_ca_cache
 
     subjects: set[bytes] = set()
+    by_subject: dict[bytes, list[x509.Certificate]] = {}
     for path in _SYSTEM_CA_BUNDLE_PATHS:
         pem_path = Path(path)
         if not pem_path.exists():
@@ -116,26 +119,50 @@ def _load_system_ca_subjects() -> set[bytes]:
             end += len(b"-----END CERTIFICATE-----")
             try:
                 cert = x509.load_pem_x509_certificate(pem_data[start:end])
-                subjects.add(cert.subject.public_bytes(Encoding.DER))
+                subj = cert.subject.public_bytes(Encoding.DER)
+                subjects.add(subj)
+                by_subject.setdefault(subj, []).append(cert)
             except Exception:
                 pass
             pem_data = pem_data[end:]
         break
 
     logger.debug("loaded %d system CA subjects from trust store", len(subjects))
-    _system_ca_subjects_cache = subjects
-    return subjects
+    _system_ca_cache = (subjects, by_subject)
+    return _system_ca_cache
+
+
+def _load_system_ca_subjects() -> set[bytes]:
+    """Return DER-encoded subject bytes from the system CA trust store."""
+    return _load_system_ca_cache()[0]
 
 
 def _is_anchored_by_system_root(chain: list[Certificate]) -> bool:
-    """Return True if the chain's last cert issuer matches a system CA root."""
+    """Return True if the chain's top cert is *signature-verified* against a
+    system CA root (BC-069).
+
+    Finds system roots whose subject matches the top cert's issuer, then
+    verifies the actual cryptographic signature — not just name matching.
+    """
     if not chain:
         return False
-    subjects = _load_system_ca_subjects()
+    subjects, by_subject = _load_system_ca_cache()
     if not subjects:
         return False
     last = chain[-1]
-    return _issuer_bytes(last) in subjects
+    issuer_der = _issuer_bytes(last)
+    if issuer_der not in subjects:
+        return False
+    last_x = _load_x509(last)
+    if last_x is None:
+        return False
+    for root_x in by_subject.get(issuer_der, []):
+        try:
+            last_x.verify_directly_issued_by(root_x)
+            return True
+        except Exception:  # noqa: BLE001
+            continue
+    return False
 
 
 def _load_x509(cert: Certificate) -> x509.Certificate | None:

@@ -47,18 +47,22 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-1 open breadcrumb: 0 critical, 0 high, 1 medium (deferred), 0 low.
+4 open breadcrumbs: 0 critical, 0 high, 4 medium (1 deferred), 0 low.
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
 
 ### Open design/latent issues
 
-- **BC-061** (medium) — Chain validation is name-matching only, never verifies signatures
-- **BC-063** (medium) — Daily scheduled scan does not pin IP (BC-053 bypass)
-- **BC-064** (low) — TLS verification off by default; `verified` not persisted
+- **Missing index** (medium) — No composite index on `certificates(hostname, port, is_leaf)` or `scan_history(hostname, port, scanned_at)` — 11+ queries do full table scans
+- **Rate-limit proxy bypass** (medium) — Route-level rate limits use `request.client.host` ignoring `CERT_WATCH_TRUST_PROXY`; audit log `resolve_source_ip()` also affected
+- **evaluate_all_certs() perf** (low) — Loads `raw_der` blobs for all leaf certs during alert evaluation; only metadata columns needed
 
 ### Recently resolved
 
+- **BC-069** (medium) — Chain trust system-root hop is name-based, not signature-verified (resolved: `_is_anchored_by_system_root()` now verifies cryptographic signatures via `verify_directly_issued_by`)
+- **BC-064** (low) — TLS verification off by default; `verified` not persisted (resolved: `tls_verified` field on `ScannedEntry`, persisted in `scan_posture` via migration 0004)
+- **BC-063** (medium) — Daily scheduled scan does not pin IP (resolved: `_scan_host_once` auto-resolves and pins IP when `pinned_ip` is None, hardening all callers by default)
+- **BC-061** (medium) — Chain validation is name-matching only, never verifies signatures (resolved: `validate_chain_signatures()` verifies every link cryptographically)
 - **BC-048** (medium) — Fleet pivot views load full inventory into memory (resolved: SQL-level GROUP BY aggregation for summaries; entries lazy-loaded via `/api/pivot/{pivot}/{key}` on expand; `get_pivot_group_entries()` helper)
 - **BC-049** (medium) — In-memory rate limiting not shared across workers (resolved: SQLite-backed `rate_limits` table with JSON timestamps; `_init_rate_db()` at startup; graceful fallback to in-memory on DB errors)
 - **BC-058** (medium) — OAuth userinfo fallback bypasses ID token verification (resolved: auth fails instead of silently falling back to userinfo when ID token verification fails)
@@ -99,6 +103,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ### Recently implemented features
 
+- **Chain trust and scan hardening (2026-06-01)** — Resolved BC-063/BC-064/BC-069. `_scan_host_once` auto-resolves and pins IP when `pinned_ip` is None, hardening all callers (scheduler, manual scan, routes) against DNS rebinding. `_is_anchored_by_system_root()` verifies cryptographic signatures against system trust store, not just name matching. `tls_verified` field persisted per-scan in `scan_posture` (migration 0004). HSTS probe fixed to use raw SSL socket with correct SNI when pinned IP is present.
 - **Security hardening (2026-06-01)** — Second adversarial review round: fixed 15 issues. `_probe_hsts` accepts `pinned_ip` to prevent DNS rebinding (BC-062 resolved). DNS parser cycle detection and TXID/RCODE validation (BC-065 resolved). Auth misconfiguration now raises ValueError instead of silently degrading to NoAuthProvider (BC-066). OAuth state bypass fixed; `CERT_WATCH_BASE_URL` prevents Host-header open redirect (BC-067). LDAP cleartext-warning at init time. Scrypt weak-parameter rejection and warning. Rate limiting uses `_extract_client_ip()` everywhere. DOM XSS: urgency class whitelist. CSP+nosniff+X-Frame-Options middleware. CSV injection escaping. Healthz no longer leaks exceptions. Cookie path="/". Break-glass uses `isinstance()`. SQL injection surface documented.
 - **Security hardening (2026-05-31)** — Fixed 12 security issues found via adversarial review: auth bypass on 4 API endpoints (`/api/certificates/{id}/pem`, `/api/certificates/{id}/posture`, `/api/webhook/test`, `/api/ct/reconciliation`); DOM-based XSS in dashboard pivot view (`innerHTML` → `escHtml()` helper); STARTTLS silent suppression now aborts SMTP on failure; OAuth state cookie required for callback CSRF; login endpoint rate-limited (10/5min); DNS query IDs use `secrets.randbelow` instead of `random.randint`; logout changed from GET to POST with CSRF; `delete_cookie()` calls include security flags; LDAP STARTTLS now uses `ssl.CERT_REQUIRED` by default instead of `CERT_NONE` (BC-059); OAuth error messages no longer leak raw exception details in URLs (BC-060).
 - **HSTS probe during scans (BC-051)** — `scan_host()` now makes an HTTP HEAD request on port 443 to detect `Strict-Transport-Security` header via `_probe_hsts()`. HSTS result passed to `evaluate_posture()`. A+ posture grade now achievable from scans.
@@ -147,7 +152,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 - **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). When ID token verification fails, auth is rejected rather than silently falling back to userinfo (BC-058). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Empty `CERT_WATCH_AUTH_SECRET`/`CERT_WATCH_CSRF_SECRET` treated as unset (BC-054). Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
 - **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
-- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. Accepts `pinned_ip` parameter to prevent DNS rebinding (BC-053). `_probe_hsts()` checks for HSTS header on port 443 (BC-051). On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
+- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. When `pinned_ip` is None, `_scan_host_once` auto-resolves and pins the IP for DNS-rebinding hardening (BC-063). `_probe_hsts()` checks for HSTS header on port 443 (BC-051), connecting to pinned IP with correct SNI. `ScannedEntry` carries `tls_verified` (True when TLS handshake used CERT_REQUIRED, persisted in `scan_posture` via migration 0004). On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
 - **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. A+ requires TLS 1.3 + HSTS (now achievable via `_probe_hsts()`). 37 unit + integration tests.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.

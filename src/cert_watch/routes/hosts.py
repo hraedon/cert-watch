@@ -199,7 +199,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     s = _get_settings(request)
     # Parse and validate all rows first, collecting scan jobs
     errors: list[str] = []
-    scan_jobs: list[tuple[str, int, int | None]] = []  # (hostname, port, threshold)
+    scan_jobs: list[tuple[str, int, int | None, str | None]] = []
     for i, row in enumerate(reader, start=2):
         hostname = row.get("hostname", "").strip()
         if not hostname:

@@ -46,7 +46,8 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
     """Check if an HTTPS server sends Strict-Transport-Security.
 
     Returns True if HSTS header found, False if not found, None on error.
-    When pinned_ip is provided, connects to that IP (prevents DNS rebinding).
+    When pinned_ip is provided, connects to that IP with SNI=hostname
+    (prevents DNS rebinding).
     """
     if port != 443:
         return None
@@ -55,10 +56,14 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
 
         ctx = ssl.create_default_context()
         if pinned_ip:
-            conn = http.client.HTTPSConnection(
-                pinned_ip, port, timeout=HSTS_TIMEOUT, context=ctx,
-            )
-            conn.set_tunnel(hostname, port, {"Host": hostname})
+            sock = socket.create_connection((pinned_ip, port), timeout=HSTS_TIMEOUT)
+            try:
+                ssl_sock = ctx.wrap_socket(sock, server_hostname=hostname)
+            except Exception:
+                sock.close()
+                raise
+            conn = http.client.HTTPSConnection(hostname, port, timeout=HSTS_TIMEOUT, context=ctx)
+            conn.sock = ssl_sock
         else:
             conn = http.client.HTTPSConnection(
                 hostname, port, timeout=HSTS_TIMEOUT, context=ctx,
@@ -103,6 +108,7 @@ class ScannedEntry:
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     protocol_version: str = ""
     hsts: bool | None = None
+    tls_verified: bool | None = None
 
 
 def _build_dns_query(name: str, qtype: int) -> bytes:
@@ -437,7 +443,11 @@ def scan_host(
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
 ) -> ScannedEntry | ScanError:
-    """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06."""
+    """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06.
+
+    When pinned_ip is None, the hostname is resolved once per attempt and the
+    resulting IP is pinned for the entire scan (DNS-rebinding hardening, BC-063).
+    """
     last_error: ScanError | None = None
     for attempt in range(1 + retries):
         result = _scan_host_once(
@@ -466,16 +476,29 @@ def _scan_host_once(
 ) -> ScannedEntry | ScanError:
     """Single TLS handshake attempt — no retry logic.
 
+    When pinned_ip is not supplied, resolves the hostname once and pins the
+    resulting IP for the entire scan (prevents DNS-rebinding TOCTOU, BC-063).
+
     On Python < 3.13, native chain extraction is unavailable. Rather than
     opening a second TLS connection to the same host (which can hit a
     different backend behind a load balancer), we use openssl s_client
     as the primary connection, getting both leaf and chain from one call.
     """
+    if pinned_ip is None:
+        try:
+            _fam, _saddr = _resolve_host(
+                hostname, port, allow_private=allow_private,
+                dns_servers=dns_servers,
+            )
+            pinned_ip = _saddr[0]
+        except OSError:
+            pass
+
     if not _has_native_chain_api():
         return _scan_host_via_openssl(
             hostname, port, timeout=timeout,
             allow_private=allow_private, dns_servers=dns_servers,
-            pinned_ip=pinned_ip,
+            pinned_ip=pinned_ip, verify=verify,
         )
 
     try:
@@ -526,6 +549,7 @@ def _scan_host_once(
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version,
         hsts=hsts,
+        tls_verified=verify,
     )
 
 
@@ -537,6 +561,7 @@ def _scan_host_via_openssl(
     allow_private: bool,
     dns_servers: tuple[str, ...],
     pinned_ip: str | None = None,
+    verify: bool = False,
 ) -> ScannedEntry | ScanError:
     """Scan using openssl s_client only — one connection for both leaf and chain.
 
@@ -566,6 +591,7 @@ def _scan_host_via_openssl(
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
                 hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
+                tls_verified=False,
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
@@ -609,6 +635,7 @@ def _scan_host_via_openssl(
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
         hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
+        tls_verified=False,
     )
 
 
@@ -693,4 +720,5 @@ def _evaluate_and_store_posture(
         ocsp_stapling=result.ocsp_stapling,
         hsts=result.hsts,
         must_staple=result.must_staple,
+        tls_verified=entry.tls_verified,
     )
