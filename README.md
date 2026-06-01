@@ -35,6 +35,33 @@ uv venv && uv pip install -e ".[dev]"
 .venv/bin/pytest -q                    # run tests
 ```
 
+## First run
+
+On a fresh install with no hosts and no auth configured, cert-watch redirects
+you to `/setup` to create a local admin account. After creating the admin you
+can log in and use the dashboard.
+
+To skip the wizard (for local dev or air-gapped environments):
+
+```bash
+CERT_WATCH_ALLOW_UNAUTH=1 .venv/bin/python -m cert_watch
+```
+
+### Settings page
+
+Once the app is running, click **Settings** in the top-right to configure:
+
+- **Auth** — switch between local admin, LDAP/AD, or OAuth/OIDC without
+  restarting. Env vars always override GUI values (escape hatch).
+- **SMTP** — alert email server with a "Send test email" button.
+- **Alerts** — webhook URL, recipients, and digest mode.
+
+### Setup wizard
+
+The wizard runs automatically on first launch. It creates a local admin
+account and optionally walks through SMTP and first-host configuration. Set
+`CERT_WATCH_ALLOW_UNAUTH=1` to suppress the redirect.
+
 ## Docker
 
 ```bash
