@@ -4,6 +4,7 @@ on:
     branches: [main]
     paths-ignore:
       - 'deploy/k8s/kustomization.yaml'
+      - 'deploy/k8s-demo/kustomization.yaml'
       - '**.md'
       - 'docs/**'
 
@@ -57,10 +58,12 @@ jobs:
 
       - name: Bump kustomize image tag
         run: |
-          cd deploy/k8s
           curl -sSL -o /tmp/kustomize.tgz https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/v5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
           tar -xzf /tmp/kustomize.tgz -C /tmp
-          /tmp/kustomize edit set image ghcr.io/${{ github.repository_owner }}/cert-watch=ghcr.io/${{ github.repository_owner }}/cert-watch:${{ steps.tag.outputs.tag }}
+          for dir in deploy/k8s deploy/k8s-demo; do
+            cd "$GITHUB_WORKSPACE/$dir"
+            /tmp/kustomize edit set image ghcr.io/${{ github.repository_owner }}/cert-watch=ghcr.io/${{ github.repository_owner }}/cert-watch:${{ steps.tag.outputs.tag }}
+          done
 
       - name: Commit tag bump
         run: |
@@ -70,6 +73,6 @@ jobs:
             echo "No image change to commit."
             exit 0
           fi
-          git add deploy/k8s/kustomization.yaml
+          git add deploy/k8s/kustomization.yaml deploy/k8s-demo/kustomization.yaml
           git commit -m "chore(deploy): bump image to ${{ steps.tag.outputs.tag }}"
           git push
