@@ -112,9 +112,19 @@ def resolve_actor(request: object) -> str:
 
 
 def resolve_source_ip(request: object) -> str | None:
-    """Resolve source IP from a FastAPI Request object."""
+    """Resolve source IP from a FastAPI Request object.
+
+    Uses the proxy-aware IP extraction when CERT_WATCH_TRUST_PROXY is set.
+    Returns None when the source IP cannot be determined.
+    """
     try:
-        client = getattr(request, "client", None)
-        return client.host if client else None
+        from cert_watch.middleware import _extract_client_ip
+
+        ip = _extract_client_ip(request)
+        return ip if ip != "unknown" else None
     except Exception:
-        return None
+        try:
+            client = getattr(request, "client", None)
+            return client.host if client else None
+        except Exception:
+            return None

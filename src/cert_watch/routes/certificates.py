@@ -31,7 +31,7 @@ from cert_watch.filters import (
     register_filters,
     subject_cn,
 )
-from cert_watch.middleware import check_csrf, check_rate_limit, get_csrf_context
+from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit, get_csrf_context
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
@@ -349,7 +349,7 @@ async def upload(
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not check_rate_limit(f"upload:{request.client.host}", 10, 60):
+    if not check_rate_limit(f"upload:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )

@@ -47,15 +47,19 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-4 open breadcrumbs: 0 critical, 0 high, 4 medium (1 deferred), 0 low.
+3 open breadcrumbs: 0 critical, 0 high, 2 medium (1 deferred), 0 low.
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
 
 ### Open design/latent issues
 
-- **Missing index** (medium) — No composite index on `certificates(hostname, port, is_leaf)` or `scan_history(hostname, port, scanned_at)` — 11+ queries do full table scans
-- **Rate-limit proxy bypass** (medium) — Route-level rate limits use `request.client.host` ignoring `CERT_WATCH_TRUST_PROXY`; audit log `resolve_source_ip()` also affected
 - **evaluate_all_certs() perf** (low) — Loads `raw_der` blobs for all leaf certs during alert evaluation; only metadata columns needed
+
+### Recently resolved
+
+- **Missing composite indexes** (medium) — Added migration 0005: `idx_cert_host_port_leaf ON certificates(hostname, port, is_leaf)` and `idx_scan_history_host_port_ts ON scan_history(hostname, port, scanned_at DESC)`. Also added to base schema for fresh DBs.
+- **Rate-limit proxy bypass** (medium) — Route-level rate limits in `hosts.py` and `certificates.py` now use `_extract_client_ip(request)` instead of `request.client.host`. Audit log `resolve_source_ip()` also uses proxy-aware extraction.
+- **No test for `_probe_hsts`** (medium) — 10 unit tests now cover: non-443 port returns None, HSTS header present/absent, connection errors, SSL errors, pinned IP path (correct IP/SNI), pinned IP SSL failure, connection refused, connection cleanup on success/error.
 
 ### Recently resolved
 
@@ -151,13 +155,14 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 ## Architecture notes
 
 - **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). When ID token verification fails, auth is rejected rather than silently falling back to userinfo (BC-058). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Empty `CERT_WATCH_AUTH_SECRET`/`CERT_WATCH_CSRF_SECRET` treated as unset (BC-054). Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars.
-- **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration.
+- **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration. Migration 0005 adds composite indexes `idx_cert_host_port_leaf` and `idx_scan_history_host_port_ts`.
 - **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. When `pinned_ip` is None, `_scan_host_once` auto-resolves and pins the IP for DNS-rebinding hardening (BC-063). `_probe_hsts()` checks for HSTS header on port 443 (BC-051), connecting to pinned IP with correct SNI. `ScannedEntry` carries `tls_verified` (True when TLS handshake used CERT_REQUIRED, persisted in `scan_posture` via migration 0004). On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades.
 - **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. A+ requires TLS 1.3 + HSTS (now achievable via `_probe_hsts()`). 37 unit + integration tests.
 - **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook.
 - **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
 - **`app.py`** — FastAPI with lifespan (scheduler start/stop), CSRF middleware, auth middleware, rate limiting.
-- **`middleware.py`** — CSRF protection, rate limiting (SQLite-backed sliding window, BC-049), auth middleware. `_init_rate_db(db_path)` at startup. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level.
+- **`middleware.py`** — CSRF protection, rate limiting (SQLite-backed sliding window, BC-049), auth middleware. `_init_rate_db(db_path)` at startup. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). All route-level rate limits (`hosts.py`, `certificates.py`, `auth.py`, `views.py`) use `_extract_client_ip()` for proxy-aware client identification. `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level.
+- **`audit.py`** — `resolve_source_ip()` uses `_extract_client_ip()` for proxy-aware IP logging when `CERT_WATCH_TRUST_PROXY` is set. Falls back to `request.client.host` on error.
 
 ## Breadcrumbs / memory
 

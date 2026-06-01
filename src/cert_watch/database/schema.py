@@ -123,6 +123,10 @@ CREATE INDEX IF NOT EXISTS idx_scan_history_scanned_at ON scan_history(scanned_a
 CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_scan_posture_cert_scanned ON scan_posture(cert_id, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cert_host_port_leaf
+    ON certificates(hostname, port, is_leaf);
+CREATE INDEX IF NOT EXISTS idx_scan_history_host_port_ts
+    ON scan_history(hostname, port, scanned_at DESC);
 """
 
 _initialized_paths: set[str] = set()

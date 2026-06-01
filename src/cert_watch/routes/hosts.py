@@ -16,7 +16,7 @@ from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
-from cert_watch.middleware import check_csrf, check_rate_limit
+from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit
 from cert_watch.scan import ScanError, scan_host, store_scanned
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
@@ -117,7 +117,7 @@ async def add_host(
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not check_rate_limit(f"add_host:{request.client.host}", 20, 60):
+    if not check_rate_limit(f"add_host:{_extract_client_ip(request)}", 20, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
@@ -177,7 +177,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not check_rate_limit(f"import_hosts:{request.client.host}", 5, 60):
+    if not check_rate_limit(f"import_hosts:{_extract_client_ip(request)}", 5, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
@@ -316,7 +316,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    if not check_rate_limit(f"scan_host:{request.client.host}", 10, 60):
+    if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
         )
