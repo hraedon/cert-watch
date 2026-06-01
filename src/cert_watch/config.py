@@ -313,8 +313,20 @@ class Settings:
         )
 
     def build_auth_provider(self):
-        """Return an AuthProvider based on auth config. No-op when AUTH_PROVIDER is unset."""
+        """Return an AuthProvider based on auth config. No-op when AUTH_PROVIDER is unset.
+
+        Falls back to kv_store for local_admin_user/local_admin_password_hash when
+        env vars are unset (Plan 014 Slice 2).
+        """
         from cert_watch.auth import build_auth_provider
+        from cert_watch.database import kv_get
+
+        local_admin_user = self.local_admin_user
+        local_admin_password_hash = self.local_admin_password_hash
+        if not local_admin_user:
+            local_admin_user = kv_get(self.db_path, "local_admin_user") or ""
+        if not local_admin_password_hash:
+            local_admin_password_hash = kv_get(self.db_path, "local_admin_password_hash") or ""
 
         return build_auth_provider(
             provider=self.auth_provider,
@@ -336,8 +348,8 @@ class Settings:
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
             allowed_groups=list(self.allowed_groups),
             allowed_roles=list(self.allowed_roles),
-            local_admin_user=self.local_admin_user,
-            local_admin_password_hash=self.local_admin_password_hash,
+            local_admin_user=local_admin_user,
+            local_admin_password_hash=local_admin_password_hash,
         )
 
     @classmethod

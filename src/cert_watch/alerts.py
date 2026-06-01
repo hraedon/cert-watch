@@ -168,6 +168,9 @@ def evaluate_all_certs(
             "SELECT * FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
+    # Batch-resolve group recipients for all certs in ≤3 queries
+    all_group_recipients = resolve_all_group_recipients(db_path)
+
     all_alerts: list[Alert] = []
     for leaf_row in leaves:
         cert = Certificate(
@@ -190,8 +193,8 @@ def evaluate_all_certs(
                 custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
             owner_info = host_owners.get((hostname, port))
 
-        # Resolve alert-group recipients for this cert
-        group_recipients = resolve_group_recipients(db_path, leaf_row["id"])
+        # Resolve alert-group recipients for this cert (batch result)
+        group_recipients = all_group_recipients.get(leaf_row["id"], [])
 
         # Merge group recipients with owner email into extra_recipients
         merged_extra: list[str] = list(group_recipients)
@@ -331,6 +334,70 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
 
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
+
+
+def resolve_all_group_recipients(
+    db_path: str | Path,
+) -> dict[str, list[str]]:
+    """Return {cert_id: [recipients]} for all leaf certs in one pass.
+
+    Uses three targeted SQL queries instead of per-cert N+1 resolution.
+    Results are identical to calling resolve_group_recipients() per cert.
+    """
+    from cert_watch.database.connection import _connect
+    from cert_watch.tags import merge_tags, parse_tags, tags_match
+
+    # 1. Load all groups
+    groups: list[dict] = []
+    with _connect(db_path) as conn:
+        groups = [
+            {
+                "id": row["id"],
+                "recipients": [r.strip() for r in row["recipients"].split(",") if r.strip()],
+                "match_tags": parse_tags(row["match_tags"]),
+            }
+            for row in conn.execute(
+                "SELECT id, recipients, match_tags FROM alert_groups"
+            ).fetchall()
+        ]
+        if not groups:
+            return {}
+
+        # 2. Load all leaf certs with their own tags and host tags
+        cert_tags_rows = conn.execute(
+            """SELECT c.id, c.tags, h.tags AS host_tags
+               FROM certificates c
+               LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
+               WHERE c.is_leaf = 1"""
+        ).fetchall()
+        cert_tags = {
+            row["id"]: merge_tags(row["tags"], row["host_tags"])
+            for row in cert_tags_rows
+        }
+
+        # 3. Load all manual assignments
+        manual_rows = conn.execute(
+            "SELECT cert_id, group_id FROM alert_group_certs"
+        ).fetchall()
+        manual_map: dict[str, set[str]] = {}
+        for row in manual_rows:
+            manual_map.setdefault(row["cert_id"], set()).add(row["group_id"])
+
+    result: dict[str, list[str]] = {}
+    for cert_id, effective in cert_tags.items():
+        seen: set[str] = set()
+        out: list[str] = []
+        manual_ids = manual_map.get(cert_id, set())
+        for g in groups:
+            if g["id"] in manual_ids or tags_match(effective, g["match_tags"]):
+                for r in g["recipients"]:
+                    rc = r.casefold()
+                    if rc not in seen:
+                        seen.add(rc)
+                        out.append(r)
+        if out:
+            result[cert_id] = out
+    return result
 
 
 def resolve_group_recipients(

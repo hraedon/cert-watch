@@ -103,47 +103,7 @@ async def lifespan(app: FastAPI):
         derived = hashlib.sha256((auth_secret + "csrf").encode()).hexdigest()
         set_csrf_secret(derived)
 
-    # Slice 2: if env vars for local admin are unset, check kv_store
-    local_admin_user = s.local_admin_user
-    local_admin_password_hash = s.local_admin_password_hash
-    if not local_admin_user:
-        kv_user = kv_get(s.db_path, "local_admin_user")
-        if kv_user:
-            local_admin_user = kv_user
-    if not local_admin_password_hash:
-        kv_hash = kv_get(s.db_path, "local_admin_password_hash")
-        if kv_hash:
-            local_admin_password_hash = kv_hash
-    # Rebuild auth provider if kv_store provided local admin that env didn't
-    if (local_admin_user and local_admin_password_hash) and (
-        not s.local_admin_user or not s.local_admin_password_hash
-    ):
-        from cert_watch.auth import build_auth_provider
-        auth = build_auth_provider(
-            provider=s.auth_provider,
-            ldap_server=s.ldap_server,
-            ldap_base_dn=s.ldap_base_dn,
-            ldap_bind_dn=s.ldap_bind_dn,
-            ldap_bind_password=s.ldap_bind_password,
-            ldap_user_filter=s.ldap_user_filter,
-            ldap_start_tls=s.ldap_start_tls,
-            ldap_ca_cert=s.ldap_ca_cert,
-            ldap_required_groups=list(s.ldap_required_groups),
-            ldap_connect_timeout=s.ldap_connect_timeout,
-            oauth_client_id=s.oauth_client_id,
-            oauth_client_secret=s.oauth_client_secret,
-            oauth_issuer_url=s.oauth_issuer_url,
-            oauth_scope=s.oauth_scope,
-            oauth_authorization_endpoint=s.oauth_authorization_endpoint,
-            oauth_token_endpoint=s.oauth_token_endpoint,
-            oauth_userinfo_endpoint=s.oauth_userinfo_endpoint,
-            allowed_groups=list(s.allowed_groups),
-            allowed_roles=list(s.allowed_roles),
-            local_admin_user=local_admin_user,
-            local_admin_password_hash=local_admin_password_hash,
-        )
-    else:
-        auth = s.build_auth_provider()
+    auth = s.build_auth_provider()
 
     # Slice 3: setup wizard detection
     host_count = 0

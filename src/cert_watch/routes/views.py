@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__, ct_lookup
@@ -98,6 +98,65 @@ def healthz(request: Request) -> dict:
         "commit": __commit__,
         "checks": checks,
     }
+
+
+@router.get("/api/health")
+def api_health(request: Request) -> JSONResponse:
+    """Structured health data for the dashboard banner."""
+    db = _db_path(request)
+    checks: dict[str, object] = {}
+
+    # Scheduler
+    from cert_watch.scheduler import _scheduler_thread
+    checks["scheduler_running"] = (
+        _scheduler_thread is not None and _scheduler_thread.is_alive()
+    )
+
+    # Last scan
+    try:
+        with _connect(db) as conn:
+            scan_row = conn.execute(
+                "SELECT scanned_at, status FROM scan_history "
+                "ORDER BY scanned_at DESC LIMIT 1"
+            ).fetchone()
+        if scan_row:
+            checks["last_scan_at"] = scan_row["scanned_at"]
+            checks["last_scan_status"] = scan_row["status"]
+        else:
+            checks["last_scan_at"] = None
+            checks["last_scan_status"] = None
+    except Exception:
+        checks["last_scan_at"] = None
+        checks["last_scan_status"] = None
+
+    # Failed alerts in last 24h
+    try:
+        cutoff = (datetime.now(UTC) - __import__("datetime").timedelta(hours=24)).isoformat()
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
+                (cutoff,),
+            ).fetchone()
+        checks["failed_alerts_24h"] = row[0] if row else 0
+    except Exception:
+        checks["failed_alerts_24h"] = 0
+
+    # Auth status
+    auth = getattr(request.app.state, "auth_provider", None)
+    checks["auth_provider"] = auth.provider_name if auth else "none"
+    checks["break_glass_enabled"] = (
+        hasattr(auth, "local_admin_user") and bool(auth.local_admin_user)
+    ) if auth else False
+
+    # Overall color
+    overall = "ok"
+    if not checks["scheduler_running"]:
+        overall = "critical"
+    elif checks["failed_alerts_24h"] > 0 or checks.get("last_scan_status") == "failure":
+        overall = "warning"
+
+    checks["overall"] = overall
+    return JSONResponse(content=checks)
 
 
 @router.get("/", response_class=HTMLResponse)

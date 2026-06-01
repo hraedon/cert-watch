@@ -59,6 +59,13 @@
           {{ warning }}
         </div>
       {% endif %}
+      <div id="cw-health-banner" class="cw-health-banner" style="display:none">
+        <div class="cw-health-inner">
+          <span class="cw-health-dot"></span>
+          <span id="cw-health-text">Loading…</span>
+        </div>
+        <button class="cw-health-dismiss" title="Dismiss" onclick="dismissHealth()">×</button>
+      </div>
       {% block content %}{% endblock %}
     </div>
   </div>
@@ -82,6 +89,69 @@
         localStorage.setItem('cw-theme', next);
         updateIcons();
       });
+    })();
+  </script>
+  {# Health banner — fetches /api/health every 30s #}
+  <script>
+    (function() {
+      var BANNER = document.getElementById('cw-health-banner');
+      var TEXT = document.getElementById('cw-health-text');
+      if (!BANNER || !TEXT) return;
+
+      function esc(s) {
+        var d = document.createElement('div');
+        d.appendChild(document.createTextNode(s == null ? '' : String(s)));
+        return d.innerHTML;
+      }
+
+      function dismissHealth() {
+        BANNER.style.display = 'none';
+        try { sessionStorage.setItem('cw-health-dismissed', '1'); } catch(e) {}
+      }
+      window.dismissHealth = dismissHealth;
+
+      function render(data) {
+        var cls = 'cw-health-' + (data.overall || 'ok');
+        BANNER.className = 'cw-health-banner ' + cls;
+
+        var parts = [];
+        if (!data.scheduler_running) {
+          parts.push('Scheduler is <b>not running</b>');
+        }
+        if (data.last_scan_status === 'failure') {
+          var when = data.last_scan_at ? ' at ' + esc(data.last_scan_at) : '';
+          parts.push('Last scan <b>failed</b>' + when);
+        }
+        if (data.failed_alerts_24h > 0) {
+          parts.push(esc(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
+        }
+        if (data.overall === 'ok') {
+          parts = ['All systems operational'];
+        }
+
+        TEXT.innerHTML = parts.join(' · ') || 'System status unknown';
+        BANNER.style.display = '';
+      }
+
+      function poll() {
+        try {
+          if (sessionStorage.getItem('cw-health-dismissed') === '1') {
+            BANNER.style.display = 'none';
+            return;
+          }
+        } catch(e) {}
+        fetch('/api/health')
+          .then(function(r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
+          .then(render)
+          .catch(function(e) {
+            BANNER.className = 'cw-health-banner cw-health-critical';
+            TEXT.textContent = 'Health check unavailable';
+            BANNER.style.display = '';
+          });
+      }
+
+      poll();
+      setInterval(poll, 30000);
     })();
   </script>
 </body>

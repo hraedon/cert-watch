@@ -296,6 +296,54 @@ body {
   font-size: 13px;
 }
 
+/* ---------- HEALTH BANNER ---------- */
+.cw-health-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 26px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.cw-health-banner.cw-health-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+.cw-health-banner.cw-health-warning {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.cw-health-banner.cw-health-critical {
+  background: var(--crit-soft);
+  color: var(--crit);
+}
+.cw-health-inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.cw-health-ok .cw-health-dot { background: var(--ok); }
+.cw-health-warning .cw-health-dot { background: var(--warn); }
+.cw-health-critical .cw-health-dot { background: var(--crit); }
+.cw-health-dismiss {
+  background: none;
+  border: none;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  color: inherit;
+  opacity: 0.7;
+  padding: 0 4px;
+}
+.cw-health-dismiss:hover { opacity: 1; }
+
 /* ---------- LINKS / MISC ---------- */
 .cw-link { color: var(--accent); cursor: pointer; text-decoration: none; }
 .cw-link:hover { text-decoration: underline; }
