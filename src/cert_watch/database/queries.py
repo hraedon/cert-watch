@@ -1589,3 +1589,32 @@ def list_calendar(
             "cert_ids": ids,
         })
     return result
+
+
+# ---------- Alert retention (Plan 002 WI-1) ----------
+
+
+def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
+    """Delete alerts rows older than *retention_days*. Returns count deleted.
+
+    A non-positive ``retention_days`` disables purging (returns 0).
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    try:
+        init_schema(db_path)
+        with _connect(db_path) as conn:
+            cur = conn.execute("DELETE FROM alerts WHERE created_at < ?", (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            import logging
+            logging.getLogger("cert_watch.database").info(
+                "purged %d alert rows older than %d days", deleted, retention_days
+            )
+        return deleted
+    except Exception:
+        import logging
+        logging.getLogger("cert_watch.database").warning("alert purge failed", exc_info=True)
+        return 0

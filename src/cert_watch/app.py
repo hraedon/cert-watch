@@ -209,11 +209,12 @@ async def lifespan(app: FastAPI):
         return run_ct_monitor(s.db_path)
 
     def _maintenance() -> None:
-        """Daily housekeeping: trim audit log and cert history to retention windows."""
+        """Daily housekeeping: trim audit log, cert history, and alerts to retention windows."""
         from cert_watch.audit import purge_old_audit
-        from cert_watch.database.queries import purge_old_history
+        from cert_watch.database.queries import purge_old_alerts, purge_old_history
         purge_old_audit(s.db_path, s.audit_retention_days)
         purge_old_history(s.db_path, s.history_retention_days)
+        purge_old_alerts(s.db_path, s.alert_retention_days)
 
     # Purge once at startup too — restarts (e.g. k8s rollouts) are frequent and
     # shouldn't have to wait for the next daily cycle to reclaim the audit log.
