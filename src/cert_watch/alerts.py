@@ -50,6 +50,7 @@ def evaluate_thresholds(
     custom_thresholds: tuple[int, ...] | None = None,
     cooldown_hours: int = 24,
     owner_info: dict | None = None,
+    extra_recipients: list[str] | None = None,
 ) -> list[Alert]:
     """
     Create pending alerts for thresholds the cert has now crossed, skipping any
@@ -65,6 +66,10 @@ def evaluate_thresholds(
     use fingerprint_sha256 as a stable handle.
 
     If custom_thresholds is provided, those are used instead of the defaults.
+
+    If extra_recipients is provided, those addresses are used as the alert's
+    extra_recipients (merged from alert-group routing). Otherwise, the
+    owner_info["owner_email"] is used (backward-compatible behavior).
     """
     days = cert.days_until_expiry()
     if custom_thresholds is not None:
@@ -119,9 +124,13 @@ def evaluate_thresholds(
                 message=_format_message(cert, days, t, owner_info=owner_info),
                 threshold_days=t,
                 extra_recipients=(
-                    [owner_info["owner_email"]]
-                    if owner_info and owner_info.get("owner_email")
-                    else []
+                    list(extra_recipients)
+                    if extra_recipients
+                    else (
+                        [owner_info["owner_email"]]
+                        if owner_info and owner_info.get("owner_email")
+                        else []
+                    )
                 ),
             )
             alert_id = alert_repo.create(alert)
@@ -137,7 +146,8 @@ def evaluate_all_certs(
     """Evaluate thresholds for all leaf certificates in the database.
 
     Looks up per-host custom thresholds and owner/contact info from the hosts
-    table and passes them through to evaluate_thresholds.
+    table and passes them through to evaluate_thresholds. Also resolves
+    alert-group recipients based on effective tags and manual assignment.
     """
     from cert_watch.database import _connect, _parse_iso
 
@@ -179,9 +189,20 @@ def evaluate_all_certs(
             if host_td is not None:
                 custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
             owner_info = host_owners.get((hostname, port))
+
+        # Resolve alert-group recipients for this cert
+        group_recipients = resolve_group_recipients(db_path, leaf_row["id"])
+
+        # Merge group recipients with owner email into extra_recipients
+        merged_extra: list[str] = list(group_recipients)
+        if owner_info and owner_info.get("owner_email"):
+            oe = owner_info["owner_email"]
+            if oe not in merged_extra:
+                merged_extra.append(oe)
+
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
-            owner_info=owner_info,
+            owner_info=owner_info, extra_recipients=merged_extra or None,
         )
         all_alerts.extend(alerts)
     return all_alerts
@@ -310,6 +331,37 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
 
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
+
+
+def resolve_group_recipients(
+    db_path: str | Path,
+    cert_id: str,
+) -> list[str]:
+    """Resolve alert-group recipients for a cert based on effective tags + manual assignment.
+
+    Returns de-duped list of email addresses from all matching groups.
+    A group matches if the cert's effective tags intersect the group's match_tags,
+    OR the cert is manually assigned to the group.
+    """
+    from cert_watch.database import SqliteAlertGroupRepository, SqliteCertificateRepository
+    from cert_watch.tags import tags_match
+
+    cert_repo = SqliteCertificateRepository(db_path)
+    group_repo = SqliteAlertGroupRepository(db_path)
+
+    effective = cert_repo.effective_tags(cert_id)
+    manual_ids = set(group_repo.groups_for_cert_manual(cert_id))
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for g in group_repo.list_all():
+        if g.id in manual_ids or tags_match(effective, g.match_tags):
+            for r in g.recipients:
+                rc = r.casefold()
+                if rc not in seen:
+                    seen.add(rc)
+                    out.append(r)
+    return out
 
 
 def send_expiry_digest(

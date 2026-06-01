@@ -202,11 +202,22 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
     import importlib
 
     from cert_watch import config as _config
+    from cert_watch.auth import set_signing_key
+    from cert_watch.middleware import set_csrf_secret
 
     importlib.reload(_config)
+
+    from cert_watch import app as _app
+    if hasattr(_app.app.state, "needs_setup"):
+        _app.app.state.needs_setup = False
+    # Set deterministic signing keys so session tokens survive lifespan restarts
+    set_signing_key("test-auth-secret-for-tests")
+    set_csrf_secret("test-csrf-secret-for-tests")
     yield
 
 
@@ -233,6 +244,9 @@ def reload_app(monkeypatch, tmp_path):
         from cert_watch import app as app_mod
 
         importlib.reload(app_mod)
+        # Ensure setup redirect doesn't interfere with existing tests
+        if hasattr(app_mod.app.state, "needs_setup"):
+            app_mod.app.state.needs_setup = False
         return app_mod
 
     return _reload

@@ -32,8 +32,14 @@ if not _signing_key:
     _signing_key = secrets.token_hex(32)
     logger.warning(
         "CERT_WATCH_AUTH_SECRET is not set; using an ephemeral random value. "
-        "Sessions will be invalidated on every restart. Set CERT_WATCH_AUTH_SECRET in production."
+        "Sessions will be invalidated on every restart. Set CERT_WATCH_SECRET in production."
     )
+
+
+def set_signing_key(value: str) -> None:
+    """Replace the module-level signing key (used during lifespan startup)."""
+    global _signing_key
+    _signing_key = value
 
 
 def _sign_state(state: str) -> str:

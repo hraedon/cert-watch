@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS certificates (
     chain_valid INTEGER,
     replaces_cert_id TEXT,
     notes TEXT NOT NULL DEFAULT '',
+    tags TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -111,6 +112,42 @@ CREATE TABLE IF NOT EXISTS audit_log (
     detail TEXT,
     source_ip TEXT
 );
+
+CREATE TABLE IF NOT EXISTS kv_store (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alert_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    recipients TEXT NOT NULL DEFAULT '',
+    webhook_url TEXT NOT NULL DEFAULT '',
+    match_tags TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alert_group_certs (
+    group_id TEXT NOT NULL,
+    cert_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, cert_id)
+);
+
+CREATE TABLE IF NOT EXISTS cert_history (
+    id TEXT PRIMARY KEY,
+    hostname TEXT,
+    port INTEGER,
+    fingerprint_sha256 TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    key_algo TEXT,
+    sig_algo TEXT,
+    posture_grade TEXT,
+    protocol_version TEXT,
+    san_count INTEGER,
+    scanned_at TEXT NOT NULL
+);
 """
 
 _BASE_INDEXES = """
@@ -127,6 +164,12 @@ CREATE INDEX IF NOT EXISTS idx_cert_host_port_leaf
     ON certificates(hostname, port, is_leaf);
 CREATE INDEX IF NOT EXISTS idx_scan_history_host_port_ts
     ON scan_history(hostname, port, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_group_certs_cert
+    ON alert_group_certs(cert_id);
+CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
+    ON cert_history(hostname, port, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cert_history_fp
+    ON cert_history(fingerprint_sha256);
 """
 
 _initialized_paths: set[str] = set()

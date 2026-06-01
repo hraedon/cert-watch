@@ -657,14 +657,31 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
             chain=entry.chain,
             chain_valid=None,
         )
+        posture_grade = ""
         try:
-            _evaluate_and_store_posture(
+            posture_grade = _evaluate_and_store_posture(
                 repo_path_or_repo, leaf_id, entry,
             )
         except Exception:  # noqa: BLE001
             import logging
             logging.getLogger("cert_watch.scan").debug(
                 "posture evaluation skipped for %s:%s", entry.host, entry.port,
+                exc_info=True,
+            )
+        try:
+            from cert_watch.database.queries import record_cert_history
+            record_cert_history(
+                repo_path_or_repo,
+                hostname=entry.host,
+                port=entry.port,
+                leaf=entry.leaf,
+                posture_grade=posture_grade,
+                protocol_version=entry.protocol_version,
+            )
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("cert_watch.scan").debug(
+                "cert_history write skipped for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
         return leaf_id
@@ -680,8 +697,8 @@ def _evaluate_and_store_posture(
     db_path: str | Path,
     cert_id: str,
     entry: ScannedEntry,
-) -> None:
-    """Evaluate TLS posture and store the result."""
+) -> str:
+    """Evaluate TLS posture and store the result. Returns the grade string."""
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import Certificate as _Cert
     from cert_watch.database import SqliteTrustAnchorRepository
@@ -722,3 +739,4 @@ def _evaluate_and_store_posture(
         must_staple=result.must_staple,
         tls_verified=entry.tls_verified,
     )
+    return result.grade

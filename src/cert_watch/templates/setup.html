@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — setup</title>
+  <script>
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+</head>
+<body>
+  <div class="cw-app">
+    <div class="cw-page cw-login-center">
+      <div class="cw-panel cw-form-panel">
+        <div class="cw-login-intro">
+          <div class="cw-mark cw-login-mark">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
+          </div>
+          <h2 class="cw-login-title">Welcome to cert-watch</h2>
+          <p class="cw-muted">Create a local admin account to get started. This account will let you log in and manage certificates.</p>
+        </div>
+
+        {% if error %}
+          <div class="cw-login-error">
+            {{ error }}
+          </div>
+        {% endif %}
+
+        <form method="post" action="/setup">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input type="hidden" name="step" value="1">
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="username">Admin username</label>
+            <input class="cw-input" type="text" id="username" name="username" required autofocus
+                   placeholder="admin" minlength="3" autocomplete="username">
+          </div>
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="password">Password</label>
+            <input class="cw-input" type="password" id="password" name="password" required
+                   placeholder="at least 8 characters" minlength="8" autocomplete="new-password">
+          </div>
+          <div class="cw-field cw-mb-16">
+            <label class="cw-label" for="password_confirm">Confirm password</label>
+            <input class="cw-input" type="password" id="password_confirm" name="password_confirm" required
+                   placeholder="re-enter password" minlength="8" autocomplete="new-password">
+          </div>
+          <button type="submit" class="cw-btn primary cw-btn--expand">Create admin &amp; continue</button>
+        </form>
+
+        <div class="cw-muted cw-mt-16" style="font-size:0.85rem">
+          You can also configure authentication via environment variables
+          (<code>AUTH_PROVIDER</code>, <code>CERT_WATCH_LOCAL_ADMIN_USER</code>,
+          <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code>). See the runbook for details.
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

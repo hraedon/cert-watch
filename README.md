@@ -16,6 +16,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Bulk import** — CSV upload for adding many hosts at once
 - **Prometheus metrics** — `/metrics` endpoint for monitoring integration
 - **Renewal tracking** — links renewed certificates to their predecessors
+- **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
 ## Stack
@@ -24,7 +25,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - SQLite (single-file, WAL mode)
 - Optional: `ldap3` (LDAP auth), `authlib` (OAuth auth)
 - Docker image published to GHCR (multi-arch: amd64 + arm64)
-- Deploy: Kubernetes (Argo CD GitOps), Docker Compose, or Linux + systemd
+- Deploy: Kubernetes (Argo CD GitOps), Docker Compose, Linux + systemd, or Windows + IIS
 
 ## Quick start (local)
 
@@ -71,6 +72,21 @@ sudo ./scripts/install-linux.sh   # installs to /opt/cert-watch, enables cert-wa
 
 See `deploy/systemd/cert-watch.service`.
 
+## Windows / IIS
+
+cert-watch runs on Windows with no code changes — IIS fronts the uvicorn
+process, either via the **HttpPlatformHandler** module (recommended; IIS
+supervises the process, no third-party service) or as a **reverse proxy** to a
+Windows service. Bootstrap with:
+
+```powershell
+.\scripts\install-windows.ps1   # venv + data dir + persistent signing keys
+```
+
+Then configure the IIS site — see [`deploy/iis/README.md`](deploy/iis/README.md).
+Set `CERT_WATCH_TRUST_PROXY=1` so client IP and scheme come from IIS's forwarded
+headers.
+
 ## Configuration
 
 All configuration is via environment variables.
@@ -79,12 +95,14 @@ All configuration is via environment variables.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CERT_WATCH_DATA_DIR` | `/var/lib/cert-watch` | Directory for SQLite database |
+| `CERT_WATCH_DATA_DIR` | `/var/lib/cert-watch` (POSIX), `%PROGRAMDATA%\cert-watch` (Windows) | Directory for SQLite database |
 | `CERT_WATCH_HOST` | `0.0.0.0` | Listen address |
 | `CERT_WATCH_PORT` | `8000` | Listen port |
 | `CERT_WATCH_SCHED_HOUR` | `6` | Hour to run daily scan (UTC) |
 | `CERT_WATCH_SCHED_MIN` | `0` | Minute to run daily scan |
 | `CERT_WATCH_TLS_VERIFY` | `0` | Set `1` to verify TLS certificates when scanning |
+| `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
 
 ### Alerts (SMTP)
@@ -158,7 +176,10 @@ All JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/healthz` | Health check (DB, scheduler, cert counts) |
 | `GET` | `/metrics` | Prometheus metrics |
 | `GET` | `/api/certificates` | List certificates (paginated) |
-| `GET` | `/api/certificates/{id}` | Certificate detail |
+| `GET` | `/api/certificates/{id}` | Certificate detail (includes `tags` + `effective_tags`) |
+| `GET` | `/api/tags` | Distinct tags across hosts + certs |
+| `PUT` | `/api/certificates/{id}/tags` | Set a cert's tags (`{"tags": [...]}` or csv) |
+| `PUT` | `/api/hosts/{id}/tags` | Set a host's tags |
 | `GET` | `/api/hosts` | List tracked hosts |
 | `GET` | `/api/alerts` | List alerts |
 | `GET` | `/ct-lookup/{domain}` | Certificate Transparency lookup |
@@ -198,9 +219,28 @@ deploy/
   k8s/                 Kustomize manifests
   compose/             Docker Compose
   systemd/             Systemd unit file
+  iis/                 IIS web.config(s) + Windows runbook
   argocd/              Argo CD Application CR
 .github/workflows/     CI, E2E, image build
 ```
+
+## Prior art & positioning
+
+cert-watch is not the first TLS-certificate monitor, and it doesn't pretend to
+be. It exists as a controlled build-method experiment (a hand-built comparison
+point for [software-factory-2](https://github.com/hraedon/software-factory-2))
+and as deep, read-only certificate **observability** for a regulated,
+directory-authenticated, self-hosted environment. For simple "tell me before a
+cert expires," tools like **Uptime Kuma** are an excellent fit; for pure CT
+watch, **SSLMate Cert Spotter**; for ACME issuance/renewal, **Certimate**.
+
+cert-watch's niche is the bundle a regulated AD shop needs in one self-contained
+unit: live scan **+** offline upload, signature-verified chain validation, TLS
+posture grading, CT reconciliation, LDAP/Entra auth, and an audit log.
+
+See [`docs/positioning.md`](docs/positioning.md) for the full landscape table,
+an honest account of where the alternatives are better, and how this shapes the
+roadmap.
 
 ## License
 

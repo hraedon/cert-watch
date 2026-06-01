@@ -3,12 +3,25 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert
 from cert_watch.database.schema import init_schema
+
+
+def distinct_tags(db_path: str | Path) -> list[str]:
+    """Return the sorted set of distinct tags across all hosts and certificates."""
+    from cert_watch.tags import merge_tags
+
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT tags FROM hosts UNION ALL SELECT tags FROM certificates"
+        ).fetchall()
+    all_tags = merge_tags(*[r["tags"] for r in rows])
+    return sorted(all_tags, key=str.casefold)
 
 
 def replace_scanned(
@@ -1116,3 +1129,204 @@ def get_posture_grades_for_certs(
             cert_ids,
         ).fetchall()
     return {r["cert_id"]: r["grade"] for r in rows}
+
+
+# ---------- kv_store helpers ----------
+
+
+def kv_get(db_path: str | Path, key: str) -> str | None:
+    """Get a value from the kv_store table. Returns None if key not found."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def kv_set(db_path: str | Path, key: str, value: str) -> None:
+    """Set a value in the kv_store table (upsert)."""
+    init_schema(db_path)
+    now = _iso(datetime.now(UTC))
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, now),
+        )
+        conn.commit()
+
+
+def kv_all(db_path: str | Path) -> dict[str, str]:
+    """Return all key-value pairs from the kv_store table."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM kv_store").fetchall()
+    return {r["key"]: r["value"] for r in rows}
+
+
+# ---------- cert_history (Plan 016) ----------
+
+
+def _extract_key_algo(raw_der: bytes) -> str:
+    """Extract key algorithm string from DER-encoded certificate."""
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives.asymmetric import ec, rsa
+
+        cert = x509.load_der_x509_certificate(raw_der)
+        key = cert.public_key()
+        if isinstance(key, rsa.RSAPublicKey):
+            return f"RSA-{key.key_size}"
+        if isinstance(key, ec.EllipticCurvePublicKey):
+            return f"EC-{key.curve.name}"
+        return type(key).__name__
+    except Exception:
+        return ""
+
+
+def _extract_sig_algo(raw_der: bytes) -> str:
+    """Extract signature algorithm string from DER-encoded certificate."""
+    try:
+        from cryptography import x509
+
+        cert = x509.load_der_x509_certificate(raw_der)
+        oid = cert.signature_algorithm_oid
+        return oid._name if hasattr(oid, "_name") else oid.dotted_string
+    except Exception:
+        return ""
+
+
+def record_cert_history(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    leaf: Certificate,
+    posture_grade: str = "",
+    protocol_version: str = "",
+    scanned_at: str | None = None,
+) -> str:
+    """Append a per-scan snapshot row to cert_history.
+
+    Called after every successful leaf scan. Returns the new row id.
+    """
+    init_schema(db_path)
+    row_id = str(uuid.uuid4())
+    if scanned_at is None:
+        scanned_at = _iso(datetime.now(UTC))
+
+    key_algo = _extract_key_algo(leaf.raw_der) if leaf.raw_der else ""
+    sig_algo = _extract_sig_algo(leaf.raw_der) if leaf.raw_der else ""
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            """INSERT INTO cert_history
+            (id, hostname, port, fingerprint_sha256, issuer, not_after,
+             key_algo, sig_algo, posture_grade, protocol_version, san_count, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                row_id,
+                hostname,
+                port,
+                leaf.fingerprint_sha256,
+                leaf.issuer,
+                _iso(leaf.not_after),
+                key_algo,
+                sig_algo,
+                posture_grade,
+                protocol_version,
+                len(leaf.san_dns_names),
+                scanned_at,
+            ),
+        )
+        conn.commit()
+    return row_id
+
+
+def purge_old_history(db_path: str | Path, retention_days: int) -> int:
+    """Delete cert_history rows older than *retention_days*. Returns count deleted.
+
+    A non-positive ``retention_days`` disables purging (returns 0).
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    try:
+        init_schema(db_path)
+        with _connect(db_path) as conn:
+            cur = conn.execute("DELETE FROM cert_history WHERE scanned_at < ?", (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            import logging
+            logging.getLogger("cert_watch.database").info(
+                "purged %d cert_history rows older than %d days", deleted, retention_days
+            )
+        return deleted
+    except Exception:
+        import logging
+        logging.getLogger("cert_watch.database").warning("cert_history purge failed", exc_info=True)
+        return 0
+
+
+def list_cert_history(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    limit: int = 365,
+) -> list[dict]:
+    """Return scan history for a specific host:port, newest first."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT id, hostname, port, fingerprint_sha256, issuer, not_after,
+                      key_algo, sig_algo, posture_grade, protocol_version,
+                      san_count, scanned_at
+               FROM cert_history
+               WHERE hostname = ? AND port = ?
+               ORDER BY scanned_at DESC
+               LIMIT ?""",
+            (hostname, port, limit),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_tls_version_trends(
+    db_path: str | Path,
+    days: int = 30,
+) -> list[dict]:
+    """Fleet TLS version distribution over time.
+
+    Returns [{date, protocol_version, count}] for the last *days* days.
+    """
+    init_schema(db_path)
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT DATE(scanned_at) as date, protocol_version, COUNT(*) as count
+               FROM cert_history
+               WHERE scanned_at >= ? AND protocol_version IS NOT NULL AND protocol_version != ''
+               GROUP BY DATE(scanned_at), protocol_version
+               ORDER BY date DESC""",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def list_grade_trends(
+    db_path: str | Path,
+    days: int = 30,
+) -> list[dict]:
+    """Fleet posture grade distribution over time.
+
+    Returns [{date, posture_grade, count}] for the last *days* days.
+    """
+    init_schema(db_path)
+    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            """SELECT DATE(scanned_at) as date, posture_grade, COUNT(*) as count
+               FROM cert_history
+               WHERE scanned_at >= ? AND posture_grade IS NOT NULL AND posture_grade != ''
+               GROUP BY DATE(scanned_at), posture_grade
+               ORDER BY date DESC""",
+            (cutoff,),
+        ).fetchall()
+    return [dict(r) for r in rows]

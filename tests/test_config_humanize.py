@@ -181,6 +181,62 @@ def test_json_formatter_output():
         root.removeHandler(h)
 
 
+# ---------- default data dir (cross-platform) ----------
+
+
+def test_default_data_dir_posix():
+    from cert_watch import config as _config
+
+    assert _config._default_data_dir_str("posix", None) == "/var/lib/cert-watch"
+    assert _config._default_data_dir_str("posix", r"D:\ProgramData") == "/var/lib/cert-watch"
+
+
+def test_default_data_dir_windows_uses_programdata():
+    from cert_watch import config as _config
+
+    assert (
+        _config._default_data_dir_str("nt", r"D:\ProgramData")
+        == r"D:\ProgramData\cert-watch"
+    )
+
+
+def test_default_data_dir_windows_fallback():
+    from cert_watch import config as _config
+
+    assert _config._default_data_dir_str("nt", None) == r"C:\ProgramData\cert-watch"
+
+
+def test_data_dir_env_overrides_default(monkeypatch, tmp_path):
+    s = _fresh_settings(monkeypatch, {"CERT_WATCH_DATA_DIR": str(tmp_path)})
+    assert s.data_dir == tmp_path
+    assert s.db_path == tmp_path / "cert-watch.sqlite3"
+
+
+# ---------- audit retention ----------
+
+
+def test_audit_retention_default(monkeypatch, tmp_path):
+    monkeypatch.delenv("CERT_WATCH_AUDIT_RETENTION_DAYS", raising=False)
+    s = _fresh_settings(monkeypatch, {"CERT_WATCH_DATA_DIR": str(tmp_path)})
+    assert s.audit_retention_days == 90
+
+
+def test_audit_retention_from_env(monkeypatch, tmp_path):
+    s = _fresh_settings(
+        monkeypatch,
+        {"CERT_WATCH_DATA_DIR": str(tmp_path), "CERT_WATCH_AUDIT_RETENTION_DAYS": "30"},
+    )
+    assert s.audit_retention_days == 30
+
+
+def test_audit_retention_invalid_falls_back(monkeypatch, tmp_path):
+    s = _fresh_settings(
+        monkeypatch,
+        {"CERT_WATCH_DATA_DIR": str(tmp_path), "CERT_WATCH_AUDIT_RETENTION_DAYS": "soon"},
+    )
+    assert s.audit_retention_days == 90
+
+
 def test_text_formatter_output():
     import logging
 

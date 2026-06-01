@@ -31,6 +31,13 @@ _CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 8  # 8 hours
 
 
+def set_csrf_secret(value: str) -> None:
+    """Replace the module-level CSRF secret (used during lifespan startup)."""
+    global _csrf_secret_val, _CSRF_SECRET
+    _csrf_secret_val = value
+    _CSRF_SECRET = value
+
+
 def make_csrf_token(session_id: str) -> str:
     payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
     sig = hmac.new(_CSRF_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
@@ -257,7 +264,7 @@ def get_csrf_context(request: Request) -> dict:
 # ---------- Middleware functions ----------
 
 _PUBLIC_PATHS = frozenset({
-    "/healthz", "/login", "/auth/callback", "/auth/logout",
+    "/healthz", "/login", "/auth/callback", "/auth/logout", "/setup",
 })
 
 _METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None
@@ -324,6 +331,22 @@ async def csrf_session_middleware(request: Request, call_next):
         )
         return response
     return await call_next(request)
+
+
+async def setup_redirect_middleware(request: Request, call_next):
+    """Redirect all HTML page requests to /setup when the app needs first-run configuration.
+
+    Detected via app.state.needs_setup flag set during lifespan.
+    Public paths, /setup itself, and API paths are never redirected.
+    API requests without auth will get 401 from auth_middleware regardless.
+    """
+    needs_setup = getattr(request.app.state, "needs_setup", False)
+    if not needs_setup:
+        return await call_next(request)
+    path = request.url.path
+    if is_public_path(path) or path.startswith("/setup") or path.startswith("/api/"):
+        return await call_next(request)
+    return RedirectResponse(url="/setup", status_code=303)
 
 
 async def auth_middleware(request: Request, call_next):

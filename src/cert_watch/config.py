@@ -1,10 +1,49 @@
 import json
 import logging
 import os
+import secrets
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 logger = logging.getLogger("cert_watch.config")
+
+
+def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> str:
+    """Return env/_FILE secret if set (treating empty/whitespace as unset);
+    else read data_dir/filename; else generate 32-byte hex, persist 0600, return it.
+
+    This ensures signing keys survive restarts even when the operator hasn't
+    set an explicit env var. The persisted file is the fallback for local dev
+    and bare-metal installs without Docker secrets.
+    """
+    value = read_secret(env_name)
+    if value and value.strip():
+        return value
+    secret_file = data_dir / filename
+    try:
+        if secret_file.exists():
+            persisted = secret_file.read_text().strip()
+            if persisted:
+                logger.warning(
+                    "Using persisted %s from %s (no %s env var set; "
+                    "consider setting %s in production for explicit control)",
+                    filename, secret_file, env_name, env_name,
+                )
+                return persisted
+    except OSError:
+        logger.debug("could not read %s, will regenerate", secret_file)
+    generated = secrets.token_hex(32)
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(generated + "\n")
+        secret_file.chmod(0o600)
+        logger.info("generated and persisted %s to %s", filename, secret_file)
+    except OSError:
+        logger.warning(
+            "could not persist %s to %s; using ephemeral key (sessions will not survive restart)",
+            filename, secret_file,
+        )
+    return generated
 
 
 def read_secret(name: str) -> str | None:
@@ -30,6 +69,29 @@ def read_secret(name: str) -> str | None:
     return None
 
 
+def _default_data_dir_str(os_name: str, programdata: str | None) -> str:
+    """Compute the default data-dir path string for *os_name*.
+
+    Split out from :func:`_default_data_dir` so the platform branch is testable
+    on any host (building a concrete ``WindowsPath`` is impossible on POSIX, so
+    we join with ``PureWindowsPath`` and return a plain string).
+    """
+    if os_name == "nt":
+        base = programdata or r"C:\ProgramData"
+        return str(PureWindowsPath(base, "cert-watch"))
+    return "/var/lib/cert-watch"
+
+
+def _default_data_dir() -> Path:
+    """Platform-appropriate default data directory.
+
+    Always overridable via ``CERT_WATCH_DATA_DIR``. On Windows there is no
+    ``/var`` hierarchy, so default to ``%PROGRAMDATA%\\cert-watch`` (normally
+    ``C:\\ProgramData\\cert-watch``); on POSIX keep ``/var/lib/cert-watch``.
+    """
+    return Path(_default_data_dir_str(os.name, os.environ.get("PROGRAMDATA")))
+
+
 @dataclass(frozen=True)
 class Settings:
     db_path: Path
@@ -50,6 +112,8 @@ class Settings:
     allow_private: bool = True
     dns_servers: tuple[str, ...] = ()
     log_format: str = "text"
+    audit_retention_days: int = 90
+    history_retention_days: int = 365
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -76,10 +140,12 @@ class Settings:
     local_admin_password_hash: str = ""
     # Security
     base_url: str = ""  # Override for OAuth redirect URI detection
+    allow_unauth: bool = False  # Suppress unauthenticated warning (CERT_WATCH_ALLOW_UNAUTH=1)
 
     @classmethod
     def from_env(cls) -> "Settings":
-        data_dir = Path(os.environ.get("CERT_WATCH_DATA_DIR", "/var/lib/cert-watch"))
+        env_data_dir = os.environ.get("CERT_WATCH_DATA_DIR")
+        data_dir = Path(env_data_dir) if env_data_dir else _default_data_dir()
         recipients = tuple(
             r.strip()
             for r in os.environ.get("ALERT_RECIPIENTS", "").split(",")
@@ -116,6 +182,24 @@ class Settings:
             ldap_connect_timeout = int(ldap_connect_timeout_str)
         except ValueError:
             ldap_connect_timeout = 5
+        audit_retention_str = os.environ.get("CERT_WATCH_AUDIT_RETENTION_DAYS", "90")
+        try:
+            audit_retention_days = int(audit_retention_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_AUDIT_RETENTION_DAYS=%r, using default 90",
+                audit_retention_str,
+            )
+            audit_retention_days = 90
+        history_retention_str = os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365")
+        try:
+            history_retention_days = int(history_retention_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_HISTORY_RETENTION_DAYS=%r, using default 365",
+                history_retention_str,
+            )
+            history_retention_days = 365
         return cls(
             db_path=data_dir / "cert-watch.sqlite3",
             data_dir=data_dir,
@@ -131,6 +215,8 @@ class Settings:
             webhook_headers=webhook_headers,
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
             alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
+            audit_retention_days=audit_retention_days,
+            history_retention_days=history_retention_days,
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),
@@ -177,6 +263,7 @@ class Settings:
             local_admin_password_hash=read_secret("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH") or "",
             # Security
             base_url=os.environ.get("CERT_WATCH_BASE_URL", "").rstrip("/"),
+            allow_unauth=os.environ.get("CERT_WATCH_ALLOW_UNAUTH", "0") == "1",
         )
 
     def build_alert_config(self):

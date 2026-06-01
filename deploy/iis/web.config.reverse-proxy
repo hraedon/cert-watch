@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ALTERNATIVE to HttpPlatformHandler: IIS as a pure reverse proxy.
+
+  Use this when cert-watch runs as a long-lived process you supervise yourself
+  (a Windows service via NSSM/Shawl, or a scheduled task), listening on
+  127.0.0.1:8000. IIS terminates TLS and forwards to it. Requires the
+  Application Request Routing (ARR) + URL Rewrite IIS modules, and ARR proxying
+  enabled at the server level (IIS Manager > server > Application Request
+  Routing Cache > Server Proxy Settings > Enable proxy).
+
+  To use: rename this file to web.config in the site's physical path.
+  The X-Forwarded-* server variables below must be allow-listed first:
+    appcmd set config -section:system.webServer/rewrite/allowedServerVariables /+"[name='HTTP_X_FORWARDED_PROTO']"
+    appcmd set config -section:system.webServer/rewrite/allowedServerVariables /+"[name='HTTP_X_FORWARDED_HOST']"
+  ARR adds X-Forwarded-For automatically.
+-->
+<configuration>
+  <system.webServer>
+    <rewrite>
+      <rules>
+        <rule name="cert-watch-reverse-proxy" stopProcessing="true">
+          <match url="(.*)" />
+          <action type="Rewrite" url="http://127.0.0.1:8000/{R:1}" />
+          <serverVariables>
+            <set name="HTTP_X_FORWARDED_PROTO" value="https" />
+            <set name="HTTP_X_FORWARDED_HOST" value="{HTTP_HOST}" />
+          </serverVariables>
+        </rule>
+      </rules>
+    </rewrite>
+    <security>
+      <requestFiltering removeServerHeader="true" />
+    </security>
+    <httpProtocol>
+      <customHeaders>
+        <add name="Strict-Transport-Security" value="max-age=31536000; includeSubDomains" />
+      </customHeaders>
+    </httpProtocol>
+  </system.webServer>
+</configuration>

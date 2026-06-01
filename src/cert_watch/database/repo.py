@@ -185,6 +185,46 @@ class SqliteCertificateRepository(CertificateRepository):
             )
             conn.commit()
 
+    def get_tags(self, cert_id: str) -> str:
+        """Return the cert's own (normalized) tag string, or '' if not found."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT tags FROM certificates WHERE id = ?", (cert_id,)
+            ).fetchone()
+        return format_tags(parse_tags(row["tags"])) if row else ""
+
+    def set_tags(self, cert_id: str, tags: str) -> None:
+        """Set the cert's own tags (normalized before storage)."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        now = _iso(datetime.now(UTC))
+        normalized = format_tags(parse_tags(tags))
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE certificates SET tags = ?, updated_at = ? WHERE id = ?",
+                (normalized, now, cert_id),
+            )
+            conn.commit()
+
+    def effective_tags(self, cert_id: str) -> list[str]:
+        """Cert's own tags unioned with its host's tags (plan 013 inheritance)."""
+        from cert_watch.tags import merge_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT c.tags AS cert_tags, h.tags AS host_tags"
+                " FROM certificates c"
+                " LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port"
+                " WHERE c.id = ?",
+                (cert_id,),
+            ).fetchone()
+        if not row:
+            return []
+        d = dict(row)
+        return merge_tags(d.get("cert_tags"), d.get("host_tags"))
+
 
 # ---------- Alert Repository ----------
 
@@ -553,6 +593,18 @@ class SqliteHostRepository:
             conn.commit()
         return True
 
+    def set_tags(self, host_id: str, tags: str) -> bool:
+        """Set a host's tags (normalized before storage). Returns False if no such host."""
+        from cert_watch.tags import format_tags, parse_tags
+
+        normalized = format_tags(parse_tags(tags))
+        with _connect(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE hosts SET tags = ? WHERE id = ?", (normalized, host_id)
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
     def update_renewal(
         self,
         host_id: str,
@@ -588,3 +640,175 @@ class SqliteHostRepository:
             )
             conn.commit()
         return True
+
+
+# ---------- Alert Groups (Plan 015) ----------
+
+@dataclass
+class AlertGroup:
+    id: str = ""
+    name: str = ""
+    recipients: list[str] = field(default_factory=list)
+    match_tags: list[str] = field(default_factory=list)
+    webhook_url: str = ""
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+
+class SqliteAlertGroupRepository:
+    def __init__(self, db_path: str | Path) -> None:
+        self.db_path = Path(db_path)
+
+    def create(
+        self,
+        name: str,
+        recipients: list[str],
+        match_tags: list[str],
+        webhook_url: str = "",
+    ) -> str:
+        from cert_watch.tags import format_tags
+
+        group_id = str(uuid.uuid4())
+        now = _iso(datetime.now(UTC))
+        rec_str = format_tags(recipients)
+        tags_str = format_tags(match_tags)
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO alert_groups"
+                " (id, name, recipients, webhook_url, match_tags, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (group_id, name, rec_str, webhook_url, tags_str, now),
+            )
+            conn.commit()
+        return group_id
+
+    def get(self, group_id: str) -> AlertGroup | None:
+        from cert_watch.tags import parse_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM alert_groups WHERE id = ?", (group_id,)
+            ).fetchone()
+        if not row:
+            return None
+        return AlertGroup(
+            id=row["id"],
+            name=row["name"],
+            recipients=parse_tags(row["recipients"]),
+            match_tags=parse_tags(row["match_tags"]),
+            webhook_url=row["webhook_url"],
+            created_at=_parse_iso(row["created_at"]),
+        )
+
+    def get_by_name(self, name: str) -> AlertGroup | None:
+        from cert_watch.tags import parse_tags
+
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM alert_groups WHERE name = ?", (name,)
+            ).fetchone()
+        if not row:
+            return None
+        return AlertGroup(
+            id=row["id"],
+            name=row["name"],
+            recipients=parse_tags(row["recipients"]),
+            match_tags=parse_tags(row["match_tags"]),
+            webhook_url=row["webhook_url"],
+            created_at=_parse_iso(row["created_at"]),
+        )
+
+    def list_all(self) -> list[AlertGroup]:
+        from cert_watch.tags import parse_tags
+
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM alert_groups ORDER BY name"
+            ).fetchall()
+        return [
+            AlertGroup(
+                id=r["id"],
+                name=r["name"],
+                recipients=parse_tags(r["recipients"]),
+                match_tags=parse_tags(r["match_tags"]),
+                webhook_url=r["webhook_url"],
+                created_at=_parse_iso(r["created_at"]),
+            )
+            for r in rows
+        ]
+
+    def update(
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        recipients: list[str] | None = None,
+        match_tags: list[str] | None = None,
+        webhook_url: str | None = None,
+    ) -> bool:
+        from cert_watch.tags import format_tags
+
+        with _connect(self.db_path) as conn:
+            r = conn.execute(
+                "SELECT id FROM alert_groups WHERE id = ?", (group_id,)
+            ).fetchone()
+            if not r:
+                return False
+            sets: list[str] = []
+            params: list = []
+            if name is not None:
+                sets.append("name = ?")
+                params.append(name)
+            if recipients is not None:
+                sets.append("recipients = ?")
+                params.append(format_tags(recipients))
+            if match_tags is not None:
+                sets.append("match_tags = ?")
+                params.append(format_tags(match_tags))
+            if webhook_url is not None:
+                sets.append("webhook_url = ?")
+                params.append(webhook_url)
+            if not sets:
+                return True
+            params.append(group_id)
+            conn.execute(
+                f"UPDATE alert_groups SET {', '.join(sets)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+        return True
+
+    def delete(self, group_id: str) -> bool:
+        with _connect(self.db_path) as conn:
+            r = conn.execute(
+                "DELETE FROM alert_groups WHERE id = ?", (group_id,)
+            )
+            conn.execute(
+                "DELETE FROM alert_group_certs WHERE group_id = ?", (group_id,)
+            )
+            conn.commit()
+            return r.rowcount > 0
+
+    def assign_cert(self, group_id: str, cert_id: str) -> None:
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO alert_group_certs (group_id, cert_id)"
+                " VALUES (?, ?)",
+                (group_id, cert_id),
+            )
+            conn.commit()
+
+    def unassign_cert(self, group_id: str, cert_id: str) -> None:
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM alert_group_certs WHERE group_id = ? AND cert_id = ?",
+                (group_id, cert_id),
+            )
+            conn.commit()
+
+    def groups_for_cert_manual(self, cert_id: str) -> list[str]:
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT group_id FROM alert_group_certs WHERE cert_id = ?",
+                (cert_id,),
+            ).fetchall()
+        return [r["group_id"] for r in rows]

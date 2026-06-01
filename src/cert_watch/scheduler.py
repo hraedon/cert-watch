@@ -125,11 +125,15 @@ def start_scheduler(
     alert_fn: Callable[[], dict],
     *,
     ct_fn: Callable[[], dict] | None = None,
+    maintenance_fn: Callable[[], None] | None = None,
     hour: int = 6,
     minute: int = 0,
     db_path: str | Path | None = None,
 ) -> None:
     """Start a daemon thread that runs scan_fn + ct_fn + alert_fn once per day.
+
+    ``maintenance_fn`` (optional) runs at the end of each daily cycle for
+    housekeeping such as audit-log retention; failures are logged, never raised.
 
     When db_path is provided and there are hosts with no successful scan yet,
     the scheduler retries every FAST_RETRY_INTERVAL (1 hour) instead of waiting
@@ -157,6 +161,11 @@ def start_scheduler(
                 logger.info("scheduled alerts completed")
             except Exception:  # noqa: BLE001
                 logger.exception("scheduler alert_fn failed")
+            if maintenance_fn is not None:
+                try:
+                    maintenance_fn()
+                except Exception:  # noqa: BLE001
+                    logger.exception("scheduler maintenance_fn failed")
 
         def _loop() -> None:
             while not _scheduler_stop.is_set():
