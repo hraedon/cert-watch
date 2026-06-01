@@ -696,3 +696,224 @@ class TestPostureEdgeCases:
         assert result.protocol_version == "TLSv1.3"
         assert result.ocsp_stapling is True
         assert result.hsts is True
+
+
+# ---------- Revocation endpoint health (Plan 017 A1) ----------
+
+
+def _cert_with_aia_and_crl(
+    ocsp_url: str | None = None,
+    crl_urls: list[str] | None = None,
+) -> bytes:
+    """Generate a self-signed certificate with AIA and/or CRL extensions."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import AuthorityInformationAccessOID, NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.now(UTC)
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, "revocation-test.example.com"),
+    ])
+
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=90))
+    )
+
+    if ocsp_url:
+        aia = x509.AuthorityInformationAccess([
+            x509.AccessDescription(
+                AuthorityInformationAccessOID.OCSP,
+                x509.UniformResourceIdentifier(ocsp_url),
+            ),
+        ])
+        builder = builder.add_extension(aia, critical=False)
+
+    if crl_urls:
+        dp = x509.CRLDistributionPoints([
+            x509.DistributionPoint(
+                full_name=[x509.UniformResourceIdentifier(url)],
+                relative_name=None,
+                reasons=None,
+                crl_issuer=None,
+            )
+            for url in crl_urls
+        ])
+        builder = builder.add_extension(dp, critical=False)
+
+    cert = builder.sign(key, hashes.SHA256())
+    return cert.public_bytes(serialization.Encoding.DER)
+
+
+def test_extract_ocsp_url_present():
+    from cert_watch.posture import _extract_ocsp_url
+    der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.example.com")
+    url = _extract_ocsp_url(der)
+    assert url == "http://ocsp.example.com"
+
+
+def test_extract_ocsp_url_absent():
+    from cert_watch.posture import _extract_ocsp_url
+    der = _cert_with_aia_and_crl()
+    url = _extract_ocsp_url(der)
+    assert url is None
+
+
+def test_extract_crl_urls_present():
+    from cert_watch.posture import _extract_crl_urls
+    der = _cert_with_aia_and_crl(crl_urls=["http://crl.example.com/ca.crl"])
+    urls = _extract_crl_urls(der)
+    assert urls == ["http://crl.example.com/ca.crl"]
+
+
+def test_extract_crl_urls_multiple():
+    from cert_watch.posture import _extract_crl_urls
+    der = _cert_with_aia_and_crl(crl_urls=[
+        "http://crl1.example.com/ca.crl",
+        "http://crl2.example.com/ca.crl",
+    ])
+    urls = _extract_crl_urls(der)
+    assert len(urls) == 2
+
+
+def test_extract_crl_urls_absent():
+    from cert_watch.posture import _extract_crl_urls
+    der = _cert_with_aia_and_crl()
+    urls = _extract_crl_urls(der)
+    assert urls == []
+
+
+def test_extract_empty_der():
+    from cert_watch.posture import _extract_crl_urls, _extract_ocsp_url
+    assert _extract_ocsp_url(b"") is None
+    assert _extract_crl_urls(b"") == []
+
+
+def test_check_ocsp_reachable_success():
+    from unittest.mock import MagicMock, patch
+
+    from cert_watch.posture import _check_ocsp_reachable
+    with patch("cert_watch.posture.urllib.request") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        assert _check_ocsp_reachable("http://ocsp.test") is True
+
+
+def test_check_ocsp_reachable_failure():
+    from unittest.mock import patch
+
+    from cert_watch.posture import _check_ocsp_reachable
+    with patch("cert_watch.posture.urllib.request.urlopen", side_effect=Exception("timeout")):
+        assert _check_ocsp_reachable("http://ocsp.test") is False
+
+
+def test_check_crl_reachable_success():
+    from unittest.mock import MagicMock, patch
+
+    from cert_watch.posture import _check_crl_reachable
+    with patch("cert_watch.posture.urllib.request") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        assert _check_crl_reachable("http://crl.test/ca.crl") is True
+
+
+def test_check_crl_reachable_failure():
+    from unittest.mock import patch
+
+    from cert_watch.posture import _check_crl_reachable
+    with patch("cert_watch.posture.urllib.request.urlopen", side_effect=Exception("refused")):
+        assert _check_crl_reachable("http://crl.test/ca.crl") is False
+
+
+def test_check_revocation_endpoints_ocsp_reachable():
+    from unittest.mock import patch
+
+    from cert_watch.posture import check_revocation_endpoints
+    der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=True):
+        findings = check_revocation_endpoints(der)
+    assert any(f.check == "ocsp_endpoint" and f.status == "pass" for f in findings)
+
+
+def test_check_revocation_endpoints_ocsp_unreachable():
+    from unittest.mock import patch
+
+    from cert_watch.posture import check_revocation_endpoints
+    der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=False):
+        findings = check_revocation_endpoints(der)
+    assert any(f.check == "ocsp_endpoint" and f.status == "warn" for f in findings)
+
+
+def test_check_revocation_endpoints_crl_reachable():
+    from unittest.mock import patch
+
+    from cert_watch.posture import check_revocation_endpoints
+    der = _cert_with_aia_and_crl(crl_urls=["http://crl.test/ca.crl"])
+    with patch("cert_watch.posture._check_crl_reachable", return_value=True):
+        findings = check_revocation_endpoints(der)
+    assert any(f.check == "crl_endpoint" and f.status == "pass" for f in findings)
+
+
+def test_check_revocation_endpoints_crl_unreachable():
+    from unittest.mock import patch
+
+    from cert_watch.posture import check_revocation_endpoints
+    der = _cert_with_aia_and_crl(crl_urls=["http://crl.test/ca.crl"])
+    with patch("cert_watch.posture._check_crl_reachable", return_value=False):
+        findings = check_revocation_endpoints(der)
+    assert any(f.check == "crl_endpoint" and f.status == "warn" for f in findings)
+
+
+def test_check_revocation_endpoints_no_urls():
+    from cert_watch.posture import check_revocation_endpoints
+    der = _cert_with_aia_and_crl()
+    findings = check_revocation_endpoints(der)
+    assert any(f.check == "ocsp_endpoint" and f.status == "info" for f in findings)
+    assert any(f.check == "crl_endpoint" and f.status == "info" for f in findings)
+
+
+def test_evaluate_posture_with_revocation_check():
+    """When check_revocation=True, revocation findings are included."""
+    from unittest.mock import patch
+    der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
+    cert = Certificate(
+        subject="CN=revocation-test.example.com",
+        issuer="CN=revocation-test.example.com",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=datetime.now(UTC) + timedelta(days=90),
+        san_dns_names=["revocation-test.example.com"],
+        fingerprint_sha256="AA" * 32,
+        raw_der=der,
+    )
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=True):
+        result = evaluate_posture(cert, check_revocation=True)
+    assert any(f.check == "ocsp_endpoint" for f in result.findings)
+
+
+def test_evaluate_posture_without_revocation_check():
+    """When check_revocation=False (default), no revocation findings."""
+    der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
+    cert = Certificate(
+        subject="CN=revocation-test.example.com",
+        issuer="CN=revocation-test.example.com",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=datetime.now(UTC) + timedelta(days=90),
+        san_dns_names=["revocation-test.example.com"],
+        fingerprint_sha256="AA" * 32,
+        raw_der=der,
+    )
+    result = evaluate_posture(cert, check_revocation=False)
+    assert not any(f.check == "ocsp_endpoint" for f in result.findings)
+    assert not any(f.check == "crl_endpoint" for f in result.findings)

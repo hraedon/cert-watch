@@ -762,11 +762,20 @@ def _evaluate_and_store_posture(
 
     cs = chain_status(cert, chain, anchors) if chain else None
 
+    # Read revocation check toggle from config
+    try:
+        import cert_watch.config as _cfg
+        _s = _cfg.Settings.from_env()
+        _check_revocation = _s.check_revocation
+    except Exception:
+        _check_revocation = False
+
     result = evaluate_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
         chain_status=cs,
         hsts=entry.hsts,
+        check_revocation=_check_revocation,
     )
 
     store_scan_posture(

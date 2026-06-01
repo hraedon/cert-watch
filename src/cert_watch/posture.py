@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+import urllib.request
 from dataclasses import dataclass, field
 
 from cert_watch.certificate_model import Certificate
+
+logger = logging.getLogger("cert_watch.posture")
 
 
 @dataclass
@@ -24,12 +28,128 @@ class PostureResult:
     must_staple: bool = False
 
 
+# ---------- Revocation endpoint health (Plan 017 A1) ----------
+
+
+def _extract_ocsp_url(cert_der: bytes) -> str | None:
+    """Extract the first OCSP responder URL from the AIA extension."""
+    from cryptography import x509
+    from cryptography.x509.oid import AuthorityInformationAccessOID, ExtensionOID
+
+    try:
+        x509_cert = x509.load_der_x509_certificate(cert_der)
+        aia = x509_cert.extensions.get_extension_for_oid(
+            ExtensionOID.AUTHORITY_INFORMATION_ACCESS
+        )
+        for access_desc in aia.value:
+            if access_desc.access_method == AuthorityInformationAccessOID.OCSP:
+                return access_desc.access_location.value
+    except Exception:
+        pass
+    return None
+
+
+def _extract_crl_urls(cert_der: bytes) -> list[str]:
+    """Extract CRL distribution point URLs from the certificate."""
+    from cryptography import x509
+    from cryptography.x509.oid import ExtensionOID
+
+    urls: list[str] = []
+    try:
+        x509_cert = x509.load_der_x509_certificate(cert_der)
+        cdp = x509_cert.extensions.get_extension_for_oid(
+            ExtensionOID.CRL_DISTRIBUTION_POINTS
+        )
+        for dp in cdp.value:
+            if dp.full_name:
+                for name in dp.full_name:
+                    if hasattr(name, "value") and isinstance(name.value, str):
+                        urls.append(name.value)
+    except Exception:
+        pass
+    return urls
+
+
+def _check_ocsp_reachable(url: str, timeout: int = 5) -> bool:
+    """Check if an OCSP responder URL is reachable (HTTP HEAD)."""
+    try:
+        req = urllib.request.Request(url, method="HEAD")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 500
+    except Exception:
+        return False
+
+
+def _check_crl_reachable(url: str, timeout: int = 5) -> bool:
+    """Check if a CRL distribution point URL is reachable (HTTP GET, minimal)."""
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return 200 <= resp.status < 500
+    except Exception:
+        return False
+
+
+def check_revocation_endpoints(
+    cert_der: bytes,
+    timeout: int = 5,
+) -> list[Finding]:
+    """Check reachability of OCSP and CRL endpoints for a certificate.
+
+    Returns a list of Finding objects for each endpoint checked.
+    """
+    findings: list[Finding] = []
+
+    ocsp_url = _extract_ocsp_url(cert_der)
+    if ocsp_url:
+        reachable = _check_ocsp_reachable(ocsp_url, timeout=timeout)
+        if reachable:
+            findings.append(Finding(
+                check="ocsp_endpoint", status="pass",
+                message=f"OCSP responder reachable at {ocsp_url}",
+            ))
+        else:
+            findings.append(Finding(
+                check="ocsp_endpoint", status="warn",
+                message=f"OCSP responder unreachable at {ocsp_url}",
+            ))
+    else:
+        findings.append(Finding(
+            check="ocsp_endpoint", status="info",
+            message="No OCSP responder URL in AIA extension",
+        ))
+
+    crl_urls = _extract_crl_urls(cert_der)
+    if crl_urls:
+        for url in crl_urls:
+            reachable = _check_crl_reachable(url, timeout=timeout)
+            if reachable:
+                findings.append(Finding(
+                    check="crl_endpoint", status="pass",
+                    message=f"CRL endpoint reachable at {url}",
+                ))
+            else:
+                findings.append(Finding(
+                    check="crl_endpoint", status="warn",
+                    message=f"CRL endpoint unreachable at {url}",
+                ))
+    else:
+        findings.append(Finding(
+            check="crl_endpoint", status="info",
+            message="No CRL distribution points in certificate",
+        ))
+
+    return findings
+
+
 def evaluate_posture(
     cert: Certificate,
     protocol_version: str | None = None,
     ocsp_stapling: bool | None = None,
     hsts: bool | None = None,
     chain_status: str | None = None,
+    check_revocation: bool = False,
+    revocation_timeout: int = 5,
 ) -> PostureResult:
     """Evaluate TLS posture grade and lint findings from certificate data.
 
@@ -40,6 +160,9 @@ def evaluate_posture(
     - Self-signed leaf
     - Missing intermediate (chain_status incomplete)
     - OCSP must-staple without stapling
+
+    When ``check_revocation`` is True, OCSP and CRL endpoint reachability
+    is checked (network calls).  Gated by ``CERT_WATCH_CHECK_REVOCATION``.
     """
     from cryptography import x509
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
@@ -207,6 +330,15 @@ def evaluate_posture(
             check="hsts", status="pass",
             message="HSTS header present",
         ))
+
+    # Revocation endpoint health (opt-in, Plan 017 A1)
+    if check_revocation and cert.raw_der:
+        revocation_findings = check_revocation_endpoints(
+            cert.raw_der, timeout=revocation_timeout,
+        )
+        findings.extend(revocation_findings)
+        # Unreachable OCSP/CRL is a warning, not a grade penalty
+        # (the cert itself may be fine; the responder may be down)
 
     if grade_severity == 0:
         grade = "A"

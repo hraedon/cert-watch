@@ -116,6 +116,7 @@ class Settings:
     history_retention_days: int = 365
     alert_retention_days: int = 90
     drift_alerts: bool = True
+    check_revocation: bool = False
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -230,6 +231,7 @@ class Settings:
             history_retention_days=history_retention_days,
             alert_retention_days=alert_retention_days,
             drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
+            check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),
