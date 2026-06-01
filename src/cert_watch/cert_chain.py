@@ -138,6 +138,75 @@ def _is_anchored_by_system_root(chain: list[Certificate]) -> bool:
     return _issuer_bytes(last) in subjects
 
 
+def _load_x509(cert: Certificate) -> x509.Certificate | None:
+    """Parse a Certificate's DER bytes into an x509.Certificate, or None.
+
+    Signature verification requires the raw DER (a public key parsed from it).
+    DB-loaded and freshly-scanned certs both carry raw_der (NOT NULL column),
+    so this normally succeeds; we return None defensively rather than raise.
+    """
+    if not cert.raw_der:
+        return None
+    try:
+        return x509.load_der_x509_certificate(cert.raw_der)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _is_signed_by(child: Certificate, issuer: Certificate) -> bool:
+    """Return True iff `child` is cryptographically signed by `issuer`'s key.
+
+    Verifies the actual signature, not just that names line up. Uses
+    cryptography's verify_directly_issued_by (>=40; pyproject pins >=43) which
+    also checks the issuer/subject Name match and the AKI/SKI hints. Returns
+    False on any failure (bad signature, name mismatch, unparseable DER,
+    unsupported key type).
+    """
+    child_x = _load_x509(child)
+    issuer_x = _load_x509(issuer)
+    if child_x is None or issuer_x is None:
+        return False
+    try:
+        child_x.verify_directly_issued_by(issuer_x)
+        return True
+    except Exception:  # noqa: BLE001
+        # InvalidSignature, ValueError (name mismatch), TypeError
+        # (unsupported key), etc. all mean "not verifiably signed by".
+        return False
+
+
+def validate_chain_signatures(chain: list[Certificate]) -> bool | None:
+    """Verify each cert in `chain` is cryptographically signed by the next.
+
+    Returns None when chain length < 2 (not applicable, mirrors
+    validate_chain_order). Returns True only when every adjacent pair passes
+    real signature verification — name linkage is necessary but not sufficient.
+    """
+    if len(chain) < 2:
+        return None
+    return all(_is_signed_by(chain[i], chain[i + 1]) for i in range(len(chain) - 1))
+
+
+def _is_signature_anchored_by_user(
+    chain: list[Certificate], anchors: list[Certificate]
+) -> bool:
+    """Return True if the chain's top is signature-verified against an anchor.
+
+    Either the last cert IS an uploaded anchor (fingerprint match — same cert,
+    trivially valid), or the last cert is cryptographically signed by one of
+    the uploaded anchors. Name-only linkage is NOT sufficient.
+    """
+    if not chain or not anchors:
+        return False
+    last = chain[-1]
+    for a in anchors:
+        if last.fingerprint_sha256 == a.fingerprint_sha256:
+            return True
+        if _is_signed_by(last, a):
+            return True
+    return False
+
+
 def validate_chain_order(chain: list[Certificate]) -> bool | None:
     """See AC-02. Returns None when chain length < 2 (not applicable).
 
@@ -182,7 +251,12 @@ def deduplicate_chain(certificates: list[Certificate]) -> list[Certificate]:
 
 
 def validate_chain_with_anchors(chain: list[Certificate], anchors: list[Certificate]) -> bool:
-    """Validate chain order including trust anchors.
+    """Validate chain ORDER (name linkage) including trust anchors.
+
+    NOTE: this checks issuer/subject *Name* linkage only — it does NOT verify
+    signatures and is not a trust decision. Trust grading goes through
+    chain_status(), which requires real signature verification (BC-061). This
+    helper remains for structural ordering checks.
 
     Same issuer==subject walk as validate_chain_order, but the final step
     may match an anchor (anchor.subject == last cert.issuer).
@@ -199,7 +273,11 @@ def validate_chain_with_anchors(chain: list[Certificate], anchors: list[Certific
 
 
 def is_anchored_by_user(chain: list[Certificate], anchors: list[Certificate]) -> bool:
-    """Return True if the chain is anchored by a user-uploaded trust anchor.
+    """Return True if the chain is name-linked to a user-uploaded trust anchor.
+
+    NOTE: name/fingerprint linkage only — NOT a signature check. For the trust
+    decision use chain_status(), which calls _is_signature_anchored_by_user()
+    to verify the anchor's signature (BC-061).
 
     Checks whether the last certificate matches an uploaded anchor by
     fingerprint (self-signed roots) or by issuer/subject linkage.
@@ -220,25 +298,39 @@ def chain_status(
 ) -> str:
     """Return a human-readable chain trust status.
 
+    Trust grades ("public"/"private") require CRYPTOGRAPHIC signature
+    verification of every link, not just matching issuer/subject Names. A chain
+    whose names line up but whose signatures are forged/mismatched grades as
+    "invalid" — a forged intermediate is detected (BC-061).
+
     - "self-signed"   : leaf is its own issuer.
     - "unknown"       : no intermediates available (can't validate).
-    - "invalid"       : chain order is structurally broken.
-    - "private"       : chain is valid and anchored by a user-uploaded trust anchor.
-    - "public"        : chain is valid and ends at a self-signed root (assumed public CA)
-                        or at a certificate whose issuer is in the system trust store.
-    - "incomplete"    : chain is structurally valid but missing a trusted root.
+    - "invalid"       : chain order is structurally broken OR a link's signature
+                        does not verify (names may match but the key does not).
+    - "private"       : chain is signature-verified end to end and anchored by a
+                        user-uploaded trust anchor.
+    - "public"        : chain is signature-verified end to end and ends at a
+                        self-signed root (assumed public CA) or at a certificate
+                        whose issuer is in the system trust store.
+    - "incomplete"    : chain links verify but no trusted root is present.
     """
     if _subject_bytes(leaf) == _issuer_bytes(leaf):
         return "self-signed"
     if not chain:
         return "unknown"
     full = [leaf, *chain]
-    structural = validate_chain_order(full)
-    if not structural:
+    # Names must line up AND every link must be signature-verified. A
+    # name-matching-but-forged chain is reported as invalid, not trusted.
+    if not validate_chain_order(full):
         return "invalid"
-    if is_anchored_by_user(full, anchors):
+    if validate_chain_signatures(full) is not True:
+        return "invalid"
+    if _is_signature_anchored_by_user(full, anchors):
         return "private"
-    if _subject_bytes(chain[-1]) == _issuer_bytes(chain[-1]):
+    last = chain[-1]
+    if _subject_bytes(last) == _issuer_bytes(last) and _is_signed_by(last, last):
+        # Self-signed root: only "public" if it actually self-signs (a real
+        # trust anchor), not merely if its names happen to match.
         return "public"
     if _is_anchored_by_system_root(full):
         return "public"

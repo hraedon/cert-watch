@@ -12,10 +12,37 @@ from cert_watch.cert_chain import (
     is_anchored_by_user,
     split_leaf_intermediates,
     validate_chain_order,
+    validate_chain_signatures,
     validate_chain_with_anchors,
     validate_is_ca_certificate,
 )
 from cert_watch.certificate_model import extract_chain_from_pem, parse_certificate
+
+
+def _issue(subject_cn, issuer_name, issuer_key, subject_key=None):
+    """Build a DER cert: subject_cn signed by issuer_key, issuer=issuer_name.
+
+    By passing a wrong issuer_key while keeping issuer_name aligned with the
+    parent's subject, we forge a cert whose NAMES link to the parent but whose
+    SIGNATURE was made by an unrelated key (BC-061 attack model).
+    """
+    skey = subject_key or rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer_name)
+        .public_key(skey.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=365))
+        .sign(issuer_key, hashes.SHA256())
+    )
+    return cert, skey
+
+
+def _to_cert(der_cert):
+    return parse_certificate(der_cert.public_bytes(Encoding.DER))
 
 
 def _make_ca_cert(ca: bool) -> bytes:
@@ -188,3 +215,97 @@ def test_validate_is_ca_invalid_der():
 def test_validate_is_ca_empty_der():
     result = validate_is_ca_certificate(b"")
     assert result == "failed to parse certificate"
+
+
+# ---------- BC-061: signature verification, not just name matching ----------
+
+
+def test_validate_chain_signatures_genuine(chain_triplet):
+    """A genuinely-signed leaf->intermediate->root chain verifies."""
+    certs = [
+        parse_certificate(chain_triplet["leaf"].der),
+        parse_certificate(chain_triplet["intermediate"].der),
+        parse_certificate(chain_triplet["root"].der),
+    ]
+    assert validate_chain_signatures(certs) is True
+
+
+def test_validate_chain_signatures_forged():
+    """Names line up but a forged intermediate's signature does not verify."""
+    # Real root.
+    root_cert, root_key = _issue(
+        "Forge Root CA",
+        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")]),
+        rsa.generate_private_key(public_exponent=65537, key_size=2048),
+    )
+    # Re-sign the root with its own key so it self-signs cleanly.
+    root_self_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")])
+    root_cert, root_key = _issue("Forge Root CA", root_name, root_self_key, root_self_key)
+
+    # Forged intermediate: issuer NAME == root's subject, but signed by an
+    # ATTACKER key, not root_key. Name linkage holds; signature is bogus.
+    attacker_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    inter_cert, inter_key = _issue("Forge Intermediate CA", root_name, attacker_key)
+    inter_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Forge Intermediate CA")]
+    )
+    leaf_cert, _ = _issue("forge-leaf.example.com", inter_name, inter_key)
+
+    chain = [_to_cert(leaf_cert), _to_cert(inter_cert), _to_cert(root_cert)]
+    # Names link end to end...
+    assert validate_chain_order(chain) is True
+    # ...but the forged intermediate breaks signature verification.
+    assert validate_chain_signatures(chain) is not True
+
+
+def test_chain_status_forged_intermediate_not_public():
+    """A name-matching-but-forged chain must NOT grade as public/private/valid."""
+    root_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")])
+    root_cert, _ = _issue("Forge Root CA", root_name, root_key, root_key)
+
+    attacker_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    inter_cert, inter_key = _issue("Forge Intermediate CA", root_name, attacker_key)
+    inter_name = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Forge Intermediate CA")]
+    )
+    leaf_cert, _ = _issue("forge-leaf.example.com", inter_name, inter_key)
+
+    leaf = _to_cert(leaf_cert)
+    chain = [_to_cert(inter_cert), _to_cert(root_cert)]
+    anchor = _to_cert(root_cert)
+
+    # Without anchor: not "public", not "incomplete" — graded invalid.
+    assert chain_status(leaf, chain, []) == "invalid"
+    # Even with the real root uploaded as an anchor, the forged link is caught.
+    assert chain_status(leaf, chain, [anchor]) == "invalid"
+    assert chain_status(leaf, chain, [anchor]) not in ("public", "private")
+
+
+def test_chain_status_genuine_chain_private_with_anchor(chain_triplet):
+    """A genuinely-signed chain is still graded 'private' when anchored."""
+    leaf = parse_certificate(chain_triplet["leaf"].der)
+    intermediate = parse_certificate(chain_triplet["intermediate"].der)
+    root = parse_certificate(chain_triplet["root"].der)
+    assert chain_status(leaf, [intermediate, root], [root]) == "private"
+
+
+def test_chain_status_genuine_chain_public_root(chain_triplet):
+    """A genuinely-signed chain ending at its self-signed root is 'public'."""
+    leaf = parse_certificate(chain_triplet["leaf"].der)
+    intermediate = parse_certificate(chain_triplet["intermediate"].der)
+    root = parse_certificate(chain_triplet["root"].der)
+    assert chain_status(leaf, [intermediate, root], []) == "public"
+
+
+def test_self_signed_cert_still_scans_no_inventory_regression(self_signed_leaf):
+    """Inventory must not regress: a self-signed cert still parses + grades.
+
+    The trust grade is 'self-signed' (honest: not cryptographically trusted),
+    but the cert is fully parsed and usable — scanning/storing is unaffected.
+    """
+    leaf = parse_certificate(self_signed_leaf.der)
+    assert leaf is not None
+    assert leaf.raw_der  # stored/usable for inventory
+    assert chain_status(leaf, [], []) == "self-signed"
