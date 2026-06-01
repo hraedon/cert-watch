@@ -268,55 +268,34 @@ when `TRUST_PROXY=0`; spoofed header from non-proxy ignored.
 
 ## Phase 4 — Structural cleanup (MEDIUM)
 
-These are things to fix while the codebase is still small enough to
-refactor safely.
+> **Moved to Plan 018** (auth & data-layer consolidation). Plan 018
+> refines and replaces these items with concrete sequencing, blast-radius
+> analysis, and acceptance criteria informed by a codebase-wide review.
+> The summary below is kept for reference; see Plan 018 for the current
+> spec.
 
 ### 4.1 Consolidate auth checks with FastAPI dependencies
 
-**Problem:** Auth is checked at three levels: middleware, route-level
-manual checks, and implicit reliance on middleware. This is inconsistent
-and fragile.
-
-**Fix:**
-- Create a `require_auth` FastAPI dependency that validates the session
-  cookie and returns the username.
-- Create a `require_csrf` dependency for mutating endpoints.
-- Migrate all `/api/*` routes to use `Depends(require_auth)`.
-- Keep the middleware as a safety net for UI routes (redirect to login).
-- Remove the manual auth checks from individual API route handlers.
-
-**Files:** new `deps.py` (or in `middleware.py`), all `routes/*.py`.
-
-**Tests:** all `/api/*` routes return 401 without valid session; UI
-routes redirect to login; middleware still catches routes not using the
-dependency.
+→ Plan 018 A3 (`Depends(require_auth)` / `Depends(require_write)` sweep).
 
 ### 4.2 Unify data access for dashboard/metrics/healthz
 
-**Problem:** `_list_unified_entries_raw()` is the shared foundation for
-too many things. Each caller materializes the full dataset then filters
-differently.
-
-**Fix:**
-- Create a `DashboardQuery` class (or module) with targeted methods:
-  - `count_by_status(db) → dict[str, int]` — counts per urgency bucket
-  - `list_page(db, offset, limit, filters) → (rows, total)` — SQL-level
-    pagination with WHERE clauses
-  - `latest_scan(db) → (scanned_at, status)` — single row
-  - `failed_alerts_24h(db) → int` — single count
-  - `list_for_metrics(db) → iterator` — cursor-based, not materialized
-- Migrate callers one at a time: healthz, metrics, dashboard (ungrouped),
-  dashboard (grouped), pivot views.
-- Keep `_list_unified_entries_raw()` as a compatibility shim until all
-  callers are migrated, then delete it.
-
-**Files:** new `database/dashboard.py`, `routes/views.py`,
-`routes/api.py`, `database/queries.py`.
-
-**Tests:** each new method returns correct results; dashboard renders
-identically to before; metrics output unchanged.
+→ Plan 018 B2 (purpose-built dashboard queries).
 
 ### 4.3 Audit log retention
+
+**Problem:** The audit log grows unbounded. SMB users won't manage this.
+
+**Fix:**
+- Add `CERT_WATCH_AUDIT_RETENTION_DAYS` env var (default `90`).
+- On startup (and daily via scheduler), delete audit rows older than the
+  retention period.
+- Log at INFO when rows are purged.
+
+**Files:** `audit.py`, `scheduler.py`.
+
+**Tests:** old rows purged; recent rows retained; configurable retention;
+default 90 days.
 
 **Problem:** The audit log grows unbounded. SMB users won't manage this.
 
@@ -380,10 +359,10 @@ Phase 3 (security gaps) ─── HIGH, can parallel with Phase 2
   ├── 3.4 DNS rebinding fix (BC-053)
   └── 3.5 proxy-aware rate limiting (BC-055)
 
-Phase 4 (structural cleanup) ─── MEDIUM, after Phases 1-3
-  ├── 4.1 FastAPI auth dependencies
-  ├── 4.2 unified data access
-  └── 4.3 audit log retention
+Phase 4 (structural cleanup) ─── MEDIUM, see Plan 018
+  ├── 4.1 FastAPI auth dependencies → Plan 018 A3
+  ├── 4.2 unified data access → Plan 018 B2
+  └── 4.3 audit log retention (stays in this plan)
 
 Phase 5 (documentation) ─── MEDIUM, after Phase 4
   ├── 5.1 quick-start guide
@@ -420,9 +399,7 @@ refactor" work. Phase 5 follows naturally.
 - AC-11: Add-host SSRF check and scan use the same DNS resolution.
 
 ### Phase 4
-- AC-12: All `/api/*` routes use `Depends(require_auth)` — no manual auth
-  checks in route handlers.
-- AC-13: Dashboard renders identically using the new query methods.
+- AC-12..AC-13: moved to Plan 018.
 - AC-14: Audit rows older than retention period are purged automatically.
 
 ---
