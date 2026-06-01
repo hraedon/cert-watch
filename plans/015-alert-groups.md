@@ -105,11 +105,38 @@ which puts `owner_email` into `Alert.extra_recipients` (`alerts.py:121`).
 3. **No group match → no `extra_recipients` added → global default only.**
    Backward compatible (AC-6).
 
-### Per-group webhooks — **Phase 2, out of scope here**
-`send_webhook` uses a single global `WebhookConfig`. Per-group webhook fan-out
-needs the send loop to dispatch per group; defer. Store `webhook_url` now so
-the schema/API are stable, but don't wire delivery yet. Note this clearly in
-code + README.
+### Phase 2 — per-group multi-channel delivery (Teams/Slack/Discord/PagerDuty)
+
+> Folded in from the competitive review: native, rich-formatted channels are a
+> table-stakes expectation today, and the per-group model is the natural place
+> for them — each team routes to *its own* channel. This replaces the original
+> "raw global webhook" as the differentiator a regulated multi-team shop needs.
+
+`send_webhook` currently uses a single global `WebhookConfig`, so per-group fan
+-out is genuinely new work. Land email routing (Phase 1 above) first, then:
+
+1. **Schema:** add a `channels` JSON column to `alert_groups` (keep `recipients`
+   for email + `webhook_url` for back-compat). Each entry:
+   `{"type": "slack"|"teams"|"discord"|"pagerduty"|"webhook", "target": "<url/key>"}`.
+2. **Adapter layer:** new `alert_channels.py` with one formatter per type
+   (`format_slack(alert) -> dict`, `format_teams(...)` MessageCard/Adaptive
+   Card, `format_discord(...)`, `format_pagerduty(...)` Events API v2, raw
+   `webhook`). A `dispatch(channel, alert) -> bool` switch; reuse the existing
+   HTTP/retry/secret-sanitizing helpers from `send_webhook`.
+3. **Send loop:** in `process_pending`, after resolving matching groups for an
+   alert's cert, dispatch to each matched group's channels (best-effort per
+   channel; one failing channel must not block the others or the email path).
+   Record per-channel success/failure on the alert (extend the `alerts` row or
+   log structured).
+4. **API:** `channels` becomes part of the group create/update body and the
+   `/alert-routing` preview (`channels` listed alongside `recipients`).
+5. **Tests:** each formatter's payload shape; dispatch success/partial-failure
+   isolation; a group with Slack + email delivers to both; bad channel config
+   rejected at the API.
+
+Phase 2 is independently shippable after Phase 1; keep them as separate slices.
+The "Teams" mentioned in the project description is delivered here — also fix
+the README, which currently omits it.
 
 ---
 
@@ -158,8 +185,8 @@ slice 1) and `record_audit`.
    land with the alert regression suite green.
 3. JSON API (+ tests).
 4. README: API table rows + a short "Alert routing" section; AGENTS.md note.
-5. Mark Plan 013 slice 2 done; leave slice 3 (per-group webhooks) as a tracked
-   follow-up breadcrumb.
+5. Mark Plan 013 slice 2 done.
+6. **Phase 2 (multi-channel)** as a separate, follow-on slice — see above.
 
 ## Risk notes
 - The only behavior change to existing installs is in `evaluate_all_certs`;

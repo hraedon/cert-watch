@@ -222,6 +222,24 @@ deploy/
 .github/workflows/     CI, E2E, image build
 ```
 
+## Prior art & positioning
+
+cert-watch is not the first TLS-certificate monitor, and it doesn't pretend to
+be. It exists as a controlled build-method experiment (a hand-built comparison
+point for [software-factory-2](https://github.com/hraedon/software-factory-2))
+and as deep, read-only certificate **observability** for a regulated,
+directory-authenticated, self-hosted environment. For simple "tell me before a
+cert expires," tools like **Uptime Kuma** are an excellent fit; for pure CT
+watch, **SSLMate Cert Spotter**; for ACME issuance/renewal, **Certimate**.
+
+cert-watch's niche is the bundle a regulated AD shop needs in one self-contained
+unit: live scan **+** offline upload, signature-verified chain validation, TLS
+posture grading, CT reconciliation, LDAP/Entra auth, and an audit log.
+
+See [`docs/positioning.md`](docs/positioning.md) for the full landscape table,
+an honest account of where the alternatives are better, and how this shapes the
+roadmap.
+
 ## License
 
 MIT
