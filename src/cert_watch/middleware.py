@@ -416,8 +416,15 @@ async def require_auth(request: Request) -> str:
 
 
 async def require_write(request: Request) -> str:
-    """Auth + CSRF. Returns username or raises 401/403."""
+    """Auth + CSRF. Returns username or raises 401/403.
+
+    Skips CSRF when auth is disabled (NoAuthProvider) so the "auth off = open"
+    contract matches the original _require_api_write behavior.
+    """
     username = await require_auth(request)
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return username
     csrf_err = await check_csrf(request)
     if csrf_err:
         raise HTTPException(status_code=403, detail=csrf_err)
