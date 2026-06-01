@@ -16,6 +16,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Bulk import** — CSV upload for adding many hosts at once
 - **Prometheus metrics** — `/metrics` endpoint for monitoring integration
 - **Renewal tracking** — links renewed certificates to their predecessors
+- **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
 ## Stack
@@ -101,6 +102,7 @@ All configuration is via environment variables.
 | `CERT_WATCH_SCHED_MIN` | `0` | Minute to run daily scan |
 | `CERT_WATCH_TLS_VERIFY` | `0` | Set `1` to verify TLS certificates when scanning |
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
 
 ### Alerts (SMTP)

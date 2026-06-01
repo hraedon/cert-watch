@@ -113,6 +113,7 @@ class Settings:
     dns_servers: tuple[str, ...] = ()
     log_format: str = "text"
     audit_retention_days: int = 90
+    history_retention_days: int = 365
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -190,6 +191,15 @@ class Settings:
                 audit_retention_str,
             )
             audit_retention_days = 90
+        history_retention_str = os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365")
+        try:
+            history_retention_days = int(history_retention_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_HISTORY_RETENTION_DAYS=%r, using default 365",
+                history_retention_str,
+            )
+            history_retention_days = 365
         return cls(
             db_path=data_dir / "cert-watch.sqlite3",
             data_dir=data_dir,
@@ -206,6 +216,7 @@ class Settings:
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
             alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
             audit_retention_days=audit_retention_days,
+            history_retention_days=history_retention_days,
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),

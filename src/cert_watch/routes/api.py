@@ -22,7 +22,10 @@ from cert_watch.database import (
     count_dashboard_leaves,
     distinct_tags,
     list_alerts_with_subject,
+    list_cert_history,
     list_dashboard_rows,
+    list_grade_trends,
+    list_tls_version_trends,
 )
 from cert_watch.middleware import check_csrf
 from cert_watch.tags import format_tags, parse_tags
@@ -212,6 +215,22 @@ async def api_update_notes(cert_id: str, request: Request) -> JSONResponse:
         source_ip=resolve_source_ip(request),
     )
     return JSONResponse(content={"id": cert_id, "notes": notes})
+
+
+@router.get("/api/certificates/{cert_id}/history")
+def api_cert_history(request: Request, cert_id: str, limit: int = 365) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
+    db = _db_path(request)
+    from cert_watch.database.connection import _connect
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+    if row is None:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    history = list_cert_history(db, row["hostname"], row["port"], limit=min(max(limit, 1), 1000))
+    return JSONResponse(content={"cert_id": cert_id, "history": history})
 
 
 # ---------- Tags (plan 013) ----------
@@ -849,3 +868,24 @@ def api_pivot_group_entries(request: Request, pivot: str, group_key: str) -> JSO
         "group_key": group_key,
         "entries": entries,
     })
+
+
+# ---------- Trends (Plan 016) ----------
+
+
+@router.get("/api/trends/tls-versions")
+def api_tls_version_trends(request: Request, days: int = 30) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
+    db = _db_path(request)
+    trends = list_tls_version_trends(db, days=min(max(days, 1), 365))
+    return JSONResponse(content={"days": days, "trends": trends})
+
+
+@router.get("/api/trends/grades")
+def api_grade_trends(request: Request, days: int = 30) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
+    db = _db_path(request)
+    trends = list_grade_trends(db, days=min(max(days, 1), 365))
+    return JSONResponse(content={"days": days, "trends": trends})
