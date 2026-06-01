@@ -1,10 +1,49 @@
 import json
 import logging
 import os
+import secrets
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 
 logger = logging.getLogger("cert_watch.config")
+
+
+def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> str:
+    """Return env/_FILE secret if set (treating empty/whitespace as unset);
+    else read data_dir/filename; else generate 32-byte hex, persist 0600, return it.
+
+    This ensures signing keys survive restarts even when the operator hasn't
+    set an explicit env var. The persisted file is the fallback for local dev
+    and bare-metal installs without Docker secrets.
+    """
+    value = read_secret(env_name)
+    if value and value.strip():
+        return value
+    secret_file = data_dir / filename
+    try:
+        if secret_file.exists():
+            persisted = secret_file.read_text().strip()
+            if persisted:
+                logger.warning(
+                    "Using persisted %s from %s (no %s env var set; "
+                    "consider setting %s in production for explicit control)",
+                    filename, secret_file, env_name, env_name,
+                )
+                return persisted
+    except OSError:
+        logger.debug("could not read %s, will regenerate", secret_file)
+    generated = secrets.token_hex(32)
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        secret_file.write_text(generated + "\n")
+        secret_file.chmod(0o600)
+        logger.info("generated and persisted %s to %s", filename, secret_file)
+    except OSError:
+        logger.warning(
+            "could not persist %s to %s; using ephemeral key (sessions will not survive restart)",
+            filename, secret_file,
+        )
+    return generated
 
 
 def read_secret(name: str) -> str | None:
@@ -100,6 +139,7 @@ class Settings:
     local_admin_password_hash: str = ""
     # Security
     base_url: str = ""  # Override for OAuth redirect URI detection
+    allow_unauth: bool = False  # Suppress unauthenticated warning (CERT_WATCH_ALLOW_UNAUTH=1)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -212,6 +252,7 @@ class Settings:
             local_admin_password_hash=read_secret("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH") or "",
             # Security
             base_url=os.environ.get("CERT_WATCH_BASE_URL", "").rstrip("/"),
+            allow_unauth=os.environ.get("CERT_WATCH_ALLOW_UNAUTH", "0") == "1",
         )
 
     def build_alert_config(self):

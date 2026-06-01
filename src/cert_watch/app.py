@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -11,11 +14,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
+from cert_watch.auth import NoAuthProvider, set_signing_key
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
     SqliteHostRepository,
     init_schema,
+    kv_get,
 )
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
@@ -24,6 +29,8 @@ from cert_watch.middleware import (
     csrf_session_middleware,
     rate_limit_headers_middleware,
     security_headers_middleware,
+    set_csrf_secret,
+    setup_redirect_middleware,
 )
 from cert_watch.routes import api as route_modules
 from cert_watch.scan import scan_host, store_scanned
@@ -84,11 +91,91 @@ async def lifespan(app: FastAPI):
     _setup_logging(log_format=s.log_format)
     init_schema(s.db_path)
     _init_rate_db(s.db_path)
-    auth = s.build_auth_provider()
+
+    # Persist signing keys across restarts (Plan 014 Slice 1)
+    from cert_watch.config import resolve_or_persist_secret
+    auth_secret = resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
+    set_signing_key(auth_secret)
+    csrf_env = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
+    if csrf_env and csrf_env.strip():
+        set_csrf_secret(csrf_env.strip())
+    else:
+        derived = hashlib.sha256((auth_secret + "csrf").encode()).hexdigest()
+        set_csrf_secret(derived)
+
+    # Slice 2: if env vars for local admin are unset, check kv_store
+    local_admin_user = s.local_admin_user
+    local_admin_password_hash = s.local_admin_password_hash
+    if not local_admin_user:
+        kv_user = kv_get(s.db_path, "local_admin_user")
+        if kv_user:
+            local_admin_user = kv_user
+    if not local_admin_password_hash:
+        kv_hash = kv_get(s.db_path, "local_admin_password_hash")
+        if kv_hash:
+            local_admin_password_hash = kv_hash
+    # Rebuild auth provider if kv_store provided local admin that env didn't
+    if (local_admin_user and local_admin_password_hash) and (
+        not s.local_admin_user or not s.local_admin_password_hash
+    ):
+        from cert_watch.auth import build_auth_provider
+        auth = build_auth_provider(
+            provider=s.auth_provider,
+            ldap_server=s.ldap_server,
+            ldap_base_dn=s.ldap_base_dn,
+            ldap_bind_dn=s.ldap_bind_dn,
+            ldap_bind_password=s.ldap_bind_password,
+            ldap_user_filter=s.ldap_user_filter,
+            ldap_start_tls=s.ldap_start_tls,
+            ldap_ca_cert=s.ldap_ca_cert,
+            ldap_required_groups=list(s.ldap_required_groups),
+            ldap_connect_timeout=s.ldap_connect_timeout,
+            oauth_client_id=s.oauth_client_id,
+            oauth_client_secret=s.oauth_client_secret,
+            oauth_issuer_url=s.oauth_issuer_url,
+            oauth_scope=s.oauth_scope,
+            oauth_authorization_endpoint=s.oauth_authorization_endpoint,
+            oauth_token_endpoint=s.oauth_token_endpoint,
+            oauth_userinfo_endpoint=s.oauth_userinfo_endpoint,
+            allowed_groups=list(s.allowed_groups),
+            allowed_roles=list(s.allowed_roles),
+            local_admin_user=local_admin_user,
+            local_admin_password_hash=local_admin_password_hash,
+        )
+    else:
+        auth = s.build_auth_provider()
+
+    # Slice 3: setup wizard detection
+    host_count = 0
+    with contextlib.suppress(Exception):
+        host_count = len(SqliteHostRepository(s.db_path).list_all())
+    setup_complete = kv_get(s.db_path, "setup_complete") == "1"
+    needs_setup = False
+    if (
+        isinstance(auth, NoAuthProvider)
+        and host_count == 0
+        and not setup_complete
+        and not s.allow_unauth
+    ):
+        needs_setup = True
+    app.state.needs_setup = needs_setup
     app.state.auth_provider = auth
     app.state.settings = s
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
+
+    # Slice 4: warn when running without auth on a non-loopback address
+    if isinstance(auth, NoAuthProvider):
+        bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
+        if bind_host not in ("127.0.0.1", "::1", "localhost") and not s.allow_unauth:
+            bind_port = os.environ.get("CERT_WATCH_PORT", "8000")
+            logger.warning(
+                "CERT-WATCH WARNING: running without authentication on %s:%s. "
+                "All certificate and host data is publicly accessible. "
+                "Set AUTH_PROVIDER + a local admin (visit /setup) to secure this instance. "
+                "Set CERT_WATCH_ALLOW_UNAUTH=1 to suppress this warning.",
+                bind_host, bind_port,
+            )
     alert_cfg = s.build_alert_config()
     webhook_cfg = s.build_webhook_config()
 
@@ -153,6 +240,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.middleware("http")(security_headers_middleware)
 app.middleware("http")(rate_limit_headers_middleware)
 app.middleware("http")(csrf_session_middleware)
+app.middleware("http")(setup_redirect_middleware)
 app.middleware("http")(auth_middleware)
 
 # Mount route modules

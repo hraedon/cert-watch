@@ -1129,3 +1129,34 @@ def get_posture_grades_for_certs(
             cert_ids,
         ).fetchall()
     return {r["cert_id"]: r["grade"] for r in rows}
+
+
+# ---------- kv_store helpers ----------
+
+
+def kv_get(db_path: str | Path, key: str) -> str | None:
+    """Get a value from the kv_store table. Returns None if key not found."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def kv_set(db_path: str | Path, key: str, value: str) -> None:
+    """Set a value in the kv_store table (upsert)."""
+    init_schema(db_path)
+    now = _iso(datetime.now(UTC))
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+            (key, value, now),
+        )
+        conn.commit()
+
+
+def kv_all(db_path: str | Path) -> dict[str, str]:
+    """Return all key-value pairs from the kv_store table."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT key, value FROM kv_store").fetchall()
+    return {r["key"]: r["value"] for r in rows}

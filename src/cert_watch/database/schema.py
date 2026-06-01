@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS audit_log (
     detail TEXT,
     source_ip TEXT
 );
+
+CREATE TABLE IF NOT EXISTS kv_store (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 _BASE_INDEXES = """
