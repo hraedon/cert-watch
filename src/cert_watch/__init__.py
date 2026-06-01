@@ -10,7 +10,7 @@ def _load_runtime_version() -> tuple[str, str]:
         if vf.is_file():
             content = vf.read_text().strip()
             parts = content.split("\n")
-            ver = parts[0] if parts else ""
+            ver = parts[0].lstrip("v") if parts else ""
             commit = parts[1] if len(parts) > 1 else ""
             return ver or __version__, commit
     except Exception:
