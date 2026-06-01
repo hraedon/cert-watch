@@ -349,3 +349,143 @@ def test_evaluate_thresholds_custom_cooldown(alert_repo, expiring_cert):
     # All thresholds already have alerts, but cooldown=0 means they're eligible
     second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
     assert len(second) > 0
+
+
+# ---------- send_expiry_digest (Plan 002 WI-2) ----------
+
+
+def _insert_cert(db_path, *, subject="CN=test", hostname="h.example.com", port=443,
+                 not_after="2026-06-01T00:00:00+00:00", is_leaf=1):
+    """Insert a minimal certificate row for digest testing."""
+    import uuid
+    from datetime import UTC, datetime
+
+    from cert_watch.database import _connect, init_schema
+    init_schema(db_path)
+    now = datetime.now(UTC).isoformat()
+    cert_id = str(uuid.uuid4())
+    with _connect(db_path) as conn:
+        conn.execute(
+            """INSERT INTO certificates
+            (id, subject, issuer, not_before, not_after, san_dns_names,
+             fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+             parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
+             created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (cert_id, subject, "CN=CA", "2025-01-01T00:00:00+00:00", not_after,
+             "", "fp" + cert_id[:8], b"", "scan", hostname, port, is_leaf,
+             None, None, None, "", "", now, now),
+        )
+        conn.commit()
+    return cert_id
+
+
+def test_send_expiry_digest_returns_true_with_expiring_certs(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    # Cert expiring in 5 days
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, not_after=soon)
+    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
+                         from_addr="from@test", recipients=["to@test"])
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_server = MagicMock()
+        mock_smtp.SMTP.return_value.__enter__ = lambda s: mock_server
+        mock_smtp.SMTP.return_value.__exit__ = MagicMock(return_value=False)
+        result = send_expiry_digest(db, config)
+    assert result is True
+
+
+def test_send_expiry_digest_returns_true_when_no_expiring(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    # Cert expiring in 100 days — not within 30-day window
+    far = (datetime.now(UTC) + timedelta(days=100)).isoformat()
+    _insert_cert(db, not_after=far)
+    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
+                         from_addr="from@test", recipients=["to@test"])
+    result = send_expiry_digest(db, config)
+    assert result is True  # nothing to report is success
+
+
+def test_send_expiry_digest_returns_false_when_no_config(tmp_path):
+    from cert_watch.alerts import send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    _insert_cert(db)
+    assert send_expiry_digest(db, None, None) is False
+
+
+def test_send_expiry_digest_sends_webhook_when_no_smtp(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, not_after=soon)
+    webhook = WebhookConfig(url="https://hooks.test/hook")
+    with patch("cert_watch.alerts.urllib.request") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
+
+
+def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=3)).isoformat()
+    _insert_cert(db, subject="CN=important", hostname="web.example.com",
+                 port=443, not_after=soon)
+    webhook = WebhookConfig(url="https://hooks.test/hook")
+    with patch("cert_watch.alerts.urllib.request") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_req.Request.return_value = MagicMock()
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
+
+
+def test_send_expiry_digest_smtp_failure_returns_false(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, not_after=soon)
+    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
+                         from_addr="from@test", recipients=["to@test"])
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_smtp.SMTP.side_effect = Exception("connection refused")
+        result = send_expiry_digest(db, config)
+    assert result is False
+
+
+def test_send_expiry_digest_respects_30_day_window(tmp_path):
+    """Only certs within 30 days are included."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    # One inside window, one outside
+    inside = (datetime.now(UTC) + timedelta(days=20)).isoformat()
+    outside = (datetime.now(UTC) + timedelta(days=60)).isoformat()
+    _insert_cert(db, subject="CN=inside", hostname="in.example.com", not_after=inside)
+    _insert_cert(db, subject="CN=outside", hostname="out.example.com", not_after=outside)
+    webhook = WebhookConfig(url="https://hooks.test/hook")
+    with patch("cert_watch.alerts.urllib.request") as mock_req:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
+        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
