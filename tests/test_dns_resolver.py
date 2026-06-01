@@ -39,18 +39,18 @@ def test_parse_dns_name_pointer():
 def test_resolve_with_dns_builds_packet(monkeypatch):
     from cert_watch.scan import _resolve_with_dns
 
-    captured: list[tuple[bytes, tuple[str, int]]] = []
-
     class FakeSock:
+        def __init__(self):
+            self._query_data = None
+
         def settimeout(self, v):
             pass
 
         def sendto(self, data, addr):
-            captured.append((data, addr))
+            self._query_data = data
 
         def recvfrom(self, bufsize):
-            query = captured[0][0]
-            qid = query[:2]
+            qid = self._query_data[:2]
             hdr = qid + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
             question = b"\x07example\x03com\x00" + struct.pack("!HH", 1, 1)
             name_ptr = struct.pack("!H", 0xC00C)
@@ -115,14 +115,17 @@ def test_resolve_hostname_uses_custom_dns(monkeypatch):
         return [(socket.AF_INET, 1, 0, "", ("1.1.1.1", port))]
 
     class FakeSock:
+        def __init__(self):
+            self._query_data = None
+
         def settimeout(self, v):
             pass
 
         def sendto(self, data, addr):
-            pass
+            self._query_data = data
 
         def recvfrom(self, bufsize):
-            qid = b"\x00\x01"
+            qid = self._query_data[:2]
             hdr = qid + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
             question = b"\x07example\x03com\x00" + struct.pack("!HH", 1, 1)
             name_ptr = struct.pack("!H", 0xC00C)

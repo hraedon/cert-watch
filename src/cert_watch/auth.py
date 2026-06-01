@@ -188,6 +188,13 @@ class LDAPAuthProvider(AuthProvider):
         self.ca_cert = ca_cert
         self.required_groups = required_groups or []
         self.connect_timeout = connect_timeout
+        is_ldaps = any(s.lower().startswith("ldaps://") for s in server_url.split(","))
+        if not is_ldaps and not start_tls and (bind_dn or bind_password):
+            logger.warning(
+                "LDAP connection over plaintext ldap:// without STARTTLS — "
+                "bind credentials will be transmitted in cleartext. "
+                "Use ldaps:// or set LDAP_START_TLS=1."
+            )
         try:
             import ldap3  # noqa: F401
         except ImportError:
@@ -573,10 +580,11 @@ class OAuthProvider(AuthProvider):
         except ImportError:
             return AuthResult(success=False, error="authlib not installed")
         # BC-009: verify state parameter before exchanging code
-        if state:
-            expected_state = _verify_state(state)
-            if expected_state is None:
-                return AuthResult(success=False, error="invalid OAuth state")
+        if not state:
+            return AuthResult(success=False, error="missing OAuth state parameter")
+        expected_state = _verify_state(state)
+        if expected_state is None:
+            return AuthResult(success=False, error="invalid OAuth state")
         endpoints = self._discover()
         token_endpoint = endpoints.get("token_endpoint", "")
         if not token_endpoint:
@@ -719,6 +727,18 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
         expected_dk = base64.b64decode(parts[5])
     except (ValueError, Exception):
         return False
+    if n < 2 or r < 1 or p < 1 or len(expected_dk) != 32:
+        logger.warning(
+            "Rejecting scrypt hash with invalid parameters: n=%s r=%s p=%s",
+            parts[1], parts[2], parts[3],
+        )
+        return False
+    if n < 2**14 or r < 8:
+        logger.warning(
+            "Scrypt hash with weak parameters (n=%s r=%s p=%s) — "
+            "production should use n>=16384 r>=8",
+            parts[1], parts[2], parts[3],
+        )
     dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
     return hmac.compare_digest(dk, expected_dk)
 
@@ -832,10 +852,10 @@ def build_auth_provider(
         return NoAuthProvider()
     if provider == "ldap":
         if not ldap_server or not ldap_base_dn:
-            logger.warning("LDAP auth misconfigured: LDAP_SERVER and LDAP_BASE_DN required")
-            if local_admin:
-                return local_admin
-            return NoAuthProvider()
+            raise ValueError(
+                "LDAP auth misconfigured: LDAP_SERVER and LDAP_BASE_DN are required "
+                "when AUTH_PROVIDER=ldap. Either configure LDAP or set AUTH_PROVIDER=none."
+            )
         primary = LDAPAuthProvider(
             server_url=ldap_server,
             base_dn=ldap_base_dn,
@@ -852,10 +872,10 @@ def build_auth_provider(
         return primary
     if provider in ("oauth", "entra", "azure", "oidc"):
         if not oauth_client_id or not oauth_issuer_url:
-            logger.warning("OAuth misconfigured: OAUTH_CLIENT_ID and OAUTH_ISSUER_URL required")
-            if local_admin:
-                return local_admin
-            return NoAuthProvider()
+            raise ValueError(
+                "OAuth misconfigured: OAUTH_CLIENT_ID and OAUTH_ISSUER_URL are required "
+                "when AUTH_PROVIDER=oauth. Either configure OAuth or set AUTH_PROVIDER=none."
+            )
         primary = OAuthProvider(
             OAuthConfig(
                 client_id=oauth_client_id,
@@ -870,7 +890,7 @@ def build_auth_provider(
         if local_admin:
             return _CompositeProvider(local_admin, primary)
         return primary
-    logger.warning("Unknown AUTH_PROVIDER=%r, falling back to no auth", provider)
-    if local_admin:
-        return local_admin
-    return NoAuthProvider()
+    logger.warning("Unknown AUTH_PROVIDER=%r, refusing to start without authentication", provider)
+    raise ValueError(
+        f"Unknown AUTH_PROVIDER={provider!r}. Valid values: none, ldap, oauth/entra/azure/oidc."
+    )

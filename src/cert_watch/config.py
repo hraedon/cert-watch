@@ -74,6 +74,8 @@ class Settings:
     # Local break-glass admin
     local_admin_user: str = ""
     local_admin_password_hash: str = ""
+    # Security
+    base_url: str = ""  # Override for OAuth redirect URI detection
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -173,6 +175,8 @@ class Settings:
             # Local break-glass admin
             local_admin_user=os.environ.get("CERT_WATCH_LOCAL_ADMIN_USER", ""),
             local_admin_password_hash=read_secret("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH") or "",
+            # Security
+            base_url=os.environ.get("CERT_WATCH_BASE_URL", "").rstrip("/"),
         )
 
     def build_alert_config(self):

@@ -26,6 +26,14 @@ from cert_watch.middleware import check_csrf
 
 logger = logging.getLogger("cert_watch.routes.api")
 
+_CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_safe(value: str) -> str:
+    if value and str(value)[0] in _CSV_DANGEROUS_PREFIXES:
+        return "'" + str(value)
+    return str(value)
+
 router = APIRouter()
 
 
@@ -343,31 +351,31 @@ def api_export_certificates_csv(request: Request) -> PlainTextResponse:
     ])
     for r in rows:
         writer.writerow([
-            r["host"],
-            r["source"],
-            r["subject"],
-            r["issuer"],
-            r["not_after"],
-            r["days_remaining"],
-            r["urgency"],
-            r.get("chain_valid", ""),
-            r["subject"],
-            r["issuer"],
-            r["not_after"],
+            _csv_safe(r["host"]),
+            _csv_safe(r["source"]),
+            _csv_safe(r["subject"]),
+            _csv_safe(r["issuer"]),
+            _csv_safe(r["not_after"]),
+            _csv_safe(r["days_remaining"]),
+            _csv_safe(r["urgency"]),
+            _csv_safe(r.get("chain_valid", "")),
+            _csv_safe(r["subject"]),
+            _csv_safe(r["issuer"]),
+            _csv_safe(r["not_after"]),
         ])
         for chain in r.get("chain", []):
             writer.writerow([
-                r["host"],
-                r["source"],
-                chain["subject"],
-                chain["issuer"],
-                chain["not_after"],
-                chain["days_remaining"],
-                chain["urgency"],
+                _csv_safe(r["host"]),
+                _csv_safe(r["source"]),
+                _csv_safe(chain["subject"]),
+                _csv_safe(chain["issuer"]),
+                _csv_safe(chain["not_after"]),
+                _csv_safe(chain["days_remaining"]),
+                _csv_safe(chain["urgency"]),
                 "",
-                r["subject"],
-                r["issuer"],
-                r["not_after"],
+                _csv_safe(r["subject"]),
+                _csv_safe(r["issuer"]),
+                _csv_safe(r["not_after"]),
             ])
     return PlainTextResponse(
         content=output.getvalue(),

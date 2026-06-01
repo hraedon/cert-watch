@@ -42,22 +42,29 @@ _PRIVATE_NETWORKS = [
 ]
 
 
-def _probe_hsts(hostname: str, port: int) -> bool | None:
+def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool | None:
     """Check if an HTTPS server sends Strict-Transport-Security.
 
     Returns True if HSTS header found, False if not found, None on error.
+    When pinned_ip is provided, connects to that IP (prevents DNS rebinding).
     """
     if port != 443:
         return None
     try:
         import http.client
 
-        conn = http.client.HTTPSConnection(
-            hostname, port, timeout=HSTS_TIMEOUT,
-            context=ssl.create_default_context(),
-        )
+        ctx = ssl.create_default_context()
+        if pinned_ip:
+            conn = http.client.HTTPSConnection(
+                pinned_ip, port, timeout=HSTS_TIMEOUT, context=ctx,
+            )
+            conn.set_tunnel(hostname, port, {"Host": hostname})
+        else:
+            conn = http.client.HTTPSConnection(
+                hostname, port, timeout=HSTS_TIMEOUT, context=ctx,
+            )
         try:
-            conn.request("HEAD", "/")
+            conn.request("HEAD", "/", headers={"Host": hostname})
             resp = conn.getresponse()
             hsts_header = resp.getheader("Strict-Transport-Security")
         finally:
@@ -121,6 +128,7 @@ def _parse_dns_name(data: bytes, offset: int) -> tuple[str, int]:
     original = offset
     jumped = False
     max_offset = original
+    seen_offsets: set[int] = set()
     while offset < len(data):
         length = data[offset]
         if length == 0:
@@ -130,6 +138,9 @@ def _parse_dns_name(data: bytes, offset: int) -> tuple[str, int]:
             if not jumped:
                 max_offset = offset + 2
             pointer = struct.unpack("!H", data[offset : offset + 2])[0] & 0x3FFF
+            if pointer in seen_offsets:
+                break
+            seen_offsets.add(pointer)
             offset = pointer
             jumped = True
             continue
@@ -149,6 +160,7 @@ def _resolve_with_dns(
     results: list[tuple[int, tuple]] = []
     for qtype, family in [(_QTYPE_A, socket.AF_INET), (_QTYPE_AAAA, socket.AF_INET6)]:
         query = _build_dns_query(hostname, qtype)
+        query_id = struct.unpack("!H", query[:2])[0]
         for server in dns_servers:
             try:
                 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -161,6 +173,13 @@ def _resolve_with_dns(
             except (TimeoutError, OSError):
                 continue
             if len(response) < 12:
+                continue
+            resp_id = struct.unpack("!H", response[:2])[0]
+            if resp_id != query_id:
+                continue
+            flags = struct.unpack("!H", response[2:4])[0]
+            rcode = flags & 0x000F
+            if rcode != 0:
                 continue
             ancount = struct.unpack("!H", response[6:8])[0]
             offset = 12
@@ -497,7 +516,7 @@ def _scan_host_once(
             cp.is_leaf = False
             chain_certs.append(cp)
 
-    hsts = _probe_hsts(hostname, port)
+    hsts = _probe_hsts(hostname, port, pinned_ip=pinned_ip)
 
     return ScannedEntry(
         host=hostname,
@@ -546,7 +565,7 @@ def _scan_host_via_openssl(
                 chain=chain_certs,
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
-                hsts=_probe_hsts(hostname, port),
+                hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
@@ -589,7 +608,7 @@ def _scan_host_via_openssl(
         chain=[],
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
-        hsts=_probe_hsts(hostname, port),
+        hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
     )
 
 

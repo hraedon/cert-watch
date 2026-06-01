@@ -26,7 +26,12 @@ from cert_watch.database import (
 )
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import register_filters
-from cert_watch.middleware import check_metrics_token, check_rate_limit, get_csrf_context
+from cert_watch.middleware import (
+    _extract_client_ip,
+    check_metrics_token,
+    check_rate_limit,
+    get_csrf_context,
+)
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -64,8 +69,8 @@ def healthz(request: Request) -> dict:
             checks["last_scan_status"] = scan_row["status"]
         else:
             checks["last_scan"] = "none"
-    except Exception as exc:
-        checks["database"] = f"error: {exc}"
+    except Exception:
+        checks["database"] = "error"
         ok = False
     # Scheduler
     from cert_watch.scheduler import _scheduler_thread
@@ -294,7 +299,7 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
 
 @router.get("/ct-lookup/{domain}")
 def ct_lookup_view(request: Request, domain: str) -> dict:
-    if not check_rate_limit(f"ct:{request.client.host}", 10, 60):
+    if not check_rate_limit(f"ct:{_extract_client_ip(request)}", 10, 60):
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "rate limited"}, status_code=429)
     result = ct_lookup.query_ct_log(domain)
@@ -320,7 +325,7 @@ def ct_lookup_view(request: Request, domain: str) -> dict:
 @router.get("/caa-check/{domain}")
 def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
-    if not check_rate_limit(f"caa:{request.client.host}", 10, 60):
+    if not check_rate_limit(f"caa:{_extract_client_ip(request)}", 10, 60):
         from fastapi.responses import JSONResponse
         return JSONResponse({"error": "rate limited"}, status_code=429)
     import re as _re

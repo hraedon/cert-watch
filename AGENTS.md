@@ -51,6 +51,12 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
 
+### Open design/latent issues
+
+- **BC-061** (medium) — Chain validation is name-matching only, never verifies signatures
+- **BC-063** (medium) — Daily scheduled scan does not pin IP (BC-053 bypass)
+- **BC-064** (low) — TLS verification off by default; `verified` not persisted
+
 ### Recently resolved
 
 - **BC-048** (medium) — Fleet pivot views load full inventory into memory (resolved: SQL-level GROUP BY aggregation for summaries; entries lazy-loaded via `/api/pivot/{pivot}/{key}` on expand; `get_pivot_group_entries()` helper)
@@ -93,6 +99,7 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ### Recently implemented features
 
+- **Security hardening (2026-06-01)** — Second adversarial review round: fixed 15 issues. `_probe_hsts` accepts `pinned_ip` to prevent DNS rebinding (BC-062 resolved). DNS parser cycle detection and TXID/RCODE validation (BC-065 resolved). Auth misconfiguration now raises ValueError instead of silently degrading to NoAuthProvider (BC-066). OAuth state bypass fixed; `CERT_WATCH_BASE_URL` prevents Host-header open redirect (BC-067). LDAP cleartext-warning at init time. Scrypt weak-parameter rejection and warning. Rate limiting uses `_extract_client_ip()` everywhere. DOM XSS: urgency class whitelist. CSP+nosniff+X-Frame-Options middleware. CSV injection escaping. Healthz no longer leaks exceptions. Cookie path="/". Break-glass uses `isinstance()`. SQL injection surface documented.
 - **Security hardening (2026-05-31)** — Fixed 12 security issues found via adversarial review: auth bypass on 4 API endpoints (`/api/certificates/{id}/pem`, `/api/certificates/{id}/posture`, `/api/webhook/test`, `/api/ct/reconciliation`); DOM-based XSS in dashboard pivot view (`innerHTML` → `escHtml()` helper); STARTTLS silent suppression now aborts SMTP on failure; OAuth state cookie required for callback CSRF; login endpoint rate-limited (10/5min); DNS query IDs use `secrets.randbelow` instead of `random.randint`; logout changed from GET to POST with CSRF; `delete_cookie()` calls include security flags; LDAP STARTTLS now uses `ssl.CERT_REQUIRED` by default instead of `CERT_NONE` (BC-059); OAuth error messages no longer leak raw exception details in URLs (BC-060).
 - **HSTS probe during scans (BC-051)** — `scan_host()` now makes an HTTP HEAD request on port 443 to detect `Strict-Transport-Security` header via `_probe_hsts()`. HSTS result passed to `evaluate_posture()`. A+ posture grade now achievable from scans.
 - **DNS rebinding prevention (BC-053)** — `_is_blocked_host_check()` returns a pinned IP from SSRF check. `scan_host()` accepts `pinned_ip` parameter, passing it through to `_open_tls_connection()` and `_scan_via_openssl()`. Both add-host and CSV import flows pin the resolved IP.

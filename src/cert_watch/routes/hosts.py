@@ -22,6 +22,15 @@ from cert_watch.scheduler import ScanHistory, record_scan_history
 
 logger = logging.getLogger("cert_watch.routes.hosts")
 
+_CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
+
+
+def _csv_safe(value) -> str:
+    s = str(value) if value is not None else ""
+    if s and s[0] in _CSV_DANGEROUS_PREFIXES:
+        return "'" + s
+    return s
+
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -367,9 +376,11 @@ def api_export_hosts_csv(request: Request) -> PlainTextResponse:
     ])
     for h in hosts:
         writer.writerow([
-            h.hostname, h.port, h.threshold_days or "", h.tags,
-            h.scan_interval_hours or "", h.owner_name, h.owner_email,
-            h.owner_slack, h.renewal_status, h.added_at.isoformat(),
+            _csv_safe(h.hostname), _csv_safe(h.port), _csv_safe(h.threshold_days or ""),
+            _csv_safe(h.tags), _csv_safe(h.scan_interval_hours or ""),
+            _csv_safe(h.owner_name), _csv_safe(h.owner_email),
+            _csv_safe(h.owner_slack), _csv_safe(h.renewal_status),
+            _csv_safe(h.added_at.isoformat()),
         ])
     return PlainTextResponse(
         content=output.getvalue(),

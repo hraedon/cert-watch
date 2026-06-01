@@ -11,7 +11,15 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __version__
-from cert_watch.auth import SESSION_COOKIE, SESSION_TTL, NoAuthProvider, check_authz, create_session
+from cert_watch.auth import (
+    SESSION_COOKIE,
+    SESSION_TTL,
+    LocalAdminProvider,
+    NoAuthProvider,
+    _CompositeProvider,
+    check_authz,
+    create_session,
+)
 from cert_watch.middleware import _COOKIE_SECURE, _extract_client_ip, check_csrf, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.auth")
@@ -60,8 +68,8 @@ async def login_submit(
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
         )
-    is_break_glass = type(auth).__name__ == "LocalAdminProvider" or (
-        type(auth).__name__ == "_CompositeProvider" and result.username == auth._local.username
+    is_break_glass = isinstance(auth, LocalAdminProvider) or (
+        isinstance(auth, _CompositeProvider) and result.username == auth._local.username
     )
     if is_break_glass:
         logger.warning("Break-glass login by local admin: %s", result.username)
@@ -93,7 +101,7 @@ async def login_submit(
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
-        secure=_COOKIE_SECURE,
+        secure=_COOKIE_SECURE, path="/",
     )
     logger.info(
         "user logged in: %s (%s)",
@@ -103,12 +111,23 @@ async def login_submit(
     return response
 
 
+def _get_base_url(request: Request) -> str:
+    """Return base URL for OAuth redirect URIs.
+
+    Prefers CERT_WATCH_BASE_URL when set (prevents Host header injection).
+    Falls back to request.base_url.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    base = getattr(settings, "base_url", "") if settings else ""
+    return base or str(request.base_url).rstrip("/")
+
+
 @router.get("/auth/login")
 def oauth_start(request: Request) -> RedirectResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
-    base = str(request.base_url).rstrip("/")
+    base = _get_base_url(request)
     redirect_uri = f"{base}/auth/callback"
     result = auth.start_oauth_flow(redirect_uri)
     if not result.success:
@@ -125,6 +144,7 @@ def oauth_start(request: Request) -> RedirectResponse:
             samesite="lax",
             max_age=600,
             secure=_COOKIE_SECURE,
+            path="/",
         )
     return response
 
@@ -171,7 +191,7 @@ def oauth_callback(
             "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
-    base = str(request.base_url).rstrip("/")
+    base = _get_base_url(request)
     redirect_uri = f"{base}/auth/callback"
     result = auth.complete_oauth_flow(code, redirect_uri, state=signed_state)
     if not result.success:
@@ -202,7 +222,7 @@ def oauth_callback(
     )
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
-        secure=_COOKIE_SECURE,
+        secure=_COOKIE_SECURE, path="/",
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response

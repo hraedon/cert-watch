@@ -16,6 +16,7 @@ from cert_watch.auth import (
     OAuthProvider,
     _CompositeProvider,
     _scrypt_hash,
+    _sign_state,
     build_auth_provider,
     check_authz,
     create_session,
@@ -325,24 +326,24 @@ def test_build_noauth_explicit():
 
 
 def test_build_unknown():
-    provider = build_auth_provider("foobar")
-    assert isinstance(provider, NoAuthProvider)
+    with pytest.raises(ValueError, match="Unknown AUTH_PROVIDER"):
+        build_auth_provider("foobar")
 
 
 def test_build_ldap_missing_config(_mock_ldap3):
-    # Missing server/base_dn falls back to NoAuth
-    provider = build_auth_provider("ldap")
-    assert isinstance(provider, NoAuthProvider)
+    # Missing server/base_dn raises instead of silently degrading to NoAuth
+    with pytest.raises(ValueError, match="LDAP auth misconfigured"):
+        build_auth_provider("ldap")
 
 
 def test_build_oauth_missing_config():
-    provider = build_auth_provider("oauth")
-    assert isinstance(provider, NoAuthProvider)
+    with pytest.raises(ValueError, match="OAuth misconfigured"):
+        build_auth_provider("oauth")
 
 
 def test_build_entra_alias():
-    provider = build_auth_provider("entra")
-    assert isinstance(provider, NoAuthProvider)
+    with pytest.raises(ValueError, match="OAuth misconfigured"):
+        build_auth_provider("entra")
 
 
 def test_build_ldap_with_config(_mock_ldap3):
@@ -1352,8 +1353,11 @@ class TestOAuthJWKSVerification:
 
         mock_authlib = MagicMock()
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        signed_state = _sign_state("test-state")
         with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            result = provider.complete_oauth_flow(
+                "auth-code", "http://localhost/callback", state=signed_state,
+            )
             assert result.success is True
             assert result.username == "alice@example.com"
 
@@ -1387,8 +1391,11 @@ class TestOAuthJWKSVerification:
 
         mock_authlib = MagicMock()
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        signed_state = _sign_state("test-state")
         with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            result = provider.complete_oauth_flow(
+                "auth-code", "http://localhost/callback", state=signed_state,
+            )
             assert result.success is False
             assert "ID token verification failed" in result.error
 
@@ -1408,8 +1415,11 @@ class TestOAuthJWKSVerification:
 
         mock_authlib = MagicMock()
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        signed_state = _sign_state("test-state")
         with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow("auth-code", "http://localhost/callback")
+            result = provider.complete_oauth_flow(
+                "auth-code", "http://localhost/callback", state=signed_state,
+            )
             assert result.success is True
             assert result.username == "bob@example.com"
 

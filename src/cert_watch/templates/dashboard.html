@@ -560,6 +560,8 @@ function cwUrgency(daysRemaining) {
   return { urgency: 'healthy', label: 'Healthy' };
 }
 
+var _VALID_URGENCIES = { expired:1, critical:1, warning:1, healthy:1, gray:1 };
+
 function escHtml(s) {
   var d = document.createElement('div');
   d.appendChild(document.createTextNode(s == null ? '' : String(s)));
@@ -585,6 +587,7 @@ function togglePivotGroup(idx) {
         var html = '';
         (data.entries || []).forEach(function(e) {
           var u = cwUrgency(e.days_remaining);
+          var urgencyClass = _VALID_URGENCIES[u.urgency] ? u.urgency : 'gray';
           var daysHtml = e.days_remaining != null
             ? '<span class="cw-text-text-3 cw-fz-11-5">' + escHtml(e.days_remaining) + ' days</span>'
             : '';
@@ -593,7 +596,7 @@ function togglePivotGroup(idx) {
           html += '<div class="cw-host-row">'
             + '<div class="cw-host-row-info">'
             + link
-            + ' <span class="cw-pill ' + escHtml(u.urgency) + '"><span class="dot"></span>' + escHtml(u.label) + '</span>'
+            + ' <span class="cw-pill ' + urgencyClass + '"><span class="dot"></span>' + escHtml(u.label) + '</span>'
             + daysHtml
             + '</div></div>';
         });

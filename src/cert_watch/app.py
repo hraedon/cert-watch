@@ -23,6 +23,7 @@ from cert_watch.middleware import (
     auth_middleware,
     csrf_session_middleware,
     rate_limit_headers_middleware,
+    security_headers_middleware,
 )
 from cert_watch.routes import api as route_modules
 from cert_watch.scan import scan_host, store_scanned
@@ -139,6 +140,7 @@ app = FastAPI(title="cert-watch", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
 # Register middleware (order matters: last registered = first executed)
+app.middleware("http")(security_headers_middleware)
 app.middleware("http")(rate_limit_headers_middleware)
 app.middleware("http")(csrf_session_middleware)
 app.middleware("http")(auth_middleware)

@@ -625,6 +625,11 @@ def _load_unified_filtered(
 
     Uses SQL-level filtering via an EXISTS subquery on the *hosts* table so
     only matching rows are materialised.  Uploaded certificates are excluded.
+
+    SECURITY: ``host_where`` is interpolated into SQL via f-string.  It MUST
+    be a hardcoded string from internal call sites only — never derived from
+    user input.  The callers in ``get_pivot_group_entries()`` construct it
+    from whitelisted column names.
     """
     init_schema(db_path)
     with _connect(db_path) as conn:

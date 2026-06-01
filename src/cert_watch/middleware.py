@@ -320,7 +320,7 @@ async def csrf_session_middleware(request: Request, call_next):
         response = await call_next(request)
         response.set_cookie(
             "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL,
-            secure=_COOKIE_SECURE,
+            secure=_COOKIE_SECURE, path="/",
         )
         return response
     return await call_next(request)
@@ -351,3 +351,22 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith("/api/"):
         return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     return RedirectResponse(url="/login", status_code=303)
+
+
+_CSP_HEADER = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
+
+
+async def security_headers_middleware(request: Request, call_next):
+    """Add security response headers (CSP, X-Content-Type-Options, etc.)."""
+    response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP_HEADER
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    return response
