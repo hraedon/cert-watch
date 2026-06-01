@@ -4,9 +4,9 @@ Conventions and quick reference for agents (and humans) working on cert-watch.
 
 ## Versioning
 
-Version comes from `git describe --tags --abbrev=0` at Docker build time, injected via `GIT_TAG` and `GIT_COMMIT` build args. The Dockerfile writes these to `src/cert_watch/_version.txt`, and `__init__.py` reads it at import time. The UI shows `v{version} ({commit})` in the header.
+Version comes from `git describe --tags --abbrev=0` at Docker build time, injected via `GIT_TAG` and `GIT_COMMIT` build args. The Dockerfile writes these to `src/cert_watch/_version.txt`, and `__init__.py` reads it at import time (stripping any `v` prefix). The UI shows `v{version} ({commit})` in the header. Healthz also includes both.
 
-When tagging a release, update both `pyproject.toml` version and `src/cert_watch/_version.txt` to match the new tag. The release workflow also stamps `_version.txt` at build time from `GIT_TAG`, so the file in the repo is a fallback for local dev.
+When tagging a release, update `pyproject.toml` version and `src/cert_watch/_version.txt` to match the new tag number (without the `v` prefix). The release workflow stamps `_version.txt` at build time from `GIT_TAG`, so the file in the repo is a fallback for local dev.
 
 ## Why this project exists
 
