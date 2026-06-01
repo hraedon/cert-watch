@@ -25,6 +25,9 @@ from cert_watch.auth import (
 )
 from cert_watch.config import read_secret
 
+_HAS_JOSE = importlib.util.find_spec("joserfc") is not None
+_HAS_AUTHLIB = importlib.util.find_spec("authlib") is not None
+
 
 @pytest.fixture(autouse=True)
 def _restore_modules():
@@ -1208,6 +1211,7 @@ def _make_oauth_provider(
     return provider
 
 
+@pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
 class TestOAuthJWKSVerification:
 
     def test_valid_token_verified(self):
@@ -1519,6 +1523,7 @@ class TestValidateClaimsManual:
         _validate_claims_manual(claims, "https://login.example.com", "test-client", "abc123")
 
 
+@pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
 class TestJWKSCacheTTL:
 
     def test_jwks_refetched_after_ttl_expires(self, monkeypatch):
