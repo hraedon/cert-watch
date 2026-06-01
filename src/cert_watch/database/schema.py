@@ -118,6 +118,21 @@ CREATE TABLE IF NOT EXISTS kv_store (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS alert_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    recipients TEXT NOT NULL DEFAULT '',
+    webhook_url TEXT NOT NULL DEFAULT '',
+    match_tags TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alert_group_certs (
+    group_id TEXT NOT NULL,
+    cert_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, cert_id)
+);
 """
 
 _BASE_INDEXES = """
@@ -134,6 +149,8 @@ CREATE INDEX IF NOT EXISTS idx_cert_host_port_leaf
     ON certificates(hostname, port, is_leaf);
 CREATE INDEX IF NOT EXISTS idx_scan_history_host_port_ts
     ON scan_history(hostname, port, scanned_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alert_group_certs_cert
+    ON alert_group_certs(cert_id);
 """
 
 _initialized_paths: set[str] = set()

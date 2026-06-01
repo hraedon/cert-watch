@@ -8,6 +8,7 @@ from cert_watch.migrations.m0004_tls_verified import upgrade as tls_verified_upg
 from cert_watch.migrations.m0005_composite_indexes import upgrade as composite_indexes_upgrade
 from cert_watch.migrations.m0006_cert_tags import upgrade as cert_tags_upgrade
 from cert_watch.migrations.m0007_kv_store import upgrade as kv_store_upgrade
+from cert_watch.migrations.m0008_alert_groups import upgrade as alert_groups_upgrade
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -19,3 +20,4 @@ runner.register(
 )
 runner.register("0006", "add tags column to certificates (plan 013)", cert_tags_upgrade)
 runner.register("0007", "add kv_store table (Plan 014)", kv_store_upgrade)
+runner.register("0008", "add alert_groups tables (Plan 015)", alert_groups_upgrade)

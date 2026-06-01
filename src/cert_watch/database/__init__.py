@@ -47,9 +47,11 @@ from cert_watch.database.queries import (
 # Repositories & dataclasses
 from cert_watch.database.repo import (
     Alert,
+    AlertGroup,
     AlertRepository,
     CertificateRepository,
     HostEntry,
+    SqliteAlertGroupRepository,
     SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteHostRepository,
@@ -73,9 +75,11 @@ __all__ = [
     "_row_to_cert",
     # repo
     "Alert",
+    "AlertGroup",
     "AlertRepository",
     "CertificateRepository",
     "HostEntry",
+    "SqliteAlertGroupRepository",
     "SqliteAlertRepository",
     "SqliteCertificateRepository",
     "SqliteHostRepository",
