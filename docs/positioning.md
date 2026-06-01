@@ -16,10 +16,13 @@ and understand why this exists anyway.
    feature comparison.
 
 2. **It targets a regulated, directory-centric, self-hosted environment.** The
-   intended home is an audited Active Directory shop with no SaaS dependency.
-   That makes a specific combination first-class: LDAP/Entra authentication, an
-   append-only audit log, no outbound cloud sync, and Windows/IIS hosting. Most
-   of the prior art treats one or more of those as out of scope.
+   intended home is an audited Active Directory shop that will not make a
+   third-party cloud service a dependency in the trust path of a security tool.
+   (This is a governance choice, not a network constraint — the environment has
+   egress; it just declines external-SaaS dependencies.) That makes a specific
+   combination first-class: LDAP/Entra authentication, an append-only audit log,
+   no dependency on an external cloud service, and Windows/IIS hosting. Most of
+   the prior art treats one or more of those as out of scope.
 
 3. **It goes deep on certificate *observability* specifically.** Read-only,
    signature-verified chain validation; TLS posture grading; CT *reconciliation*
@@ -83,7 +86,9 @@ The positioning above is the lens for what we build next. Concretely:
   health, and audit-grade reporting (plan 017).
 - **Fold multi-channel alerting into alert groups** (plan 015) rather than
   treating it as a separate epic.
-- **Deliberately decline** features that fight the self-contained / no-egress
-  design or that drift toward a different product class — real-time CT
-  streaming, external cloud-API discovery, active network scanning, and ACME
-  renewal automation. Plan 017 records *why*, so the comparison stays legible.
+- **Deliberately decline** features that make an external cloud service a
+  dependency, or that drift toward a different product class — external
+  cloud-API discovery, reliance on a hosted CT-streaming feed, active network
+  scanning, and ACME renewal automation. (Self-hostable versions of some of
+  these stay on the table; the line is *no external-SaaS dependency*, not *no
+  egress*.) Plan 017 records *why*, so the comparison stays legible.
