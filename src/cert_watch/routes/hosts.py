@@ -9,14 +9,13 @@ import logging
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
-from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit
+from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit, require_auth
 from cert_watch.scan import ScanError, scan_host, store_scanned
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
@@ -30,6 +29,7 @@ def _csv_safe(value) -> str:
     if s and s[0] in _CSV_DANGEROUS_PREFIXES:
         return "'" + s
     return s
+
 
 router = APIRouter()
 
@@ -46,7 +46,10 @@ def _db_path(request: Request) -> Path:
 
 
 def _is_blocked_host_check(
-    hostname: str, *, allow_private: bool = True, dns_servers: tuple[str, ...] = (),
+    hostname: str,
+    *,
+    allow_private: bool = True,
+    dns_servers: tuple[str, ...] = (),
 ) -> tuple[str | None, str | None]:
     """SSRF pre-check for the add-host form.
 
@@ -73,9 +76,7 @@ def _is_blocked_host_check(
             continue
         if _is_blocked_ip(ip, allow_private=allow_private):
             check_ip = (
-                ip.ipv4_mapped
-                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
-                else ip
+                ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
             )
             is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
             blocked_info = (ip, is_private)
@@ -123,7 +124,9 @@ async def add_host(
         )
     s = _get_settings(request)
     ssrf_err, pinned_ip = _is_blocked_host_check(
-        hostname, allow_private=s.allow_private, dns_servers=s.dns_servers,
+        hostname,
+        allow_private=s.allow_private,
+        dns_servers=s.dns_servers,
     )
     if ssrf_err:
         return RedirectResponse(url=f"/?error={quote(ssrf_err)}", status_code=303)
@@ -135,37 +138,48 @@ async def add_host(
     source_ip = resolve_source_ip(request)
     for p in ports:
         host_id = host_repo.add(
-            hostname, p, threshold_days=threshold_days, tags=tags,
+            hostname,
+            p,
+            threshold_days=threshold_days,
+            tags=tags,
             scan_interval_hours=scan_interval_hours,
         )
         record_audit(
-            db, actor=actor, action="host.add",
-            target_type="host", target_id=host_id,
+            db,
+            actor=actor,
+            action="host.add",
+            target_type="host",
+            target_id=host_id,
             detail={"hostname": hostname, "port": p},
             source_ip=source_ip,
         )
         result = scan_host(
-            hostname, p, allow_private=s.allow_private, dns_servers=s.dns_servers,
+            hostname,
+            p,
+            allow_private=s.allow_private,
+            dns_servers=s.dns_servers,
             pinned_ip=pinned_ip,
         )
         if not isinstance(result, ScanError):
             store_scanned(result, db)
             scanned += 1
-            record_scan_history(
-                db, ScanHistory(hostname=hostname, port=p, status="success")
-            )
+            record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))
             logger.info("added and scanned host %s:%d", hostname, p)
         else:
             record_scan_history(
                 db,
                 ScanHistory(
-                    hostname=hostname, port=p, status="failure",
+                    hostname=hostname,
+                    port=p,
+                    status="failure",
                     error_message=result.error_message,
                 ),
             )
             logger.warning(
                 "added host %s:%d but scan failed: %s",
-                hostname, p, result.error_message,
+                hostname,
+                p,
+                result.error_message,
             )
     if common_ports:
         logger.info("common-ports scan for %s: %d/%d succeeded", hostname, scanned, len(ports))
@@ -223,7 +237,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
                 errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
                 continue
         ssrf_err, row_pinned_ip = _is_blocked_host_check(
-            hostname, allow_private=s.allow_private, dns_servers=s.dns_servers,
+            hostname,
+            allow_private=s.allow_private,
+            dns_servers=s.dns_servers,
         )
         if ssrf_err:
             errors.append(f"row {i}: {ssrf_err}")
@@ -238,7 +254,10 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
                 errors.append(f"row {i}: invalid scan_interval_hours '{interval_str}'")
                 continue
         host_repo.add(
-            hostname, port, threshold_days=threshold, tags=row_tags,
+            hostname,
+            port,
+            threshold_days=threshold,
+            tags=row_tags,
             scan_interval_hours=interval_hours,
         )
         scan_jobs.append((hostname, port, threshold, row_pinned_ip))
@@ -249,8 +268,11 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
     record_audit(
-        db, actor=actor, action="host.import",
-        target_type="host", target_id="bulk",
+        db,
+        actor=actor,
+        action="host.import",
+        target_type="host",
+        target_id="bulk",
         detail={"filename": file.filename, "rows": len(scan_jobs), "errors": len(errors)},
         source_ip=source_ip,
     )
@@ -258,8 +280,10 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, object]:
         hostname, port, _, pinned = job
         result = scan_host(
-            hostname, port,
-            allow_private=allow_priv, dns_servers=dns_srv,
+            hostname,
+            port,
+            allow_private=allow_priv,
+            dns_servers=dns_srv,
             pinned_ip=pinned,
         )
         return hostname, port, result
@@ -269,9 +293,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         for hostname, port, result in pool.map(_scan_one, scan_jobs):
             if not isinstance(result, ScanError):
                 store_scanned(result, db)
-                record_scan_history(
-                    db, ScanHistory(hostname=hostname, port=port, status="success")
-                )
+                record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
             else:
                 record_scan_history(
                     db,
@@ -303,8 +325,11 @@ async def delete_host(request: Request, host_id: str) -> RedirectResponse:
     db = _db_path(request)
     SqliteHostRepository(db).delete(host_id)
     record_audit(
-        db, actor=resolve_actor(request), action="host.delete",
-        target_type="host", target_id=host_id,
+        db,
+        actor=resolve_actor(request),
+        action="host.delete",
+        target_type="host",
+        target_id=host_id,
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted host %s", host_id)
@@ -325,15 +350,20 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     record_audit(
-        db, actor=resolve_actor(request), action="host.scan",
-        target_type="host", target_id=host_id,
+        db,
+        actor=resolve_actor(request),
+        action="host.scan",
+        target_type="host",
+        target_id=host_id,
         detail={"hostname": host.hostname, "port": host.port},
         source_ip=resolve_source_ip(request),
     )
     s = _get_settings(request)
     result = scan_host(
-        host.hostname, host.port,
-        allow_private=s.allow_private, dns_servers=s.dns_servers,
+        host.hostname,
+        host.port,
+        allow_private=s.allow_private,
+        dns_servers=s.dns_servers,
     )
     if not isinstance(result, ScanError):
         store_scanned(result, db)
@@ -359,29 +389,41 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
 
 
 @router.get("/api/export/hosts.csv")
-def api_export_hosts_csv(request: Request) -> PlainTextResponse:
+def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -> PlainTextResponse:
     """Export all tracked hosts as CSV."""
-    auth = getattr(request.app.state, "auth_provider", None)
-    if auth is not None and not isinstance(auth, NoAuthProvider):
-        token = request.cookies.get(SESSION_COOKIE, "")
-        if not validate_session(token):
-            return PlainTextResponse("unauthenticated", status_code=401)
     db = _db_path(request)
     hosts = SqliteHostRepository(db).list_all()
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "hostname", "port", "threshold_days", "tags", "scan_interval_hours",
-        "owner_name", "owner_email", "owner_slack", "renewal_status", "added_at",
-    ])
+    writer.writerow(
+        [
+            "hostname",
+            "port",
+            "threshold_days",
+            "tags",
+            "scan_interval_hours",
+            "owner_name",
+            "owner_email",
+            "owner_slack",
+            "renewal_status",
+            "added_at",
+        ]
+    )
     for h in hosts:
-        writer.writerow([
-            _csv_safe(h.hostname), _csv_safe(h.port), _csv_safe(h.threshold_days or ""),
-            _csv_safe(h.tags), _csv_safe(h.scan_interval_hours or ""),
-            _csv_safe(h.owner_name), _csv_safe(h.owner_email),
-            _csv_safe(h.owner_slack), _csv_safe(h.renewal_status),
-            _csv_safe(h.added_at.isoformat()),
-        ])
+        writer.writerow(
+            [
+                _csv_safe(h.hostname),
+                _csv_safe(h.port),
+                _csv_safe(h.threshold_days or ""),
+                _csv_safe(h.tags),
+                _csv_safe(h.scan_interval_hours or ""),
+                _csv_safe(h.owner_name),
+                _csv_safe(h.owner_email),
+                _csv_safe(h.owner_slack),
+                _csv_safe(h.renewal_status),
+                _csv_safe(h.added_at.isoformat()),
+            ]
+        )
     return PlainTextResponse(
         content=output.getvalue(),
         media_type="text/csv",

@@ -7,13 +7,12 @@ import tempfile
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
@@ -31,7 +30,13 @@ from cert_watch.filters import (
     register_filters,
     subject_cn,
 )
-from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit, get_csrf_context
+from cert_watch.middleware import (
+    _extract_client_ip,
+    check_csrf,
+    check_rate_limit,
+    get_csrf_context,
+    require_auth,
+)
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
@@ -82,8 +87,8 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         except Exception:
             pass
         sig_alg = x509_cert.signature_algorithm_oid._name
-        serial = format(x509_cert.serial_number, 'X')
-        serial = ':'.join(serial[i:i+2] for i in range(0, len(serial), 2))
+        serial = format(x509_cert.serial_number, "X")
+        serial = ":".join(serial[i : i + 2] for i in range(0, len(serial), 2))
     except Exception:
         key_type_str = "unknown"
         sig_alg = "unknown"
@@ -91,7 +96,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
 
     fp_hex = cert.fingerprint_sha256
     if ":" not in fp_hex and len(fp_hex) == 64:
-        fp_hex = ':'.join(fp_hex[i:i+2] for i in range(0, len(fp_hex), 2)).upper()
+        fp_hex = ":".join(fp_hex[i : i + 2] for i in range(0, len(fp_hex), 2)).upper()
 
     # Get chain (non-leaf certs with this cert as parent)
     with _connect(db) as conn:
@@ -120,19 +125,22 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
                 kt = "Ed448"
         except Exception:
             pass
-        chain_certs.append({
-            "id": cr["id"],
-            "subject": c.subject,
-            "issuer": c.issuer,
-            "not_after": c.not_after.isoformat(),
-            "days_remaining": chain_days,
-            "subject_cn": subject_cn(c.subject),
-            "issuer_org": friendly_issuer(c.issuer),
-            "key_type": kt,
-        })
+        chain_certs.append(
+            {
+                "id": cr["id"],
+                "subject": c.subject,
+                "issuer": c.issuer,
+                "not_after": c.not_after.isoformat(),
+                "days_remaining": chain_days,
+                "subject_cn": subject_cn(c.subject),
+                "issuer_org": friendly_issuer(c.issuer),
+                "key_type": kt,
+            }
+        )
 
     # Determine chain status
     from cert_watch.cert_chain import chain_status as _chain_status
+
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     chain_certs_objects = [_row_to_cert(cr) for cr in chain_rows]
     cs = _chain_status(cert, chain_certs_objects, anchors)
@@ -211,6 +219,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     # Get posture evaluation
     from cert_watch.database import get_posture_for_cert
     from cert_watch.posture import evaluate_posture
+
     posture = get_posture_for_cert(db, cert_id)
     posture_data = None
     if posture:
@@ -242,7 +251,8 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         context={
             "cert": cert,
             "cert_id": cert_id,
-            "version": __version__, "commit": __commit__,
+            "version": __version__,
+            "commit": __commit__,
             "auth_user": request.scope.get("auth_user", ""),
             "active_page": "dashboard",
             "key_type": key_type_str,
@@ -273,15 +283,11 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
 
 
 @router.get("/api/certificates/{cert_id}/posture", response_model=None)
-def certificate_posture_api(request: Request, cert_id: str):
+def certificate_posture_api(request: Request, cert_id: str, _auth: str = Depends(require_auth)):
     """Return the latest posture evaluation for a certificate as JSON."""
-    auth = getattr(request.app.state, "auth_provider", None)
-    if auth is not None and not isinstance(auth, NoAuthProvider):
-        token = request.cookies.get(SESSION_COOKIE, "")
-        if not validate_session(token):
-            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     db = _db_path(request)
     from cert_watch.database import get_posture_for_cert
+
     posture = get_posture_for_cert(db, cert_id)
     if posture is None:
         return {"error": "no posture data", "cert_id": cert_id}
@@ -305,8 +311,11 @@ async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse
     db = _db_path(request)
     delete_certificate_cascade(db, cert_id)
     record_audit(
-        db, actor=resolve_actor(request), action="cert.delete",
-        target_type="certificate", target_id=cert_id,
+        db,
+        actor=resolve_actor(request),
+        action="cert.delete",
+        target_type="certificate",
+        target_id=cert_id,
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted certificate %s (cascade)", cert_id)
@@ -331,8 +340,11 @@ async def update_certificate_notes(
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     repo.update_notes(cert_id, notes)
     record_audit(
-        db, actor=resolve_actor(request), action="cert.update_notes",
-        target_type="certificate", target_id=cert_id,
+        db,
+        actor=resolve_actor(request),
+        action="cert.update_notes",
+        target_type="certificate",
+        target_id=cert_id,
         detail={"notes_length": len(notes)},
         source_ip=resolve_source_ip(request),
     )
@@ -371,14 +383,15 @@ async def upload(
         pw_bytes = password.encode("utf-8") if password else None
         entry = upload_certificate(tmp_path, password=pw_bytes)
         if isinstance(entry, ParseError):
-            return RedirectResponse(
-                url=f"/?error={quote(entry.error_message)}", status_code=303
-            )
+            return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
         entry.file_name = file.filename or entry.file_name
         store_uploaded(entry, db)
         record_audit(
-            db, actor=resolve_actor(request), action="cert.upload",
-            target_type="certificate", target_id="upload",
+            db,
+            actor=resolve_actor(request),
+            action="cert.upload",
+            target_type="certificate",
+            target_id="upload",
             detail={"filename": file.filename or "unknown"},
             source_ip=resolve_source_ip(request),
         )
@@ -413,9 +426,7 @@ async def add_trust_anchor(
     try:
         entry = upload_certificate(tmp_path)
         if isinstance(entry, ParseError):
-            return RedirectResponse(
-                url=f"/?error={quote(entry.error_message)}", status_code=303
-            )
+            return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
         # Validate that the certificate is suitable as a CA trust anchor
         ca_err = validate_is_ca_certificate(entry.leaf.raw_der)
         if ca_err:
@@ -426,8 +437,11 @@ async def add_trust_anchor(
         repo = SqliteTrustAnchorRepository(db)
         anchor_id = repo.add(entry.leaf)
         record_audit(
-            db, actor=resolve_actor(request), action="trust_anchor.add",
-            target_type="trust_anchor", target_id=anchor_id,
+            db,
+            actor=resolve_actor(request),
+            action="trust_anchor.add",
+            target_type="trust_anchor",
+            target_id=anchor_id,
             detail={"subject": entry.leaf.subject},
             source_ip=resolve_source_ip(request),
         )
@@ -446,8 +460,11 @@ async def delete_trust_anchor(request: Request, anchor_id: str) -> RedirectRespo
     repo = SqliteTrustAnchorRepository(db)
     repo.delete(anchor_id)
     record_audit(
-        db, actor=resolve_actor(request), action="trust_anchor.delete",
-        target_type="trust_anchor", target_id=anchor_id,
+        db,
+        actor=resolve_actor(request),
+        action="trust_anchor.delete",
+        target_type="trust_anchor",
+        target_id=anchor_id,
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted trust anchor %s", anchor_id)

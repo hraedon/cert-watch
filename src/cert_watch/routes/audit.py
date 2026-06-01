@@ -5,15 +5,15 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
-from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
 from cert_watch.config import Settings
 from cert_watch.filters import register_filters
+from cert_watch.middleware import require_auth
 
 logger = logging.getLogger("cert_watch.routes.audit")
 
@@ -42,7 +42,11 @@ def audit_page(
     db = _db_path(request)
     limit = 50
     rows = list_audit(
-        db, target_type=target_type or None, actor=actor or None, page=page, limit=limit,
+        db,
+        target_type=target_type or None,
+        actor=actor or None,
+        page=page,
+        limit=limit,
     )
     total = count_audit(db, target_type=target_type or None, actor=actor or None)
     total_pages = max((total + limit - 1) // limit, 1)
@@ -52,7 +56,8 @@ def audit_page(
         name="audit.html",
         context={
             "rows": rows,
-            "version": __version__, "commit": __commit__,
+            "version": __version__,
+            "commit": __commit__,
             "auth_user": auth_user,
             "active_page": "audit",
             "filter_target_type": target_type,
@@ -69,17 +74,13 @@ def audit_page(
 @router.get("/api/audit")
 def api_audit(
     request: Request,
+    _auth: str = Depends(require_auth),
     target_type: str = "",
     target_id: str = "",
     actor: str = "",
     page: int = 1,
     limit: int = 50,
 ) -> JSONResponse:
-    auth = getattr(request.app.state, "auth_provider", None)
-    if auth is not None and not isinstance(auth, NoAuthProvider):
-        token = request.cookies.get(SESSION_COOKIE, "")
-        if not validate_session(token):
-            return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     db = _db_path(request)
     limit = min(max(limit, 1), 200)
     page = max(page, 1)
@@ -97,12 +98,14 @@ def api_audit(
         target_id=target_id or None,
         actor=actor or None,
     )
-    return JSONResponse(content={
-        "audit": rows,
-        "pagination": {
-            "page": page,
-            "limit": limit,
-            "total": total,
-            "pages": (total + limit - 1) // limit if limit else 0,
-        },
-    })
+    return JSONResponse(
+        content={
+            "audit": rows,
+            "pagination": {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "pages": (total + limit - 1) // limit if limit else 0,
+            },
+        }
+    )
