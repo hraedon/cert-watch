@@ -145,6 +145,14 @@ the scan-history page.
 banner renders in template; stale scan triggers yellow; failed alerts
 trigger yellow; scheduler down triggers red.
 
+**Follow-up:** The health banner JS is inline in `base.html` with no
+automated JS test coverage. A Playwright E2E test covers visibility, but
+a JS unit test runner (Jest/Vitest) would be faster and more granular
+for the banner logic. If more widgets follow this inline pattern,
+`base.html` will become the same maintenance burden the CSS macros were
+before extraction to `tokens.css`. Extract page-agnostic JS utilities to
+`static/js/` when the next widget is added. Tracked: BC-039.
+
 ### 2.2 Fix healthz memory usage
 
 **Problem:** `healthz` calls `list_scan_history(db)` loading all rows
@@ -337,6 +345,22 @@ Add `docs/troubleshooting.md` covering:
   /alerts page for error messages.
 - "The dashboard is slow" → host count, SQLite WAL, disk I/O.
 
+### 5.4 README accuracy & API docs
+
+- Update README project layout (test count, endpoint list) to match current
+  reality. The README still says "368 tests" when the suite is at 626+.
+- Add OpenAPI / Swagger UI exposure (`/docs`, `/redoc`) so API consumers
+  have interactive documentation instead of a manual markdown table.
+  Gated by auth middleware or public with a note that endpoints require auth.
+
+### 5.5 E2E coverage for the setup wizard
+
+The E2E suite bypasses `/setup` with `CERT_WATCH_ALLOW_UNAUTH=1`. Add a
+new `tests/e2e/test_setup_wizard.py` that exercises the full first-run
+journey: create local admin → log in → reach dashboard. This is the
+highest-leverage E2E test because it covers the first impression every
+user gets.
+
 ---
 
 ## Sequencing
@@ -367,7 +391,9 @@ Phase 4 (structural cleanup) ─── MEDIUM, see Plan 018
 Phase 5 (documentation) ─── MEDIUM, after Phase 4
   ├── 5.1 quick-start guide
   ├── 5.2 setup wizard docs
-  └── 5.3 troubleshooting guide
+  ├── 5.3 troubleshooting guide
+  ├── 5.4 README accuracy & API docs
+  └── 5.5 E2E coverage for the setup wizard
 ```
 
 Phases 1–3 are the "resolve now" work. Phase 4 is the "while we can still
