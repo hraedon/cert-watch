@@ -30,7 +30,12 @@ def _free_port() -> int:
 def cert_watch_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     data_dir: Path = tmp_path_factory.mktemp("cw-data")
     port = _free_port()
-    env = {**os.environ, "CERT_WATCH_DATA_DIR": str(data_dir), "CERT_WATCH_PORT": str(port)}
+    env = {
+        **os.environ,
+        "CERT_WATCH_DATA_DIR": str(data_dir),
+        "CERT_WATCH_PORT": str(port),
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+    }
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch"],
         env=env,
