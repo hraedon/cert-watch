@@ -22,6 +22,7 @@ from cert_watch.database import (
     count_dashboard_leaves,
     distinct_tags,
     list_alerts_with_subject,
+    list_calendar,
     list_cert_history,
     list_dashboard_rows,
     list_grade_trends,
@@ -889,3 +890,22 @@ def api_grade_trends(request: Request, days: int = 30) -> JSONResponse:
     db = _db_path(request)
     trends = list_grade_trends(db, days=min(max(days, 1), 365))
     return JSONResponse(content={"days": days, "trends": trends})
+
+
+# ---------- Calendar (Plan 016 Slice 4) ----------
+
+
+@router.get("/api/calendar")
+def api_calendar(
+    request: Request,
+    bucket: str = "month",
+    from_date: str | None = None,
+    to_date: str | None = None,
+) -> JSONResponse:
+    if err := _require_api_auth(request):
+        return err
+    if bucket not in ("day", "week", "month"):
+        bucket = "month"
+    db = _db_path(request)
+    buckets = list_calendar(db, from_date=from_date, to_date=to_date, bucket=bucket)
+    return JSONResponse(content={"bucket": bucket, "buckets": buckets})

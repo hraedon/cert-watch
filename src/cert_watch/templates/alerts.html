@@ -23,7 +23,7 @@
     {% set ns.all_count = ns.all_count + 1 %}
     {% if a.alert_type == 'expired' or a.alert_type == 'scan_failure' %}
       {% set ns.critical_count = ns.critical_count + 1 %}
-    {% elif a.alert_type == 'expiry_warning' %}
+    {% elif a.alert_type == 'expiry_warning' or a.alert_type == 'drift' %}
       {% set ns.warning_count = ns.warning_count + 1 %}
     {% endif %}
   {% endfor %}
@@ -50,9 +50,9 @@
   {% if alerts %}
     <div class="cw-flex-col cw-gap-10">
       {% for a in alerts %}
-        {% set sev_color = 'var(--crit)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn)' if a.alert_type == 'expiry_warning' else 'var(--accent)' %}
-        {% set sev_bg = 'var(--crit-soft)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn-soft)' if a.alert_type == 'expiry_warning' else 'var(--accent-soft)' %}
-        {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'clock' %}
+        {% set sev_color = 'var(--crit)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn)' if (a.alert_type == 'expiry_warning' or a.alert_type == 'drift') else 'var(--accent)' %}
+        {% set sev_bg = 'var(--crit-soft)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn-soft)' if (a.alert_type == 'expiry_warning' or a.alert_type == 'drift') else 'var(--accent-soft)' %}
+        {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'refresh' if a.alert_type == 'drift' else 'clock' %}
         <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}">
           <div class="cw-alert-icon cw-sev-icon" style="--sev-color:{{ sev_color }};--sev-bg:{{ sev_bg }}">
             {{ icons.svg_icon(icon_name, 17) }}

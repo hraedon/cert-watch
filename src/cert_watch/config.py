@@ -114,6 +114,7 @@ class Settings:
     log_format: str = "text"
     audit_retention_days: int = 90
     history_retention_days: int = 365
+    drift_alerts: bool = True
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -217,6 +218,7 @@ class Settings:
             alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
             audit_retention_days=audit_retention_days,
             history_retention_days=history_retention_days,
+            drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),

@@ -669,6 +669,49 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
                 exc_info=True,
             )
         try:
+            from cert_watch.database.queries import (
+                _extract_key_algo,
+                _extract_sig_algo,
+                create_drift_alert,
+                detect_drift,
+            )
+            key_algo = _extract_key_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
+            sig_algo = _extract_sig_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
+            drift_events = detect_drift(
+                repo_path_or_repo,
+                hostname=entry.host,
+                port=entry.port,
+                new_leaf=entry.leaf,
+                posture_grade=posture_grade,
+                protocol_version=entry.protocol_version,
+                key_algo=key_algo,
+                sig_algo=sig_algo,
+            )
+            if drift_events:
+                try:
+                    import cert_watch.config as _cfg
+                    _s = _cfg.Settings.from_env()
+                    if _s.drift_alerts:
+                        create_drift_alert(
+                            repo_path_or_repo,
+                            cert_id=leaf_id,
+                            hostname=entry.host,
+                            port=entry.port,
+                            events=drift_events,
+                        )
+                except Exception:  # noqa: BLE001
+                    import logging
+                    logging.getLogger("cert_watch.scan").debug(
+                        "drift alert creation skipped for %s:%s", entry.host, entry.port,
+                        exc_info=True,
+                    )
+        except Exception:  # noqa: BLE001
+            import logging
+            logging.getLogger("cert_watch.scan").debug(
+                "drift detection skipped for %s:%s", entry.host, entry.port,
+                exc_info=True,
+            )
+        try:
             from cert_watch.database.queries import record_cert_history
             record_cert_history(
                 repo_path_or_repo,

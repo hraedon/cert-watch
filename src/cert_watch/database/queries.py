@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -188,6 +189,202 @@ def _compute_renewal_diff(old_row, new_leaf: Certificate) -> list[str]:
     if old_row["issuer"] != new_leaf.issuer:
         changes.append(f"issuer changed to {new_leaf.issuer}")
     return changes
+
+
+# ---------- Drift detection (Plan 016 Slice 2) ----------
+
+
+@dataclass
+class DriftEvent:
+    """A single field-level change detected between two scans."""
+    field: str
+    old: str
+    new: str
+    severity: str  # "high" | "info"
+
+
+_GRADE_ORDER = {"A+": 5, "A": 4, "B": 3, "C": 2, "F": 1, "": 0}
+
+_TLS_ORDER = {"TLSv1.3": 3, "TLSv1.2": 2, "TLSv1.1": 1, "TLSv1.0": 0}
+
+
+def _grade_value(grade: str) -> int:
+    return _GRADE_ORDER.get(grade, 0)
+
+
+def _tls_value(version: str) -> int:
+    return _TLS_ORDER.get(version, -1)
+
+
+def _parse_key_algo(algo_str: str) -> tuple[str, int]:
+    """Extract (type, size) from key algo string like 'RSA-2048' or 'EC-P256'."""
+    if not algo_str:
+        return ("", 0)
+    parts = algo_str.split("-", 1)
+    if len(parts) == 2:
+        try:
+            return (parts[0], int(parts[1]))
+        except ValueError:
+            return (parts[0], 0)
+    return (algo_str, 0)
+
+
+def _is_sha1_algo(algo: str) -> bool:
+    return "sha1" in algo.lower() or "SHA-1" in algo
+
+
+def _compute_drift_events(
+    old: dict,
+    new_leaf: Certificate,
+    new_posture_grade: str = "",
+    new_protocol_version: str = "",
+    new_key_algo: str = "",
+    new_sig_algo: str = "",
+) -> list[DriftEvent]:
+    """Compare a previous cert_history row with a new scan.
+
+    Returns a list of DriftEvent with severity classification.
+    """
+    events: list[DriftEvent] = []
+
+    # Issuer change → high
+    old_issuer = old.get("issuer", "")
+    if old_issuer and old_issuer != new_leaf.issuer:
+        events.append(DriftEvent("issuer", old_issuer, new_leaf.issuer, "high"))
+
+    # Key algorithm change — check for key size drop → high
+    old_key = old.get("key_algo", "")
+    new_key = new_key_algo or old_key  # fall back if not provided
+    if old_key and new_key and old_key != new_key:
+        old_type, old_size = _parse_key_algo(old_key)
+        new_type, new_size = _parse_key_algo(new_key)
+        if old_type == new_type and new_size > 0 and old_size > 0 and new_size < old_size:
+            events.append(DriftEvent("key_algo", old_key, new_key, "high"))
+        else:
+            events.append(DriftEvent("key_algo", old_key, new_key, "info"))
+
+    # Signature algorithm weakened (e.g. SHA-256 → SHA-1) → high
+    old_sig = old.get("sig_algo", "")
+    new_sig = new_sig_algo or old_sig
+    if old_sig and new_sig and old_sig != new_sig:
+        if _is_sha1_algo(new_sig) and not _is_sha1_algo(old_sig):
+            events.append(DriftEvent("sig_algo", old_sig, new_sig, "high"))
+        else:
+            events.append(DriftEvent("sig_algo", old_sig, new_sig, "info"))
+
+    # Posture grade dropped → high
+    old_grade = old.get("posture_grade", "")
+    grade = new_posture_grade or old_grade
+    if old_grade and grade and old_grade != grade:
+        if _grade_value(grade) < _grade_value(old_grade):
+            events.append(DriftEvent("posture_grade", old_grade, grade, "high"))
+        else:
+            events.append(DriftEvent("posture_grade", old_grade, grade, "info"))
+
+    # Protocol version downgraded → high
+    old_proto = old.get("protocol_version", "")
+    proto = new_protocol_version or old_proto
+    if old_proto and proto and old_proto != proto:
+        if _tls_value(proto) < _tls_value(old_proto):
+            events.append(DriftEvent("protocol_version", old_proto, proto, "high"))
+        else:
+            events.append(DriftEvent("protocol_version", old_proto, proto, "info"))
+
+    # SAN count changed → info
+    old_san_count = old.get("san_count")
+    new_san_count = len(new_leaf.san_dns_names)
+    if old_san_count is not None and old_san_count != new_san_count:
+        events.append(DriftEvent("san_count", str(old_san_count), str(new_san_count), "info"))
+
+    # Expiry shift — benign renewal (same issuer, later not_after) = info
+    old_not_after = old.get("not_after", "")
+    if old_not_after:
+        old_expiry = _parse_iso(old_not_after)
+        days_added = (new_leaf.not_after - old_expiry).days
+        if days_added > 0 and old_issuer == new_leaf.issuer:
+            events.append(DriftEvent("not_after", old_not_after, _iso(new_leaf.not_after), "info"))
+
+    return events
+
+
+def detect_drift(
+    db_path: str | Path,
+    hostname: str,
+    port: int,
+    new_leaf: Certificate,
+    posture_grade: str = "",
+    protocol_version: str = "",
+    key_algo: str = "",
+    sig_algo: str = "",
+) -> list[DriftEvent]:
+    """Look up the most recent cert_history row for host:port and compare with the new scan.
+
+    Returns DriftEvents (empty if no previous history or no changes).
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT fingerprint_sha256, issuer, not_after, key_algo, sig_algo,
+                      posture_grade, protocol_version, san_count
+               FROM cert_history
+               WHERE hostname = ? AND port = ?
+               ORDER BY scanned_at DESC
+               LIMIT 1""",
+            (hostname, port),
+        ).fetchone()
+    if row is None:
+        return []
+    return _compute_drift_events(
+        dict(row), new_leaf,
+        new_posture_grade=posture_grade,
+        new_protocol_version=protocol_version,
+        new_key_algo=key_algo,
+        new_sig_algo=sig_algo,
+    )
+
+
+def _drift_summary(events: list[DriftEvent]) -> str:
+    """Format drift events into a human-readable summary line."""
+    if not events:
+        return ""
+    high = [e for e in events if e.severity == "high"]
+    if high:
+        parts = [f"{e.field}: {e.old} -> {e.new}" for e in high]
+        return "DRIFT " + "; ".join(parts)
+    parts = [f"{e.field}: {e.old} -> {e.new}" for e in events]
+    return "drift " + "; ".join(parts)
+
+
+def create_drift_alert(
+    db_path: str | Path,
+    cert_id: str,
+    hostname: str,
+    port: int,
+    events: list[DriftEvent],
+    extra_recipients: list[str] | None = None,
+) -> str | None:
+    """Create a drift alert if any high-severity events exist.
+
+    Returns the alert id if created, None otherwise.
+    """
+    from cert_watch.database.repo import Alert, SqliteAlertRepository
+
+    high = [e for e in events if e.severity == "high"]
+    if not high:
+        return None
+
+    summary = _drift_summary(events)
+    message = f"{hostname}:{port} — {summary}"
+
+    alert = Alert(
+        cert_id=cert_id,
+        alert_type="drift",
+        status="pending",
+        message=message,
+        extra_recipients=extra_recipients or [],
+    )
+    alert_repo = SqliteAlertRepository(db_path)
+    return alert_repo.create(alert)
 
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
@@ -1330,3 +1527,65 @@ def list_grade_trends(
             (cutoff,),
         ).fetchall()
     return [dict(r) for r in rows]
+
+
+# ---------- Calendar (Plan 016 Slice 4) ----------
+
+
+def list_calendar(
+    db_path: str | Path,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    bucket: str = "month",
+) -> list[dict]:
+    """Return certificate expiry buckets for the calendar view.
+
+    Buckets: ``day``, ``week``, ``month``.  Each result has
+    ``bucket_start``, ``count``, and ``cert_ids`` (JSON array).
+    Only leaf certificates are included.
+    """
+    init_schema(db_path)
+    if bucket not in ("day", "week", "month"):
+        bucket = "month"
+
+    # SQLite date formatting for bucketing
+    if bucket == "day":
+        group_expr = "DATE(not_after)"
+    elif bucket == "week":
+        # Start of ISO week (Monday)
+        group_expr = "DATE(not_after, 'weekday 0', '-6 days')"
+    else:  # month
+        group_expr = "DATE(not_after, 'start of month')"
+
+    conditions = ["is_leaf = 1"]
+    params: list[str] = []
+    if from_date:
+        conditions.append("not_after >= ?")
+        params.append(from_date)
+    if to_date:
+        conditions.append("not_after <= ?")
+        params.append(to_date)
+
+    where = " AND ".join(conditions)
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            f"""SELECT {group_expr} AS bucket_start,
+                       COUNT(*) AS count,
+                       GROUP_CONCAT(id) AS cert_ids_csv
+                FROM certificates
+                WHERE {where}
+                GROUP BY {group_expr}
+                ORDER BY bucket_start""",
+            params,
+        ).fetchall()
+
+    result = []
+    for r in rows:
+        ids = r["cert_ids_csv"].split(",") if r["cert_ids_csv"] else []
+        result.append({
+            "bucket_start": r["bucket_start"],
+            "count": r["count"],
+            "cert_ids": ids,
+        })
+    return result
