@@ -367,6 +367,42 @@ callers migrate, then gets deleted. `list_unified_entries()` and
 `list_unified_entries_page()` become thin wrappers that call the new
 methods during the transition.
 
+#### Backend-portability discipline
+
+This refactor is also the opportunity to establish the boundary that
+makes a future database backend swap (BC-031) feasible without
+rewriting the world.
+
+**Rule: routes see dataclasses and dicts, never raw SQL rows.** Every
+query method returns plain Python objects — `list[dict]`, a dataclass,
+or a named tuple. No `sqlite3.Row` objects, no `dict(row)` conversions
+in route handlers. The conversion happens inside the repository/query
+layer.
+
+**Rule: SQLite dialect stays inside the query/repository layer.** The
+new methods in `queries.py` (or wherever they land) are the only
+place that contains SQL. Route handlers, alert evaluation, and
+template rendering never construct SQL strings, never call
+`_connect()` directly, and never use SQLite-specific idioms
+(`julianday`, `strftime`, `?` placeholders, `INSERT OR REPLACE`).
+
+**Rule: `_connect()` is an implementation detail, not a public API.**
+Currently `_connect()` is exported from `database/__init__.py` and
+called from `routes/views.py`, `routes/api.py`, `routes/certificates.py`,
+`routes/hosts.py`, `alerts.py`, `audit.py`, and others. Each of these
+call sites is a SQLite coupling point. The new query methods should
+internalize their connection handling (call `_connect()` themselves),
+so callers pass `db_path` and get results — no connection management
+in route code.
+
+The practical test: if someone wanted to write `database/postgres.py`
+implementing the same read interfaces, they should only need to touch
+`database/` — not `routes/`, not `alerts.py`, not `audit.py`. After
+this refactor, that test should hold for the dashboard queries. It
+won't hold for everything yet (there are still direct `_connect()`
+calls in routes), but every query method that moves behind a clean
+interface is one fewer coupling point to fix later.
+
 **Files:** `database/queries.py`, `routes/views.py`, `routes/api.py`.
 
 **Tests:** existing dashboard tests must render identically. Add tests
@@ -376,15 +412,35 @@ empty results).
 **AC:** AC-12: dashboard renders identically using new query methods.
 AC-13: `_list_unified_entries_raw()` is deleted (or reduced to a
 deprecated wrapper). AC-14: no caller materializes the full
-certificates table except CSV export.
+certificates table except CSV export. AC-15: no `_connect()` call or
+raw SQL string appears in `routes/` files (except through the new
+query methods).
 
 ---
 
 ## What this plan deliberately does NOT cover
 
-- **BC-031 (PostgreSQL/MSSQL).** The SQLite abstraction is a separate,
-  larger concern. This plan makes the data access patterns cleaner, which
-  makes a future database backend swap easier, but does not attempt it.
+- **BC-031 (PostgreSQL/MSSQL).** cert-watch targets SMB shops running a
+  single instance. At hundreds of hosts with daily scans and a year of
+  history, the total dataset is ~500K rows / ~50–100MB — well within
+  SQLite's comfort zone. The single-writer model (one scheduler thread,
+  one web process) means write contention isn't a concern. The `Recreate`
+  k8s rollout strategy is a deliberate simplicity choice, not a symptom.
+
+  The repository abstraction (`CertificateRepository`,
+  `SqliteHostRepository`, etc.) already provides the interface a future
+  backend would implement. B2's "backend-portability discipline" tightens
+  that boundary by isolating SQL dialect within the query layer. If
+  PostgreSQL support becomes a real requirement, the path is:
+  `database/postgres.py` implementing the same repository interfaces +
+  `DATABASE_URL` env var + dialect flag in the migration runner. That's a
+  well-scoped multi-session project — but it's not needed now, and adding
+  SQLAlchemy or an ORM "for portability" would be a bigger project than
+  the actual backend swap.
+
+  BC-031 stays as a deferred breadcrumb. The trigger to revisit is in the
+  runbook: when write latency or operational PostgreSQL requirements
+  outweigh SQLite's simplicity.
 
 - **Alert retention purge (Plan 002 WI-1).** The `alerts` table still
   grows unbounded. This is a separate concern (a scheduler change, not a
