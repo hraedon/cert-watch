@@ -53,13 +53,10 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-3 open breadcrumbs: 0 critical, 0 high, 2 medium (1 deferred), 0 low.
+Open: BC-031 (medium, deferred), BC-034 (low).
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
-
-### Open design/latent issues
-
-- **evaluate_all_certs() perf** (low) — Loads `raw_der` blobs for all leaf certs during alert evaluation; only metadata columns needed
+- **BC-034** (low) — evaluate_all_certs() loads raw_der blobs for all leaf certs; only metadata columns needed
 
 ### Recently resolved
 
