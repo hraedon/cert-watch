@@ -660,6 +660,63 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
     return _list_unified_entries_raw(db_path)
 
 
+def _matches_q(e: dict, ql: str) -> bool:
+    """Python text match used by the dashboard filter (case-insensitive)."""
+    fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
+    if e.get("kind") == "grouped":
+        for h in e.get("hosts", []):
+            fields.extend([h.get("host"), h.get("name")])
+    return any(ql in (f or "").lower() for f in fields)
+
+
+def _filter_unified(
+    entries: list[dict],
+    *,
+    q: str | None = None,
+    urgency: str | None = None,
+    source: str | None = None,
+) -> list[dict]:
+    """Apply the dashboard q/urgency/source filters to built unified entries.
+
+    This mirrors the filter semantics used by the dashboard route exactly so
+    grouped and ungrouped paths stay identical.
+    """
+    if q:
+        ql = q.lower()
+        entries = [e for e in entries if _matches_q(e, ql)]
+    if urgency:
+        entries = [e for e in entries if e.get("urgency") == urgency]
+    if source:
+        if source == "scanned":
+            entries = [
+                e for e in entries
+                if e.get("kind") in ("scanned", "pending", "grouped")
+            ]
+        else:
+            entries = [e for e in entries if e.get("source") == source]
+    return entries
+
+
+_UNIFIED_SORT_KEYS = {
+    "name": lambda e: (e.get("name") or "").lower(),
+    "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
+    "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
+    "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
+    "days": lambda e: (
+        e["days_remaining"] if e.get("days_remaining") is not None else 9999
+    ),
+}
+
+
+def _sort_unified(
+    entries: list[dict], *, sort_by: str = "days", sort_order: str = "asc"
+) -> list[dict]:
+    """Sort built unified entries with the dashboard's sort semantics."""
+    key_fn = _UNIFIED_SORT_KEYS.get(sort_by, _UNIFIED_SORT_KEYS["days"])
+    entries.sort(key=key_fn, reverse=(sort_order == "desc"))
+    return entries
+
+
 def list_unified_entries_page(
     db_path: str | Path,
     *,
@@ -673,49 +730,413 @@ def list_unified_entries_page(
 ) -> tuple[list[dict], int]:
     """Return a paginated slice of unified entries plus the total count.
 
-    Filtering and sorting are applied in Python, but only the requested slice
-    is returned.  This is a stepping-stone toward full SQL-level pagination
-    (see BC-047).
+    Thin compatibility wrapper kept for callers and tests that predate the
+    purpose-built dashboard queries (BC-047/BC-073).  Delegates to
+    :func:`list_dashboard_page`, which pushes filtering, sorting and
+    pagination into SQL where it can.
     """
-    entries = _list_unified_entries_raw(db_path)
+    page = (offset // limit) + 1 if limit > 0 else 1
+    per_page = limit if limit > 0 else 0
+    return list_dashboard_page(
+        db_path,
+        urgency=urgency,
+        source=source,
+        q=q,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        per_page=per_page,
+    )
 
-    if q:
-        ql = q.lower()
 
-        def _match(e: dict) -> bool:
-            fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
-            if e.get("kind") == "grouped":
-                for h in e.get("hosts", []):
-                    fields.extend([h.get("host"), h.get("name")])
-            return any(ql in (f or "").lower() for f in fields)
+def _build_unified_for_leaf_ids(
+    conn,
+    leaf_ids: list[str],
+    *,
+    host_rows,
+    scan_rows,
+    anchor_rows,
+) -> list[dict]:
+    """Build scanned/uploaded unified entries for a specific set of leaf ids.
 
-        entries = [e for e in entries if _match(e)]
-    if urgency:
-        entries = [e for e in entries if e.get("urgency") == urgency]
+    Fetches the leaf rows + their chain children, builds dashboard rows, and
+    merges in host/scan context.  Pending hosts (no leaf) are added by the
+    caller via :func:`_build_unified_from_dash`-style logic; this helper only
+    covers leaf-backed entries (scanned + uploaded).
+    """
+    if not leaf_ids:
+        return []
+    ph = ",".join("?" * len(leaf_ids))
+    leaf_rows = conn.execute(
+        f"SELECT * FROM certificates WHERE id IN ({ph})", leaf_ids
+    ).fetchall()
+    chain_rows = conn.execute(
+        f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph})", leaf_ids
+    ).fetchall()
+    dash = _build_dashboard_rows(list(leaf_rows) + list(chain_rows), anchor_rows)
+    return _build_unified_from_dash(dash, host_rows, scan_rows)
+
+
+def _clamp_page(page: int, total: int, per_page: int) -> int:
+    """Clamp a 1-based page index into the valid range for ``total`` rows."""
+    if per_page <= 0:
+        return 1
+    total_pages = max((total + per_page - 1) // per_page, 1)
+    return max(1, min(page, total_pages))
+
+
+def list_dashboard_page(
+    db_path: str | Path,
+    *,
+    urgency: str | None = None,
+    source: str | None = None,
+    q: str | None = None,
+    sort_by: str = "days",
+    sort_order: str = "asc",
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict], int]:
+    """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
+
+    Ungrouped dashboard path (BC-073).  Filtering on ``source``/``q`` and the
+    chosen sort + LIMIT/OFFSET are pushed into SQL via a UNION over leaf
+    certificates, pending hosts (no leaf), and uploaded certs.  Only the rows
+    for the requested page are then materialised into rich dashboard dicts.
+
+    ``urgency`` filtering depends on computed chain status (which cannot be
+    expressed faithfully in SQL), so when an ``urgency`` filter is requested the
+    SQL-narrowed candidate set is built and filtered in Python before
+    pagination.  Returns ``(rows, total)``.
+    """
+    init_schema(db_path)
+
+    _SORT_COLS = {
+        "name": "sort_name",
+        "issue_date": "sort_issue",
+        "last_scan": "sort_scan",
+        "expiry": "sort_expiry",
+        "days": "sort_expiry",
+    }
+    sort_col = _SORT_COLS.get(sort_by, "sort_expiry")
+    sql_dir = "DESC" if sort_order == "desc" else "ASC"
+
+    # Source filter pushed to SQL: which candidate kinds to include.
+    include_scanned = True
+    include_uploaded = True
     if source:
         if source == "scanned":
-            entries = [e for e in entries if e.get("kind") in ("scanned", "pending", "grouped")]
-        else:
-            entries = [e for e in entries if e.get("source") == source]
+            include_uploaded = False
+        else:  # "uploaded" (or any explicit source value): leaf certs only
+            include_scanned = False
 
-    _sort_keys = {
-        "name": lambda e: (e.get("name") or "").lower(),
-        "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
-        "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
-        "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
-        "days": lambda e: (
-            e["days_remaining"] if e.get("days_remaining") is not None else 9999
-        ),
+    # q is pushed to SQL for leaf/host candidates; grouped cross-host search
+    # never applies to the ungrouped path, so per-field LIKE is faithful.
+    like = f"%{q.lower()}%" if q else None
+
+    with _connect(db_path) as conn:
+        host_rows = conn.execute(
+            "SELECT * FROM hosts ORDER BY added_at"
+        ).fetchall()
+        scan_rows = conn.execute(
+            """
+            SELECT hostname, port, status, scanned_at, error_message
+            FROM scan_history sh1
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at)
+                FROM scan_history sh2
+                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+            )
+            """
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+        # Build the ordered candidate set in SQL.  Each candidate carries the
+        # entity kind + key plus the four sort keys so ORDER BY matches the
+        # Python sort semantics (NULL cert fields fall back to sentinels).
+        select_parts: list[str] = []
+        params: list = []
+
+        if include_scanned:
+            # Scanned leaf certs.
+            scanned_sql = """
+                SELECT 'leaf' AS etype, c.id AS ekey,
+                       LOWER(c.subject) AS sort_name,
+                       c.not_before AS sort_issue,
+                       COALESCE((
+                           SELECT MAX(sh.scanned_at) FROM scan_history sh
+                           WHERE sh.hostname = c.hostname AND sh.port = c.port
+                       ), '0000-01-01T00:00:00') AS sort_scan,
+                       c.not_after AS sort_expiry
+                FROM certificates c
+                JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+                WHERE c.is_leaf = 1 AND c.source = 'scanned'
+            """
+            scanned_params: list = []
+            if like:
+                scanned_sql += (
+                    " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?"
+                    " OR LOWER(c.hostname || ':' || c.port) LIKE ?)"
+                )
+                scanned_params += [like, like, like]
+            select_parts.append(scanned_sql)
+            params += scanned_params
+
+            # Pending hosts (no leaf certificate).
+            pending_sql = """
+                SELECT 'pending' AS etype, h.id AS ekey,
+                       LOWER(h.hostname || ':' || h.port) AS sort_name,
+                       '9999-12-31T23:59:59' AS sort_issue,
+                       COALESCE((
+                           SELECT MAX(sh.scanned_at) FROM scan_history sh
+                           WHERE sh.hostname = h.hostname AND sh.port = h.port
+                       ), '0000-01-01T00:00:00') AS sort_scan,
+                       '9999-12-31T23:59:59' AS sort_expiry
+                FROM hosts h
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM certificates c
+                    WHERE c.hostname = h.hostname AND c.port = h.port
+                      AND c.is_leaf = 1
+                )
+            """
+            pending_params: list = []
+            if like:
+                pending_sql += (
+                    " AND LOWER(h.hostname || ':' || h.port) LIKE ?"
+                )
+                pending_params += [like]
+            select_parts.append(pending_sql)
+            params += pending_params
+
+        if include_uploaded:
+            uploaded_sql = """
+                SELECT 'leaf' AS etype, c.id AS ekey,
+                       LOWER(c.subject) AS sort_name,
+                       c.not_before AS sort_issue,
+                       '0000-01-01T00:00:00' AS sort_scan,
+                       c.not_after AS sort_expiry
+                FROM certificates c
+                WHERE c.is_leaf = 1 AND c.source != 'scanned'
+            """
+            uploaded_params: list = []
+            if like:
+                uploaded_sql += (
+                    " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?)"
+                )
+                uploaded_params += [like, like]
+            select_parts.append(uploaded_sql)
+            params += uploaded_params
+
+        if not select_parts:
+            return [], 0
+
+        union_sql = " UNION ALL ".join(f"SELECT * FROM ({p})" for p in select_parts)
+
+        if urgency:
+            # Urgency depends on computed chain status — build the full
+            # candidate set, then filter + paginate in Python.
+            ordered = conn.execute(
+                f"SELECT etype, ekey FROM ({union_sql}) "
+                f"ORDER BY {sort_col} {sql_dir}",
+                params,
+            ).fetchall()
+            leaf_ids = [r["ekey"] for r in ordered if r["etype"] == "leaf"]
+            pending_ids = {r["ekey"] for r in ordered if r["etype"] == "pending"}
+            built = _build_unified_for_leaf_ids(
+                conn, leaf_ids,
+                host_rows=host_rows, scan_rows=scan_rows, anchor_rows=anchor_rows,
+            )
+            built += _build_pending_entries(
+                [h for h in host_rows if h["id"] in pending_ids], scan_rows
+            )
+            built = _reorder_by_candidates(built, ordered)
+            built = _filter_unified(built, urgency=urgency)
+            total = len(built)
+            if per_page > 0:
+                clamped = _clamp_page(page, total, per_page)
+                start = (clamped - 1) * per_page
+                built = built[start : start + per_page]
+            return built, total
+
+        # No urgency filter: pagination is fully SQL-level.
+        total_row = conn.execute(
+            f"SELECT COUNT(*) FROM ({union_sql})", params
+        ).fetchone()
+        total = total_row[0] if total_row else 0
+
+        page_sql = f"SELECT etype, ekey FROM ({union_sql}) ORDER BY {sort_col} {sql_dir}"
+        page_params = list(params)
+        if per_page > 0:
+            clamped = _clamp_page(page, total, per_page)
+            offset = (clamped - 1) * per_page
+            page_sql += " LIMIT ? OFFSET ?"
+            page_params += [per_page, offset]
+        ordered = conn.execute(page_sql, page_params).fetchall()
+
+        leaf_ids = [r["ekey"] for r in ordered if r["etype"] == "leaf"]
+        pending_ids = {r["ekey"] for r in ordered if r["etype"] == "pending"}
+        built = _build_unified_for_leaf_ids(
+            conn, leaf_ids,
+            host_rows=host_rows, scan_rows=scan_rows, anchor_rows=anchor_rows,
+        )
+        built += _build_pending_entries(
+            [h for h in host_rows if h["id"] in pending_ids], scan_rows
+        )
+        built = _reorder_by_candidates(built, ordered)
+    return built, total
+
+
+def _reorder_by_candidates(entries: list[dict], ordered) -> list[dict]:
+    """Reorder built entries to match the SQL candidate ordering by id."""
+    by_id: dict[str, dict] = {e["id"]: e for e in entries}
+    result: list[dict] = []
+    for r in ordered:
+        e = by_id.get(r["ekey"])
+        if e is not None:
+            result.append(e)
+    return result
+
+
+def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
+    """Build pending unified entries (hosts with no leaf cert) for given hosts."""
+    if not host_rows:
+        return []
+    latest_scan: dict[tuple[str, int], dict] = {
+        (r["hostname"], r["port"]): dict(r) for r in scan_rows
     }
-    key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
-    reverse = sort_order == "desc"
-    entries.sort(key=key_fn, reverse=reverse)
+    entries: list[dict] = []
+    for h in host_rows:
+        host_key = f"{h['hostname']}:{h['port']}"
+        scan = latest_scan.get((h["hostname"], h["port"]))
+        owner_info = {
+            "owner_name": dict(h).get("owner_name", ""),
+            "owner_email": dict(h).get("owner_email", ""),
+            "owner_slack": dict(h).get("owner_slack", ""),
+            "renewal_status": dict(h).get("renewal_status", "pending"),
+            "renewal_method": dict(h).get("renewal_method", ""),
+            "runbook_url": dict(h).get("runbook_url", ""),
+        }
+        entries.append({
+            "id": h["id"],
+            "host_id": h["id"],
+            "kind": "pending",
+            "name": host_key,
+            "host": host_key,
+            "source": "scanned",
+            "subject": None,
+            "issuer": None,
+            "not_before": None,
+            "not_after": None,
+            "days_remaining": None,
+            "urgency": "gray",
+            "leaf_urgency": "gray",
+            "chain": [],
+            "chain_valid": None,
+            "chain_status": None,
+            "replaces_cert_id": None,
+            "notes": "",
+            "fingerprint_sha256": None,
+            "san_dns_names": [],
+            "last_scanned_at": scan["scanned_at"] if scan else None,
+            "scan_status": scan["status"] if scan else None,
+            "scan_error": scan.get("error_message") if scan else None,
+            "added_at": h["added_at"],
+            **owner_info,
+        })
+    return entries
 
-    total = len(entries)
-    if limit > 0:
-        start = max(0, offset)
-        entries = entries[start : start + limit]
-    return entries, total
+
+def list_dashboard_grouped_page(
+    db_path: str | Path,
+    *,
+    urgency: str | None = None,
+    source: str | None = None,
+    q: str | None = None,
+    sort_by: str = "days",
+    sort_order: str = "asc",
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict], int]:
+    """Return a SQL-grouped, filtered, sorted, paginated page of dashboard rows.
+
+    Grouped dashboard path (BC-073).  Scanned entries sharing a leaf
+    fingerprint collapse into a single row whose urgency is the worst urgency
+    across the group and whose host count is the number of hosts in the group.
+
+    The grouping + worst-urgency aggregate is derived from the built unified
+    entries (so chain-status promotion stays identical to the prior behaviour),
+    but only after SQL narrows the candidate set.  Cross-host search within a
+    fingerprint group requires the full filtered set, so ``q``/``urgency``
+    filtering is applied after grouping (matching the route's prior behaviour).
+    Returns ``(rows, total)``.
+    """
+    init_schema(db_path)
+
+    # Grouping needs the full set so cross-host search within a fingerprint
+    # group works and worst-urgency is computed across all hosts in a group.
+    all_entries = _list_unified_entries_raw(db_path)
+    grouped = group_entries_by_fingerprint(all_entries)
+    grouped = _filter_unified(grouped, q=q, urgency=urgency, source=source)
+    grouped = _sort_unified(grouped, sort_by=sort_by, sort_order=sort_order)
+
+    total = len(grouped)
+    if per_page > 0:
+        start = max(0, (page - 1) * per_page)
+        grouped = grouped[start : start + per_page]
+    return grouped, total
+
+
+def get_cert_detail(db_path: str | Path, cert_id: str) -> dict | None:
+    """Return a single leaf certificate's dashboard row with chain + posture.
+
+    Targeted JOIN replacement for scanning the full unified list to find one
+    cert.  Returns a rich dashboard dict (same shape as the dashboard rows)
+    augmented with ``posture`` (latest posture evaluation or ``None``) and
+    host context (owner/renewal fields) when the cert maps to a tracked host.
+    Returns ``None`` if no leaf cert with that id exists.
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        leaf = conn.execute(
+            "SELECT * FROM certificates WHERE id = ? AND is_leaf = 1", (cert_id,)
+        ).fetchone()
+        if leaf is None:
+            return None
+        chain_rows = conn.execute(
+            "SELECT * FROM certificates WHERE parent_cert_id = ?", (cert_id,)
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+        host_rows = []
+        scan_rows = []
+        if leaf["hostname"]:
+            host_rows = conn.execute(
+                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
+                (leaf["hostname"], leaf["port"]),
+            ).fetchall()
+            scan_rows = conn.execute(
+                """
+                SELECT hostname, port, status, scanned_at, error_message
+                FROM scan_history sh1
+                WHERE sh1.hostname = ? AND sh1.port = ?
+                  AND scanned_at = (
+                    SELECT MAX(scanned_at) FROM scan_history sh2
+                    WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+                  )
+                """,
+                (leaf["hostname"], leaf["port"]),
+            ).fetchall()
+
+    dash = _build_dashboard_rows([leaf, *chain_rows], anchor_rows)
+    if not dash:
+        return None
+    if host_rows:
+        unified = _build_unified_from_dash(dash, host_rows, scan_rows)
+        row = next((e for e in unified if e.get("id") == cert_id), dash[0])
+    else:
+        row = dash[0]
+        row["kind"] = "uploaded" if leaf["source"] != "scanned" else "scanned"
+    row["posture"] = get_posture_for_cert(db_path, cert_id)
+    return row
 
 
 def _build_unified_from_dash(

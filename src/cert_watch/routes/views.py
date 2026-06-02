@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
 
@@ -17,20 +17,18 @@ from cert_watch.database import (
     _total_alerts,
     _total_scan_history,
     get_posture_grades_for_certs,
-    group_entries_by_fingerprint,
     list_alerts_with_subject,
+    list_dashboard_grouped_page,
+    list_dashboard_page,
     list_fleet_pivot,
     list_scan_history,
-    list_unified_entries,
-    list_unified_entries_page,
 )
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
-    _extract_client_ip,
     check_metrics_token,
-    check_rate_limit,
     get_csrf_context,
+    rate_limit,
 )
 
 logger = logging.getLogger("cert_watch.routes.views")
@@ -215,58 +213,23 @@ def dashboard(
             "healthy": r.get("healthy") or 0,
         }
     elif grouped:
-        # Grouping requires the full filtered set so cross-host search within
-        # a fingerprint group works (e.g. searching "beta" finds a group that
-        # also contains "alpha").  BC-047 does not yet optimise this path.
-        all_entries = list_unified_entries(db)
-        entries = group_entries_by_fingerprint(all_entries)
-        if q:
-            ql = q.lower()
-
-            def _match(e: dict) -> bool:
-                fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
-                if e.get("kind") == "grouped":
-                    for h in e.get("hosts", []):
-                        fields.extend([h.get("host"), h.get("name")])
-                return any(ql in (f or "").lower() for f in fields)
-
-            entries = [e for e in entries if _match(e)]
-        if urgency:
-            entries = [e for e in entries if e.get("urgency") == urgency]
-        if source:
-            if source == "scanned":
-                entries = [e for e in entries if e.get("kind") in ("scanned", "pending", "grouped")]
-            else:
-                entries = [e for e in entries if e.get("source") == source]
-        _sort_keys = {
-            "name": lambda e: (e.get("name") or "").lower(),
-            "issue_date": lambda e: e.get("not_before") or "9999-12-31T23:59:59",
-            "last_scan": lambda e: e.get("last_scanned_at") or "0000-01-01T00:00:00",
-            "expiry": lambda e: e.get("not_after") or "9999-12-31T23:59:59",
-            "days": lambda e: (
-                e["days_remaining"] if e.get("days_remaining") is not None else 9999
-            ),
-        }
-        key_fn = _sort_keys.get(sort_by, _sort_keys["days"])
-        reverse = sort_order == "desc"
-        entries.sort(key=key_fn, reverse=reverse)
-        total = len(entries)
+        # Grouped path: grouping by leaf fingerprint with worst urgency +
+        # host count, filtered/sorted (BC-073).  Grouping needs the full
+        # filtered set, so paginate in the route after clamping the page.
+        all_grouped, total = list_dashboard_grouped_page(
+            db, q=q, urgency=urgency, source=source,
+            sort_by=sort_by, sort_order=sort_order, per_page=0,
+        )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
         start = (page - 1) * per_page
-        page_entries = entries[start : start + per_page]
+        page_entries = all_grouped[start : start + per_page]
     else:
-        # Fast path: no grouping, no pivot — paginate at the raw level.
-        offset = (page - 1) * per_page
-        page_entries, total = list_unified_entries_page(
-            db,
-            offset=offset,
-            limit=per_page,
-            q=q,
-            urgency=urgency,
-            source=source,
-            sort_by=sort_by,
-            sort_order=sort_order,
+        # Fast path: no grouping, no pivot — SQL-level pagination (BC-073).
+        page_entries, total = list_dashboard_page(
+            db, q=q, urgency=urgency, source=source,
+            sort_by=sort_by, sort_order=sort_order,
+            page=page, per_page=per_page,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -361,11 +324,8 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     )
 
 
-@router.get("/ct-lookup/{domain}")
+@router.get("/ct-lookup/{domain}", dependencies=[Depends(rate_limit("ct", 10, 60))])
 def ct_lookup_view(request: Request, domain: str) -> dict:
-    if not check_rate_limit(f"ct:{_extract_client_ip(request)}", 10, 60):
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "rate limited"}, status_code=429)
     result = ct_lookup.query_ct_log(domain)
     if isinstance(result, str):
         return {"error": result}
@@ -386,12 +346,9 @@ def ct_lookup_view(request: Request, domain: str) -> dict:
     }
 
 
-@router.get("/caa-check/{domain}")
+@router.get("/caa-check/{domain}", dependencies=[Depends(rate_limit("caa", 10, 60))])
 def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
-    if not check_rate_limit(f"caa:{_extract_client_ip(request)}", 10, 60):
-        from fastapi.responses import JSONResponse
-        return JSONResponse({"error": "rate limited"}, status_code=429)
     import re as _re
 
     _DOMAIN_RE = _re.compile(

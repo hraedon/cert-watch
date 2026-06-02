@@ -235,12 +235,15 @@ def get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tupl
 async def check_csrf(request: Request) -> str | None:
     """Validate CSRF double-submit cookie. Returns error message or None.
 
-    Checks: x-csrf-token header, _csrf_token form field, then query param (fallback).
+    Checks the ``x-csrf-token`` header, then the ``_csrf_token`` form field.
+    The query-string fallback was removed (BC-070): query-param tokens leak
+    into browser history, access logs, and Referer headers, weakening the
+    double-submit pattern on state-changing routes.
     Skipped when CERT_WATCH_CSRF_DISABLED=1 (for testing).
     """
     if os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
         return None
-    token = request.headers.get("x-csrf-token") or request.query_params.get("_csrf_token") or ""
+    token = request.headers.get("x-csrf-token") or ""
     if not token:
         try:
             form = await request.form()
@@ -377,20 +380,35 @@ async def auth_middleware(request: Request, call_next):
     return RedirectResponse(url="/login", status_code=303)
 
 
-_CSP_HEADER = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
-    "connect-src 'self'; "
-    "frame-ancestors 'none'"
-)
+def _csp_header(nonce: str) -> str:
+    """Build the Content-Security-Policy header for a per-request nonce.
+
+    Scripts must carry the matching ``nonce-`` attribute; ``'unsafe-inline'``
+    is no longer permitted for ``script-src`` (Plan 020 S4), so an injected
+    ``<script>`` without the nonce is refused by the browser. ``style-src``
+    keeps ``'unsafe-inline'`` because templates bind dynamic CSS custom
+    properties inline.
+    """
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    )
 
 
 async def security_headers_middleware(request: Request, call_next):
-    """Add security response headers (CSP, X-Content-Type-Options, etc.)."""
+    """Add security response headers (CSP, X-Content-Type-Options, etc.).
+
+    Generates a per-request CSP nonce and stashes it on ``request.state`` so
+    templates can stamp it onto their inline ``<script>`` blocks.
+    """
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = _CSP_HEADER
+    response.headers["Content-Security-Policy"] = _csp_header(nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response
@@ -429,3 +447,26 @@ async def require_write(request: Request) -> str:
     if csrf_err:
         raise HTTPException(status_code=403, detail=csrf_err)
     return username
+
+
+def rate_limit(key_prefix: str, max_requests: int, window_seconds: int):
+    """FastAPI dependency factory for per-client-IP rate limiting (Plan 020 S2).
+
+    Usage: ``deps=[Depends(rate_limit("ct", 10, 60))]`` (or a parameter
+    ``_rl: None = Depends(rate_limit("ct", 10, 60))``). Raises
+    ``HTTPException(429)`` when the limit is exceeded, and always uses
+    ``_extract_client_ip()`` so proxy-aware identification is automatic — a
+    new API route can't forget it.
+
+    This is for JSON/API routes. Routes that return a ``RedirectResponse`` on
+    limit (form POSTs like ``/hosts`` and ``/login``) must keep a manual
+    ``check_rate_limit`` call, because a dependency can only raise, not return
+    a redirect.
+    """
+
+    async def _dep(request: Request) -> None:
+        client_ip = _extract_client_ip(request)
+        if not check_rate_limit(f"{key_prefix}:{client_ip}", max_requests, window_seconds):
+            raise HTTPException(status_code=429, detail="rate limited")
+
+    return _dep

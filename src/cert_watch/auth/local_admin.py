@@ -1,0 +1,143 @@
+"""Local break-glass admin: scrypt hashing and the composite provider.
+
+The local admin evaluates before the primary provider and works regardless of
+external provider availability. `_CompositeProvider` lives here because it is
+small and tightly coupled to `LocalAdminProvider`.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import logging
+import os
+
+from .protocol import AuthProvider, AuthResult
+
+logger = logging.getLogger("cert_watch.auth")
+
+# Fixed salt + params used to compute a dummy scrypt hash on username mismatch
+# so timing is indistinguishable from the username-match path (BC-072). The
+# value is not secret — its only purpose is to spend comparable CPU time.
+_DUMMY_SALT = b"cert-watch-dummy"
+_DUMMY_N = 2**14
+_DUMMY_R = 8
+_DUMMY_P = 1
+
+
+def _scrypt_hash(
+    password: str, *, n: int = 2**14, r: int = 8, p: int = 1, salt: bytes | None = None,
+) -> str:
+    salt = salt or os.urandom(16)
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    return f"scrypt${n}${r}${p}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+
+def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
+    if not stored_hash or not stored_hash.startswith("scrypt$"):
+        return False
+    parts = stored_hash.split("$")
+    if len(parts) != 6:
+        return False
+    try:
+        n = int(parts[1])
+        r = int(parts[2])
+        p = int(parts[3])
+        salt = base64.b64decode(parts[4])
+        expected_dk = base64.b64decode(parts[5])
+    except (ValueError, Exception):
+        return False
+    if n < 2 or r < 1 or p < 1 or len(expected_dk) != 32:
+        logger.warning(
+            "Rejecting scrypt hash with invalid parameters: n=%s r=%s p=%s",
+            parts[1], parts[2], parts[3],
+        )
+        return False
+    if n < 2**14 or r < 8:
+        logger.warning(
+            "Scrypt hash with weak parameters (n=%s r=%s p=%s) — "
+            "production should use n>=16384 r>=8",
+            parts[1], parts[2], parts[3],
+        )
+    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    return hmac.compare_digest(dk, expected_dk)
+
+
+class LocalAdminProvider(AuthProvider):
+    def __init__(self, username: str, password_hash: str) -> None:
+        self.username = username
+        self.password_hash = password_hash
+
+    def _dummy_verify(self, password: str) -> None:
+        """Compute a throwaway scrypt hash to equalize timing on username
+        mismatch (BC-072). Without this, a non-matching username returns
+        immediately while a matching username spends ~100ms in scrypt, letting
+        an attacker enumerate the break-glass username by response timing.
+        """
+        hashlib.scrypt(
+            password.encode(),
+            salt=_DUMMY_SALT,
+            n=_DUMMY_N,
+            r=_DUMMY_R,
+            p=_DUMMY_P,
+            dklen=32,
+        )
+
+    def authenticate(self, username: str, password: str) -> AuthResult:
+        if not username or not password:
+            return AuthResult(success=False, error="username and password required")
+        if username != self.username:
+            # BC-072: spend comparable CPU time so timing doesn't reveal whether
+            # the supplied username matches the configured break-glass admin.
+            self._dummy_verify(password)
+            return AuthResult(success=False, error="invalid credentials")
+        if not verify_scrypt_hash(password, self.password_hash):
+            return AuthResult(success=False, error="invalid credentials")
+        logger.warning("BREAK-GLASS LOGIN: local admin '%s' authenticated", username)
+        return AuthResult(
+            success=True,
+            username=username,
+            groups=["admins"],
+            roles=["admin"],
+        )
+
+    def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
+        return AuthResult(success=False, error="Use form login for local admin")
+
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
+        return AuthResult(success=False, error="Use form login for local admin")
+
+    @property
+    def provider_name(self) -> str:
+        return "local-admin"
+
+    @property
+    def supports_form_login(self) -> bool:
+        return True
+
+
+class _CompositeProvider(AuthProvider):
+    def __init__(self, local: LocalAdminProvider, primary: AuthProvider) -> None:
+        self._local = local
+        self._primary = primary
+
+    def authenticate(self, username: str, password: str) -> AuthResult:
+        result = self._local.authenticate(username, password)
+        if result.success:
+            return result
+        return self._primary.authenticate(username, password)
+
+    def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
+        return self._primary.start_oauth_flow(redirect_uri)
+
+    def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
+        return self._primary.complete_oauth_flow(code, redirect_uri, state)
+
+    @property
+    def provider_name(self) -> str:
+        return self._primary.provider_name
+
+    @property
+    def supports_form_login(self) -> bool:
+        return True

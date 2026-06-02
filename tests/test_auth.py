@@ -728,6 +728,35 @@ def test_local_admin_wrong_username():
     assert result.success is False
 
 
+def test_local_admin_username_mismatch_computes_dummy_hash():
+    """BC-072: username mismatch must spend scrypt CPU time so timing doesn't
+    reveal whether the supplied username matches the break-glass admin."""
+    from unittest.mock import patch
+
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+
+    with patch.object(
+        provider, "_dummy_verify", wraps=provider._dummy_verify
+    ) as dummy:
+        result = provider.authenticate("not-admin", "whatever")
+    assert result.success is False
+    dummy.assert_called_once_with("whatever")
+
+
+def test_local_admin_dummy_verify_invokes_scrypt():
+    """BC-072: the dummy-hash branch actually performs scrypt work."""
+    import hashlib
+    from unittest.mock import patch
+
+    h = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", h)
+
+    with patch.object(hashlib, "scrypt", wraps=hashlib.scrypt) as scrypt_spy:
+        provider.authenticate("not-admin", "whatever")
+    assert scrypt_spy.call_count >= 1
+
+
 def test_local_admin_empty_creds():
     h = _scrypt_hash("pw", n=2**4, r=1, p=1)
     provider = LocalAdminProvider("admin", h)

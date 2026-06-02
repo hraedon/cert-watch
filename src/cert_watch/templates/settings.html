@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cert-watch — settings</title>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     try {
       var t = localStorage.getItem('cw-theme') || 'dark';
       document.documentElement.setAttribute('data-theme', t);
@@ -310,7 +310,7 @@
     </div>
   </div>
 
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     function toggleProvider() {
       var provider = document.getElementById('auth_provider').value;
       document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');
