@@ -416,6 +416,62 @@ def caa_check_view(request: Request, domain: str) -> dict:
     }
 
 
+def _pivot_tls_monthly(rows: list[dict]) -> tuple[list[dict], int]:
+    """Aggregate daily TLS version rows into monthly stacked-bar data.
+
+    Returns (sorted_rows, max_monthly_total) so the template can scale bars.
+    """
+    from collections import OrderedDict
+
+    months: OrderedDict[str, dict] = OrderedDict()
+    for r in rows:
+        month = r["date"][:7]
+        if month not in months:
+            months[month] = {"month": month, "tls_1_3": 0, "tls_1_2": 0, "tls_1_0": 0}
+        v = (r.get("protocol_version") or "").strip()
+        count = r.get("count", 0)
+        if v == "TLSv1.3":
+            months[month]["tls_1_3"] += count
+        elif v == "TLSv1.2":
+            months[month]["tls_1_2"] += count
+        else:
+            months[month]["tls_1_0"] += count
+    result = sorted(months.values(), key=lambda m: m["month"])
+    max_total = max(
+        (m["tls_1_3"] + m["tls_1_2"] + m["tls_1_0"] for m in result), default=1
+    )
+    return result, max(max_total, 1)
+
+
+def _pivot_grade_monthly(rows: list[dict]) -> tuple[list[dict], int]:
+    """Aggregate daily grade rows into monthly stacked-bar data.
+
+    Returns (sorted_rows, max_monthly_total) so the template can scale bars.
+    """
+    from collections import OrderedDict
+
+    months: OrderedDict[str, dict] = OrderedDict()
+    for r in rows:
+        month = r["date"][:7]
+        if month not in months:
+            months[month] = {"month": month, "grade_a": 0, "grade_b": 0, "grade_c": 0, "grade_f": 0}
+        grade = (r.get("posture_grade") or "").strip().upper()
+        count = r.get("count", 0)
+        if grade in ("A+", "A"):
+            months[month]["grade_a"] += count
+        elif grade == "B":
+            months[month]["grade_b"] += count
+        elif grade == "C":
+            months[month]["grade_c"] += count
+        else:
+            months[month]["grade_f"] += count
+    result = sorted(months.values(), key=lambda m: m["month"])
+    max_total = max(
+        (m["grade_a"] + m["grade_b"] + m["grade_c"] + m["grade_f"] for m in result), default=1
+    )
+    return result, max(max_total, 1)
+
+
 @router.get("/insights", response_class=HTMLResponse)
 def insights_view(
     request: Request,
@@ -425,8 +481,8 @@ def insights_view(
     from cert_watch.database import list_calendar, list_grade_trends, list_tls_version_trends
 
     calendar_data = list_calendar(db, bucket="week")
-    tls_trends = list_tls_version_trends(db, days=180)
-    grade_trends = list_grade_trends(db, days=180)
+    tls_trends, tls_max = _pivot_tls_monthly(list_tls_version_trends(db, days=180))
+    grade_trends, grade_max = _pivot_grade_monthly(list_grade_trends(db, days=180))
 
     return templates.TemplateResponse(
         request=request,
@@ -438,7 +494,9 @@ def insights_view(
             "tab": tab,
             "calendar_data": calendar_data,
             "tls_trends": tls_trends,
+            "tls_max": tls_max,
             "grade_trends": grade_trends,
+            "grade_max": grade_max,
         },
     )
 

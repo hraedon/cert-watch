@@ -136,7 +136,7 @@
             {% set total = (t.tls_1_3 or 0) + (t.tls_1_2 or 0) + (t.tls_1_0 or 0) %}
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
               {% if total > 0 %}
-              <div class="cw-chart-bar" style="height:{{ (total / 12 * 100) | int }}%">
+              <div class="cw-chart-bar" style="height:{{ (total / tls_max * 100) | int }}%">
                 {% if t.tls_1_3 %}<div style="flex:{{ t.tls_1_3 }};background:var(--ok);min-height:2px"></div>{% endif %}
                 {% if t.tls_1_2 %}<div style="flex:{{ t.tls_1_2 }};background:var(--warn);min-height:2px"></div>{% endif %}
                 {% if t.tls_1_0 %}<div style="flex:{{ t.tls_1_0 }};background:var(--crit);min-height:2px"></div>{% endif %}
@@ -176,7 +176,7 @@
             {% set total = (g.grade_a or 0) + (g.grade_b or 0) + (g.grade_c or 0) + (g.grade_f or 0) %}
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
               {% if total > 0 %}
-              <div class="cw-chart-bar" style="height:{{ (total / 12 * 100) | int }}%">
+              <div class="cw-chart-bar" style="height:{{ (total / grade_max * 100) | int }}%">
                 {% if g.grade_a %}<div style="flex:{{ g.grade_a }};background:var(--ok);min-height:2px"></div>{% endif %}
                 {% if g.grade_b %}<div style="flex:{{ g.grade_b }};background:var(--accent);min-height:2px"></div>{% endif %}
                 {% if g.grade_c %}<div style="flex:{{ g.grade_c }};background:var(--warn);min-height:2px"></div>{% endif %}
