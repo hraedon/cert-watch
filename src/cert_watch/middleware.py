@@ -424,27 +424,70 @@ async def auth_middleware(request: Request, call_next):
     return RedirectResponse(url="/login", status_code=303)
 
 
-# NOTE: script-src keeps 'unsafe-inline'. The Plan 020 S4 nonce approach was
-# reverted (BC-075): the templates use ~24 inline event-handler attributes
-# (onclick=, onchange=) which CSP nonces cannot whitelist — only <script>
-# blocks. Removing 'unsafe-inline' broke every button. Proper hardening
-# (handlers -> addEventListener) is best done during the design-session
-# template rewrite. style-src needs 'unsafe-inline' for dynamic CSS custom
-# properties bound inline.
-_CSP_HEADER = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
-    "connect-src 'self'; "
-    "frame-ancestors 'none'"
-)
+def _build_csp(nonce: str) -> str:
+    """Build the Content-Security-Policy header for a request.
+
+    BC-075: ``script-src`` still includes ``'unsafe-inline'`` because some
+    templates retain inline ``on*=`` event-handler attributes, which CSP nonces
+    *cannot* whitelist (only ``<script>`` blocks). The no-inline-handler guardrail
+    test (``tests/test_no_inline_handlers.py``) ratchets that count toward zero.
+
+    A per-request ``nonce`` is already issued (``request.state.csp_nonce``) and
+    threaded into every ``<script>`` via ``{{ request.state.csp_nonce }}`` in the
+    templates, so the final hardening is a one-line change here — once the
+    guardrail reaches zero, replace the ``script-src`` line with::
+
+        f"script-src 'self' 'nonce-{nonce}'; "
+
+    Until then, adding a nonce would make modern browsers *ignore*
+    ``'unsafe-inline'`` and break the remaining inline handlers — the exact
+    regression that reverted Plan 020 S4 — so we don't emit it yet.
+
+    ``style-src`` keeps ``'unsafe-inline'`` regardless: the UI binds dynamic CSS
+    custom properties via inline ``style=`` attributes, which nonces can't cover.
+    """
+    _ = nonce  # reserved for the BC-075 flip described above
+    return (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'"
+    )
+
+
+class CSPNonceMiddleware:
+    """Pure-ASGI middleware that issues a per-request CSP nonce into
+    ``scope['state']`` before anything else runs.
+
+    Done as raw ASGI (not ``BaseHTTPMiddleware``) deliberately: ``request.state``
+    set inside a ``BaseHTTPMiddleware`` does not propagate to the endpoint /
+    template render (task isolation), but ``scope['state']`` written here is
+    shared with the downstream request — so both the templates
+    (``{{ request.state.csp_nonce }}``) and ``security_headers_middleware`` (for
+    the eventual header flip) read the same value. See BC-075.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            scope.setdefault("state", {})["csp_nonce"] = secrets.token_urlsafe(16)
+        await self.app(scope, receive, send)
 
 
 async def security_headers_middleware(request: Request, call_next):
-    """Add security response headers (CSP, X-Content-Type-Options, etc.)."""
+    """Add security response headers (CSP, X-Content-Type-Options, etc.).
+
+    The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
+    (``request.state.csp_nonce``); ``_build_csp`` will consume it at the BC-075
+    flip. Today it's threaded into templates only (header keeps 'unsafe-inline').
+    """
+    nonce = getattr(request.state, "csp_nonce", "")
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = _CSP_HEADER
+    response.headers["Content-Security-Policy"] = _build_csp(nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response

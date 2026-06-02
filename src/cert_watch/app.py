@@ -23,6 +23,7 @@ from cert_watch.database import (
 )
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
+    CSPNonceMiddleware,
     _init_rate_db,
     auth_middleware,
     csrf_session_middleware,
@@ -39,6 +40,10 @@ from cert_watch.security import SecurityContext
 logger = logging.getLogger("cert_watch.app")
 
 BASE_DIR = Path(__file__).parent
+# Templates read the per-request CSP nonce via {{ request.state.csp_nonce }}
+# (set by CSPNonceMiddleware). That works across every route module's own
+# Jinja2Templates instance because Starlette always injects `request` into the
+# context — no per-instance context processor to keep in sync (BC-075).
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 register_filters(templates)
 
@@ -250,6 +255,10 @@ def create_app(
     application.middleware("http")(csrf_session_middleware)
     application.middleware("http")(setup_redirect_middleware)
     application.middleware("http")(auth_middleware)
+    # Outermost (runs first): issue the per-request CSP nonce into scope state
+    # before any other middleware/endpoint, so the template context processor and
+    # security_headers_middleware share it (BC-075).
+    application.add_middleware(CSPNonceMiddleware)
 
     # Mount route modules
     for router in route_modules:

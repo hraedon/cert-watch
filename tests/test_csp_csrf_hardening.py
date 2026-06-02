@@ -16,10 +16,14 @@ def _reload_app(tmp_path, monkeypatch):
 
 
 # ── Security headers ────────────────────────────────────────────────────────
-# NOTE: Plan 020 S4 (CSP nonce) was reverted — see BC-075. CSP keeps
-# 'unsafe-inline' for script-src because the templates use inline event-handler
-# attributes (onclick=) that nonces cannot whitelist. Proper hardening is
-# deferred to the design-session template rewrite.
+# NOTE (BC-075): the per-request CSP nonce is plumbed — issued in
+# security_headers_middleware, exposed via the csp_nonce context processor, and
+# stamped on every <script> in base.html — but script-src still carries
+# 'unsafe-inline' (and the header does NOT yet emit the nonce) because some
+# templates retain inline on*= handlers. Adding the nonce to the header now would
+# make browsers ignore 'unsafe-inline' and break those handlers. The
+# no-inline-handler guardrail (test_no_inline_handlers.py) ratchets them to zero;
+# then _build_csp flips to 'nonce-…' and drops 'unsafe-inline'.
 
 
 def test_security_headers_present(tmp_path, monkeypatch):
@@ -32,6 +36,28 @@ def test_security_headers_present(tmp_path, monkeypatch):
     assert "frame-ancestors 'none'" in csp
     assert r.headers.get("X-Content-Type-Options") == "nosniff"
     assert r.headers.get("X-Frame-Options") == "DENY"
+
+
+def test_csp_nonce_rendered_and_per_request(tmp_path, monkeypatch):
+    """base.html's <script> blocks carry a non-empty nonce that is shared within
+    a response and fresh per request (BC-075 plumbing). Page-template scripts are
+    nonce-stamped as those screens are converted; this checks the base wiring."""
+    import re
+
+    app_mod = _reload_app(tmp_path, monkeypatch)
+    with TestClient(app_mod.app) as client:
+        r1 = client.get("/")
+        r2 = client.get("/")
+    assert r1.status_code == 200
+
+    nonces1 = re.findall(r'<script\b[^>]*nonce="([^"]+)"', r1.text)
+    assert len(nonces1) >= 3, "base.html's three <script> blocks should be nonce-stamped"
+    assert all(nonces1), "nonce must be non-empty"
+    # All base scripts share this request's single nonce…
+    assert len(set(nonces1)) == 1
+    # …and a second request gets a different nonce.
+    nonces2 = re.findall(r'<script\b[^>]*nonce="([^"]+)"', r2.text)
+    assert nonces2 and set(nonces1).isdisjoint(nonces2)
 
 
 # ── BC-070: CSRF token no longer accepted via query parameter ───────────────

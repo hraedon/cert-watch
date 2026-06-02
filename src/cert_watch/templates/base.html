@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}cert-watch{% endblock %}</title>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     try {
       var t = localStorage.getItem('cw-theme') || 'dark';
       document.documentElement.setAttribute('data-theme', t);
@@ -64,13 +64,13 @@
           <span class="cw-health-dot"></span>
           <span id="cw-health-text">Loading…</span>
         </div>
-        <button class="cw-health-dismiss" title="Dismiss" onclick="dismissHealth()">×</button>
+        <button class="cw-health-dismiss" id="cw-health-dismiss" title="Dismiss">×</button>
       </div>
       {% block content %}{% endblock %}
     </div>
   </div>
   {% block scripts %}{% endblock %}
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     (function() {
       var btn = document.getElementById('theme-toggle');
       if (!btn) return;
@@ -92,7 +92,7 @@
     })();
   </script>
   {# Health banner — fetches /api/health every 30s #}
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     (function() {
       var BANNER = document.getElementById('cw-health-banner');
       var TEXT = document.getElementById('cw-health-text');
@@ -108,7 +108,10 @@
         BANNER.style.display = 'none';
         try { sessionStorage.setItem('cw-health-dismissed', '1'); } catch(e) {}
       }
-      window.dismissHealth = dismissHealth;
+      // BC-075 reference pattern: bind via addEventListener, not an inline
+      // onclick= attribute (which a nonce-based CSP cannot whitelist).
+      var DISMISS = document.getElementById('cw-health-dismiss');
+      if (DISMISS) DISMISS.addEventListener('click', dismissHealth);
 
       function render(data) {
         var cls = 'cw-health-' + (data.overall || 'ok');
