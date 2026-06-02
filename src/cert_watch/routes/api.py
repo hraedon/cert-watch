@@ -508,7 +508,9 @@ async def api_create_alert_group(
         return JSONResponse(content={"error": "webhook_url must be a string"}, status_code=400)
 
     if webhook_url:
-        _validate_webhook_url(webhook_url)
+        err = _validate_webhook_url(webhook_url)
+        if err:
+            return err
 
     # Validate emails minimally
     for r in recipients_raw:
@@ -751,9 +753,6 @@ def api_export_certificates_csv(
             "days_remaining",
             "urgency",
             "chain_valid",
-            "leaf_subject",
-            "leaf_issuer",
-            "leaf_not_after",
         ]
     )
     for r in rows:
@@ -767,9 +766,6 @@ def api_export_certificates_csv(
                 _csv_safe(r["days_remaining"]),
                 _csv_safe(r["urgency"]),
                 _csv_safe(r.get("chain_valid", "")),
-                _csv_safe(r["subject"]),
-                _csv_safe(r["issuer"]),
-                _csv_safe(r["not_after"]),
             ]
         )
         for chain in r.get("chain", []):
@@ -783,9 +779,6 @@ def api_export_certificates_csv(
                     _csv_safe(chain["days_remaining"]),
                     _csv_safe(chain["urgency"]),
                     "",
-                    _csv_safe(r["subject"]),
-                    _csv_safe(r["issuer"]),
-                    _csv_safe(r["not_after"]),
                 ]
             )
     return PlainTextResponse(
@@ -915,7 +908,7 @@ def api_report_expiring_csv(
 
 
 @router.post("/api/webhook/test")
-async def api_webhook_test(request: Request, _auth: str = Depends(require_auth)) -> JSONResponse:
+async def api_webhook_test(request: Request, _auth: str = Depends(require_write)) -> JSONResponse:
     """Send a test payload to the configured webhook URL."""
     settings = _get_settings(request)
     webhook_cfg = settings.build_webhook_config()

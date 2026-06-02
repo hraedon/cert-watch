@@ -9,10 +9,9 @@ Slices:
 
 from __future__ import annotations
 
-import logging
 import os
 import stat
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -440,7 +439,9 @@ class TestSecureByDefault:
                 and bind_host not in self.LOOPBACK_ADDRS
                 and not s.allow_unauth
             )
-            assert should_exit, "Expected non-loopback + NoAuthProvider + no allow_unauth to be fatal"
+            assert should_exit, (
+                "Expected non-loopback + NoAuthProvider + no allow_unauth to be fatal"
+            )
         finally:
             vars(cfg_mod).clear()
             vars(cfg_mod).update(saved_cfg)
@@ -500,7 +501,7 @@ class TestSecureByDefault:
 
     def test_auth_provider_exempt(self, tmp_path):
         """BC-083: configured auth provider skips the check."""
-        from cert_watch.auth import LocalAdminProvider, _scrypt_hash
+        from cert_watch.auth import _scrypt_hash
 
         auth = LocalAdminProvider("admin", _scrypt_hash("pass"))
         assert not isinstance(auth, NoAuthProvider)

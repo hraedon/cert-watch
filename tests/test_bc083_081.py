@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
-from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import (
-    SESSION_COOKIE,
     NoAuthProvider,
     create_session,
     set_signing_key,
@@ -19,7 +16,6 @@ from cert_watch.auth import (
 from cert_watch.database import init_schema, kv_set
 from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.middleware import set_csrf_secret
-
 
 # ---------- BC-083: Secure-by-default auth posture ----------
 
@@ -74,8 +70,8 @@ class TestBC083SecureByDefault:
 
     def test_system_exit_nonloopback_no_auth(self, tmp_path, monkeypatch):
         """BC-083: lifespan raises SystemExit for non-loopback + no auth + no ALLOW_UNAUTH."""
-        from cert_watch.config import Settings
         from cert_watch.auth import NoAuthProvider
+        from cert_watch.config import Settings
 
         s = Settings(
             db_path=tmp_path / "test.sqlite3",
@@ -91,12 +87,15 @@ class TestBC083SecureByDefault:
         assert not s.allow_unauth
         # Non-loopback host should trigger SystemExit
         bind_host = "0.0.0.0"
-        should_exit = isinstance(auth, NoAuthProvider) and not s.allow_unauth and bind_host not in self.LOOPBACK_ADDRS
+        should_exit = (
+            isinstance(auth, NoAuthProvider)
+            and not s.allow_unauth
+            and bind_host not in self.LOOPBACK_ADDRS
+        )
         assert should_exit
 
     def test_loopback_exempt(self, tmp_path):
         """BC-083: loopback binds always bypass the SystemExit check."""
-        from cert_watch.config import Settings
         from cert_watch.auth import NoAuthProvider
 
         auth = NoAuthProvider()
@@ -217,8 +216,8 @@ class TestBC081SessionRevocation:
         set_csrf_secret("test-logout-csrf")
 
         from cert_watch.app import create_app
-        from cert_watch.config import Settings
         from cert_watch.auth import LocalAdminProvider, _scrypt_hash
+        from cert_watch.config import Settings
         from cert_watch.security import SecurityContext
 
         db = tmp_path / "test.sqlite3"
