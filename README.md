@@ -227,20 +227,23 @@ All JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 
 ```
 src/cert_watch/
-  app.py               FastAPI app, routes, middleware
-  auth.py              Authentication (LDAP, OAuth, sessions)
+  app.py               FastAPI app factory + lifespan
+  routes/              HTTP route handlers (api, views, hosts, certificates, …)
+  middleware.py        Security middleware + FastAPI deps (auth, CSRF, rate limit, CSP)
+  auth/                Authentication package (session, LDAP, OAuth, local admin, factory)
   alerts.py            Email + webhook alerting
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
   config.py            Environment-based settings
   ct_lookup.py         Certificate Transparency lookups
-  database.py          SQLite persistence layer
+  posture.py           TLS posture grading
+  database/            SQLite persistence layer (repositories, queries, migrations)
   scan.py              TLS scanning
   scheduler.py         Daily scan scheduler
   upload.py            Certificate file upload/parse
   templates/           Jinja2 HTML templates
   static/              CSS
-tests/                 pytest suite (368 tests)
+tests/                 pytest suite (652 unit tests)
 docs/spec/             Work-item specs (one per FR)
 deploy/
   k8s/                 Kustomize manifests

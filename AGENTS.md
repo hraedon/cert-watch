@@ -15,14 +15,14 @@ cert-watch is a "traditional"-build comparison point for [software-factory-2](ht
 ## Orient
 
 1. **Read the spec.** `docs/spec/wi_*.md` — one file per FR or interface module, with explicit acceptance criteria. The spec is the contract.
-2. **Read the scaffold.** `src/cert_watch/` — `app.py` (FastAPI), `templates/`, `static/`, plus feature modules: `certificate_model.py`, `cert_chain.py`, `database.py`, `scan.py`, `upload.py`, `alerts.py`, `scheduler.py`, `auth.py`, `ct_lookup.py`, `config.py`.
+2. **Read the scaffold.** `src/cert_watch/` — `app.py` (FastAPI app factory + lifespan), `routes/` (HTTP handlers), `middleware.py` (security middleware + FastAPI deps), `templates/`, `static/`, plus feature modules: `certificate_model.py`, `cert_chain.py`, `scan.py`, `upload.py`, `alerts.py`, `scheduler.py`, `posture.py`, `ct_lookup.py`, `config.py`. The `auth/` package and `database/` package hold the two largest concerns (see Architecture notes).
 3. **Note the deploy story.** See `deploy/` (k8s + Argo CD, docker compose, systemd, IIS). Argo CD watches `deploy/k8s/`; CI bumps the image tag there on every merge to `main`. Do not commit changes to `deploy/k8s/kustomization.yaml` in feature PRs. Windows/IIS hosting (`deploy/iis/`, `scripts/install-windows.ps1`) fronts uvicorn via HttpPlatformHandler or an ARR reverse proxy; the app is cross-platform (the only OS-specific bit is the `CERT_WATCH_DATA_DIR` default — see `config._default_data_dir`).
 
 ## Build / test / lint
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/pytest -q            # unit tests
+.venv/bin/pytest -q            # unit tests (excludes e2e + integration by default)
 .venv/bin/ruff check .         # lint
 
 # Auth extras (optional — tests mock these, but needed for real usage):
@@ -30,172 +30,71 @@ uv pip install -e ".[auth-ldap]"   # LDAP/AD
 uv pip install -e ".[auth-oauth]"  # OAuth/OIDC (Entra, Google)
 uv pip install -e ".[auth]"        # both
 
+# Integration tests (need a real openssl binary; opt-in):
+.venv/bin/pytest -m integration -q
+
 # E2E:
 uv pip install -e ".[e2e]" && .venv/bin/playwright install --with-deps chromium
 .venv/bin/pytest -m e2e tests/e2e -q
 ```
 
-E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t64 libxcomposite1 libxdamage1 libxrandr2 libgtk-3-0t64 libasound2t64` (one-time sudo install). CI handles this via `playwright install --with-deps`.
+The default pytest config (`pyproject.toml` `addopts`) runs `-m 'not e2e and not integration'`. The `@integration` openssl-`s_client` tests are environment-sensitive (need openssl on PATH + a local TLS server) and are excluded from the default run. E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t64 libxcomposite1 libxdamage1 libxrandr2 libgtk-3-0t64 libasound2t64` (one-time sudo install). CI handles this via `playwright install --with-deps`.
 
 ## Conventions
 
 - **Single SQLite file** at `${CERT_WATCH_DATA_DIR}/cert-watch.sqlite3` (default `/var/lib/cert-watch`). Deployment is single-writer; `Recreate` rollout strategy in k8s. WAL mode enabled.
 - **PKCS#12 (`.pfx`) and PKCS#7 (`.p7b`/`.p7c`) support extends the original spec.**
-- **Auth is optional.** When `AUTH_PROVIDER` is unset, all routes are open (backward compat). Set to `ldap` or `oauth`/`entra` to enable. Auth deps (`ldap3`, `authlib`) are optional extras, not core requirements. Tests mock the import layer.
+- **Auth is optional.** When `AUTH_PROVIDER` is unset, all routes are open (backward compat). Set to `ldap` or `oauth`/`entra` to enable. Auth deps (`ldap3`, `authlib`) are optional extras, not core requirements. Tests mock the import layer. A misconfigured provider raises `ValueError` at startup rather than silently degrading to open.
+- **Route-level auth via dependencies.** Use `Depends(require_auth)` / `Depends(require_write)` from `middleware.py` for `/api/*` routes — never hand-roll session/CSRF checks in handlers. `require_auth` returns `""` (not 401) under `NoAuthProvider` so the "auth off = open" contract holds. Rate-limited API routes use `Depends(rate_limit("<prefix>", max, window))`; only form-POST/redirect routes (`/hosts`, `/login`, `/upload`) keep a manual `check_rate_limit` (a dependency can't return a redirect).
 - **Empty-state must not error.** The dashboard renders an "empty state" message when no certificates exist.
-- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/static`, and the login flow (`/login`, `/auth/*`) stay open when auth is enabled. **`/api/*` requires auth** — route-level checks in addition to middleware (BC-057). `/metrics` can be gated with `CERT_WATCH_METRICS_TOKEN` for bearer token auth (BC-056).
-- **Environment-driven config.** All settings via env vars (see README). No config files.
-- **`CERT_WATCH_ALLOW_PRIVATE_IPS`** — defaults to `1` (private IP scanning enabled). Set to `0` to block RFC 1918 / ULA hosts. Loopback and link-local remain blocked regardless.
-- **`CERT_WATCH_DNS_SERVERS`** — comma-separated list of DNS server IPs for hostname resolution during scans. When set, queries are sent directly to these servers (UDP port 53, A/AAAA records) instead of using the system resolver. Falls back to system resolver if custom DNS returns no results. Useful for resolving internal hostnames via domain controllers.
-- **`CERT_WATCH_TRUST_PROXY`** — set to `1` to extract client IP from `X-Forwarded-For` / `X-Real-IP` headers for rate limiting. Optionally configure `CERT_WATCH_TRUSTED_PROXIES` (comma-separated IPs) to trust specific proxy IPs.
-- **`CERT_WATCH_METRICS_TOKEN`** — when set, `/metrics` requires `Authorization: Bearer <token>` header. Without this, `/metrics` is open (backward compat).
-- **`CERT_WATCH_ALLOW_UNAUTH`** — set to `1` to suppress the unauthenticated-mode startup warning and the first-run setup redirect. Intended for dev/air-gapped environments.
-- **`CERT_WATCH_HISTORY_RETENTION_DAYS`** — defaults to `365`. Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging.
-- **`CERT_WATCH_DRIFT_ALERTS`** — set to `0` to disable drift detection alerts. Defaults to `1` (enabled). Drift alerts fire when re-scans detect issuer changes, key-size drops, SHA-1 downgrades, posture grade drops, or TLS version downgrades.
-- **`CERT_WATCH_ALERT_RETENTION_DAYS`** — defaults to `90`. Days of alert history to keep; purged at startup + daily. `0` disables purging.
-- **`CERT_WATCH_CHECK_REVOCATION`** — set to `1` to enable OCSP/CRL endpoint reachability checks during posture evaluation. Defaults to `0` (off). When enabled, checks that the certificate's OCSP responder and CRL distribution points are reachable; findings are added to the posture result (warnings, not grade penalties).
+- **Public paths are unauthenticated.** `/healthz`, `/metrics`, `/static`, and the login flow (`/login`, `/auth/*`) stay open when auth is enabled. **`/api/*` requires auth.** `/metrics` can be gated with `CERT_WATCH_METRICS_TOKEN` for bearer token auth.
+- **CSP uses per-request nonces.** `security_headers_middleware` generates a nonce on `request.state.csp_nonce`; inline `<script>` blocks must carry `nonce="{{ request.state.csp_nonce }}"`. `script-src` does **not** allow `'unsafe-inline'` — an injected `<script>` without the nonce is refused by the browser.
+- **CSRF is double-submit cookie.** Token accepted via the `x-csrf-token` header or `_csrf_token` form field only — never the query string (BC-070).
+- **Environment-driven config.** All settings via env vars (see README). GUI settings (`/settings`) persist to `kv_store`; **env vars always win** over GUI values.
+- **`CERT_WATCH_ALLOW_PRIVATE_IPS`** — defaults to `1`. Set to `0` to block RFC 1918 / ULA hosts. Loopback and link-local remain blocked regardless.
+- **`CERT_WATCH_DNS_SERVERS`** — comma-separated DNS server IPs for direct hostname resolution during scans (UDP/53, A/AAAA). Falls back to system resolver. Useful for internal hostnames via domain controllers.
+- **`CERT_WATCH_TRUST_PROXY`** — set to `1` to extract client IP from `X-Forwarded-For` / `X-Real-IP` for rate limiting. Optionally `CERT_WATCH_TRUSTED_PROXIES` (comma-separated) to trust specific proxies.
+- **`CERT_WATCH_METRICS_TOKEN`** — when set, `/metrics` requires `Authorization: Bearer <token>`.
+- **`CERT_WATCH_ALLOW_UNAUTH`** — set to `1` to suppress the unauthenticated-mode startup warning and first-run setup redirect (dev/air-gapped).
+- **`CERT_WATCH_HISTORY_RETENTION_DAYS`** (default `365`), **`CERT_WATCH_ALERT_RETENTION_DAYS`** (default `90`), **`CERT_WATCH_AUDIT_RETENTION_DAYS`** (default `90`) — days of history/alerts/audit to keep; purged at startup + daily; `0` disables.
+- **`CERT_WATCH_DRIFT_ALERTS`** — `0` disables drift detection alerts (default `1`). Fires on issuer changes, key-size drops, SHA-1 downgrades, posture grade drops, TLS version downgrades.
+- **`CERT_WATCH_CHECK_REVOCATION`** — `1` enables OCSP/CRL reachability checks during posture evaluation (default `0`). Findings are warnings, not grade penalties.
 - **Spec acceptance criteria are the boundary.** Don't add features beyond the spec without a tracked breadcrumb or plan entry.
 
-## Known issues (open breadcrumbs)
+## Known issues & plan status
 
-5 open design/latent issues: 0 critical, 0 high, 3 medium, 2 low.
+Breadcrumbs are tracked in **agent-notes** (postgres-backed) and mirrored as markdown under `breadcrumbs/active/` and `breadcrumbs/resolved/`. The `.md` files use YAML frontmatter (`identifier`/`title`/`kind`/`status`/`severity`), so `agent-notes breadcrumb sync` ingests them. Don't keep a changelog here — query the source of truth:
 
-- **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-061** (medium) — Chain validation is name-matching only, never verifies cryptographic signatures
-- **BC-070** (medium) — CSRF token accepted via query parameter on state-changing routes
-- **BC-071** (medium) — OAuth userinfo fallback has no nonce binding
-- **BC-073** (medium) — `_list_unified_entries_raw` loads full inventory into memory (Plan 018 B2)
-- **BC-064** (low) — TLS verification off by default; `verified` not persisted in scan_posture
-- **BC-072** (low) — CompositeProvider timing leak on local admin username enumeration
-- **BC-050** (medium) — `delete_certificate_cascade` doesn't clean `cert_history`, `alert_group_certs`
+```bash
+agent-notes breadcrumb find --path /projects/cert-watch --status open --json
+agent-notes search all "<topic>" --path /projects/cert-watch --json
+# re-import after editing files (active/ is non-standard, so sync it explicitly):
+agent-notes breadcrumb sync --from-files breadcrumbs/active --path /projects/cert-watch --create-missing-vocab
+agent-notes breadcrumb sync --path /projects/cert-watch --create-missing-vocab   # default dir covers resolved/
+```
 
-### Planned consolidation
+Unresolved backlog (as of 2026-06-02): **BC-031** (PostgreSQL/MSSQL backend — deferred, multi-session), **BC-071** (OAuth userinfo fallback nonce binding — partial), **BC-073** (grouped dashboard still materializes filtered inventory — partial, low), **BC-074** (ephemeral signing key invalidates sessions on restart / across workers — needs Plan 018 B1). 46 resolved breadcrumbs are in the DB as history (BC-026/BC-027 are DB-only legacy entries with no local file).
 
-- **Plan 018** — Auth & data-layer consolidation: Depends sweep (A3), SecurityContext + create_app factory (B1), purpose-built dashboard queries (B2)
-- **Plan 020** — Security middleware consolidation: rate-limit deps, audit logging deps, CSP nonces, get_db dep, proxy-aware IP extraction
-- **Plan 021** — Auth module decomposition: split auth.py into session/protocol/ldap/oauth/local_admin/factory
-
-### Recently resolved
-
-- **Missing composite indexes** (medium) — Added migration 0005: `idx_cert_host_port_leaf ON certificates(hostname, port, is_leaf)` and `idx_scan_history_host_port_ts ON scan_history(hostname, port, scanned_at DESC)`. Also added to base schema for fresh DBs.
-- **Rate-limit proxy bypass** (medium) — Route-level rate limits in `hosts.py` and `certificates.py` now use `_extract_client_ip(request)` instead of `request.client.host`. Audit log `resolve_source_ip()` also uses proxy-aware extraction.
-- **No test for `_probe_hsts`** (medium) — 10 unit tests now cover: non-443 port returns None, HSTS header present/absent, connection errors, SSL errors, pinned IP path (correct IP/SNI), pinned IP SSL failure, connection refused, connection cleanup on success/error.
-
-### Recently resolved
-
-- **BC-069** (medium) — Chain trust system-root hop is name-based, not signature-verified (resolved: `_is_anchored_by_system_root()` now verifies cryptographic signatures via `verify_directly_issued_by`)
-- **BC-064** (low) — TLS verification off by default; `verified` not persisted (resolved: `tls_verified` field on `ScannedEntry`, persisted in `scan_posture` via migration 0004)
-- **BC-063** (medium) — Daily scheduled scan does not pin IP (resolved: `_scan_host_once` auto-resolves and pins IP when `pinned_ip` is None, hardening all callers by default)
-- **BC-061** (medium) — Chain validation is name-matching only, never verifies signatures (resolved: `validate_chain_signatures()` verifies every link cryptographically)
-- **BC-048** (medium) — Fleet pivot views load full inventory into memory (resolved: SQL-level GROUP BY aggregation for summaries; entries lazy-loaded via `/api/pivot/{pivot}/{key}` on expand; `get_pivot_group_entries()` helper)
-- **BC-049** (medium) — In-memory rate limiting not shared across workers (resolved: SQLite-backed `rate_limits` table with JSON timestamps; `_init_rate_db()` at startup; graceful fallback to in-memory on DB errors)
-- **BC-058** (medium) — OAuth userinfo fallback bypasses ID token verification (resolved: auth fails instead of silently falling back to userinfo when ID token verification fails)
-- **BC-056** (medium) — /metrics endpoint exposes internal infrastructure without authentication (resolved: `CERT_WATCH_METRICS_TOKEN` gates with bearer token auth)
-- **BC-055** (medium) — Rate limiter trusts X-Forwarded-For implicitly (resolved: `CERT_WATCH_TRUST_PROXY` + `CERT_WATCH_TRUSTED_PROXIES` env vars)
-- **BC-054** (medium) — Empty string accepted as valid auth/CSRF secret (resolved: empty strings treated as unset; `resolve_or_persist_secret()` generates and persists keys across restarts)
-- **BC-053** (medium) — DNS rebinding window between SSRF check and TLS connection (resolved: pinned IP from SSRF check passed through to scan)
-- **BC-052** (medium) — /healthz loads full scan_history into memory (resolved: targeted SQL `ORDER BY scanned_at DESC LIMIT 1`)
-- **BC-057** (low) — /api/audit endpoint has no route-level auth enforcement (resolved: all API read endpoints have route-level auth checks)
-- **BC-050** (low) — /metrics endpoint loads full inventory into memory (resolved: targeted SQL queries for cert/host counts)
-- **BC-051** (low) — A+ posture grade unreachable from scans (resolved: `_probe_hsts()` HTTP HEAD check on port 443)
-- **BC-047** (medium) — Dashboard and healthz still load full inventory into memory (resolved: `healthz` uses targeted `COUNT(*)` queries; `list_unified_entries_page()` applies filtering/sorting/pagination so only the page slice is materialized; `grouped=0` fast path avoids loading full dataset)
-- **BC-045** (low) — OAuth state smuggled in `AuthResult.error` field (resolved: dedicated `oauth_state` field; all callers updated)
-- **BC-046** (low) — `init_schema` called redundantly on every repository instantiation (resolved: `SqliteHostRepository` and `SqliteCertificateRepository` no longer auto-call `init_schema`; callers/tests explicitly initialize)
-- **BC-044** (medium) — Unbounded `scan_history` and `alerts` queries load all rows into memory (resolved: SQL-level pagination, `list_alerts_with_subject` and `list_scan_history` accept `page`/`limit`; total count helpers; HTML pagination controls)
-- **BC-042** (medium) — posture.py test coverage and scan_posture wiring (resolved: 37 tests covering all grading rules, storage, tie-breaking; store_scanned() calls _evaluate_and_store_posture())
-- **BC-039** (low) — Empty-state markup inconsistent across templates (resolved: standardized on .cw-panel.cw-empty-state pattern; fixed duplicate class attribute bug in scan_history.html)
-- **BC-037** (low) — Dashboard inline styles unmaintainable (resolved: all static inline styles extracted to CSS classes in tokens.css; only dynamic CSS custom property bindings remain)
-- **BC-041** (low) — Auth test _reload_app module state pollution (resolved: autouse fixture saves/restores config/auth/app module dicts; root cause was class-identity drift from importlib.reload)
-- **BC-038** (low) — Every Jinja2 template duplicates the 30-line svg_icon macro (resolved: extracted to `macros/icons.html`, all 4 templates use `{% import %}`)
-- **BC-035** (medium) — database.py monolith decomposed into database/ package (resolved: schema.py + repo.py + queries.py + connection.py + migration runner)
-- **BC-040** (medium) — Working tree uncommitted database.py decomposition (resolved: already committed in prior session)
-- **FEAT-006** (low) — Database migration tooling (resolved: Plan 009 — minimal in-repo migration runner instead of Alembic)
-- **BC-033** (low) — Dashboard grouping by cert fingerprint with per-host status (resolved: fingerprint-based grouping with expand/collapse, host count badge, status summary)
-- **BC-036** (medium) — No integration test for openssl s_client scan path (resolved: 3 integration tests with real TLS server + openssl subprocess)
-
-- **BC-016** (high) — Deploy lag: code current, ops push needed for CI
-- **BC-017** (medium) — E2E test now asserts host row + scan-history failure
-- **BC-027** (low) — openssl s_client fallback opens second TLS connection per scan (resolved: single-connection strategy)
-- **BC-028** (low) — duplicate of BC-027
-- **BC-029** (low) — REST API pagination lacks HATEOAS navigation links (resolved: added self/next/prev links)
-- **BC-030** (low) — app.py decomposition (resolved: already complete at ~121 lines)
-- **BC-032** (low) — Structured JSON logging for observability integration (resolved: `CERT_WATCH_LOG_FORMAT=json`)
-- **BC-034** (low) — Owner/contact field with alert routing and renewal status (resolved: schema + API + alerts + dashboard)
-- **BC-023** (low) — DER-based issuer/subject comparison in validate_chain_order
-- **BC-024** (low) — Trust anchor CA validation (BasicConstraints check)
-- **BC-025** (low) — Private IP rejection includes CERT_WATCH_ALLOW_PRIVATE_IPS hint
-
-### Recently implemented features
-
-- **Cert history foundation (Plan 016 Slice 1)** — Per-scan certificate snapshots in `cert_history` table (migration 0009). `record_cert_history()` appends a row after every successful leaf scan with hostname, port, fingerprint, issuer, not_after, key_algo, sig_algo, posture_grade, protocol_version, san_count. `purge_old_history()` wired into scheduler maintenance; `CERT_WATCH_HISTORY_RETENTION_DAYS` env var (default 365, `0` disables). API: `GET /api/certificates/{id}/history`, `GET /api/trends/tls-versions`, `GET /api/trends/grades`. 20 new tests. Slices 2 (drift alerting) and 4 (calendar view) now also implemented.
-- **Drift detection & alerting (Plan 016 Slice 2)** — `_compute_drift_events()` compares previous `cert_history` row with current scan, returning structured `DriftEvent` list with severity (high/info). Covers: issuer change, key-size drop, SHA-1 downgrade, posture grade drop, TLS version downgrade, SAN count change, benign renewal. `detect_drift()` + `create_drift_alert()` wired into `store_scanned()`. Drift alerts use `alert_type="drift"` and flow through the existing alert pipeline (email + webhook + group routing). `CERT_WATCH_DRIFT_ALERTS=0` disables. Alerts template updated for drift rendering. 25 new tests.
-- **Calendar / expiry timeline (Plan 016 Slice 4)** — `GET /api/calendar?bucket=day|week|month&from_date=&to_date=` returns expiry buckets with cert counts and IDs. `list_calendar()` in queries.py uses SQL GROUP BY with `DATE()` bucketing. Leaf-only. 11 new tests.
-- **Alert retention purge (Plan 002 WI-1)** — `purge_old_alerts()` in queries.py deletes alert rows older than `CERT_WATCH_ALERT_RETENTION_DAYS` (default 90, `0` disables). Wired into scheduler maintenance alongside audit and cert-history purges. Runs at startup + daily. 9 new tests.
-- **Revocation-endpoint health (Plan 017 A1)** — `check_revocation_endpoints()` in posture.py checks OCSP responder and CRL distribution point reachability. `_extract_ocsp_url()` and `_extract_crl_urls()` parse AIA and CRL extensions from DER. Gated by `CERT_WATCH_CHECK_REVOCATION=0` (default off). Findings added to posture result as warnings (no grade penalty). 17 new tests.
-- **Audit-grade reporting (Plan 017 A2)** — `GET /api/reports/inventory.csv` exports full certificate inventory with host, port, source, subject, issuer, not_before/not_after, days_remaining, urgency, chain_valid, fingerprint, tags. `GET /api/reports/expiring.csv?days=N` exports certs expiring within N days (default 30, max 365). Both auth-gated. 6 new tests.
-- **GUI settings page (Plan 019 Slice 1)** — `/settings` route with tabs for Auth, SMTP, and Alerts configuration. Auth config stored in `kv_store` with env var override (env wins). `Settings.from_env_with_kv()` merges kv_store with env vars. LDAP "Test Connection" button validates bind before saving. SMTP "Send test email" button. Auth provider rebuilt in-memory on save (no restart). Provider-specific form sections (LDAP/OIDC) toggle based on selection. 16 new tests.
-- **Alert groups & routing (Plan 015)** — Team-based alert routing via alert groups. `alert_groups` table stores group name, email recipients (csv), webhook_url, and match_tags (csv). `alert_group_certs` table for manual per-cert assignment. `SqliteAlertGroupRepository` with full CRUD, assign/unassign, and `groups_for_cert_manual()`. `resolve_group_recipients()` in `alerts.py` resolves matching groups by effective tags or manual assignment, de-dupes recipients. `evaluate_all_certs()` merges group recipients with owner_email into `extra_recipients`. Migration 0008. JSON API: `GET/POST /api/alert-groups`, `GET/PATCH/DELETE /api/alert-groups/{id}`, `POST/DELETE /api/alert-groups/{id}/certs/{cert_id}`, `GET /api/certificates/{id}/alert-routing` (preview). All endpoints auth-gated + audit-logged. 36 new tests. Phase 2 (per-group multi-channel delivery: Teams/Slack/Discord/PagerDuty) deferred.
-- **Onboarding & secure bootstrap (Plan 014)** — Fresh installs get persisted signing keys (`.auth_secret` and derived CSRF secret in `data_dir`), a first-run `/setup` wizard to create a local admin without the CLI, and a startup warning when running without auth on a non-loopback address. `kv_store` table (migration 0007) stores wizard state. `CERT_WATCH_ALLOW_UNAUTH=1` suppresses the warning and setup redirect. `resolve_or_persist_secret()` in `config.py` generates and persists secrets across restarts. `set_signing_key()`/`set_csrf_secret()` in `auth.py`/`middleware.py` allow lifespan-time key rotation. Setup redirect middleware only redirects HTML pages; `/api/*` paths pass through.
-- **Chain trust and scan hardening (2026-06-01)** — Resolved BC-063/BC-064/BC-069. `_scan_host_once` auto-resolves and pins IP when `pinned_ip` is None, hardening all callers (scheduler, manual scan, routes) against DNS rebinding. `_is_anchored_by_system_root()` verifies cryptographic signatures against system trust store, not just name matching. `tls_verified` field persisted per-scan in `scan_posture` (migration 0004). HSTS probe fixed to use raw SSL socket with correct SNI when pinned IP is present.
-- **Security hardening (2026-06-01)** — Second adversarial review round: fixed 15 issues. `_probe_hsts` accepts `pinned_ip` to prevent DNS rebinding (BC-062 resolved). DNS parser cycle detection and TXID/RCODE validation (BC-065 resolved). Auth misconfiguration now raises ValueError instead of silently degrading to NoAuthProvider (BC-066). OAuth state bypass fixed; `CERT_WATCH_BASE_URL` prevents Host-header open redirect (BC-067). LDAP cleartext-warning at init time. Scrypt weak-parameter rejection and warning. Rate limiting uses `_extract_client_ip()` everywhere. DOM XSS: urgency class whitelist. CSP+nosniff+X-Frame-Options middleware. CSV injection escaping. Healthz no longer leaks exceptions. Cookie path="/". Break-glass uses `isinstance()`. SQL injection surface documented.
-- **Security hardening (2026-05-31)** — Fixed 12 security issues found via adversarial review: auth bypass on 4 API endpoints (`/api/certificates/{id}/pem`, `/api/certificates/{id}/posture`, `/api/webhook/test`, `/api/ct/reconciliation`); DOM-based XSS in dashboard pivot view (`innerHTML` → `escHtml()` helper); STARTTLS silent suppression now aborts SMTP on failure; OAuth state cookie required for callback CSRF; login endpoint rate-limited (10/5min); DNS query IDs use `secrets.randbelow` instead of `random.randint`; logout changed from GET to POST with CSRF; `delete_cookie()` calls include security flags; LDAP STARTTLS now uses `ssl.CERT_REQUIRED` by default instead of `CERT_NONE` (BC-059); OAuth error messages no longer leak raw exception details in URLs (BC-060).
-- **HSTS probe during scans (BC-051)** — `scan_host()` now makes an HTTP HEAD request on port 443 to detect `Strict-Transport-Security` header via `_probe_hsts()`. HSTS result passed to `evaluate_posture()`. A+ posture grade now achievable from scans.
-- **DNS rebinding prevention (BC-053)** — `_is_blocked_host_check()` returns a pinned IP from SSRF check. `scan_host()` accepts `pinned_ip` parameter, passing it through to `_open_tls_connection()` and `_scan_via_openssl()`. Both add-host and CSV import flows pin the resolved IP.
-- **Proxy-aware rate limiting (BC-055)** — `CERT_WATCH_TRUST_PROXY=1` enables X-Forwarded-For extraction for rate limiting. `CERT_WATCH_TRUSTED_PROXIES` limits which proxy IPs to trust. `_extract_client_ip()` in middleware.py.
-- **Metrics bearer token auth (BC-056)** — `CERT_WATCH_METRICS_TOKEN` env var gates `/metrics` with `Authorization: Bearer <token>`. Backward compatible: unset = open. `check_metrics_token()` helper in middleware.py.
-- **Route-level API auth (BC-057)** — All API read endpoints (`/api/certificates`, `/api/hosts`, `/api/alerts`, `/api/audit`, `/api/export/*`) have route-level auth checks via `_require_api_auth()`. Defense-in-depth on top of middleware.
-- **Targeted /healthz query (BC-052)** — `/healthz` now uses `SELECT scanned_at, status FROM scan_history ORDER BY scanned_at DESC LIMIT 1` instead of `list_scan_history()`. Uses cached `_connect()` instead of throwaway connection.
-- **Targeted /metrics query (BC-050)** — `/metrics` now iterates a cursor over leaf certificates instead of calling `list_dashboard_rows()`. Host/cert/expired counts via targeted SQL.
-- **Empty secret rejection (BC-054)** — `CERT_WATCH_AUTH_SECRET` and `CERT_WATCH_CSRF_SECRET` treat empty strings as unset, falling back to `secrets.token_hex(32)`.
-- **OAuth ID token enforcement (BC-058)** — When an ID token is present but verification fails, authentication is rejected rather than silently falling back to the userinfo endpoint. Userinfo is only used when no ID token was returned.
-- **Fingerprint grouping (BC-033)** — Dashboard groups hosts sharing the same leaf certificate fingerprint into expandable rows with host count badge and status summary. Toggle with `grouped=0` query param.
-- **Scan retry** — `scan_host()` retries transient failures (connection refused, timeout) up to 2 times with exponential backoff.
-- **Fast scheduler retry** — When hosts have no successful scan yet, the scheduler retries every hour instead of waiting for the daily cycle.
-- **Scan result diffing** — On renewal (fingerprint change), `replace_scanned()` logs what changed (expiry shift, SAN changes, issuer change).
-- **Confirmation dialogs** — Destructive actions ("Clear results", "Delete host", "Remove trust anchor") require `confirm()` before submitting.
-- **Rate limit headers** — API responses include `X-RateLimit-Remaining`, `X-RateLimit-Limit`, and `Retry-After` (on 429).
-- **Single-connection TLS scan** — On Python < 3.13, `scan_host()` uses a single `openssl s_client` call for both leaf and chain (instead of opening a second connection). Falls back to Python TLS for leaf-only if openssl is unavailable.
-- **System CA chain validation** — `chain_status()` checks the system trust store, so LE and other public CA chains show as "public" even when the root is omitted.
-- **Scan failure UX** — Scan failures show as yellow warnings (not red errors) with human-friendly messages.
-- **Rate limit enforcement** — API middleware returns 429 on rate limit exceeded (not just headers).
-- **app.py decomposition** — Split ~1500-line monolith into `middleware.py`, `filters.py`, and `routes/` modules.
-- **Host tags** — `tags` column on hosts for categorization and filtering.
-- **Per-host scan scheduling** — `scan_interval_hours` column allows different scan frequencies per host.
-- **Webhook test endpoint** — `POST /api/webhook/test` sends a test payload to verify webhook config.
-- **Expiry digest mode** — `ALERT_DIGEST_ONLY=1` sends a single daily summary instead of per-cert alerts.
-- **SQLite rate limiting (BC-049)** — `rate_limits` table stores sliding-window timestamps as JSON. `_init_rate_db()` at startup configures DB path. `check_rate_limit()` uses SQLite for cross-worker sharing with graceful in-memory fallback on DB errors. Migration 0003.
-- **Fleet pivot lazy loading (BC-048)** — `list_fleet_pivot()` uses SQL-level GROUP BY for summaries (count, worst urgency, earliest expiry). Entries loaded on demand via `GET /api/pivot/{pivot}/{key}`. Dashboard template fetches group entries via AJAX on expand.
-- **Webhook retry** — `process_pending()` retries failed alerts up to 3 times with exponential backoff.
-- **Host export CSV** — `GET /api/export/hosts.csv` for bulk host list export.
-- **SQL-level pagination** — `list_dashboard_rows()` accepts sort/pagination params for efficient queries.
-- **HATEOAS pagination links** — All paginated API endpoints (`/api/certificates`, `/api/hosts`, `/api/alerts`) now include `self`, `next`, `prev` links.
-- **Owner/contact and renewal status** — `hosts` table has `owner_name`, `owner_email`, `owner_slack`, `renewal_status`. Alerts route to owners. `PATCH /api/hosts/{id}/owner` to update. Dashboard shows owner chip and renewal status.
-- **Structured JSON logging** — `CERT_WATCH_LOG_FORMAT=json` env var switches from text to JSON logs with `timestamp`, `level`, `logger`, `message` fields.
-- **Authorization gate (Plan 010 Slice 1)** — `CERT_WATCH_ALLOWED_GROUPS` and `CERT_WATCH_ALLOWED_ROLES` env vars restrict access to members of specified groups/roles when auth is enabled. `AuthResult` carries `groups` and `roles`. `read_secret()` helper supports Docker/K8s `*_FILE` secret convention. `check_authz()` enforces the gate at login and OAuth callback.
-- **PEM download endpoint** — `GET /api/certificates/{id}/pem` returns raw PEM bytes with `Content-Disposition: attachment`. The detail page "Download PEM" button now links here instead of the JSON API.
-- **Local break-glass admin (Plan 010 Slice 2)** — `CERT_WATCH_LOCAL_ADMIN_USER` and `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` enable a local admin account that works regardless of external provider state. Scrypt password hashing (`hashlib.scrypt`). `cert-watch hash-password` CLI for generating hashes. Break-glass login bypasses group/role gate (implicit admin) and emits WARNING log + audit row with `break_glass=true`. `_CompositeProvider` tries local admin first, then delegates to the primary provider. Login form shows username/password when local admin or form-login provider is configured.
-- **Shared svg_icon macro (BC-038)** — Extracted all icon macros to `templates/macros/icons.html`. All 4 main templates now use `{% import "macros/icons.html" as icons %}`.
-- **Fleet dashboard lenses (Plan 006 Phase 5)** — Dashboard pivot views: `?view=issuer`, `?view=owner`, `?view=renewal_method`. Groups entries with aggregate stats (count, worst urgency, earliest expiry). Expandable detail rows per group. `list_fleet_pivot()` in queries.py.
-- **JWKS cache TTL** — `OAuthProvider` JWKS cache now expires after a configurable TTL (default 24h, `CERT_WATCH_JWKS_CACHE_TTL`). On `InvalidKeyIdError`, the cache is force-refreshed and token verification retried once.
-- **CT reconciliation (Plan 006 Phase 3)** — `ct_reconciliation()` compares CT log hostnames against tracked hosts for a domain. `GET /api/ct/reconciliation?domain=…` returns tracked/ct/gap hostnames and coverage percentage. 8 tests with mocked crt.sh.
-- **Audit log (Plan 008)** — Append-only `audit_log` table, `record_audit()` helper, all mutating routes instrumented. `GET /audit` (HTML) and `GET /api/audit` (JSON, paginated, filterable). Break-glass logins flagged `break_glass=true`.
-- **Operator runbook (Plan 011)** — `docs/runbook.md` covers deploy, upgrade (with auto-migration backup), backup/restore, scan troubleshooting, full config reference, auth wiring, secure profile, metrics exposure decision, scale ceiling with BC-031 trigger.
+Plan status:
+- **Plan 018** (auth/data consolidation): Phase A (A1 kv_store fold, A2 batch group resolver, A3 Depends sweep) **done**; B2 (purpose-built dashboard queries) **done**; **B1 (SecurityContext + create_app + test-harness rewrite) deferred** — it's the security path *and* a test-harness rewrite, wants a clean tree, and follows Plan 021. Tracked by BC-074.
+- **Plan 020** (security middleware consolidation): S1 (= 018 A3) **done**; S2 (`rate_limit` dependency) **done**; S4 (CSP nonces) **done**; **S3 (audit side-effect) and S5 (`get_db` dependency) deferred** — low leverage (S3 undercut by dynamic audit details; S5 is ~40 mechanical edits for a cosmetic convention).
+- **Plan 021** (auth module decomposition): **done** — `auth.py` is now the `auth/` package.
 
 ## Architecture notes
 
-- **`auth.py`** — `AuthProvider` protocol with `NoAuthProvider`, `LDAPAuthProvider`, `OAuthProvider`, `LocalAdminProvider`. `AuthResult` carries `groups`, `roles`, and `oauth_state` (signed state for OAuth callback verification) for authorization. `check_authz()` enforces the group/role gate when `CERT_WATCH_ALLOWED_GROUPS` or `CERT_WATCH_ALLOWED_ROLES` is configured. `LocalAdminProvider` checks credentials against `CERT_WATCH_LOCAL_ADMIN_USER`/`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (scrypt, `*_FILE` convention). `_CompositeProvider` delegates: local admin first, then primary provider. `OAuthProvider._verify_id_token()` performs full JWKS-based JWT signature verification using `joserfc` + `authlib.oidc.core.CodeIDToken` (iss/aud/exp/nonce/at_hash validation). When ID token verification fails, auth is rejected rather than silently falling back to userinfo (BC-058). OIDC discovery fetches `jwks_uri`; JWKS is cached per provider instance with TTL-based expiration (default 24h, `CERT_WATCH_JWKS_CACHE_TTL` env var). On `InvalidKeyIdError`, the JWKS cache is force-refreshed and verification retried once. Empty `CERT_WATCH_AUTH_SECRET`/`CERT_WATCH_CSRF_SECRET` treated as unset (BC-054). Session management via HMAC-signed cookies (`cw_auth`). Separate from CSRF cookies (`cw_sid`). `read_secret()` in `config.py` resolves `$NAME` or `$NAME_FILE` for all secret env vars. `set_signing_key()` allows lifespan-time key rotation. Local admin credentials also sourced from `kv_store` table (Plan 014) when env vars are unset — wizard stores `local_admin_user`/`local_admin_password_hash` in `kv_store`.
-- **`database.py`** — Repository pattern (`CertificateRepository`, `AlertRepository`, `SqliteHostRepository`). `replace_scanned()` does atomic delete+insert in one transaction. `init_schema()` is idempotent with column migration. Migration 0005 adds composite indexes `idx_cert_host_port_leaf` and `idx_scan_history_host_port_ts`. Migration 0007 adds `kv_store` table for setup wizard and boot config. Migration 0008 adds `alert_groups` and `alert_group_certs` tables (Plan 015). Migration 0009 adds `cert_history` table (Plan 016). `SqliteAlertGroupRepository` with full CRUD, assign/unassign, and `groups_for_cert_manual()`. `kv_get()`, `kv_set()`, `kv_all()` helpers in `queries.py`. `record_cert_history()`, `purge_old_history()`, `list_cert_history()`, `list_tls_version_trends()`, `list_grade_trends()` in `queries.py`. `DriftEvent` dataclass, `detect_drift()`, `create_drift_alert()`, `list_calendar()` in `queries.py`. `purge_old_alerts()` in `queries.py`.
-- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. When `pinned_ip` is None, `_scan_host_once` auto-resolves and pins the IP for DNS-rebinding hardening (BC-063). `_probe_hsts()` checks for HSTS header on port 443 (BC-051), connecting to pinned IP with correct SNI. `ScannedEntry` carries `tls_verified` (True when TLS handshake used CERT_REQUIRED, persisted in `scan_posture` via migration 0004). On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for both leaf and chain (no second connection). `store_scanned()` delegates to `replace_scanned()` for path-based calls and also calls `_evaluate_and_store_posture()` to compute and persist TLS posture grades. `_evaluate_and_store_posture()` returns the grade string. `store_scanned()` also calls `detect_drift()` to compare the current scan against the previous `cert_history` row and `record_cert_history()` to append a per-scan snapshot (Plan 016). Drift alerts created via `create_drift_alert()` when `CERT_WATCH_DRIFT_ALERTS` is enabled.
-- **`posture.py`** — `evaluate_posture()` computes TLS posture grade (A+/A/B/C/F) from certificate properties. Covers key size, SHA-1 signatures, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS. A+ requires TLS 1.3 + HSTS (now achievable via `_probe_hsts()`). `check_revocation_endpoints()` checks OCSP/CRL reachability (opt-in via `CERT_WATCH_CHECK_REVOCATION`). 54 tests.
-- **`alerts.py`** — `evaluate_thresholds()` checks against LEAF_THRESHOLDS (14,7,3,1) and CHAIN_THRESHOLDS (30,14,7). Per-host custom thresholds via `hosts.threshold_days`. Owner info included in alert messages; `extra_recipients` routes to owner email. `process_pending()` tries SMTP then webhook. `resolve_group_recipients()` in `alerts.py` resolves matching groups by effective tags or manual assignment, de-dupes recipients. `evaluate_all_certs()` merges group recipients with owner_email into `extra_recipients`.
-- **`scheduler.py`** — Daemon thread with `threading.Event.wait()` for daily scheduling. `run_scan_now()` for immediate cycles.
-- **`app.py`** — FastAPI with lifespan (scheduler start/stop, persisted signing keys, setup detection, auth integration), CSRF middleware, auth middleware, rate limiting. Setup redirect middleware redirects to `/setup` on fresh installs.
-- **`middleware.py`** — CSRF protection, rate limiting (SQLite-backed sliding window, BC-049), auth middleware, setup redirect middleware. `_init_rate_db(db_path)` at startup. `_extract_client_ip()` respects `X-Forwarded-For` when `CERT_WATCH_TRUST_PROXY=1` (BC-055). All route-level rate limits (`hosts.py`, `certificates.py`, `auth.py`, `views.py`) use `_extract_client_ip()` for proxy-aware client identification. `check_metrics_token()` gates `/metrics` with `CERT_WATCH_METRICS_TOKEN` bearer auth (BC-056). `/metrics` stays in `is_public_path()` for auth middleware bypass; token check is at route level. `set_csrf_secret()` allows lifespan-time key rotation. `setup_redirect_middleware` redirects HTML page requests to `/setup` when `app.state.needs_setup` is True (fresh install, no auth, no hosts); public paths, `/setup`, and `/api/*` paths are never redirected.
-- **`audit.py`** — `resolve_source_ip()` uses `_extract_client_ip()` for proxy-aware IP logging when `CERT_WATCH_TRUST_PROXY` is set. Falls back to `request.client.host` on error.
+- **`auth/` package** — decomposed from the former `auth.py` monolith (Plan 021). `session.py` (HMAC-signed `cw_auth` session cookies, `create_session`/`validate_session`, `set_signing_key`, signed OAuth state), `protocol.py` (`AuthProvider`, `AuthResult`, `NoAuthProvider`), `local_admin.py` (`LocalAdminProvider`, `_CompositeProvider`, scrypt hashing with `*_FILE` secret convention; `_dummy_verify()` equalizes timing on username mismatch — BC-072), `ldap_provider.py` (`LDAPAuthProvider`; STARTTLS uses `CERT_REQUIRED`), `oauth_provider.py` (`OAuthProvider` with full JWKS-based ID-token verification, TTL-cached JWKS, `CERT_WATCH_JWKS_CACHE_TTL`; auth fails rather than silently falling back to userinfo when ID-token verification fails; userinfo fallback logs a warning — BC-071), `factory.py` (`build_auth_provider`, `check_authz` group/role gate). `__init__.py` re-exports the full public API, so all callers still `from cert_watch.auth import ...`. Local admin credentials also sourced from `kv_store` (setup wizard) when env vars are unset, folded into `build_auth_provider` (Plan 018 A1).
+- **`database/` package** — repository pattern (`SqliteCertificateRepository`, `SqliteAlertRepository`, `SqliteHostRepository`, `SqliteAlertGroupRepository`, `SqliteTrustAnchorRepository`) + `queries.py` (dashboard/aggregate helpers) + `connection.py` + `schema.py` + migration runner. Migrations 0001–0010 (audit log, rate limits, tls_verified, composite indexes, cert_tags, kv_store, alert_groups, cert_history, alert extra_recipients). **Dashboard data path is SQL-paginated** (Plan 018 B2): `list_dashboard_page()` (true SQL WHERE/ORDER BY/LIMIT/OFFSET), `list_dashboard_grouped_page()` (fingerprint grouping with host count + worst urgency), `get_cert_detail()` (targeted JOIN). New query methods own their `_connect()` and return plain dicts — no `sqlite3.Row` leaks into routes (backend-portability discipline; see BC-031). `_list_unified_entries_raw()` survives behind the grouped path's cross-host fingerprint search. `delete_certificate_cascade()` cleans `alerts`, `scan_posture`, `cert_history`, and `alert_group_certs`.
+- **`scan.py`** — `scan_host()` returns `ScannedEntry | ScanError`. When `pinned_ip` is None, `_scan_host_once` auto-resolves and pins the IP for DNS-rebinding hardening. `_probe_hsts()` checks the HSTS header on port 443 (pinned IP + correct SNI). `ScannedEntry.tls_verified` persisted in `scan_posture`. On Python < 3.13, `_scan_via_openssl()` makes a single `openssl s_client` call for leaf + chain. `store_scanned()` delegates to `replace_scanned()`, evaluates/stores posture, records cert history, and creates drift alerts.
+- **`posture.py`** — `evaluate_posture()` grades A+/A/B/C/F from cert properties (key size, SHA-1, ECDSA curves, chain completeness, TLS version, validity length, self-signed, OCSP must-staple, HSTS). A+ requires TLS 1.3 + HSTS. `check_revocation_endpoints()` checks OCSP/CRL reachability (opt-in).
+- **`alerts.py`** — `evaluate_thresholds()` against LEAF_THRESHOLDS (14/7/3/1) and CHAIN_THRESHOLDS (30/14/7); per-host `threshold_days`. `resolve_all_group_recipients()` batches group routing in ≤3 queries (Plan 018 A2); `evaluate_all_certs()` merges group + owner recipients into `extra_recipients`. `process_pending()` tries SMTP then webhook with retry.
+- **`scheduler.py`** — daemon thread with `threading.Event.wait()` for daily scheduling; `run_scan_now()` for immediate cycles; runs history/alert/audit purges at startup + daily.
+- **`app.py`** — FastAPI app + lifespan (scheduler start/stop, persisted signing keys via `config.resolve_or_persist_secret`, setup detection, auth provider build). Middleware stack: CSRF/session, auth, rate-limit headers, security headers (CSP nonce), setup redirect.
+- **`middleware.py`** — CSRF (double-submit, header/form only — BC-070), SQLite-backed rate limiting (`check_rate_limit`, `_init_rate_db`), proxy-aware `_extract_client_ip` (`CERT_WATCH_TRUST_PROXY`), `check_metrics_token`, and the FastAPI deps `require_auth` / `require_write` / `rate_limit(...)`. `security_headers_middleware` sets the per-request CSP nonce. `set_csrf_secret()` for lifespan-time key rotation. `setup_redirect_middleware` redirects HTML pages to `/setup` on fresh installs (never `/api/*` or public paths).
+- **`audit.py`** — append-only `audit_log`; `resolve_source_ip()` uses proxy-aware extraction. Break-glass logins flagged `break_glass=true`.
 
 ## Breadcrumbs / memory
 
-Project is registered with agent-notes (postgres-backed). Use the `mcp__breadcrumb__*` / `mcp__memory__*` / `mcp__search__*` tools from Claude Code; resolves via path `/projects/cert-watch`. Local mirror directories: `breadcrumbs/active/`, `breadcrumbs/resolved/`, `plans/`, `reflections/`.
+Project is registered with agent-notes (postgres-backed), resolving via path `/projects/cert-watch`. Use the `agent-notes` CLI (or the `/find-breadcrumb`, `/file-breadcrumb`, `/update-breadcrumb` skills). Local mirror directories: `breadcrumbs/active/`, `breadcrumbs/resolved/`, `plans/`, `reflections/`. **Search before filing** (dedup is the store's main failure mode).
 
 ## CI workflows
 
