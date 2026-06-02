@@ -1,9 +1,11 @@
-# FEAT-006: Database migration tooling (alembic)
+---
+identifier: FEAT-006
+title: Database migration tooling (alembic)
+kind: feature
+status: resolved
+severity: low
+---
 
-**Type:** feature
-**Severity:** low
-**Status:** resolved
-**Filed:** 2026-05-29
 **Resolved:** 2026-05-30
 
 ## Problem
