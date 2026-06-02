@@ -32,10 +32,11 @@ from cert_watch.filters import (
 )
 from cert_watch.middleware import (
     _extract_client_ip,
-    check_csrf,
     check_rate_limit,
+    get_auth_context,
     get_csrf_context,
     require_auth,
+    require_write_form,
 )
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
@@ -242,7 +243,8 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
         except Exception:  # noqa: BLE001
             pass
 
-    ctx = get_csrf_context(request)
+    csrf_ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
     from datetime import UTC, datetime
 
     return templates.TemplateResponse(
@@ -253,7 +255,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "cert_id": cert_id,
             "version": __version__,
             "commit": __commit__,
-            "auth_user": request.scope.get("auth_user", ""),
+            **auth_ctx,
             "active_page": "dashboard",
             "key_type": key_type_str,
             "sig_alg": sig_alg,
@@ -277,7 +279,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "renewal_method_indicator": renewal_method_indicator,
             "now": datetime.now(UTC),
             "posture": posture_data,
-            **ctx,
+            **csrf_ctx,
         },
     )
 
@@ -305,9 +307,9 @@ def certificate_posture_api(request: Request, cert_id: str, _auth: str = Depends
 
 @router.post("/certificates/{cert_id}/delete")
 async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     db = _db_path(request)
     delete_certificate_cascade(db, cert_id)
     record_audit(
@@ -326,9 +328,9 @@ async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse
 async def update_certificate_notes(
     request: Request, cert_id: str, notes: str = Form(...)
 ) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     if len(notes) > 10000:
         return RedirectResponse(
             url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
@@ -358,9 +360,9 @@ async def upload(
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
     password: str | None = Form(None),  # noqa: B008
 ) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
+    csrf_err = await require_write_form(request)
     if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+        return csrf_err
     if not check_rate_limit(f"upload:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -406,9 +408,9 @@ async def add_trust_anchor(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008
 ) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     db = _db_path(request)
     allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
     raw_suffix = Path(file.filename or "uploaded").suffix.lower()
@@ -453,9 +455,9 @@ async def add_trust_anchor(
 
 @router.post("/trust-anchors/{anchor_id}/delete")
 async def delete_trust_anchor(request: Request, anchor_id: str) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
     repo.delete(anchor_id)

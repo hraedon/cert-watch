@@ -44,17 +44,19 @@
       </div>
     </div>
     <div class="cw-flex cw-gap-8">
-      {% if hostname %}
+      {% if may_write and hostname %}
         <form method="post" action="/hosts/{{ cert_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="cw-btn primary">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
       <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn">{{ icons.svg_icon('download', 14) }}Download PEM</a>
+      {% if may_write %}
       <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-iconbtn" title="Delete">{{ icons.svg_icon('trash', 15) }}</button>
       </form>
+      {% endif %}
     </div>
   </div>
 
@@ -277,6 +279,7 @@
           {{ icons.svg_icon('file', 15) }}
           <span class="cw-fz-13-5 cw-fw-600">Notes &amp; procedures</span>
           <div class="cw-spacer"></div>
+          {% if may_write %}
           <form method="post" action="/certificates/{{ cert_id }}/notes" class="cw-inline">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <textarea name="notes" class="cw-hidden" id="notes-hidden">{{ cert.notes }}</textarea>
@@ -284,8 +287,10 @@
           <button class="cw-btn ghost sm" type="button" onclick="toggleNotes()">
             {{ icons.svg_icon('key', 13) }}<span id="notes-btn-label">Edit</span>
           </button>
+          {% endif %}
         </div>
-        <div id="notes-view" onclick="toggleNotes()" class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
+        <div id="notes-view" onclick="{% if may_write %}toggleNotes(){% endif %}" class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
+        {% if may_write %}
         <div id="notes-edit" class="cw-hidden">
           <textarea id="notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ cert.notes }}</textarea>
           <div class="cw-flex cw-gap-8 cw-mt-8">
@@ -293,6 +298,7 @@
             <button class="cw-btn primary sm" type="button" onclick="saveNotes()">Save</button>
           </div>
         </div>
+        {% endif %}
         <div class="cw-flex cw-items-center cw-gap-6 cw-mt-9 cw-fz-11 cw-text-text-3">
           {{ icons.svg_icon('clock', 11, 1.6) }}
           <span>Markdown supported · saved to this certificate</span>

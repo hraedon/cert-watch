@@ -12,6 +12,7 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import Request
 from fastapi.exceptions import HTTPException
@@ -286,6 +287,20 @@ async def check_csrf(request: Request) -> str | None:
     return None
 
 
+def get_auth_context(request: Request) -> dict:
+    """Return template context with auth_user and may_write flag.
+
+    ``may_write`` is True when no write_users list is configured (all
+    authenticated users can write), or when the current user is in
+    ``write_users`` or ``admin_users``. Auth-disabled mode is always True.
+    """
+    username = request.scope.get("auth_user", "")
+    return {
+        "auth_user": username,
+        "may_write": _may_write(request, username),
+    }
+
+
 def get_csrf_context(request: Request) -> dict:
     """Return template context dict with CSRF token for the current session."""
     session_id = get_session_id(request)
@@ -456,19 +471,69 @@ async def require_auth(request: Request) -> str:
 
 
 async def require_write(request: Request) -> str:
-    """Auth + CSRF. Returns username or raises 401/403.
+    """Auth + CSRF + write_users check. Returns username or raises 401/403.
 
     Skips CSRF when auth is disabled (NoAuthProvider) so the "auth off = open"
     contract matches the original _require_api_write behavior.
+
+    When ``CERT_WATCH_WRITE_USERS`` is set, only those users (and admin_users)
+    may perform mutations. When empty, all authenticated users can write.
     """
     username = await require_auth(request)
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return username
+    if not _may_write(request, username):
+        raise HTTPException(status_code=403, detail="read-only user")
     csrf_err = await check_csrf(request)
     if csrf_err:
         raise HTTPException(status_code=403, detail=csrf_err)
     return username
+
+
+def _may_write(request: Request, username: str) -> bool:
+    """Return True if *username* is allowed to perform mutations.
+
+    When ``CERT_WATCH_WRITE_USERS`` is empty, all authenticated users can write.
+    When set, only users in ``write_users`` or ``admin_users`` may write.
+    Admin users always have write access regardless of the write_users list.
+    Auth-disabled mode always returns True.
+    """
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return True
+    settings = getattr(request.app.state, "settings", None)
+    if not settings:
+        return True
+    if not settings.write_users:
+        return True
+    if username in settings.write_users:
+        return True
+    return username in settings.admin_users
+
+
+async def require_write_form(request: Request) -> RedirectResponse | None:
+    """Form-POST helper: check write access + CSRF, return redirect on failure.
+
+    Use this for form-POST handlers that return RedirectResponse (add_host,
+    upload, delete, etc.) — they cannot use ``Depends(require_write)`` because
+    it raises HTTPException.
+    """
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        csrf_err = await check_csrf(request)
+        if csrf_err:
+            return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+        return None
+    user = request.scope.get("auth_user")
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    if not _may_write(request, user):
+        return RedirectResponse(url="/?error=read-only%20user", status_code=303)
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    return None
 
 
 def rate_limit(key_prefix: str, max_requests: int, window_seconds: int):

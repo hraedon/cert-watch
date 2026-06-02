@@ -146,6 +146,10 @@ class Settings:
     allowed_roles: tuple[str, ...] = ()
     # Admin users (comma-separated usernames allowed to access /settings)
     admin_users: tuple[str, ...] = ()
+    # Write users (comma-separated usernames allowed to modify data).
+    # When empty, all authenticated users can write. When set, only listed
+    # users (and admins) can perform mutations — others are read-only.
+    write_users: tuple[str, ...] = ()
     # Local break-glass admin
     local_admin_user: str = ""
     local_admin_password_hash: str = ""
@@ -290,6 +294,12 @@ class Settings:
             admin_users=tuple(
                 u.strip()
                 for u in os.environ.get("CERT_WATCH_ADMINS", "").split(",")
+                if u.strip()
+            ),
+            # Write users
+            write_users=tuple(
+                u.strip()
+                for u in os.environ.get("CERT_WATCH_WRITE_USERS", "").split(",")
                 if u.strip()
             ),
             # Local break-glass admin
@@ -535,6 +545,8 @@ class Settings:
             allowed_roles=base.allowed_roles,
             # Admin users
             admin_users=base.admin_users,
+            # Write users
+            write_users=base.write_users,
             # Local break-glass admin
             local_admin_user=local_admin_user,
             local_admin_password_hash=local_admin_password_hash,

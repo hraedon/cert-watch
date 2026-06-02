@@ -15,7 +15,12 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
-from cert_watch.middleware import _extract_client_ip, check_csrf, check_rate_limit, require_auth
+from cert_watch.middleware import (
+    _extract_client_ip,
+    check_rate_limit,
+    require_auth,
+    require_write_form,
+)
 from cert_watch.scan import ScanError, scan_host, store_scanned
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
@@ -122,9 +127,9 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
         )
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     if not check_rate_limit(f"add_host:{_extract_client_ip(request)}", 20, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -197,9 +202,9 @@ async def add_host(
 
 @router.post("/hosts/import")
 async def import_hosts(request: Request, file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     if not check_rate_limit(f"import_hosts:{_extract_client_ip(request)}", 5, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -331,9 +336,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
 @router.post("/hosts/{host_id}/delete")
 async def delete_host(request: Request, host_id: str) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     db = _db_path(request)
     SqliteHostRepository(db).delete(host_id)
     record_audit(
@@ -350,9 +355,9 @@ async def delete_host(request: Request, host_id: str) -> RedirectResponse:
 
 @router.post("/hosts/{host_id}/scan")
 async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303

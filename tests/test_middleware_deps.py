@@ -186,3 +186,150 @@ async def test_require_write_valid():
     )
     result = await require_write(request)
     assert result == "alice"
+
+
+# ── BC-086: write_users enforcement ──────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_may_write_no_write_users_configured(monkeypatch, tmp_path):
+    """When write_users is empty, all authenticated users can write."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import _may_write
+
+    class _Provider:
+        pass
+
+    settings = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path, write_users=())
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    request = _make_request(auth_provider=_Provider())
+    request.scope["app"] = app
+    request.scope["auth_user"] = "viewer"
+    assert _may_write(request, "viewer") is True
+
+
+@pytest.mark.anyio
+async def test_may_write_user_in_write_list(monkeypatch, tmp_path):
+    """User in write_users list can write."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import _may_write
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3", data_dir=tmp_path, write_users=("writer1", "writer2")
+    )
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    request = _make_request(auth_provider=_Provider())
+    request.scope["app"] = app
+    request.scope["auth_user"] = "writer1"
+    assert _may_write(request, "writer1") is True
+
+
+@pytest.mark.anyio
+async def test_may_write_user_not_in_list(monkeypatch, tmp_path):
+    """User NOT in write_users and NOT in admin_users cannot write."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import _may_write
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        write_users=("writer1", "writer2"),
+        admin_users=("admin1",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    request = _make_request(auth_provider=_Provider())
+    request.scope["app"] = app
+    request.scope["auth_user"] = "viewer"
+    assert _may_write(request, "viewer") is False
+
+
+@pytest.mark.anyio
+async def test_may_write_admin_always_can_write(monkeypatch, tmp_path):
+    """Admin users can write even if not explicitly in write_users."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import _may_write
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        write_users=("writer1",),
+        admin_users=("admin1",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    request = _make_request(auth_provider=_Provider())
+    request.scope["app"] = app
+    request.scope["auth_user"] = "admin1"
+    assert _may_write(request, "admin1") is True
+
+
+@pytest.mark.anyio
+async def test_may_write_no_auth_provider(monkeypatch):
+    """When auth is disabled, _may_write returns True."""
+    from cert_watch.middleware import _may_write
+
+    request = _make_request(auth_provider=NoAuthProvider())
+    assert _may_write(request, "anyone") is True
+
+
+@pytest.mark.anyio
+async def test_require_write_readonly_user_403(monkeypatch, tmp_path):
+    """When write_users is set and user is not in it, require_write raises 403."""
+    from cert_watch.auth import SESSION_COOKIE
+    from cert_watch.config import Settings
+
+    class _Provider:
+        pass
+
+    token = create_session("viewer")
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        write_users=("writer1",),
+        admin_users=("admin1",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    provider = _Provider()
+    request = _make_request(
+        auth_provider=provider,
+        cookies={SESSION_COOKIE: token},
+    )
+    request.scope["app"] = app
+    request.scope["auth_user"] = "viewer"
+    with pytest.raises(HTTPException) as exc_info:
+        await require_write(request)
+    assert exc_info.value.status_code == 403
+    assert "read-only user" in exc_info.value.detail

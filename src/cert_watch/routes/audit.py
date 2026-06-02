@@ -13,7 +13,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
 from cert_watch.config import Settings
 from cert_watch.filters import register_filters
-from cert_watch.middleware import require_auth
+from cert_watch.middleware import get_auth_context, require_auth
 
 logger = logging.getLogger("cert_watch.routes.audit")
 
@@ -50,7 +50,6 @@ def audit_page(
     )
     total = count_audit(db, target_type=target_type or None, actor=actor or None)
     total_pages = max((total + limit - 1) // limit, 1)
-    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="audit.html",
@@ -58,7 +57,7 @@ def audit_page(
             "rows": rows,
             "version": __version__,
             "commit": __commit__,
-            "auth_user": auth_user,
+            **get_auth_context(request),
             "active_page": "audit",
             "filter_target_type": target_type,
             "filter_actor": actor,

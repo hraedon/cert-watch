@@ -257,7 +257,7 @@
                   {% endif %}
                 </div>
                 <div class="cw-host-row-actions">
-                  {% if h.host_id %}
+                  {% if may_write and h.host_id %}
                     <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
                       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                       <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30">
@@ -358,7 +358,7 @@
             </td>
             <td onclick="event.stopPropagation()">
               <div class="cw-rowact">
-                {% if e.host_id %}
+                {% if may_write and e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30" data-testid="scan-now-btn">
@@ -418,10 +418,12 @@
                 <td class="mono cw-fz-12-5">{{ a.subject }}</td>
                 <td class="cw-fz-12-5 cw-text-text-2">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
                 <td>
+                  {% if may_write %}
                   <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor?">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                     <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ icons.svg_icon('trash', 13) }}Delete</button>
                   </form>
+                  {% endif %}
                 </td>
               </tr>
             {% endfor %}
@@ -450,6 +452,7 @@
     </div>
   </div>
   <div class="cw-p-slide-body">
+    {% if may_write %}
     {# Scan host tab #}
     <div id="tab-scan" class="tab-body">
       <form method="post" action="/hosts" class="cw-form-stack">
@@ -520,12 +523,19 @@
         </div>
       </form>
     </div>
+    {% else %}
+    <div class="cw-empty">
+      <p>Read-only access — contact an administrator to make changes.</p>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
 
 {% block topbar_actions %}
+  {% if may_write %}
   <button class="cw-btn primary" onclick="openSlide()">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+  {% endif %}
 {% endblock %}
 
 {% block scripts %}

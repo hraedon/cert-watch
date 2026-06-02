@@ -27,6 +27,7 @@ from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
     check_metrics_token,
+    get_auth_context,
     get_csrf_context,
     rate_limit,
 )
@@ -235,8 +236,8 @@ def dashboard(
         page = max(1, min(page, total_pages))
 
     anchors = SqliteTrustAnchorRepository(db).list_entries()
-    ctx = get_csrf_context(request)
-    auth_user = request.scope.get("auth_user", "")
+    csrf_ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
 
     display_entries = [] if pivot_groups else page_entries
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
@@ -255,7 +256,7 @@ def dashboard(
             "version": __version__, "commit": __commit__,
             "error": error,
             "warning": warning,
-            "auth_user": auth_user,
+            **auth_ctx,
             "active_page": "dashboard",
             "filter_q": q or "",
             "filter_urgency": urgency or "",
@@ -269,7 +270,7 @@ def dashboard(
             "has_next": page < total_pages,
             "grouped": grouped,
             "posture_grades": posture_grades,
-            **ctx,
+            **csrf_ctx,
         },
     )
 
@@ -282,14 +283,13 @@ def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
     rows = list_alerts_with_subject(db, page=page, limit=per_page)
-    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="alerts.html",
         context={
             "alerts": rows,
             "version": __version__, "commit": __commit__,
-            "auth_user": auth_user,
+            **get_auth_context(request),
             "active_page": "alerts",
             "page": page,
             "total_pages": total_pages,
@@ -307,14 +307,14 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
     rows = list_scan_history(db, page=page, limit=per_page)
-    auth_user = request.scope.get("auth_user", "")
     return templates.TemplateResponse(
         request=request,
         name="scan_history.html",
         context={
             "history": rows,
             "version": __version__, "commit": __commit__,
-            "auth_user": auth_user,
+            **get_auth_context(request),
+            **get_csrf_context(request),
             "active_page": "scans",
             "page": page,
             "total_pages": total_pages,

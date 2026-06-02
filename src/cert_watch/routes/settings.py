@@ -12,7 +12,7 @@ from fastapi.templating import Jinja2Templates
 from cert_watch import __commit__, __version__
 from cert_watch.config import Settings
 from cert_watch.database import kv_all, kv_set
-from cert_watch.middleware import get_csrf_context
+from cert_watch.middleware import get_auth_context, get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.settings")
 
@@ -155,6 +155,7 @@ def settings_page(
     alert_config = _effective_config(_ALERT_KEYS, db)
     env_overrides = _env_overrides(_AUTH_KEYS, db)
     ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
     # Mask sensitive fields for display
     display_config = {}
     for k, v in {**auth_config, **smtp_config, **alert_config}.items():
@@ -174,6 +175,7 @@ def settings_page(
             "smtp": display_config,
             "alert": display_config,
             "env_overrides": env_overrides,
+            **auth_ctx,
             **ctx,
         },
     )
