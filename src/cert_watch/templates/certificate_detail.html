@@ -284,18 +284,18 @@
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <textarea name="notes" class="cw-hidden" id="notes-hidden">{{ cert.notes }}</textarea>
           </form>
-          <button class="cw-btn ghost sm" type="button" onclick="toggleNotes()">
+          <button class="cw-btn ghost sm" type="button" data-action="toggle-notes">
             {{ icons.svg_icon('key', 13) }}<span id="notes-btn-label">Edit</span>
           </button>
           {% endif %}
         </div>
-        <div id="notes-view" onclick="{% if may_write %}toggleNotes(){% endif %}" class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
+        <div id="notes-view" {% if may_write %}data-action="toggle-notes"{% endif %} class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
         {% if may_write %}
         <div id="notes-edit" class="cw-hidden">
           <textarea id="notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ cert.notes }}</textarea>
           <div class="cw-flex cw-gap-8 cw-mt-8">
-            <button class="cw-btn sm" type="button" onclick="toggleNotes()">Cancel</button>
-            <button class="cw-btn primary sm" type="button" onclick="saveNotes()">Save</button>
+            <button class="cw-btn sm" type="button" data-action="toggle-notes">Cancel</button>
+            <button class="cw-btn primary sm" type="button" data-action="save-notes">Save</button>
           </div>
         </div>
         {% endif %}
@@ -390,7 +390,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
 function toggleNotes() {
   var view = document.getElementById('notes-view');
   var edit = document.getElementById('notes-edit');

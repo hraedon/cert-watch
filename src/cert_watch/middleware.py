@@ -427,29 +427,16 @@ async def auth_middleware(request: Request, call_next):
 def _build_csp(nonce: str) -> str:
     """Build the Content-Security-Policy header for a request.
 
-    BC-075: ``script-src`` still includes ``'unsafe-inline'`` because some
-    templates retain inline ``on*=`` event-handler attributes, which CSP nonces
-    *cannot* whitelist (only ``<script>`` blocks). The no-inline-handler guardrail
-    test (``tests/test_no_inline_handlers.py``) ratchets that count toward zero.
+    ``script-src`` uses a per-request nonce — inline ``on*=`` event-handler
+    attributes have been fully converted to ``data-*`` + delegated
+    ``addEventListener`` (BC-075).
 
-    A per-request ``nonce`` is already issued (``request.state.csp_nonce``) and
-    threaded into every ``<script>`` via ``{{ request.state.csp_nonce }}`` in the
-    templates, so the final hardening is a one-line change here — once the
-    guardrail reaches zero, replace the ``script-src`` line with::
-
-        f"script-src 'self' 'nonce-{nonce}'; "
-
-    Until then, adding a nonce would make modern browsers *ignore*
-    ``'unsafe-inline'`` and break the remaining inline handlers — the exact
-    regression that reverted Plan 020 S4 — so we don't emit it yet.
-
-    ``style-src`` keeps ``'unsafe-inline'`` regardless: the UI binds dynamic CSS
-    custom properties via inline ``style=`` attributes, which nonces can't cover.
+    ``style-src`` keeps ``'unsafe-inline'``: the UI binds dynamic CSS custom
+    properties via inline ``style=`` attributes, which nonces can't cover.
     """
-    _ = nonce  # reserved for the BC-075 flip described above
     return (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "

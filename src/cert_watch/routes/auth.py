@@ -193,8 +193,17 @@ def oauth_callback(
         )
         return response
     from cert_watch.auth import _verify_state as _verify_oauth_state
-    cookie_raw = _verify_oauth_state(signed_state)
-    if cookie_raw is None or cookie_raw != state:
+    verify_result = _verify_oauth_state(signed_state)
+    if verify_result is None:
+        response = RedirectResponse(
+            url="/login?error=OAuth+state+mismatch", status_code=303
+        )
+        response.delete_cookie(
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        )
+        return response
+    cookie_raw, _nonce = verify_result
+    if cookie_raw != state:
         response = RedirectResponse(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )

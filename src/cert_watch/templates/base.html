@@ -157,5 +157,46 @@
       setInterval(poll, 30000);
     })();
   </script>
+  {# BC-075: Global delegation for data-action handlers — replaces inline on*= attributes #}
+  <script nonce="{{ request.state.csp_nonce }}">
+    document.addEventListener('click', function(e) {
+      var el = e.target.closest('[data-action]');
+      if (!el) return;
+      var action = el.getAttribute('data-action');
+      if (action === 'toggle-pivot-group') {
+        if (typeof togglePivotGroup === 'function') togglePivotGroup(el.getAttribute('data-group'));
+      } else if (action === 'toggle-group') {
+        if (typeof toggleGroup === 'function') toggleGroup(el.getAttribute('data-group'));
+      } else if (action === 'open-link') {
+        window.location = el.getAttribute('data-href');
+      } else if (action === 'open-slide') {
+        if (typeof openSlide === 'function') openSlide();
+      } else if (action === 'close-slide') {
+        if (typeof closeSlide === 'function') closeSlide();
+      } else if (action === 'switch-tab') {
+        if (typeof switchTab === 'function') switchTab(el.getAttribute('data-tab'));
+      } else if (action === 'click-target') {
+        var target = document.getElementById(el.getAttribute('data-target'));
+        if (target) target.click();
+      } else if (action === 'stop-propagation') {
+        e.stopPropagation();
+      } else if (action === 'toggle-notes') {
+        if (typeof toggleNotes === 'function') toggleNotes();
+      } else if (action === 'save-notes') {
+        if (typeof saveNotes === 'function') saveNotes();
+      } else if (action === 'test-ldap') {
+        if (typeof testLdap === 'function') testLdap();
+      } else if (action === 'test-smtp') {
+        if (typeof testSmtp === 'function') testSmtp();
+      }
+    });
+    document.addEventListener('change', function(e) {
+      var el = e.target.closest('[data-action]');
+      if (!el) return;
+      if (el.getAttribute('data-action') === 'toggle-provider') {
+        if (typeof toggleProvider === 'function') toggleProvider();
+      }
+    });
+  </script>
 </body>
 </html>

@@ -112,7 +112,7 @@
       </thead>
       <tbody>
         {% for g in pivot_groups %}
-        <tr class="cw-row-link" onclick="togglePivotGroup({{ loop.index }})">
+        <tr class="cw-row-link" data-action="toggle-pivot-group" data-group="{{ loop.index }}">
           <td class="cw-fw-600">{{ g.key }}</td>
           <td>{{ g.count }}</td>
           <td>
@@ -156,7 +156,7 @@
           {% if e.kind == 'grouped' %}
           {# ---- Grouped entry (multiple hosts, same fingerprint) ---- #}
           {% set urg = e.urgency %}
-          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" onclick="toggleGroup({{ e.group_id }})">
+          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" data-action="toggle-group">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
@@ -230,7 +230,7 @@
                 {% endif %}
               </div>
             </td>
-            <td onclick="event.stopPropagation()">
+            <td data-action="stop-propagation">
               <div class="cw-rowact">
                 <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
                   {{ icons.svg_icon('chevron-right', 14) }}
@@ -273,7 +273,7 @@
           {% else %}
           {# ---- Normal (non-grouped) entry ---- #}
           {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-          <tr class="cw-row-link" onclick="window.location='/certificates/{{ e.id }}'">
+          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
@@ -356,7 +356,7 @@
                 {% endif %}
               </div>
             </td>
-            <td onclick="event.stopPropagation()">
+            <td data-action="stop-propagation">
               <div class="cw-rowact">
                 {% if may_write and e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
@@ -435,20 +435,20 @@
 </div>
 
 {# ---- Add-host slide-over ---- #}
-<div class="cw-slide-bg" id="slide-bg" onclick="closeSlide()"></div>
+<div class="cw-slide-bg" id="slide-bg" data-action="close-slide"></div>
 <div class="cw-slide" id="slide-panel">
   <div class="cw-slide-head">
     <div>
       <div class="cw-fz-15 cw-fw-600">Add certificates</div>
       <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Scan a host, upload a file, or import in bulk.</div>
     </div>
-    <button class="cw-iconbtn" onclick="closeSlide()">{{ icons.svg_icon('x', 16) }}</button>
+    <button class="cw-iconbtn" data-action="close-slide">{{ icons.svg_icon('x', 16) }}</button>
   </div>
   <div class="cw-p-slide-top">
     <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs">
-      <button type="button" class="on" data-tab="scan" onclick="switchTab('scan')">{{ icons.svg_icon('server', 13) }}Scan host</button>
-      <button type="button" data-tab="upload" onclick="switchTab('upload')">{{ icons.svg_icon('file', 13) }}Upload file</button>
-      <button type="button" data-tab="bulk" onclick="switchTab('bulk')">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
+      <button type="button" class="on" data-tab="scan" data-action="switch-tab">{{ icons.svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab="upload" data-action="switch-tab">{{ icons.svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab="bulk" data-action="switch-tab">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
   <div class="cw-p-slide-body">
@@ -476,7 +476,7 @@
         </label>
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
           <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
         </div>
       </form>
@@ -485,7 +485,7 @@
     <div id="tab-upload" class="tab-body cw-hidden">
       <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <div class="cw-drop" onclick="document.getElementById('file-input').click()">
+        <div class="cw-drop" data-action="click-target" data-target="file-input">
           <div class="cw-drop-icon">{{ icons.svg_icon('upload', 18) }}</div>
           <div class="cw-fz-13-5 cw-fw-600">Drop a certificate, or <span class="cw-link">browse</span></div>
           <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
@@ -497,7 +497,7 @@
         </div>
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
           <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('upload', 14) }}Upload</button>
         </div>
       </form>
@@ -506,7 +506,7 @@
     <div id="tab-bulk" class="tab-body cw-hidden">
       <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <div class="cw-drop" onclick="document.getElementById('csv-input').click()">
+        <div class="cw-drop" data-action="click-target" data-target="csv-input">
           <div class="cw-drop-icon">{{ icons.svg_icon('file', 18) }}</div>
           <div class="cw-fz-13-5 cw-fw-600">Drop a CSV, or <span class="cw-link">browse</span></div>
           <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
@@ -518,7 +518,7 @@
         </div>
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" onclick="closeSlide()">Cancel</button>
+          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
           <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('plus', 14) }}Import</button>
         </div>
       </form>
@@ -534,12 +534,12 @@
 
 {% block topbar_actions %}
   {% if may_write %}
-  <button class="cw-btn primary" onclick="openSlide()">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+  <button class="cw-btn primary" data-action="open-slide">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
   {% endif %}
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ request.state.csp_nonce }}">
 function openSlide() {
   document.getElementById('slide-bg').classList.add('on');
   document.getElementById('slide-panel').classList.add('on');

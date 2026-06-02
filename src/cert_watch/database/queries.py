@@ -1,7 +1,10 @@
 """Dashboard and utility queries."""
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -10,6 +13,38 @@ from pathlib import Path
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert
 from cert_watch.database.schema import init_schema
+
+_logger = logging.getLogger("cert_watch.database.queries")
+
+# ---------- BC-082: at-rest encryption for sensitive kv_store values ----------
+
+_ENCRYPTED_PREFIX = "enc:v1:"
+
+
+def derive_encryption_key(signing_key: str) -> str:
+    """Derive a Fernet-compatible key from the app signing key."""
+    raw = hashlib.sha256(signing_key.encode()).digest()
+    return base64.urlsafe_b64encode(raw).decode()
+
+
+def fernet_encrypt(plaintext: str, key: str) -> str:
+    """Encrypt a value; return ``enc:v1:<token>``."""
+    from cryptography.fernet import Fernet
+
+    return _ENCRYPTED_PREFIX + Fernet(key.encode()).encrypt(plaintext.encode()).decode()
+
+
+def fernet_decrypt(value: str, key: str) -> str:
+    """Decrypt an ``enc:v1:`` value; pass through plaintext unchanged."""
+    if not value.startswith(_ENCRYPTED_PREFIX):
+        return value
+    from cryptography.fernet import Fernet, InvalidToken
+
+    try:
+        return Fernet(key.encode()).decrypt(value[len(_ENCRYPTED_PREFIX) :].encode()).decode()
+    except (InvalidToken, Exception):
+        _logger.warning("kv: failed to decrypt value (wrong key or corrupted); returning raw")
+        return value
 
 
 def distinct_tags(db_path: str | Path) -> list[str]:
@@ -1061,28 +1096,206 @@ def list_dashboard_grouped_page(
     Grouped dashboard path (BC-073).  Scanned entries sharing a leaf
     fingerprint collapse into a single row whose urgency is the worst urgency
     across the group and whose host count is the number of hosts in the group.
+    Uploaded and pending entries pass through ungrouped.
 
-    The grouping + worst-urgency aggregate is derived from the built unified
-    entries (so chain-status promotion stays identical to the prior behaviour),
-    but only after SQL narrows the candidate set.  Cross-host search within a
-    fingerprint group requires the full filtered set, so ``q``/``urgency``
-    filtering is applied after grouping (matching the route's prior behaviour).
-    Returns ``(rows, total)``.
+    Scanned-entry grouping uses SQL ``GROUP BY`` so only the visible page of
+    grouped rows is materialised with full cert/host/scan detail.  Ungrouped
+    entries (uploaded, pending) are loaded and merged in Python.  Returns
+    ``(rows, total)``.
     """
     init_schema(db_path)
 
-    # Grouping needs the full set so cross-host search within a fingerprint
-    # group works and worst-urgency is computed across all hosts in a group.
-    all_entries = _list_unified_entries_raw(db_path)
-    grouped = group_entries_by_fingerprint(all_entries)
-    grouped = _filter_unified(grouped, q=q, urgency=urgency, source=source)
-    grouped = _sort_unified(grouped, sort_by=sort_by, sort_order=sort_order)
+    _URGENCY_SQL = {
+        "expired": "WHEN julianday(c.not_after) - julianday('now') < 0 THEN 0",
+        "critical": "WHEN julianday(c.not_after) - julianday('now') < 7 THEN 1",
+        "warning": "WHEN julianday(c.not_after) - julianday('now') < 30 THEN 2",
+        "healthy": "ELSE 3",
+    }
+    _URGENCY_ORDER_SQL = ("expired", "critical", "warning", "healthy")
+    _URGENCY_RANK = {u: i for i, u in enumerate(_URGENCY_ORDER_SQL)}
 
-    total = len(grouped)
+    _SORT_COLS = {
+        "name": "LOWER(COALESCE(c.subject, c.hostname || ':' || c.port))",
+        "issue_date": "c.not_before",
+        "last_scan": "COALESCE(last_scan_at, '0000-01-01T00:00:00')",
+        "expiry": "c.not_after",
+        "days": "c.not_after",
+    }
+    sort_col = _SORT_COLS.get(sort_by, _SORT_COLS["days"])
+    sql_dir = "DESC" if sort_order == "desc" else "ASC"
+
+    like = f"%{q.lower()}%" if q else None
+
+    with _connect(db_path) as conn:
+        # Step 1: SQL GROUP BY fingerprint for scanned entries.
+        grouped_sql = f"""
+            SELECT
+                c.fingerprint_sha256,
+                COUNT(DISTINCT c.hostname || ':' || c.port) AS host_count,
+                MIN(c.not_after) AS earliest_expiry,
+                MIN(julianday(c.not_after) - julianday('now')) AS min_days_remaining,
+                CASE
+                    {_URGENCY_SQL['expired']}
+                    {_URGENCY_SQL['critical']}
+                    {_URGENCY_SQL['warning']}
+                    {_URGENCY_SQL['healthy']}
+                END AS worst_urgency_rank,
+                {sort_col} AS sort_val
+            FROM certificates c
+            WHERE c.is_leaf = 1
+              AND c.source = 'scanned'
+              AND c.fingerprint_sha256 IS NOT NULL
+              AND c.fingerprint_sha256 != ''
+        """
+        params: list = []
+
+        if like:
+            grouped_sql += (
+                " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?"
+                " OR LOWER(c.hostname || ':' || c.port) LIKE ?)"
+            )
+            params.extend([like, like, like])
+
+        grouped_sql += " GROUP BY c.fingerprint_sha256"
+
+        if urgency:
+            rank = _URGENCY_RANK.get(urgency)
+            if rank is not None:
+                grouped_sql += " HAVING worst_urgency_rank = ?"
+                params.append(rank)
+
+        grouped_sql += f" ORDER BY sort_val {sql_dir}"
+
+        rows = conn.execute(grouped_sql, params).fetchall()
+
+        fingerprints = [r["fingerprint_sha256"] for r in rows]
+
+        # Step 2: Load full details for grouped scanned entries.
+        cert_rows: list = []
+        chain_rows: list = []
+        if fingerprints:
+            ph = ",".join("?" * len(fingerprints))
+            cert_rows = conn.execute(
+                f"SELECT * FROM certificates c"
+                f" WHERE c.fingerprint_sha256 IN ({ph}) AND c.is_leaf = 1"
+                f" ORDER BY c.hostname, c.port",
+                fingerprints,
+            ).fetchall()
+            leaf_ids = [r["id"] for r in cert_rows]
+            if leaf_ids:
+                cph = ",".join("?" * len(leaf_ids))
+                chain_rows = conn.execute(
+                    f"SELECT * FROM certificates WHERE parent_cert_id IN ({cph})",
+                    leaf_ids,
+                ).fetchall()
+
+        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+        scan_rows = conn.execute(
+            """
+            SELECT hostname, port, status, scanned_at, error_message
+            FROM scan_history sh1
+            WHERE scanned_at = (
+                SELECT MAX(scanned_at)
+                FROM scan_history sh2
+                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
+            )
+            """
+        ).fetchall()
+        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+
+    # Step 3: Build rich dashboard rows for scanned entries and group them.
+    all_rows = list(cert_rows) + list(chain_rows)
+    dash = _build_dashboard_rows(all_rows, anchor_rows)
+    entries = _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
+
+    entries_by_fp: dict[str, list[dict]] = {}
+    for e in entries:
+        fp = e.get("fingerprint_sha256")
+        if fp:
+            entries_by_fp.setdefault(fp, []).append(e)
+
+    grouped_entries: list[dict] = []
+    group_idx = 0
+    for row in rows:
+        fp = row["fingerprint_sha256"]
+        group = entries_by_fp.get(fp, [])
+        if not group:
+            continue
+        group_idx += 1
+        first = group[0]
+
+        urgency_counts: dict[str, int] = {}
+        for h in group:
+            u = h["urgency"]
+            urgency_counts[u] = urgency_counts.get(u, 0) + 1
+
+        group_urgency = "healthy"
+        for u in _URGENCY_ORDER:
+            if urgency_counts.get(u, 0) > 0:
+                group_urgency = u
+                break
+
+        grouped_entries.append({
+            "id": first["id"],
+            "fingerprint_sha256": fp,
+            "group_id": group_idx,
+            "kind": "grouped",
+            "source": "scanned",
+            "subject": first["subject"],
+            "issuer": first["issuer"],
+            "not_before": first["not_before"],
+            "not_after": first["not_after"],
+            "days_remaining": first["days_remaining"],
+            "urgency": group_urgency,
+            "leaf_urgency": first["leaf_urgency"],
+            "chain": first["chain"],
+            "chain_valid": first["chain_valid"],
+            "chain_status": first["chain_status"],
+            "san_dns_names": first.get("san_dns_names", []),
+            "replaces_cert_id": first.get("replaces_cert_id"),
+            "notes": first.get("notes", ""),
+            "name": first["subject"] or first["host"],
+            "host": first["host"],
+            "host_id": first.get("host_id"),
+            "host_count": len(group),
+            "healthy_count": sum(1 for h in group if h["urgency"] == "healthy"),
+            "urgency_summary": urgency_counts,
+            "hosts": group,
+            "last_scanned_at": first.get("last_scanned_at"),
+            "scan_status": first.get("scan_status"),
+            "scan_error": first.get("scan_error"),
+            "added_at": first.get("added_at"),
+            "owner_name": first.get("owner_name", ""),
+            "owner_email": first.get("owner_email", ""),
+            "owner_slack": first.get("owner_slack", ""),
+            "renewal_status": first.get("renewal_status", "pending"),
+            "renewal_method": first.get("renewal_method", ""),
+            "runbook_url": first.get("runbook_url", ""),
+        })
+
+    # Step 4: Load ungrouped entries (uploaded + pending) and merge.
+    with _connect(db_path) as conn2:
+        all_certs = conn2.execute("SELECT * FROM certificates ORDER BY created_at").fetchall()
+    full_dash = _build_dashboard_rows(list(all_certs), anchor_rows)
+    all_unified = _build_unified_from_dash(full_dash, host_rows, scan_rows)
+    grouped_fps = {r["fingerprint_sha256"] for r in rows}
+
+    ungrouped: list[dict] = []
+    for e in all_unified:
+        fp = e.get("fingerprint_sha256") if e.get("kind") == "scanned" else None
+        if fp and fp in grouped_fps:
+            continue
+        ungrouped.append(e)
+
+    all_entries = grouped_entries + ungrouped
+    all_entries = _filter_unified(all_entries, q=q, urgency=urgency, source=source)
+    all_entries = _sort_unified(all_entries, sort_by=sort_by, sort_order=sort_order)
+
+    total = len(all_entries)
     if per_page > 0:
         start = max(0, (page - 1) * per_page)
-        grouped = grouped[start : start + per_page]
-    return grouped, total
+        all_entries = all_entries[start : start + per_page]
+    return all_entries, total
 
 
 def get_cert_detail(db_path: str | Path, cert_id: str) -> dict | None:
@@ -1760,12 +1973,21 @@ def get_posture_grades_for_certs(
 # ---------- kv_store helpers ----------
 
 
-def kv_get(db_path: str | Path, key: str) -> str | None:
-    """Get a value from the kv_store table. Returns None if key not found."""
+def kv_get(db_path: str | Path, key: str, encryption_key: str | None = None) -> str | None:
+    """Get a value from the kv_store table. Returns None if key not found.
+
+    When *encryption_key* is set and the stored value has the ``enc:v1:``
+    prefix, the value is transparently decrypted (BC-082).
+    """
     init_schema(db_path)
     with _connect(db_path) as conn:
         row = conn.execute("SELECT value FROM kv_store WHERE key = ?", (key,)).fetchone()
-    return row["value"] if row else None
+    if row is None:
+        return None
+    val = row["value"]
+    if encryption_key and val.startswith(_ENCRYPTED_PREFIX):
+        val = fernet_decrypt(val, encryption_key)
+    return val
 
 
 def kv_set(db_path: str | Path, key: str, value: str) -> None:
@@ -1778,6 +2000,11 @@ def kv_set(db_path: str | Path, key: str, value: str) -> None:
             (key, value, now),
         )
         conn.commit()
+
+
+def kv_set_secret(db_path: str | Path, key: str, value: str, encryption_key: str) -> None:
+    """Encrypt and store a sensitive value in kv_store (BC-082)."""
+    kv_set(db_path, key, fernet_encrypt(value, encryption_key))
 
 
 def kv_all(db_path: str | Path) -> dict[str, str]:

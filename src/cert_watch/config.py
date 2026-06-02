@@ -382,27 +382,40 @@ class Settings:
         )
 
     @classmethod
-    def from_env_with_kv(cls, db_path: Path) -> "Settings":
+    def from_env_with_kv(cls, db_path: Path, encryption_key: str | None = None) -> "Settings":
         """Build Settings with kv_store fallback for auth/smtp/alert fields.
 
         Env vars take precedence; kv_store values fill in where env is unset.
+        When *encryption_key* is set, sensitive kv_store values with the
+        ``enc:v1:`` prefix are transparently decrypted (BC-082).
         """
         base = cls.from_env()
         if not db_path:
             return base
         try:
-            from cert_watch.database import kv_all
+            from cert_watch.database import fernet_decrypt, kv_all
             kv = kv_all(db_path)
         except Exception:
             return base
         if not kv:
             return base
 
+        _SENSITIVE = frozenset({
+            "ldap_bind_password", "ldap_ca_cert",
+            "oauth_client_secret", "smtp_password",
+        })
+
+        def _decrypt(key: str, val: str) -> str:
+            if encryption_key and key in _SENSITIVE:
+                return fernet_decrypt(val, encryption_key)
+            return val
+
         def _kv(env_val: str, kv_key: str, default: str = "") -> str:
             """Return env_val if set, else kv_store value, else default."""
             if env_val:
                 return env_val
-            return kv.get(kv_key, "") or default
+            raw = kv.get(kv_key, "")
+            return _decrypt(kv_key, raw) if raw else default
 
         def _kv_bool(env_val: bool, kv_key: str, env_name: str) -> bool:
             """Env wins when the env var is explicitly set (even to 0); else

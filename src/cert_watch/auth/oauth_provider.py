@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import secrets
 import time
 from dataclasses import dataclass
 
@@ -234,10 +235,15 @@ class OAuthProvider(AuthProvider):
         authorization_endpoint = endpoints.get("authorization_endpoint", "")
         if not authorization_endpoint:
             return AuthResult(success=False, error="authorization_endpoint not configured")
+        nonce = secrets.token_urlsafe(16)
         uri, state = client.create_authorization_url(
-            authorization_endpoint, redirect_uri=redirect_uri
+            authorization_endpoint, redirect_uri=redirect_uri,
+            nonce=nonce,
         )
-        return AuthResult(success=True, redirect_url=uri, oauth_state=_sign_state(state))
+        return AuthResult(
+            success=True, redirect_url=uri,
+            oauth_state=_sign_state(state, nonce=nonce),
+        )
 
     def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         try:
@@ -247,9 +253,10 @@ class OAuthProvider(AuthProvider):
         # BC-009: verify state parameter before exchanging code
         if not state:
             return AuthResult(success=False, error="missing OAuth state parameter")
-        expected_state = _verify_state(state)
-        if expected_state is None:
+        verify_result = _verify_state(state)
+        if verify_result is None:
             return AuthResult(success=False, error="invalid OAuth state")
+        expected_state, nonce = verify_result
         endpoints = self._discover()
         token_endpoint = endpoints.get("token_endpoint", "")
         if not token_endpoint:
@@ -271,6 +278,7 @@ class OAuthProvider(AuthProvider):
                     claims = self._verify_id_token(
                         id_token_str,
                         access_token=token.get("access_token"),
+                        nonce=nonce,
                     )
                     if claims:
                         username = (

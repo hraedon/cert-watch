@@ -215,16 +215,14 @@ def dashboard(
         }
     elif grouped:
         # Grouped path: grouping by leaf fingerprint with worst urgency +
-        # host count, filtered/sorted (BC-073).  Grouping needs the full
-        # filtered set, so paginate in the route after clamping the page.
-        all_grouped, total = list_dashboard_grouped_page(
+        # host count, filtered/sorted — SQL-level pagination (BC-073).
+        page_entries, total = list_dashboard_grouped_page(
             db, q=q, urgency=urgency, source=source,
-            sort_by=sort_by, sort_order=sort_order, per_page=0,
+            sort_by=sort_by, sort_order=sort_order,
+            page=page, per_page=per_page,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
-        start = (page - 1) * per_page
-        page_entries = all_grouped[start : start + per_page]
     else:
         # Fast path: no grouping, no pivot — SQL-level pagination (BC-073).
         page_entries, total = list_dashboard_page(

@@ -37,11 +37,7 @@ _SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DO
 # Max inline handlers tolerated per template. ONLY GOES DOWN. A template not
 # listed here must have zero (that's the point — base.html was converted, so it
 # is absent and pinned to zero).
-INLINE_HANDLER_BUDGET = {
-    "dashboard.html": 16,
-    "certificate_detail.html": 4,
-    "settings.html": 3,
-}
+INLINE_HANDLER_BUDGET: dict[str, int] = {}
 
 
 def _count(path: Path) -> int:

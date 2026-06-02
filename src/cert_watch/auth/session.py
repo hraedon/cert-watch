@@ -52,21 +52,46 @@ def set_signing_key(value: str) -> None:
     _signing_key = value
 
 
-def _sign_state(state: str, security: SecurityContext | None = None) -> str:
-    sig = hmac.new(_key(security).encode(), state.encode(), hashlib.sha256).hexdigest()[:32]
-    return f"{state}:{sig}"
+def _sign_state(
+    state: str, security: SecurityContext | None = None, nonce: str | None = None
+) -> str:
+    payload = f"{state}:{nonce}" if nonce else state
+    sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{payload}:{sig}"
 
 
-def _verify_state(token: str, security: SecurityContext | None = None) -> str | None:
+def _verify_state(
+    token: str, security: SecurityContext | None = None
+) -> tuple[str, str | None] | None:
+    """Verify a signed OAuth state token.
+
+    Returns ``(state, nonce)`` on success, ``None`` on failure.
+    Handles both the new ``state:nonce:sig`` format and the legacy
+    ``state:sig`` format (nonce returned as ``None``).
+    """
     if not token or ":" not in token:
         return None
+    # Try new format first: state:nonce:sig (3+ colon-separated parts)
+    parts = token.split(":")
+    if len(parts) >= 3:
+        sig = parts[-1]
+        nonce = parts[-2]
+        state = ":".join(parts[:-2])
+        expected = hmac.new(
+            _key(security).encode(), f"{state}:{nonce}".encode(), hashlib.sha256
+        ).hexdigest()[:32]
+        if hmac.compare_digest(sig, expected):
+            return state, nonce
+    # Fallback: legacy format state:sig
     last_colon = token.rfind(":")
     state = token[:last_colon]
-    sig = token[last_colon + 1 :]
-    expected = hmac.new(_key(security).encode(), state.encode(), hashlib.sha256).hexdigest()[:32]
-    if not hmac.compare_digest(sig, expected):
-        return None
-    return state
+    sig = token[last_colon + 1:]
+    expected = hmac.new(
+        _key(security).encode(), state.encode(), hashlib.sha256
+    ).hexdigest()[:32]
+    if hmac.compare_digest(sig, expected):
+        return state, None
+    return None
 
 
 def _sign_session(data: str, security: SecurityContext | None = None) -> str:

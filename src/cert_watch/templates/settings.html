@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>cert-watch — settings</title>
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     try {
       var t = localStorage.getItem('cw-theme') || 'dark';
       document.documentElement.setAttribute('data-theme', t);
@@ -71,7 +71,7 @@
 
             <div class="cw-field cw-mb-16">
               <label class="cw-label" for="auth_provider">Authentication provider</label>
-              <select class="cw-input" id="auth_provider" name="auth_provider" onchange="toggleProvider()">
+              <select class="cw-input" id="auth_provider" name="auth_provider" data-action="toggle-provider">
                 <option value="" {% if not auth.auth_provider %}selected{% endif %}>None (open access)</option>
                 <option value="ldap" {% if auth.auth_provider == 'ldap' %}selected{% endif %}>LDAP / Active Directory</option>
                 <option value="oauth" {% if auth.auth_provider in ('oauth', 'entra', 'oidc') %}selected{% endif %}>OAuth / OIDC (Entra, Google)</option>
@@ -151,7 +151,7 @@
               </div>
 
               <div style="margin-top: 1rem;">
-                <button type="button" class="cw-btn" onclick="testLdap()">Test Connection</button>
+                <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
                 <div id="ldap-test-result" class="cw-test-result"></div>
               </div>
             </div>
@@ -269,7 +269,7 @@
 
             <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; align-items: center;">
               <button type="submit" class="cw-btn primary">Save SMTP settings</button>
-              <button type="button" class="cw-btn" onclick="testSmtp()">Send test email</button>
+              <button type="button" class="cw-btn" data-action="test-smtp">Send test email</button>
               <span id="smtp-test-result" class="cw-test-result" style="margin: 0;"></span>
             </div>
           </form>
@@ -310,7 +310,7 @@
     </div>
   </div>
 
-  <script>
+  <script nonce="{{ request.state.csp_nonce }}">
     function toggleProvider() {
       var provider = document.getElementById('auth_provider').value;
       document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');

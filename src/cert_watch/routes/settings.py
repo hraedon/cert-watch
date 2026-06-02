@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.config import Settings
-from cert_watch.database import kv_all, kv_set
+from cert_watch.database import kv_all, kv_set, kv_set_secret
 from cert_watch.middleware import get_auth_context, get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.settings")
@@ -28,6 +28,16 @@ def _get_settings(request: Request) -> Settings:
 
 def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
+
+
+def _get_encryption_key(request: Request) -> str | None:
+    """Return the Fernet encryption key derived from the signing key (BC-082)."""
+    from cert_watch.database import derive_encryption_key
+
+    security = getattr(request.app.state, "security", None)
+    if security:
+        return derive_encryption_key(security.signing_key)
+    return None
 
 
 def _require_admin(request: Request) -> RedirectResponse | None:
@@ -110,11 +120,20 @@ def _env_overrides(keys: dict[str, str], db_path: Path) -> dict[str, bool]:
     return overrides
 
 
-def _effective_config(keys: dict[str, str], db_path: Path) -> dict[str, str]:
-    """Merge kv_store values with env var overrides (env wins)."""
+def _effective_config(
+    keys: dict[str, str],
+    db_path: Path,
+    encryption_key: str | None = None,
+) -> dict[str, str]:
+    """Merge kv_store values with env var overrides (env wins).
+
+    When *encryption_key* is set, sensitive values stored in encrypted form
+    (``enc:v1:`` prefix) are transparently decrypted (BC-082).
+    """
     import os
 
     from cert_watch.config import read_secret
+    from cert_watch.database import fernet_decrypt
 
     kv = kv_all(db_path)
     result: dict[str, str] = {}
@@ -123,7 +142,10 @@ def _effective_config(keys: dict[str, str], db_path: Path) -> dict[str, str]:
         if env_val is not None and env_val.strip():
             result[kv_key] = env_val
         elif kv_key in kv and kv[kv_key]:
-            result[kv_key] = kv[kv_key]
+            val = kv[kv_key]
+            if encryption_key and kv_key in _SENSITIVE_KEYS:
+                val = fernet_decrypt(val, encryption_key)
+            result[kv_key] = val
         else:
             result[kv_key] = ""
     # Handle _FILE secrets
@@ -150,9 +172,10 @@ def settings_page(
     if redirect:
         return redirect
     db = _db_path(request)
-    auth_config = _effective_config(_AUTH_KEYS, db)
-    smtp_config = _effective_config(_SMTP_KEYS, db)
-    alert_config = _effective_config(_ALERT_KEYS, db)
+    enc_key = _get_encryption_key(request)
+    auth_config = _effective_config(_AUTH_KEYS, db, enc_key)
+    smtp_config = _effective_config(_SMTP_KEYS, db, enc_key)
+    alert_config = _effective_config(_ALERT_KEYS, db, enc_key)
     env_overrides = _env_overrides(_AUTH_KEYS, db)
     ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
@@ -196,11 +219,15 @@ async def save_auth_config(request: Request) -> RedirectResponse:
 
     db = _db_path(request)
     form = await request.form()
+    enc_key = _get_encryption_key(request)
 
-    # Save each field to kv_store
+    # Save each field to kv_store (encrypt sensitive values if key available)
     for kv_key in _AUTH_KEYS:
         val = form.get(kv_key, "").strip()
-        kv_set(db, kv_key, val)
+        if kv_key in _SENSITIVE_KEYS and val and enc_key:
+            kv_set_secret(db, kv_key, val, enc_key)
+        else:
+            kv_set(db, kv_key, val)
 
     # Rebuild auth provider with merged config
     try:
@@ -234,10 +261,14 @@ async def save_smtp_config(request: Request) -> RedirectResponse:
 
     db = _db_path(request)
     form = await request.form()
+    enc_key = _get_encryption_key(request)
 
     for kv_key in _SMTP_KEYS:
         val = form.get(kv_key, "").strip()
-        kv_set(db, kv_key, val)
+        if kv_key in _SENSITIVE_KEYS and val and enc_key:
+            kv_set_secret(db, kv_key, val, enc_key)
+        else:
+            kv_set(db, kv_key, val)
 
     # Rebuild settings with new SMTP values
     _rebuild_settings(request, db)
@@ -270,7 +301,8 @@ async def save_alert_config(request: Request) -> RedirectResponse:
 
 def _rebuild_settings(request: Request, db_path: Path) -> None:
     """Rebuild Settings from env + kv_store and update app.state."""
-    s = Settings.from_env_with_kv(db_path)
+    enc_key = _get_encryption_key(request)
+    s = Settings.from_env_with_kv(db_path, encryption_key=enc_key)
     request.app.state.settings = s
 
 
