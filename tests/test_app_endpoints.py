@@ -72,13 +72,13 @@ def test_scan_now_calls_scan_host(tmp_path, monkeypatch, reload_app, self_signed
 
     called = {}
 
-    def fake_scan_host(hostname, port=443, **kw):
+    async def fake_scan_host(hostname, port=443, **kw):
         called["args"] = (hostname, port)
         from cert_watch.certificate_model import parse_certificate
         cert = parse_certificate(self_signed_leaf.der)
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
-    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
@@ -98,10 +98,10 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch, reload_app):
     init_schema(db)
     hid = SqliteHostRepository(db).add("refused.example.com", 443)
 
-    def fake_scan_host(hostname, port=443, **kw):
+    async def fake_scan_host(hostname, port=443, **kw):
         return ScanError(hostname=hostname, port=port, error_message="connection refused")
 
-    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
@@ -257,13 +257,13 @@ def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app,
 
     scanned_ports = []
 
-    def fake_scan_host(hostname, port=443, **kw):
+    async def fake_scan_host(hostname, port=443, **kw):
         scanned_ports.append(port)
         from cert_watch.certificate_model import parse_certificate
         cert = parse_certificate(self_signed_leaf.der)
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
-    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
 
     with TestClient(app_mod.app) as client:
         r = client.post(

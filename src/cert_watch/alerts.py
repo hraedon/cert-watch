@@ -13,6 +13,7 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
+from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
 
@@ -569,7 +570,7 @@ def process_pending(
     for alert in alert_repo.list_pending():
         delivered = False
         last_error = ""
-        for attempt in range(ALERT_MAX_RETRIES):
+        for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
             if config is not None:
                 delivered = send_alert(alert, config)
             if not delivered and webhook_config is not None:
@@ -577,9 +578,6 @@ def process_pending(
             if delivered:
                 break
             last_error = alert.error_message or "unknown"
-            if attempt < ALERT_MAX_RETRIES - 1:
-                import time
-                time.sleep(ALERT_RETRY_DELAY * (attempt + 1))
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)

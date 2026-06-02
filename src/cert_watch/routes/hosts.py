@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import concurrent.futures
+import asyncio
 import csv
 import io
 import logging
@@ -21,7 +21,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.scan import ScanError, scan_host, store_scanned
+from cert_watch.scan import ScanError, scan_host_async, store_scanned_async
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
 logger = logging.getLogger("cert_watch.routes.hosts")
@@ -146,7 +146,6 @@ async def add_host(
     db = _db_path(request)
     host_repo = SqliteHostRepository(db)
     ports = COMMON_TLS_PORTS if common_ports else (port,)
-    scanned = 0
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
     for p in ports:
@@ -166,7 +165,9 @@ async def add_host(
             detail={"hostname": hostname, "port": p},
             source_ip=source_ip,
         )
-        result = scan_host(
+
+    async def _scan_and_store(p: int) -> bool:
+        result = await scan_host_async(
             hostname,
             p,
             allow_private=s.allow_private,
@@ -175,26 +176,25 @@ async def add_host(
             pinned_ip=pinned_ip,
         )
         if not isinstance(result, ScanError):
-            store_scanned(result, db)
-            scanned += 1
+            await store_scanned_async(result, db)
             record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))
             logger.info("added and scanned host %s:%d", hostname, p)
-        else:
-            record_scan_history(
-                db,
-                ScanHistory(
-                    hostname=hostname,
-                    port=p,
-                    status="failure",
-                    error_message=result.error_message,
-                ),
-            )
-            logger.warning(
-                "added host %s:%d but scan failed: %s",
-                hostname,
-                p,
-                result.error_message,
-            )
+            return True
+        record_scan_history(
+            db,
+            ScanHistory(
+                hostname=hostname, port=p, status="failure",
+                error_message=result.error_message,
+            ),
+        )
+        logger.warning(
+            "added host %s:%d but scan failed: %s",
+            hostname, p, result.error_message,
+        )
+        return False
+
+    results = await asyncio.gather(*[_scan_and_store(p) for p in ports])
+    scanned = sum(1 for r in results if r)
     if common_ports:
         logger.info("common-ports scan for %s: %d/%d succeeded", hostname, scanned, len(ports))
     return RedirectResponse(url="/", status_code=303)
@@ -277,7 +277,6 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         )
         scan_jobs.append((hostname, port, threshold, row_pinned_ip))
 
-    # Scan hosts concurrently
     allow_priv = s.allow_private
     allowed_nets = s.allowed_subnets
     dns_srv = s.dns_servers
@@ -293,9 +292,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         source_ip=source_ip,
     )
 
-    def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, object]:
+    async def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, object]:
         hostname, port, _, pinned = job
-        result = scan_host(
+        result = await scan_host_async(
             hostname,
             port,
             allow_private=allow_priv,
@@ -306,22 +305,21 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         return hostname, port, result
 
     imported = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        for hostname, port, result in pool.map(_scan_one, scan_jobs):
-            if not isinstance(result, ScanError):
-                store_scanned(result, db)
-                record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
-            else:
-                record_scan_history(
-                    db,
-                    ScanHistory(
-                        hostname=hostname,
-                        port=port,
-                        status="failure",
-                        error_message=result.error_message,
-                    ),
-                )
-            imported += 1
+    for hostname, port, result in await asyncio.gather(*[_scan_one(j) for j in scan_jobs]):
+        if not isinstance(result, ScanError):
+            await store_scanned_async(result, db)
+            record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
+        else:
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname=hostname,
+                    port=port,
+                    status="failure",
+                    error_message=result.error_message,
+                ),
+            )
+        imported += 1
     if errors and imported == 0:
         logger.warning("CSV import failed: %s", errors[:3])
         return RedirectResponse(
@@ -376,7 +374,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         source_ip=resolve_source_ip(request),
     )
     s = _get_settings(request)
-    result = scan_host(
+    result = await scan_host_async(
         host.hostname,
         host.port,
         allow_private=s.allow_private,
@@ -384,7 +382,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         dns_servers=s.dns_servers,
     )
     if not isinstance(result, ScanError):
-        store_scanned(result, db)
+        await store_scanned_async(result, db)
         record_scan_history(
             db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
         )

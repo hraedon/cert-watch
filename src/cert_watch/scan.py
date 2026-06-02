@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 import ipaddress
@@ -19,6 +20,7 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
+from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.scan")
 
@@ -511,7 +513,7 @@ def scan_host(
     resulting IP is pinned for the entire scan (DNS-rebinding hardening, BC-063).
     """
     last_error: ScanError | None = None
-    for attempt in range(1 + retries):
+    for _ in backoff_range(retries, SCAN_RETRY_BACKOFF, strategy="exponential"):
         result = _scan_host_once(
             hostname, port, timeout=timeout, verify=verify,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
@@ -520,9 +522,6 @@ def scan_host(
         if isinstance(result, ScannedEntry):
             return result
         last_error = result
-        if attempt < retries:
-            import time
-            time.sleep(SCAN_RETRY_BACKOFF * (2 ** attempt))
     return last_error
 
 
@@ -857,3 +856,47 @@ def _evaluate_and_store_posture(
         tls_verified=entry.tls_verified,
     )
     return result.grade
+
+
+async def scan_host_async(
+    hostname: str,
+    port: int = 443,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    verify: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+    dns_servers: tuple[str, ...] = (),
+    retries: int = SCAN_RETRIES,
+    pinned_ip: str | None = None,
+) -> ScannedEntry | ScanError:
+    """Async wrapper around scan_host — runs the blocking TLS scan in a thread."""
+    return await asyncio.to_thread(
+        scan_host,
+        hostname,
+        port,
+        timeout=timeout,
+        verify=verify,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+        dns_servers=dns_servers,
+        retries=retries,
+        pinned_ip=pinned_ip,
+    )
+
+
+async def store_scanned_async(
+    entry: ScannedEntry,
+    repo_path_or_repo,
+    *,
+    drift_alerts: bool = True,
+    check_revocation: bool = False,
+) -> str:
+    """Async wrapper around store_scanned — runs the blocking DB writes in a thread."""
+    return await asyncio.to_thread(
+        store_scanned,
+        entry,
+        repo_path_or_repo,
+        drift_alerts=drift_alerts,
+        check_revocation=check_revocation,
+    )

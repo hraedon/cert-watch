@@ -204,9 +204,9 @@ def test_csrf_hidden_field_accepted(tmp_path, monkeypatch):
     token = make_csrf_token(sid_cookie)
 
     from cert_watch.scan import ScanError
-    monkeypatch.setattr("cert_watch.routes.hosts.scan_host", lambda *a, **kw: ScanError(
-        hostname="x", port=443, error_message="test"
-    ))
+    async def fake_scan_error(*a, **kw):
+        return ScanError(hostname="x", port=443, error_message="test")
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_error)
 
     with TestClient(app_mod.app, cookies={"cw_sid": sid_cookie}) as client:
         r = client.post("/hosts", data={
