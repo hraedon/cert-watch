@@ -149,7 +149,9 @@ docker logs cert-watch 2>&1 | grep scan
 
 **3. Scan retry behavior.** `scan_host()` retries transient failures (connection refused, timeout) up to 2 times with exponential backoff. Check logs for retry attempts.
 
-**4. Private IP scanning.** Controlled by `CERT_WATCH_ALLOW_PRIVATE_IPS` (default: `1` — enabled). When set to `0`, RFC 1918 and ULA addresses are rejected. Loopback and link-local are always blocked regardless of this setting.
+**4. Private IP scanning.** Controlled by `CERT_WATCH_ALLOW_PRIVATE_IPS` (default: `1` — enabled). When set to `0`, RFC 1918 and ULA addresses are rejected. Loopback, link-local, and the cloud metadata endpoint (`169.254.169.254`) are always blocked regardless of this setting.
+
+**4a. Scan allowlist (recommended for sensitive sites).** `CERT_WATCH_ALLOWED_SUBNETS` takes a comma-separated CIDR list (e.g. `10.0.0.0/8,192.168.0.0/16`). When set, a private target is allowed only if it falls inside one of those ranges — everything else private is refused, making internal scanning an explicit, auditable capability. Public hosts remain scannable. The first-run setup wizard prompts for these ranges; you can change them later via the env var. For defence-in-depth, also restrict egress at the network layer (the shipped `deploy/k8s/networkpolicy.yaml` is permissive toward internal ranges by default — tighten it to your approved targets).
 
 **5. Custom DNS.** Set `CERT_WATCH_DNS_SERVERS` to a comma-separated list of DNS server IPs (e.g., `10.0.0.1,10.0.0.2`) for resolving internal hostnames. Queries are sent via UDP port 53 for A/AAAA records. Falls back to system resolver if custom DNS returns no results.
 
@@ -168,6 +170,7 @@ docker logs cert-watch 2>&1 | grep scan
 | `CERT_WATCH_SCHED_MIN` | `0` | Daily scan minute |
 | `CERT_WATCH_TLS_VERIFY` | `0` | Verify TLS when scanning |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Allow scanning private IPs |
+| `CERT_WATCH_ALLOWED_SUBNETS` | — | CIDR allowlist scoping which private ranges may be scanned |
 | `CERT_WATCH_DNS_SERVERS` | — | Custom DNS servers (comma-separated) |
 | `CERT_WATCH_LOG_FORMAT` | `text` | `text` or `json` |
 | `CERT_WATCH_AUTH_SECRET` | random | Session signing key (persist for restart survival) |
@@ -291,9 +294,13 @@ For production, use these settings:
 AUTH_PROVIDER=ldap              # or entra
 CERT_WATCH_LOG_FORMAT=json      # structured logs for SIEM
 CERT_WATCH_AUTH_SECRET=<stable-key>  # persist sessions across restarts
-CERT_WATCH_ALLOW_PRIVATE_IPS=0  # block private IP scanning unless needed
+CERT_WATCH_ALLOWED_SUBNETS=10.0.0.0/8,192.168.0.0/16  # only scan approved internal ranges
 CERT_WATCH_COOKIE_SECURE=1      # HTTPS-only cookies (default)
 ```
+
+Scope `CERT_WATCH_ALLOWED_SUBNETS` to exactly the internal networks you intend
+to monitor (or use `CERT_WATCH_ALLOW_PRIVATE_IPS=0` to block all private
+scanning). Pair it with a network-layer egress restriction for defence in depth.
 
 Ensure `CERT_WATCH_AUTH_SECRET` is set to a stable value. Without it, a random key is generated on every restart, invalidating all active sessions.
 

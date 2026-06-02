@@ -131,6 +131,30 @@ All configuration is via environment variables.
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
+| `CERT_WATCH_ALLOWED_SUBNETS` | — | Comma-separated CIDR allowlist scoping which **private** ranges may be scanned (e.g. `10.0.0.0/8,192.168.0.0/16`). When set, a private target is allowed only if it falls inside one of these ranges; public hosts stay scannable and loopback/link-local (incl. cloud metadata) stay blocked. Makes internal scanning an explicit, auditable capability. |
+
+### Scanning & SSRF policy
+
+cert-watch scans hosts you add to it (a TLS handshake to read the certificate),
+so the set of addresses it may reach is a security boundary. The defaults suit
+the primary use case — monitoring internal certificates in a self-hosted, AD
+shop — but should be tightened for sensitive environments:
+
+- **Loopback, link-local, and the cloud metadata endpoint (`169.254.169.254`)
+  are always blocked**, regardless of configuration.
+- **Public hosts are always scannable** (reading a public cert is the baseline
+  function).
+- **Private ranges** (RFC 1918 / ULA) are governed by policy:
+  - Default (`CERT_WATCH_ALLOW_PRIVATE_IPS=1`, no allowlist): all private ranges
+    are scannable.
+  - **Recommended for sensitive deployments:** set `CERT_WATCH_ALLOWED_SUBNETS`
+    to exactly the internal ranges you intend to monitor. Anything outside them
+    is refused. The first-run setup wizard prompts for these ranges.
+  - `CERT_WATCH_ALLOW_PRIVATE_IPS=0` blocks all private scanning.
+- For defence-in-depth, also constrain egress at the network layer (k8s
+  `NetworkPolicy`, an egress proxy, or a dedicated network segment). The shipped
+  `deploy/k8s/networkpolicy.yaml` is permissive toward internal ranges by
+  default to match the app default — tighten it alongside the allowlist.
 
 ### Alerts (SMTP)
 
