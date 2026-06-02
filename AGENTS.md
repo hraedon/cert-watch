@@ -58,11 +58,15 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-3 open design/latent issues: 0 critical, 0 high, 2 medium, 1 low.
+5 open design/latent issues: 0 critical, 0 high, 3 medium, 2 low.
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
 - **BC-061** (medium) — Chain validation is name-matching only, never verifies cryptographic signatures
+- **BC-070** (medium) — CSRF token accepted via query parameter on state-changing routes
+- **BC-071** (medium) — OAuth userinfo fallback has no nonce binding
+- **BC-073** (medium) — `_list_unified_entries_raw` loads full inventory into memory (Plan 018 B2)
 - **BC-064** (low) — TLS verification off by default; `verified` not persisted in scan_posture
+- **BC-072** (low) — CompositeProvider timing leak on local admin username enumeration
 - **BC-050** (medium) — `delete_certificate_cascade` doesn't clean `cert_history`, `alert_group_certs`
 
 ### Planned consolidation
