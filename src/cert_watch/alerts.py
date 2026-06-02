@@ -258,6 +258,17 @@ def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
     return msg
 
 
+def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
+    """Strip webhook URL and header values from error messages to avoid logging secrets."""
+    if config and config.url:
+        msg = msg.replace(config.url, "***")
+    if config and config.headers:
+        for val in config.headers.values():
+            if len(val) >= 4:
+                msg = msg.replace(val, "***")
+    return msg
+
+
 def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     """Send via SMTP. See AC-03/AC-06."""
     if config is None:
@@ -533,7 +544,10 @@ def send_expiry_digest(
             with _urlreq.urlopen(req, timeout=webhook_config.timeout) as resp:
                 return 200 <= resp.status < 300
         except Exception as exc:
-            logger.warning("digest webhook failed: %s", exc)
+            logger.warning(
+                "digest webhook failed: %s",
+                _sanitize_webhook_error(str(exc), webhook_config),
+            )
             return False
 
     return False

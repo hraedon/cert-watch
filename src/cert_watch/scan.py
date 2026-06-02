@@ -20,6 +20,8 @@ from pathlib import Path
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
 
+logger = logging.getLogger("cert_watch.scan")
+
 DEFAULT_TIMEOUT = 10.0
 SCAN_RETRIES = 2
 SCAN_RETRY_BACKOFF = 1.0
@@ -738,8 +740,7 @@ def store_scanned(
                 check_revocation=check_revocation,
             )
         except Exception:  # noqa: BLE001
-            import logging
-            logging.getLogger("cert_watch.scan").debug(
+            logger.debug(
                 "posture evaluation skipped for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
@@ -772,15 +773,13 @@ def store_scanned(
                         events=drift_events,
                     )
                 except Exception:  # noqa: BLE001
-                    import logging
-                    logging.getLogger("cert_watch.scan").debug(
+                    logger.debug(
                         "drift alert creation skipped for %s:%s", entry.host, entry.port,
                         exc_info=True,
                     )
         except Exception:  # noqa: BLE001
-            import logging
-            logging.getLogger("cert_watch.scan").debug(
-                "drift detection skipped for %s:%s", entry.host, entry.port,
+            logger.warning(
+                "drift detection failed for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
         try:
@@ -794,9 +793,8 @@ def store_scanned(
                 protocol_version=entry.protocol_version,
             )
         except Exception:  # noqa: BLE001
-            import logging
-            logging.getLogger("cert_watch.scan").debug(
-                "cert_history write skipped for %s:%s", entry.host, entry.port,
+            logger.warning(
+                "cert_history write failed for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
         return leaf_id
