@@ -139,6 +139,14 @@ async def lifespan(app: FastAPI):
     # BC-083: secure-by-default — refuse to serve open on non-loopback
     # unless AUTH_PROVIDER is configured or CERT_WATCH_ALLOW_UNAUTH=1 is set.
     # Loopback binds (local dev, test suite) are always exempt.
+    #
+    # CERT_WATCH_HOST is the source of truth for the bind address: the cert-watch
+    # entrypoint (__main__) normalizes it to the host it actually passes to
+    # uvicorn (whether that came from --host or the env), so this check can't
+    # diverge from the real bind. Launches that bypass the entrypoint (e.g. a
+    # raw `uvicorn cert_watch.app:app --host 127.0.0.1`) must set CERT_WATCH_HOST
+    # to their bind address or CERT_WATCH_ALLOW_UNAUTH=1; otherwise this fails
+    # closed (the secure direction). See BC-090.
     if isinstance(auth, NoAuthProvider) and not s.allow_unauth:
         bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
         if bind_host not in ("127.0.0.1", "::1", "localhost"):
@@ -146,8 +154,10 @@ async def lifespan(app: FastAPI):
                 "cert-watch refuses to run without authentication on a non-loopback "
                 f"address ({bind_host}). Either:\n"
                 "  1) Set AUTH_PROVIDER=local (and create a local admin via /setup),\n"
-                "  2) Set AUTH_PROVIDER=ldap or AUTH_PROVIDER=oauth with appropriate config, or\n"
-                "  3) Set CERT_WATCH_ALLOW_UNAUTH=1 (not recommended for production).\n"
+                "  2) Set AUTH_PROVIDER=ldap or AUTH_PROVIDER=oauth with appropriate config,\n"
+                "  3) Set CERT_WATCH_ALLOW_UNAUTH=1 (not recommended for production), or\n"
+                "  4) Bind loopback: pass --host 127.0.0.1 (or set CERT_WATCH_HOST) and\n"
+                "     front the app with a reverse proxy / IIS that terminates TLS.\n"
                 "Loopback binds (127.0.0.1 / ::1) are always exempt."
             )
     alert_cfg = s.build_alert_config()

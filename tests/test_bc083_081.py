@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 import sqlite3
-from unittest.mock import MagicMock
+from unittest.mock import patch
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import (
-    NoAuthProvider,
     create_session,
     set_signing_key,
     validate_session,
@@ -20,105 +22,129 @@ from cert_watch.middleware import set_csrf_secret
 # ---------- BC-083: Secure-by-default auth posture ----------
 
 
+def _drive_lifespan(app) -> None:
+    """Enter and cleanly exit the app's real lifespan once.
+
+    Exercises the actual ``cert_watch.app`` startup path (BC-083 check,
+    scheduler start/stop) rather than re-implementing its boolean. Raises
+    whatever the lifespan raises (e.g. SystemExit).
+    """
+
+    async def _run() -> None:
+        async with app.router.lifespan_context(app):
+            pass
+
+    asyncio.run(_run())
+
+
+def _clean_env(monkeypatch, tmp_path) -> None:
+    """Strip ambient auth/host config so each test controls the inputs."""
+    for var in (
+        "AUTH_PROVIDER",
+        "CERT_WATCH_ALLOW_UNAUTH",
+        "CERT_WATCH_HOST",
+        "CERT_WATCH_AUTH_SECRET",
+        "CERT_WATCH_CSRF_SECRET",
+        "CERT_WATCH_LOCAL_ADMIN_USER",
+        "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+
+
 class TestBC083SecureByDefault:
-    """Verify that the app refuses to start without auth on non-loopback."""
+    """Drive the *real* lifespan check (cert_watch.app) — not a replica of its
+    boolean. The replica tests this replaced never read CERT_WATCH_HOST, which
+    is why they missed the IIS regression (BC-090)."""
 
-    LOOPBACK_ADDRS = ("127.0.0.1", "::1", "localhost")
+    def test_lifespan_systemexit_on_nonloopback_no_auth(self, tmp_path, monkeypatch):
+        """No auth + non-loopback bind + no ALLOW_UNAUTH => refuse to start."""
+        from cert_watch.app import create_app
 
-    def test_needs_setup_no_host_count_condition(self):
-        """BC-083: needs_setup is true without auth and without allow_unauth,
-        regardless of host count. The old host_count==0 gate is removed."""
-        auth = NoAuthProvider()
-        s = MagicMock()
-        s.allow_unauth = False
-        setup_complete = False
+        _clean_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
 
-        needs_setup = isinstance(auth, NoAuthProvider) and not s.allow_unauth and not setup_complete
-        assert needs_setup is True
+        app = create_app()
+        with pytest.raises(SystemExit) as exc:
+            _drive_lifespan(app)
+        assert "0.0.0.0" in str(exc.value)
 
-    def test_needs_setup_false_with_auth(self):
-        """With a real auth provider, needs_setup is false."""
+    def test_lifespan_starts_on_loopback_no_auth(self, tmp_path, monkeypatch):
+        """Loopback bind is exempt even with no auth (the IIS / dev case)."""
+        from cert_watch.app import create_app
+
+        _clean_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("CERT_WATCH_HOST", "127.0.0.1")
+
+        # Should not raise.
+        _drive_lifespan(create_app())
+
+    def test_lifespan_starts_with_allow_unauth_on_nonloopback(self, tmp_path, monkeypatch):
+        """CERT_WATCH_ALLOW_UNAUTH=1 bypasses the refusal on any bind."""
+        from cert_watch.app import create_app
+
+        _clean_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
+        monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+
+        _drive_lifespan(create_app())
+
+    def test_lifespan_starts_when_auth_configured_on_nonloopback(self, tmp_path, monkeypatch):
+        """A real auth provider exempts the bind regardless of host."""
+        from cert_watch.app import create_app
         from cert_watch.auth import LocalAdminProvider, _scrypt_hash
 
-        auth = LocalAdminProvider("admin", _scrypt_hash("pass"))
-        s = MagicMock()
-        s.allow_unauth = False
-        setup_complete = False
+        _clean_env(monkeypatch, tmp_path)
+        monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
 
-        needs_setup = isinstance(auth, NoAuthProvider) and not s.allow_unauth and not setup_complete
-        assert needs_setup is False
+        # Inject a real provider; the lifespan must not refuse to start.
+        app = create_app(auth_provider=LocalAdminProvider("admin", _scrypt_hash("pw")))
+        _drive_lifespan(app)
 
-    def test_needs_setup_false_with_allow_unauth(self):
-        """With ALLOW_UNAUTH=1, needs_setup is false."""
-        auth = NoAuthProvider()
-        s = MagicMock()
-        s.allow_unauth = True
-        setup_complete = False
 
-        needs_setup = isinstance(auth, NoAuthProvider) and not s.allow_unauth and not setup_complete
-        assert needs_setup is False
+class TestEntrypointHostNormalization:
+    """BC-090: __main__ is the single source of truth for the bind host — it
+    normalizes CERT_WATCH_HOST to what it passes to uvicorn, so the BC-083
+    check (which reads that env var) can never diverge from the real bind."""
 
-    def test_needs_setup_false_after_setup_complete(self):
-        """After setup is complete, needs_setup is false."""
-        auth = NoAuthProvider()
-        s = MagicMock()
-        s.allow_unauth = False
-        setup_complete = True
+    def test_host_arg_normalizes_env(self, monkeypatch):
+        """`--host 127.0.0.1` sets CERT_WATCH_HOST=127.0.0.1 (the IIS path)."""
+        from cert_watch.__main__ import main
 
-        needs_setup = isinstance(auth, NoAuthProvider) and not s.allow_unauth and not setup_complete
-        assert needs_setup is False
+        monkeypatch.delenv("CERT_WATCH_HOST", raising=False)
+        with patch("uvicorn.run") as run:
+            main(["--host", "127.0.0.1", "--port", "12345"])
 
-    def test_system_exit_nonloopback_no_auth(self, tmp_path, monkeypatch):
-        """BC-083: lifespan raises SystemExit for non-loopback + no auth + no ALLOW_UNAUTH."""
-        from cert_watch.auth import NoAuthProvider
-        from cert_watch.config import Settings
+        assert os.environ["CERT_WATCH_HOST"] == "127.0.0.1"
+        _, kwargs = run.call_args
+        assert kwargs["host"] == "127.0.0.1"
+        assert kwargs["port"] == 12345
 
-        s = Settings(
-            db_path=tmp_path / "test.sqlite3",
-            data_dir=tmp_path,
-            auth_provider="",
-            allow_unauth=False,
-        )
-        auth = NoAuthProvider()
+    def test_host_arg_overrides_env(self, monkeypatch):
+        """--host wins over a pre-set CERT_WATCH_HOST."""
+        from cert_watch.__main__ import main
 
-        # Verify the condition logic (not a full lifespan test — that's hard
-        # to do without TestClient starting the app, which would raise SystemExit)
-        assert isinstance(auth, NoAuthProvider)
-        assert not s.allow_unauth
-        # Non-loopback host should trigger SystemExit
-        bind_host = "0.0.0.0"
-        should_exit = (
-            isinstance(auth, NoAuthProvider)
-            and not s.allow_unauth
-            and bind_host not in self.LOOPBACK_ADDRS
-        )
-        assert should_exit
+        monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
+        with patch("uvicorn.run") as run:
+            main(["--host", "127.0.0.1"])
 
-    def test_loopback_exempt(self, tmp_path):
-        """BC-083: loopback binds always bypass the SystemExit check."""
-        from cert_watch.auth import NoAuthProvider
+        assert os.environ["CERT_WATCH_HOST"] == "127.0.0.1"
+        assert run.call_args.kwargs["host"] == "127.0.0.1"
 
-        auth = NoAuthProvider()
-        # For loopback addresses, the "should exit" check should be False
-        for bind_host in self.LOOPBACK_ADDRS:
-            should_exit = isinstance(auth, NoAuthProvider) and bind_host not in self.LOOPBACK_ADDRS
-            assert not should_exit, f"{bind_host} should be exempt"
+    def test_default_host_falls_back_to_env_then_default(self, monkeypatch):
+        """No --host: use CERT_WATCH_HOST if set, else 0.0.0.0."""
+        from cert_watch.__main__ import main
 
-    def test_allow_unauth_bypasses_system_exit(self, tmp_path, monkeypatch):
-        """BC-083: CERT_WATCH_ALLOW_UNAUTH=1 skips the SystemExit."""
-        monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-        from cert_watch.config import Settings
+        monkeypatch.setenv("CERT_WATCH_HOST", "10.0.0.5")
+        with patch("uvicorn.run") as run:
+            main([])
+        assert run.call_args.kwargs["host"] == "10.0.0.5"
 
-        s = Settings(
-            db_path=tmp_path / "test.sqlite3",
-            data_dir=tmp_path,
-            auth_provider="",
-            allow_unauth=True,
-        )
-        # allow_unauth=True means the check should not trigger
-        auth = NoAuthProvider()
-        should_exit = isinstance(auth, NoAuthProvider) and not s.allow_unauth
-        assert not should_exit
+        monkeypatch.delenv("CERT_WATCH_HOST", raising=False)
+        with patch("uvicorn.run") as run:
+            main([])
+        assert run.call_args.kwargs["host"] == "0.0.0.0"
+        assert os.environ["CERT_WATCH_HOST"] == "0.0.0.0"
 
 
 # ---------- BC-081: Server-side session revocation ----------
