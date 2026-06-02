@@ -395,35 +395,27 @@ async def auth_middleware(request: Request, call_next):
     return RedirectResponse(url="/login", status_code=303)
 
 
-def _csp_header(nonce: str) -> str:
-    """Build the Content-Security-Policy header for a per-request nonce.
-
-    Scripts must carry the matching ``nonce-`` attribute; ``'unsafe-inline'``
-    is no longer permitted for ``script-src`` (Plan 020 S4), so an injected
-    ``<script>`` without the nonce is refused by the browser. ``style-src``
-    keeps ``'unsafe-inline'`` because templates bind dynamic CSS custom
-    properties inline.
-    """
-    return (
-        "default-src 'self'; "
-        f"script-src 'self' 'nonce-{nonce}'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; "
-        "connect-src 'self'; "
-        "frame-ancestors 'none'"
-    )
+# NOTE: script-src keeps 'unsafe-inline'. The Plan 020 S4 nonce approach was
+# reverted (BC-075): the templates use ~24 inline event-handler attributes
+# (onclick=, onchange=) which CSP nonces cannot whitelist — only <script>
+# blocks. Removing 'unsafe-inline' broke every button. Proper hardening
+# (handlers -> addEventListener) is best done during the design-session
+# template rewrite. style-src needs 'unsafe-inline' for dynamic CSS custom
+# properties bound inline.
+_CSP_HEADER = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'"
+)
 
 
 async def security_headers_middleware(request: Request, call_next):
-    """Add security response headers (CSP, X-Content-Type-Options, etc.).
-
-    Generates a per-request CSP nonce and stashes it on ``request.state`` so
-    templates can stamp it onto their inline ``<script>`` blocks.
-    """
-    nonce = secrets.token_urlsafe(16)
-    request.state.csp_nonce = nonce
+    """Add security response headers (CSP, X-Content-Type-Options, etc.)."""
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = _csp_header(nonce)
+    response.headers["Content-Security-Policy"] = _CSP_HEADER
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     return response

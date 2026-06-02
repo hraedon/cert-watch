@@ -384,7 +384,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script nonce="{{ request.state.csp_nonce }}">
+<script>
 function toggleNotes() {
   var view = document.getElementById('notes-view');
   var edit = document.getElementById('notes-edit');

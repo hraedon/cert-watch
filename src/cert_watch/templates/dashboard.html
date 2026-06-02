@@ -529,7 +529,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script nonce="{{ request.state.csp_nonce }}">
+<script>
 function openSlide() {
   document.getElementById('slide-bg').classList.add('on');
   document.getElementById('slide-panel').classList.add('on');

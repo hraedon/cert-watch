@@ -1,6 +1,5 @@
 """Tests for Plan 020 S4 (CSP nonces) and BC-070 (CSRF query-param removal)."""
 
-import re
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -16,45 +15,23 @@ def _reload_app(tmp_path, monkeypatch):
     return SimpleNamespace(app=create_app(settings=Settings.from_env()))
 
 
-# ── CSP nonce (Plan 020 S4) ────────────────────────────────────────────────
+# ── Security headers ────────────────────────────────────────────────────────
+# NOTE: Plan 020 S4 (CSP nonce) was reverted — see BC-075. CSP keeps
+# 'unsafe-inline' for script-src because the templates use inline event-handler
+# attributes (onclick=) that nonces cannot whitelist. Proper hardening is
+# deferred to the design-session template rewrite.
 
 
-def test_csp_header_uses_nonce_not_unsafe_inline_for_scripts(tmp_path, monkeypatch):
+def test_security_headers_present(tmp_path, monkeypatch):
     app_mod = _reload_app(tmp_path, monkeypatch)
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     assert r.status_code == 200
     csp = r.headers.get("Content-Security-Policy", "")
-    # script-src must carry a nonce and must NOT allow unsafe-inline.
-    m = re.search(r"script-src ([^;]+);", csp)
-    assert m, f"no script-src directive in CSP: {csp!r}"
-    script_src = m.group(1)
-    assert "'nonce-" in script_src
-    assert "'unsafe-inline'" not in script_src
-
-
-def test_csp_nonce_present_in_rendered_script_tags(tmp_path, monkeypatch):
-    app_mod = _reload_app(tmp_path, monkeypatch)
-    with TestClient(app_mod.app) as client:
-        r = client.get("/")
-    assert r.status_code == 200
-    csp = r.headers.get("Content-Security-Policy", "")
-    nonce = re.search(r"'nonce-([^']+)'", csp).group(1)
-    # The nonce used in the header must be the one stamped on the page's
-    # inline <script> blocks.
-    assert f'<script nonce="{nonce}">' in r.text
-
-
-def test_csp_nonce_is_unique_per_request(tmp_path, monkeypatch):
-    app_mod = _reload_app(tmp_path, monkeypatch)
-    with TestClient(app_mod.app) as client:
-        n1 = re.search(
-            r"'nonce-([^']+)'", client.get("/").headers["Content-Security-Policy"]
-        ).group(1)
-        n2 = re.search(
-            r"'nonce-([^']+)'", client.get("/").headers["Content-Security-Policy"]
-        ).group(1)
-    assert n1 != n2
+    assert "default-src 'self'" in csp
+    assert "frame-ancestors 'none'" in csp
+    assert r.headers.get("X-Content-Type-Options") == "nosniff"
+    assert r.headers.get("X-Frame-Options") == "DENY"
 
 
 # ── BC-070: CSRF token no longer accepted via query parameter ───────────────
