@@ -532,7 +532,8 @@ def send_expiry_digest(
         try:
             with _urlreq.urlopen(req, timeout=webhook_config.timeout) as resp:
                 return 200 <= resp.status < 300
-        except Exception:
+        except Exception as exc:
+            logger.warning("digest webhook failed: %s", exc)
             return False
 
     return False
