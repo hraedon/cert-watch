@@ -199,23 +199,22 @@ def malformed_blob(tmp_path: Path) -> Path:
 
 @pytest.fixture(autouse=True)
 def _isolated_data_dir(tmp_path, monkeypatch):
-    """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide."""
+    """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide.
+
+    No module reloading (Plan 018 B1): config reads env live, and apps are built
+    via ``create_app`` whose lifespan resolves a SecurityContext from these env
+    vars. The module-level signing/CSRF globals are still seeded with
+    deterministic test values for direct-call unit tests (e.g. session/CSRF
+    round-trip helpers and OAuth state signing) that don't go through a request.
+    """
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
-    import importlib
 
-    from cert_watch import config as _config
     from cert_watch.auth import set_signing_key
     from cert_watch.middleware import set_csrf_secret
 
-    importlib.reload(_config)
-
-    from cert_watch import app as _app
-    if hasattr(_app.app.state, "needs_setup"):
-        _app.app.state.needs_setup = False
-    # Set deterministic signing keys so session tokens survive lifespan restarts
     set_signing_key("test-auth-secret-for-tests")
     set_csrf_secret("test-csrf-secret-for-tests")
     yield
@@ -223,33 +222,29 @@ def _isolated_data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def reload_app(monkeypatch, tmp_path):
-    """Return a helper that reloads cert_watch.config and cert_watch.app.
+    """Build a fresh app via ``create_app()`` — no module reloading (Plan 018 B1).
 
-    Usage::
-
-        app_mod = reload_app()                # basic reload
-        app_mod = reload_app(AUTH_PROVIDER=... )  # with extra env vars
+    Returns a shim exposing ``.app`` (kept for call-site compatibility:
+    ``app_mod = reload_app(); TestClient(app_mod.app)``). Env kwargs configure
+    the build, e.g. ``reload_app(AUTH_PROVIDER="ldap", ...)``; ``Settings`` and
+    the auth provider are then resolved from that environment and injected into
+    ``create_app``, so the app's lifespan uses them without reloading modules.
 
     The ``monkeypatch`` fixture ensures env vars are restored after the test.
     """
-    import importlib
+    from types import SimpleNamespace
 
-    def _reload(**env):
+    def _build(**env):
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         for k, v in env.items():
             monkeypatch.setenv(k, v)
-        from cert_watch import config as _config
+        from cert_watch.app import create_app
+        from cert_watch.config import Settings
 
-        importlib.reload(_config)
-        from cert_watch import app as app_mod
+        application = create_app(settings=Settings.from_env())
+        return SimpleNamespace(app=application)
 
-        importlib.reload(app_mod)
-        # Ensure setup redirect doesn't interfere with existing tests
-        if hasattr(app_mod.app.state, "needs_setup"):
-            app_mod.app.state.needs_setup = False
-        return app_mod
-
-    return _reload
+    return _build
 
 
 # Also export the private builder for tests that want a custom expiry.

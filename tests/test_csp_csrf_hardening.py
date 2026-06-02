@@ -1,21 +1,19 @@
 """Tests for Plan 020 S4 (CSP nonces) and BC-070 (CSRF query-param removal)."""
 
-import importlib
 import re
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 
 def _reload_app(tmp_path, monkeypatch):
+    """Build a fresh app via create_app() (no module reloading, Plan 018 B1)."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    from cert_watch import config as _config
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
 
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
+    return SimpleNamespace(app=create_app(settings=Settings.from_env()))
 
 
 # ── CSP nonce (Plan 020 S4) ────────────────────────────────────────────────
@@ -67,12 +65,10 @@ def test_csrf_query_param_token_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    from cert_watch import config as _config
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
 
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
+    app_mod = SimpleNamespace(app=create_app(settings=Settings.from_env()))
 
     with TestClient(app_mod.app) as client:
         r = client.get("/")

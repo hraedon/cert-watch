@@ -18,6 +18,7 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
+from cert_watch.security import SecurityContext  # noqa: F401  (re-exported)
 
 logger = logging.getLogger("cert_watch.middleware")
 
@@ -39,19 +40,33 @@ def set_csrf_secret(value: str) -> None:
     _CSRF_SECRET = value
 
 
-def make_csrf_token(session_id: str) -> str:
+def _csrf_key(security: SecurityContext | None) -> str:
+    """Resolve the CSRF secret: the injected SecurityContext, else the
+    module-level import-time fallback (Plan 018 B1)."""
+    return security.csrf_secret if security is not None else _CSRF_SECRET
+
+
+def _request_security(request: Request) -> SecurityContext | None:
+    """The SecurityContext carried on app.state, if the lifespan set one."""
+    return getattr(request.app.state, "security", None)
+
+
+def make_csrf_token(session_id: str, security: SecurityContext | None = None) -> str:
     payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
-    sig = hmac.new(_CSRF_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
     return f"{payload}:{sig}"
 
 
-def validate_csrf_token(token: str, session_id: str) -> bool:
+def validate_csrf_token(
+    token: str, session_id: str, security: SecurityContext | None = None
+) -> bool:
     parts = token.split(":")
     if len(parts) != 3:
         return False
     ts_str, sig = parts[1], parts[2]
     payload = f"{session_id}:{ts_str}"
-    expected = hmac.new(_CSRF_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    key = _csrf_key(security).encode()
+    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:16]
     if not hmac.compare_digest(sig, expected):
         return False
     try:
@@ -253,7 +268,7 @@ async def check_csrf(request: Request) -> str | None:
     if not token:
         return "missing CSRF token"
     session_id = request.cookies.get("cw_sid", "")
-    if not validate_csrf_token(token, session_id):
+    if not validate_csrf_token(token, session_id, _request_security(request)):
         return "invalid or expired CSRF token"
     return None
 
@@ -261,7 +276,7 @@ async def check_csrf(request: Request) -> str | None:
 def get_csrf_context(request: Request) -> dict:
     """Return template context dict with CSRF token for the current session."""
     session_id = get_session_id(request)
-    token = make_csrf_token(session_id)
+    token = make_csrf_token(session_id, _request_security(request))
     return {"csrf_token": token}
 
 
@@ -369,7 +384,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     token = request.cookies.get(SESSION_COOKIE, "")
-    username = validate_session(token)
+    username = validate_session(token, _request_security(request))
     if username:
         request.scope["auth_user"] = username
         return await call_next(request)
@@ -427,7 +442,7 @@ async def require_auth(request: Request) -> str:
     if auth is None or isinstance(auth, NoAuthProvider):
         return ""
     token = request.cookies.get(SESSION_COOKIE, "")
-    username = validate_session(token)
+    username = validate_session(token, _request_security(request))
     if not username:
         raise HTTPException(status_code=401, detail="unauthenticated")
     return username

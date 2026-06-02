@@ -35,6 +35,7 @@ from cert_watch.middleware import (
 from cert_watch.routes import api as route_modules
 from cert_watch.scan import scan_host, store_scanned
 from cert_watch.scheduler import run_scan_now, start_scheduler, stop_scheduler
+from cert_watch.security import SecurityContext
 
 logger = logging.getLogger("cert_watch.app")
 
@@ -84,26 +85,45 @@ def _setup_logging(log_format: str = "text") -> None:
         root.setLevel(logging.INFO)
 
 
+def _resolve_security(s: Settings) -> SecurityContext:
+    """Resolve signing material from env / persisted secrets (Plan 014 + 018 B1).
+
+    The auth secret persists to data_dir/.auth_secret so sessions survive
+    restarts even without the env var; the CSRF secret derives from it unless
+    overridden. Returned as an immutable SecurityContext carried on app.state.
+    """
+    from cert_watch.config import resolve_or_persist_secret
+
+    auth_secret = resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
+    csrf_env = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
+    if csrf_env and csrf_env.strip():
+        csrf_secret = csrf_env.strip()
+    else:
+        csrf_secret = hashlib.sha256((auth_secret + "csrf").encode()).hexdigest()
+    return SecurityContext(signing_key=auth_secret, csrf_secret=csrf_secret)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """FastAPI lifespan: starts the daily scheduler and tears it down on shutdown."""
-    s = Settings.from_env()
+    """FastAPI lifespan: starts the daily scheduler and tears it down on shutdown.
+
+    Dependencies (settings, security, auth provider) may be injected via
+    ``create_app(...)`` for tests; otherwise they are resolved from the
+    environment here (the production path).
+    """
+    s = getattr(app.state, "_injected_settings", None) or Settings.from_env()
     _setup_logging(log_format=s.log_format)
     init_schema(s.db_path)
     _init_rate_db(s.db_path)
 
-    # Persist signing keys across restarts (Plan 014 Slice 1)
-    from cert_watch.config import resolve_or_persist_secret
-    auth_secret = resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
-    set_signing_key(auth_secret)
-    csrf_env = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
-    if csrf_env and csrf_env.strip():
-        set_csrf_secret(csrf_env.strip())
-    else:
-        derived = hashlib.sha256((auth_secret + "csrf").encode()).hexdigest()
-        set_csrf_secret(derived)
+    security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
+    # Phase-1 backward compat: keep the module-level signing/CSRF globals in sync
+    # so fallback paths (OAuth state signing, direct unit-test calls) use the
+    # same keys. The request path reads app.state.security directly.
+    set_signing_key(security.signing_key)
+    set_csrf_secret(security.csrf_secret)
 
-    auth = s.build_auth_provider()
+    auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider()
 
     # Slice 3: setup wizard detection
     host_count = 0
@@ -121,6 +141,7 @@ async def lifespan(app: FastAPI):
     app.state.needs_setup = needs_setup
     app.state.auth_provider = auth
     app.state.settings = s
+    app.state.security = security
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
 
@@ -196,16 +217,37 @@ async def lifespan(app: FastAPI):
     logger.info("cert-watch shutting down")
 
 
-app = FastAPI(title="cert-watch", version=__version__, lifespan=lifespan)
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
+def create_app(
+    *,
+    security: SecurityContext | None = None,
+    auth_provider=None,
+    settings: Settings | None = None,
+) -> FastAPI:
+    """Construct and configure the FastAPI application (Plan 018 B1).
 
-# Register middleware (order matters: last registered = first executed)
-app.middleware("http")(security_headers_middleware)
-app.middleware("http")(rate_limit_headers_middleware)
-app.middleware("http")(csrf_session_middleware)
-app.middleware("http")(setup_redirect_middleware)
-app.middleware("http")(auth_middleware)
+    Dependencies may be injected explicitly (tests) or left ``None`` to be
+    resolved from the environment in the lifespan (production / the module-level
+    ``app`` below). Injected values are stashed on ``app.state`` and consumed by
+    ``lifespan`` when the app starts.
+    """
+    application = FastAPI(title="cert-watch", version=__version__, lifespan=lifespan)
+    application.state._injected_security = security
+    application.state._injected_auth = auth_provider
+    application.state._injected_settings = settings
+    application.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 
-# Mount route modules
-for router in route_modules:
-    app.include_router(router)
+    # Register middleware (order matters: last registered = first executed)
+    application.middleware("http")(security_headers_middleware)
+    application.middleware("http")(rate_limit_headers_middleware)
+    application.middleware("http")(csrf_session_middleware)
+    application.middleware("http")(setup_redirect_middleware)
+    application.middleware("http")(auth_middleware)
+
+    # Mount route modules
+    for router in route_modules:
+        application.include_router(router)
+    return application
+
+
+# Module-level app for uvicorn (`cert_watch.app:app`); deps resolved from env.
+app = create_app()

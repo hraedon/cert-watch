@@ -20,7 +20,13 @@ from cert_watch.auth import (
     check_authz,
     create_session,
 )
-from cert_watch.middleware import _COOKIE_SECURE, _extract_client_ip, check_csrf, check_rate_limit
+from cert_watch.middleware import (
+    _COOKIE_SECURE,
+    _extract_client_ip,
+    _request_security,
+    check_csrf,
+    check_rate_limit,
+)
 
 logger = logging.getLogger("cert_watch.routes.auth")
 
@@ -97,7 +103,7 @@ async def login_submit(
             return RedirectResponse(
                 url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
             )
-    token = create_session(result.username)
+    token = create_session(result.username, _request_security(request))
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
@@ -215,7 +221,7 @@ def oauth_callback(
             "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
-    token = create_session(result.username)
+    token = create_session(result.username, _request_security(request))
     response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie(
         "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
