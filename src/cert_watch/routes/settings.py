@@ -201,35 +201,13 @@ async def save_auth_config(request: Request) -> RedirectResponse:
         kv_set(db, kv_key, val)
 
     # Rebuild auth provider with merged config
-    merged = _effective_config(_AUTH_KEYS, db)
     try:
-        from cert_watch.auth import build_auth_provider
-        provider = merged.get("auth_provider", "")
-        required_groups = [
-            g.strip() for g in merged.get("ldap_required_groups", "").split(",") if g.strip()
-        ]
-        auth = build_auth_provider(
-            provider=provider,
-            ldap_server=merged.get("ldap_server", ""),
-            ldap_base_dn=merged.get("ldap_base_dn", ""),
-            ldap_bind_dn=merged.get("ldap_bind_dn", ""),
-            ldap_bind_password=merged.get("ldap_bind_password", ""),
-            ldap_user_filter=merged.get("ldap_user_filter", "(sAMAccountName={username})"),
-            ldap_start_tls=merged.get("ldap_start_tls", "0") == "1",
-            ldap_ca_cert=merged.get("ldap_ca_cert", ""),
-            ldap_required_groups=required_groups,
-            ldap_connect_timeout=int(merged.get("ldap_connect_timeout", "5") or "5"),
-            oauth_client_id=merged.get("oauth_client_id", ""),
-            oauth_client_secret=merged.get("oauth_client_secret", ""),
-            oauth_issuer_url=merged.get("oauth_issuer_url", ""),
-            oauth_scope=merged.get("oauth_scope", "openid profile email"),
-            oauth_authorization_endpoint=merged.get("oauth_authorization_endpoint", ""),
-            oauth_token_endpoint=merged.get("oauth_token_endpoint", ""),
-            oauth_userinfo_endpoint=merged.get("oauth_userinfo_endpoint", ""),
-        )
+        _rebuild_settings(request, db)
+        s = _get_settings(request)
+        auth = s.build_auth_provider()
         request.app.state.auth_provider = auth
         request.app.state.needs_setup = False
-        logger.info("settings: auth provider updated to '%s'", provider)
+        logger.info("settings: auth provider updated to '%s'", s.auth_provider)
     except (ValueError, Exception) as exc:
         logger.warning("settings: auth provider rebuild failed: %s", exc)
         return RedirectResponse(

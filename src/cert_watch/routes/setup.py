@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
-from cert_watch.auth import _scrypt_hash, build_auth_provider
+from cert_watch.auth import _scrypt_hash
 from cert_watch.config import Settings
 from cert_watch.database import kv_set
 from cert_watch.middleware import get_csrf_context
@@ -118,29 +118,7 @@ async def setup_submit(
         kv_set(db, "setup_complete", "1")
 
         # Rebuild auth provider with the new local admin
-        auth = build_auth_provider(
-            provider=s.auth_provider,
-            ldap_server=s.ldap_server,
-            ldap_base_dn=s.ldap_base_dn,
-            ldap_bind_dn=s.ldap_bind_dn,
-            ldap_bind_password=s.ldap_bind_password,
-            ldap_user_filter=s.ldap_user_filter,
-            ldap_start_tls=s.ldap_start_tls,
-            ldap_ca_cert=s.ldap_ca_cert,
-            ldap_required_groups=list(s.ldap_required_groups),
-            ldap_connect_timeout=s.ldap_connect_timeout,
-            oauth_client_id=s.oauth_client_id,
-            oauth_client_secret=s.oauth_client_secret,
-            oauth_issuer_url=s.oauth_issuer_url,
-            oauth_scope=s.oauth_scope,
-            oauth_authorization_endpoint=s.oauth_authorization_endpoint,
-            oauth_token_endpoint=s.oauth_token_endpoint,
-            oauth_userinfo_endpoint=s.oauth_userinfo_endpoint,
-            allowed_groups=list(s.allowed_groups),
-            allowed_roles=list(s.allowed_roles),
-            local_admin_user=username,
-            local_admin_password_hash=password_hash,
-        )
+        auth = s.build_auth_provider()
         request.app.state.auth_provider = auth
         request.app.state.needs_setup = False
 

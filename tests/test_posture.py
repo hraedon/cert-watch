@@ -311,6 +311,24 @@ class TestPostureEvaluation:
         )
         assert result.grade == "A"
 
+    def test_a_plus_grade_for_tls13_non_443_no_hsts(self):
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(
+            cert=cert, protocol_version="TLSv1.3",
+            hsts=None, chain_status="public", port=8443,
+        )
+        assert result.grade == "A+"
+
+    def test_a_grade_for_tls13_443_no_hsts(self):
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(
+            cert=cert, protocol_version="TLSv1.3",
+            hsts=None, chain_status="public", port=443,
+        )
+        assert result.grade == "A"
+
 
 class TestPostureStorage:
     """Tests for storing and retrieving posture data from the database."""

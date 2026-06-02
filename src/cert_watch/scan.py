@@ -707,7 +707,13 @@ def _scan_host_via_openssl(
     )
 
 
-def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
+def store_scanned(
+    entry: ScannedEntry,
+    repo_path_or_repo,
+    *,
+    drift_alerts: bool = True,
+    check_revocation: bool = False,
+) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
     (so callers can pass the db path directly and we wire up source/hostname/port).
@@ -729,6 +735,7 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
         try:
             posture_grade = _evaluate_and_store_posture(
                 repo_path_or_repo, leaf_id, entry,
+                check_revocation=check_revocation,
             )
         except Exception:  # noqa: BLE001
             import logging
@@ -755,18 +762,15 @@ def store_scanned(entry: ScannedEntry, repo_path_or_repo) -> str:
                 key_algo=key_algo,
                 sig_algo=sig_algo,
             )
-            if drift_events:
+            if drift_events and drift_alerts:
                 try:
-                    import cert_watch.config as _cfg
-                    _s = _cfg.Settings.from_env()
-                    if _s.drift_alerts:
-                        create_drift_alert(
-                            repo_path_or_repo,
-                            cert_id=leaf_id,
-                            hostname=entry.host,
-                            port=entry.port,
-                            events=drift_events,
-                        )
+                    create_drift_alert(
+                        repo_path_or_repo,
+                        cert_id=leaf_id,
+                        hostname=entry.host,
+                        port=entry.port,
+                        events=drift_events,
+                    )
                 except Exception:  # noqa: BLE001
                     import logging
                     logging.getLogger("cert_watch.scan").debug(
@@ -808,6 +812,8 @@ def _evaluate_and_store_posture(
     db_path: str | Path,
     cert_id: str,
     entry: ScannedEntry,
+    *,
+    check_revocation: bool = False,
 ) -> str:
     """Evaluate TLS posture and store the result. Returns the grade string."""
     from cert_watch.cert_chain import chain_status
@@ -830,20 +836,13 @@ def _evaluate_and_store_posture(
 
     cs = chain_status(cert, chain, anchors) if chain else None
 
-    # Read revocation check toggle from config
-    try:
-        import cert_watch.config as _cfg
-        _s = _cfg.Settings.from_env()
-        _check_revocation = _s.check_revocation
-    except Exception:
-        _check_revocation = False
-
     result = evaluate_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
         chain_status=cs,
         hsts=entry.hsts,
-        check_revocation=_check_revocation,
+        check_revocation=check_revocation,
+        port=entry.port,
     )
 
     store_scan_posture(

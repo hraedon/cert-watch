@@ -150,6 +150,7 @@ def evaluate_posture(
     chain_status: str | None = None,
     check_revocation: bool = False,
     revocation_timeout: int = 5,
+    port: int = 443,
 ) -> PostureResult:
     """Evaluate TLS posture grade and lint findings from certificate data.
 
@@ -349,9 +350,14 @@ def evaluate_posture(
     else:
         grade = "F"
 
-    # A+ requires TLS 1.3 + HSTS. Both are now populated by scan_host()
-    # via _probe_hsts() and the TLS version from the socket.
-    if grade == "A" and protocol_version and "1.3" in protocol_version and hsts is True:
+    # A+ requires TLS 1.3 + HSTS on port 443.  HSTS is a 443/HTTP concept,
+    # so well-configured TLS services on non-443 ports can still earn A+.
+    if (
+        grade == "A"
+        and protocol_version
+        and "1.3" in protocol_version
+        and (hsts is True or port != 443)
+    ):
         grade = "A+"
 
     return PostureResult(

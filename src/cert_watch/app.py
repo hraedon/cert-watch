@@ -172,7 +172,11 @@ async def lifespan(app: FastAPI):
             alert_fn=lambda: {"sent": 0, "failed": 0},
             db_path=s.db_path,
             host_provider=lambda: hosts,
-            store_fn=lambda r: store_scanned(r, s.db_path),
+            store_fn=lambda r: store_scanned(
+                r, s.db_path,
+                drift_alerts=s.drift_alerts,
+                check_revocation=s.check_revocation,
+            ),
         )
 
     def _alerts() -> dict:

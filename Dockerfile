@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12-slim AS builder
+FROM python:3.13-slim AS builder
 
-ARG GIT_TAG=0.2.0
+ARG GIT_TAG=0.3.0
 ARG GIT_COMMIT=unknown
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -18,7 +18,7 @@ COPY src ./src
 RUN printf '%s\n%s\n' "$GIT_TAG" "$GIT_COMMIT" > src/cert_watch/_version.txt
 RUN pip install --no-cache-dir .
 
-FROM python:3.12-slim AS runtime
+FROM python:3.13-slim AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
