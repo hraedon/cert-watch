@@ -25,6 +25,7 @@ from cert_watch.database.queries import (
     _total_alerts,
     _total_scan_history,
     bump_session_version,
+    check_encrypted_values,
     count_dashboard_leaves,
     create_drift_alert,
     delete_certificate_cascade,
@@ -57,6 +58,7 @@ from cert_watch.database.queries import (
     list_unified_entries_page,
     purge_old_alerts,
     purge_old_history,
+    re_encrypt_kv_store,
     record_cert_history,
     replace_scanned,
     store_scan_posture,
@@ -143,4 +145,6 @@ __all__ = [
     "replace_scanned",
     "store_scan_posture",
     "bump_session_version",
+    "check_encrypted_values",
+    "re_encrypt_kv_store",
 ]

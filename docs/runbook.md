@@ -364,3 +364,21 @@ The database layer is abstracted into a repository pattern (`database/` package 
 | `cert-watch` | Start web server |
 | `cert-watch backup <path>` | Create WAL-safe database backup |
 | `cert-watch hash-password` | Generate scrypt hash for `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` |
+| `cert-watch re-encrypt <old_key>` | Re-encrypt kv_store secrets after `.auth_secret` rotation |
+
+---
+
+## Key Rotation and Recovery
+
+cert-watch encrypts sensitive kv_store values (LDAP bind passwords, OAuth client secrets, SMTP passwords) using a Fernet key derived from the persisted `.auth_secret` file. If `.auth_secret` is accidentally deleted or regenerated, these values become undecryptable.
+
+**Startup warning:** If the app detects encrypted values it cannot decrypt, it logs a warning listing the affected keys and suggests running `cert-watch re-encrypt`.
+
+**Recovery procedure after `.auth_secret` rotation:**
+
+1. Stop cert-watch.
+2. Restore the old `.auth_secret` value (or set `CERT_WATCH_AUTH_SECRET` to the old key).
+3. Run `cert-watch re-encrypt <old_key>` — this decrypts values with the old key and re-encrypts them under the current key.
+4. Start cert-watch.
+
+The `<old_key>` argument is the raw signing key string (the hex value from the old `.auth_secret` file or the old `CERT_WATCH_AUTH_SECRET` env var).

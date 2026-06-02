@@ -1,8 +1,10 @@
 """cert-watch CLI entry point.
 
 Provides ``cert-watch`` (web server), ``cert-watch backup <path>``
-(WAL-safe database backup), and ``cert-watch hash-password``
-(generate scrypt password hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH).
+(WAL-safe database backup), ``cert-watch hash-password``
+(generate scrypt password hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH),
+and ``cert-watch re-encrypt <old_key>`` (re-encrypt kv_store secrets after
+signing key rotation).
 """
 
 from __future__ import annotations
@@ -27,6 +29,16 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser(
         "hash-password",
         help="Generate scrypt hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH",
+    )
+
+    reencrypt_parser = sub.add_parser(
+        "re-encrypt",
+        help="Re-encrypt kv_store secrets after .auth_secret rotation",
+    )
+    reencrypt_parser.add_argument(
+        "old_key",
+        help="The old signing key (from the previous .auth_secret file, "
+        "or set CERT_WATCH_AUTH_SECRET to the old value)",
     )
 
     # Server bind options (default command). These are the *single source of
@@ -73,6 +85,21 @@ def main(argv: list[str] | None = None) -> None:
             print("Password cannot be empty.")
             raise SystemExit(1)
         print(_scrypt_hash(password))
+        return
+
+    if args.command == "re-encrypt":
+        from cert_watch.config import Settings, resolve_or_persist_secret
+        from cert_watch.database import init_schema
+        from cert_watch.database.queries import derive_encryption_key, re_encrypt_kv_store
+
+        s = Settings.from_env()
+        init_schema(s.db_path)
+        new_key = derive_encryption_key(
+            resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
+        )
+        old_enc_key = derive_encryption_key(args.old_key)
+        count = re_encrypt_kv_store(s.db_path, old_enc_key, new_key)
+        print(f"Re-encrypted {count} kv_store value(s).")
         return
 
     # Default: run the web server

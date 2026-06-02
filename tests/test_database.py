@@ -9,6 +9,14 @@ from cert_watch.database import (
     init_schema,
     list_unified_entries,
 )
+from cert_watch.database.queries import (
+    check_encrypted_values,
+    derive_encryption_key,
+    kv_get,
+    kv_set,
+    kv_set_secret,
+    re_encrypt_kv_store,
+)
 
 
 def test_init_schema_idempotent(tmp_path):
@@ -313,3 +321,75 @@ def test_list_unified_entries_page_pagination(tmp_path, self_signed_leaf):
         db, offset=0, limit=10, sort_by="expiry", sort_order="desc"
     )
     assert len(rows_exp) == 3
+
+
+def test_check_encrypted_values_no_encrypted(tmp_path):
+    """check_encrypted_values returns empty list when no enc:v1: values exist."""
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    key = derive_encryption_key("test-signing-key")
+    assert check_encrypted_values(db, key) == []
+
+
+def test_check_encrypted_values_all_valid(tmp_path):
+    """check_encrypted_values returns empty list when all values decrypt fine."""
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    key = derive_encryption_key("test-signing-key")
+    kv_set_secret(db, "smtp_password", "hunter2", key)
+    kv_set_secret(db, "ldap_bind_password", "secret123", key)
+    assert check_encrypted_values(db, key) == []
+
+
+def test_check_encrypted_values_detects_bad_key(tmp_path):
+    """check_encrypted_values reports keys that can't be decrypted with the given key."""
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    old_key = derive_encryption_key("old-signing-key")
+    kv_set_secret(db, "smtp_password", "hunter2", old_key)
+    kv_set_secret(db, "ldap_bind_password", "secret123", old_key)
+    kv_set(db, "alert_recipients", "admin@example.com")
+    wrong_key = derive_encryption_key("different-signing-key")
+    bad = check_encrypted_values(db, wrong_key)
+    assert "smtp_password" in bad
+    assert "ldap_bind_password" in bad
+    assert "alert_recipients" not in bad
+
+
+def test_re_encrypt_kv_store(tmp_path):
+    """re_encrypt_kv_store re-encrypts values from old key to new key."""
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    old_key = derive_encryption_key("old-signing-key")
+    new_key = derive_encryption_key("new-signing-key")
+
+    kv_set_secret(db, "smtp_password", "hunter2", old_key)
+    kv_set_secret(db, "ldap_bind_password", "secret123", old_key)
+    kv_set(db, "alert_recipients", "admin@example.com")
+
+    count = re_encrypt_kv_store(db, old_key, new_key)
+    assert count == 2
+
+    decrypted_smtp = kv_get(db, "smtp_password", encryption_key=new_key)
+    assert decrypted_smtp == "hunter2"
+    decrypted_ldap = kv_get(db, "ldap_bind_password", encryption_key=new_key)
+    assert decrypted_ldap == "secret123"
+    plain = kv_get(db, "alert_recipients")
+    assert plain == "admin@example.com"
+
+
+def test_re_encrypt_skips_undecryptable(tmp_path):
+    """re_encrypt_kv_store skips values that can't be decrypted with old key."""
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    wrong_key = derive_encryption_key("wrong-key")
+    good_key = derive_encryption_key("good-key")
+    new_key = derive_encryption_key("new-key")
+
+    kv_set_secret(db, "smtp_password", "hunter2", good_key)
+    kv_set_secret(db, "oauth_client_secret", "oauth-secret", good_key)
+
+    count = re_encrypt_kv_store(db, wrong_key, new_key)
+    assert count == 0
+
+    assert kv_get(db, "smtp_password", encryption_key=good_key) == "hunter2"

@@ -21,6 +21,7 @@ from cert_watch.database import (
     init_schema,
     kv_get,
 )
+from cert_watch.database.queries import check_encrypted_values, derive_encryption_key
 from cert_watch.filters import register_filters
 from cert_watch.middleware import (
     CSPNonceMiddleware,
@@ -138,6 +139,16 @@ async def lifespan(app: FastAPI):
     app.state.auth_provider = auth
     app.state.settings = s
     app.state.security = security
+
+    encryption_key = derive_encryption_key(security.signing_key)
+    undecryptable = check_encrypted_values(s.db_path, encryption_key)
+    if undecryptable:
+        logger.warning(
+            "kv_store: %d encrypted value(s) could not be decrypted with the "
+            "current signing key: %s. If .auth_secret was recently regenerated, "
+            "run 'cert-watch re-encrypt <old_key>' to re-encrypt with the new key.",
+            len(undecryptable), ", ".join(undecryptable),
+        )
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
 

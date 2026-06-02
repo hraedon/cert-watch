@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.3",
+    "pytest-cov>=6.0",
     "httpx>=0.27",
     "ruff>=0.7",
     "mypy>=1.13",
@@ -58,9 +59,20 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not e2e and not integration'"
+addopts = "-ra -m 'not e2e and not integration' --cov=cert_watch --cov-report=term-missing --cov-fail-under=70"
 # E2E tests opt-in via `pytest -m e2e` (requires Playwright + browsers).
 markers = [
     "e2e: end-to-end tests requiring Playwright + a running app",
     "integration: integration tests requiring external tools (e.g. openssl)",
 ]
+
+[tool.coverage.run]
+source = ["cert_watch"]
+omit = [
+    "cert_watch/__main__",
+    "cert_watch/migrations/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
