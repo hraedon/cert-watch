@@ -14,6 +14,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
 from cert_watch.config import Settings
 from cert_watch.database import kv_set
+from cert_watch.database.queries import bump_session_version
 from cert_watch.middleware import get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.setup")
@@ -121,6 +122,10 @@ async def setup_submit(
         auth = s.build_auth_provider()
         request.app.state.auth_provider = auth
         request.app.state.needs_setup = False
+
+        # BC-081: bump session version to invalidate any pre-setup sessions
+        # (defensive — there shouldn't be any, but the gate should be explicit)
+        bump_session_version(db, username)
 
         logger.info("setup wizard: local admin '%s' created, auth enabled", username)
         return RedirectResponse(url="/", status_code=303)

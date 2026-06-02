@@ -15,6 +15,9 @@ from cert_watch.migrations.m0009_cert_history import upgrade as cert_history_upg
 from cert_watch.migrations.m0010_alert_extra_recipients import (
     upgrade as alert_extra_recipients_upgrade,
 )
+from cert_watch.migrations.m0011_session_versions import (
+    upgrade as session_versions_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -31,4 +34,8 @@ runner.register("0009", "add cert_history table (Plan 016)", cert_history_upgrad
 runner.register(
     "0010", "add extra_recipients column to alerts (BC-051)",
     alert_extra_recipients_upgrade,
+)
+runner.register(
+    "0011", "add session_versions table for session revocation (BC-081)",
+    session_versions_upgrade,
 )

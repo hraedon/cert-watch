@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import logging
 import os
@@ -126,17 +125,9 @@ async def lifespan(app: FastAPI):
     auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider()
 
     # Slice 3: setup wizard detection
-    host_count = 0
-    with contextlib.suppress(Exception):
-        host_count = len(SqliteHostRepository(s.db_path).list_all())
     setup_complete = kv_get(s.db_path, "setup_complete") == "1"
     needs_setup = False
-    if (
-        isinstance(auth, NoAuthProvider)
-        and host_count == 0
-        and not setup_complete
-        and not s.allow_unauth
-    ):
+    if isinstance(auth, NoAuthProvider) and not s.allow_unauth and not setup_complete:
         needs_setup = True
     app.state.needs_setup = needs_setup
     app.state.auth_provider = auth
@@ -145,17 +136,19 @@ async def lifespan(app: FastAPI):
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
 
-    # Slice 4: warn when running without auth on a non-loopback address
-    if isinstance(auth, NoAuthProvider):
+    # BC-083: secure-by-default — refuse to serve open on non-loopback
+    # unless AUTH_PROVIDER is configured or CERT_WATCH_ALLOW_UNAUTH=1 is set.
+    # Loopback binds (local dev, test suite) are always exempt.
+    if isinstance(auth, NoAuthProvider) and not s.allow_unauth:
         bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
-        if bind_host not in ("127.0.0.1", "::1", "localhost") and not s.allow_unauth:
-            bind_port = os.environ.get("CERT_WATCH_PORT", "8000")
-            logger.warning(
-                "CERT-WATCH WARNING: running without authentication on %s:%s. "
-                "All certificate and host data is publicly accessible. "
-                "Set AUTH_PROVIDER + a local admin (visit /setup) to secure this instance. "
-                "Set CERT_WATCH_ALLOW_UNAUTH=1 to suppress this warning.",
-                bind_host, bind_port,
+        if bind_host not in ("127.0.0.1", "::1", "localhost"):
+            raise SystemExit(
+                "cert-watch refuses to run without authentication on a non-loopback "
+                f"address ({bind_host}). Either:\n"
+                "  1) Set AUTH_PROVIDER=local (and create a local admin via /setup),\n"
+                "  2) Set AUTH_PROVIDER=ldap or AUTH_PROVIDER=oauth with appropriate config, or\n"
+                "  3) Set CERT_WATCH_ALLOW_UNAUTH=1 (not recommended for production).\n"
+                "Loopback binds (127.0.0.1 / ::1) are always exempt."
             )
     alert_cfg = s.build_alert_config()
     webhook_cfg = s.build_webhook_config()

@@ -20,6 +20,7 @@ from cert_watch.auth import (
     check_authz,
     create_session,
 )
+from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.middleware import (
     _COOKIE_SECURE,
     _extract_client_ip,
@@ -103,7 +104,11 @@ async def login_submit(
             return RedirectResponse(
                 url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
             )
-    token = create_session(result.username, _request_security(request))
+    # BC-081: embed current session version in the token
+    settings = getattr(request.app.state, "settings", None)
+    db_path = str(settings.db_path) if settings else None
+    version = get_session_version(db_path, result.username) if db_path else 0
+    token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
@@ -221,7 +226,11 @@ def oauth_callback(
             "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
-    token = create_session(result.username, _request_security(request))
+    # BC-081: embed current session version in the token
+    settings = getattr(request.app.state, "settings", None)
+    db_path = str(settings.db_path) if settings else None
+    version = get_session_version(db_path, result.username) if db_path else 0
+    token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie(
         "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
@@ -239,6 +248,19 @@ async def logout(request: Request) -> RedirectResponse:
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    # BC-081: bump session version to revoke all active sessions for this user.
+    # /auth/logout is a public path (auth_middleware skips it so expired sessions
+    # can still log out), so auth_user may not be set. Read the cookie directly.
+    token = request.cookies.get(SESSION_COOKIE, "")
+    if token:
+        settings = getattr(request.app.state, "settings", None)
+        if settings:
+            db_path = str(settings.db_path)
+            from cert_watch.auth import validate_session
+            from cert_watch.middleware import _request_security
+            username = validate_session(token, _request_security(request), db_path=db_path)
+            if username:
+                bump_session_version(settings.db_path, username)
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(
         SESSION_COOKIE, httponly=True, samesite="strict", secure=_COOKIE_SECURE,

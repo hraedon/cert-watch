@@ -3,6 +3,10 @@
 HMAC-signed session tokens and OAuth state tokens, plus the module-level
 signing key (set during lifespan startup). The most security-critical and
 most-referenced slice of the auth surface.
+
+BC-081: sessions now include a version field. On validation, the stored
+session version is checked — if it exceeds the token's version, the session
+is revoked (logout/credential change bumps the version in the DB).
 """
 
 from __future__ import annotations
@@ -70,14 +74,34 @@ def _sign_session(data: str, security: SecurityContext | None = None) -> str:
     return f"{data}:{sig}"
 
 
-def create_session(username: str, security: SecurityContext | None = None) -> str:
-    """Create a signed session token for the given username."""
-    payload = f"{username}:{int(time.time())}:{secrets.token_hex(8)}"
+def create_session(
+    username: str,
+    security: SecurityContext | None = None,
+    *,
+    version: int = 0,
+) -> str:
+    """Create a signed session token for the given username.
+
+    The *version* parameter embeds the current session version from the
+    ``session_versions`` table. On validation, if the stored version exceeds
+    the token's embedded version, the session is considered revoked.
+    """
+    payload = f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
     return _sign_session(payload, security)
 
 
-def validate_session(token: str, security: SecurityContext | None = None) -> str | None:
-    """Validate a session token and return the username, or None if invalid."""
+def validate_session(
+    token: str,
+    security: SecurityContext | None = None,
+    *,
+    db_path: str | None = None,
+) -> str | None:
+    """Validate a session token and return the username, or None if invalid.
+
+    When *db_path* is provided, the stored session version for the user is
+    checked. If the stored version exceeds the version embedded in the token,
+    the session is considered revoked (BC-081).
+    """
     if not token or ":" not in token:
         return None
     # Split last ':' to get the signature
@@ -90,13 +114,27 @@ def validate_session(token: str, security: SecurityContext | None = None) -> str
     if not hmac.compare_digest(sig, expected):
         return None
     parts = payload.split(":")
-    if len(parts) < 2:
+    if len(parts) < 3:
         return None
-    username = parts[0]
-    try:
-        ts = int(parts[1])
-    except ValueError:
-        return None
+
+    # BC-081: tokens with version field have 4+ parts (username:version:ts:nonce)
+    # Old-format tokens have 3 parts (username:ts:nonce) — version defaults to 0.
+    if len(parts) >= 4:
+        username = parts[0]
+        try:
+            version = int(parts[1])
+        except ValueError:
+            # Not a version field — treat as old-format (username:ts:nonce)
+            username = parts[0]
+            version = 0
+            ts = _parse_ts(parts, start=1)
+        else:
+            ts = _parse_ts(parts, start=2)
+    else:
+        username = parts[0]
+        version = 0
+        ts = _parse_ts(parts, start=1)
+
     # Read SESSION_TTL from the cert_watch.auth package namespace so tests that
     # monkeypatch the re-exported `cert_watch.auth.SESSION_TTL` take effect here.
     import cert_watch.auth as _auth_pkg
@@ -104,4 +142,24 @@ def validate_session(token: str, security: SecurityContext | None = None) -> str
     ttl = getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
     if (time.time() - ts) > ttl:
         return None
+
+    # BC-081: check session version against the database
+    if db_path is not None:
+        from cert_watch.database.queries import get_session_version
+        stored_version = get_session_version(db_path, username)
+        if stored_version > version:
+            return None
+
     return username
+
+
+def _parse_ts(parts: list[str], start: int) -> float:
+    """Extract the timestamp from the parts list starting at *start*.
+
+    The timestamp is always an integer (epoch seconds). If parsing fails,
+    return 0 which will cause the TTL check to fail.
+    """
+    try:
+        return int(parts[start])
+    except (ValueError, IndexError):
+        return 0.0

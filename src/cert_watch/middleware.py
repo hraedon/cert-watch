@@ -51,6 +51,14 @@ def _request_security(request: Request) -> SecurityContext | None:
     return getattr(request.app.state, "security", None)
 
 
+def _request_db_path(request: Request) -> str | None:
+    """The database path from app.state.settings, if available (BC-081)."""
+    settings = getattr(request.app.state, "settings", None)
+    if settings is not None:
+        return str(settings.db_path)
+    return None
+
+
 def make_csrf_token(session_id: str, security: SecurityContext | None = None) -> str:
     payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
     sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
@@ -389,7 +397,8 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
 
     token = request.cookies.get(SESSION_COOKIE, "")
-    username = validate_session(token, _request_security(request))
+    db_path = _request_db_path(request)
+    username = validate_session(token, _request_security(request), db_path=db_path)
     if username:
         request.scope["auth_user"] = username
         return await call_next(request)
@@ -439,7 +448,8 @@ async def require_auth(request: Request) -> str:
     if auth is None or isinstance(auth, NoAuthProvider):
         return ""
     token = request.cookies.get(SESSION_COOKIE, "")
-    username = validate_session(token, _request_security(request))
+    db_path = _request_db_path(request)
+    username = validate_session(token, _request_security(request), db_path=db_path)
     if not username:
         raise HTTPException(status_code=401, detail="unauthenticated")
     return username

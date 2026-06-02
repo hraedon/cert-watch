@@ -149,6 +149,12 @@ CREATE TABLE IF NOT EXISTS cert_history (
     san_count INTEGER,
     scanned_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS session_versions (
+    username TEXT PRIMARY KEY,
+    version INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL
+);
 """
 
 _BASE_INDEXES = """
@@ -171,6 +177,8 @@ CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
     ON cert_history(hostname, port, scanned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cert_history_fp
     ON cert_history(fingerprint_sha256);
+CREATE INDEX IF NOT EXISTS idx_session_versions_username
+    ON session_versions(username);
 """
 
 _initialized_paths: set[str] = set()

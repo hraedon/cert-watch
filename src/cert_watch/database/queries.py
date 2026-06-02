@@ -2047,3 +2047,52 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
         import logging
         logging.getLogger("cert_watch.database").warning("alert purge failed", exc_info=True)
         return 0
+
+
+# ---------- Session version helpers (BC-081) ----------
+
+
+def get_session_version(db_path: str | Path, username: str) -> int:
+    """Return the current session version for *username*, defaulting to 0.
+
+    A version of 0 means no row exists yet — sessions without a version
+    record are accepted (backward compat for tokens issued before this
+    feature was added).
+    """
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT version FROM session_versions WHERE username = ?", (username,)
+        ).fetchone()
+    return row["version"] if row else 0
+
+
+def bump_session_version(db_path: str | Path, username: str) -> int:
+    """Increment and return the session version for *username*.
+
+    Creates the row (starting at version 1) if it doesn't exist. Returns the
+    new version, so callers can use it directly.
+    """
+    init_schema(db_path)
+    now = _iso(datetime.now(UTC))
+    with _connect(db_path) as conn:
+        # Try to increment first
+        cur = conn.execute(
+            "UPDATE session_versions SET version = version + 1, updated_at = ?"
+            " WHERE username = ?",
+            (now, username),
+        )
+        if cur.rowcount == 0:
+            conn.execute(
+                "INSERT INTO session_versions (username, version, updated_at)"
+                " VALUES (?, 1, ?)",
+                (username, now),
+            )
+            version = 1
+        else:
+            row = conn.execute(
+                "SELECT version FROM session_versions WHERE username = ?", (username,)
+            ).fetchone()
+            version = row["version"]
+        conn.commit()
+    return version

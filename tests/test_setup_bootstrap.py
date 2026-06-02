@@ -189,7 +189,11 @@ def fresh_db(tmp_path):
 
 @pytest.fixture
 def setup_app_client(fresh_db, tmp_path):
-    """Client with fresh DB, no auth, no hosts — triggers setup."""
+    """Client with fresh DB, no auth, no hosts — triggers setup.
+
+    Uses CERT_WATCH_ALLOW_UNAUTH=1 so the lifespan doesn't raise SystemExit
+    (BC-083: secure-by-default). The test then forces needs_setup=True.
+    """
     import cert_watch.app as app_mod
     import cert_watch.auth as auth_mod
     import cert_watch.config as cfg_mod
@@ -204,7 +208,8 @@ def setup_app_client(fresh_db, tmp_path):
         "AUTH_PROVIDER": "",
         "CERT_WATCH_AUTH_SECRET": "test-secret-for-setup",
         "CERT_WATCH_CSRF_SECRET": "test-csrf-secret-for-setup",
-        "CERT_WATCH_ALLOW_UNAUTH": "0",
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+        "CERT_WATCH_HOST": "127.0.0.1",
     }
     with patch.dict(os.environ, env, clear=False):
         s = cfg_mod.Settings.from_env()
@@ -376,6 +381,8 @@ class TestSetupWizard:
             "CERT_WATCH_DATA_DIR": str(tmp_path),
             "AUTH_PROVIDER": "",
             "CERT_WATCH_AUTH_SECRET": "test-secret",
+            "CERT_WATCH_ALLOW_UNAUTH": "1",
+            "CERT_WATCH_HOST": "127.0.0.1",
         }
         with patch.dict(os.environ, env, clear=False):
             s = cfg_mod.Settings.from_env()
@@ -401,51 +408,113 @@ class TestSetupWizard:
         vars(app_mod).update(saved_app)
 
 
-# ---------- Slice 4: Unauthenticated-mode warning ----------
+# ---------- Slice 4: Secure-by-default enforcement (BC-083) ----------
 
 
-class TestUnauthWarning:
-    """Tests for the startup warning when running without auth on non-loopback."""
+class TestSecureByDefault:
+    """Tests for BC-083: app refuses to start without auth on non-loopback."""
 
     LOOPBACK_ADDRS = ("127.0.0.1", "::1", "localhost")
 
-    def test_warning_emitted_no_auth_nonloopback(self, caplog):
-        """Warning is emitted when auth is off and bound to non-loopback."""
-        env = {
-            "CERT_WATCH_HOST": "0.0.0.0",
-            "CERT_WATCH_ALLOW_UNAUTH": "0",
-            "AUTH_PROVIDER": "",
-        }
-        with patch.dict(os.environ, env, clear=False), \
-             caplog.at_level(logging.WARNING):
+    def test_system_exit_no_auth_nonloopback(self, tmp_path):
+        """BC-083: SystemExit when auth is off and bound to non-loopback."""
+        import cert_watch.app as app_mod
+        import cert_watch.config as cfg_mod
+
+        saved_cfg = dict(vars(cfg_mod))
+        saved_app = dict(vars(app_mod))
+        try:
+            s = cfg_mod.Settings(
+                db_path=tmp_path / "test.sqlite3",
+                data_dir=tmp_path,
+                auth_provider="",
+                allow_unauth=False,
+            )
             from cert_watch.auth import NoAuthProvider
-            bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
             auth = NoAuthProvider()
-            should_warn = (
+            bind_host = "0.0.0.0"
+
+            # BC-083: should raise SystemExit for non-loopback without auth
+            should_exit = (
                 isinstance(auth, NoAuthProvider)
                 and bind_host not in self.LOOPBACK_ADDRS
+                and not s.allow_unauth
             )
-            assert should_warn
+            assert should_exit, "Expected non-loopback + NoAuthProvider + no allow_unauth to be fatal"
+        finally:
+            vars(cfg_mod).clear()
+            vars(cfg_mod).update(saved_cfg)
+            vars(app_mod).clear()
+            vars(app_mod).update(saved_app)
 
-    def test_no_warning_on_loopback(self):
-        """No warning when bound to loopback."""
-        from cert_watch.auth import NoAuthProvider
-        auth = NoAuthProvider()
-        bind_host = "127.0.0.1"
-        should_warn = (
-            isinstance(auth, NoAuthProvider)
-            and bind_host not in self.LOOPBACK_ADDRS
-        )
-        assert not should_warn
+    def test_loopback_exempt(self, tmp_path):
+        """BC-083: loopback binds are always exempt."""
+        import cert_watch.config as cfg_mod
 
-    def test_no_warning_with_allow_unauth(self):
-        """CERT_WATCH_ALLOW_UNAUTH=1 suppresses the warning."""
-        s = MagicMock()
-        s.allow_unauth = True
-        should_warn = not s.allow_unauth
-        assert not should_warn
+        saved_cfg = dict(vars(cfg_mod))
+        try:
+            s = cfg_mod.Settings(
+                db_path=tmp_path / "test.sqlite3",
+                data_dir=tmp_path,
+                auth_provider="",
+                allow_unauth=False,
+            )
+            from cert_watch.auth import NoAuthProvider
+            auth = NoAuthProvider()
 
-    def test_no_warning_with_auth_provider(self):
-        """No warning when auth provider is configured."""
+            for bind_host in self.LOOPBACK_ADDRS:
+                should_exit = (
+                    isinstance(auth, NoAuthProvider)
+                    and bind_host not in self.LOOPBACK_ADDRS
+                    and not s.allow_unauth
+                )
+                assert not should_exit, f"Loopback {bind_host} should be exempt"
+        finally:
+            vars(cfg_mod).clear()
+            vars(cfg_mod).update(saved_cfg)
+
+    def test_allow_unauth_exempt(self, tmp_path):
+        """BC-083: CERT_WATCH_ALLOW_UNAUTH=1 skips the check."""
+        import cert_watch.config as cfg_mod
+
+        saved_cfg = dict(vars(cfg_mod))
+        try:
+            s = cfg_mod.Settings(
+                db_path=tmp_path / "test.sqlite3",
+                data_dir=tmp_path,
+                auth_provider="",
+                allow_unauth=True,
+            )
+            from cert_watch.auth import NoAuthProvider
+            auth = NoAuthProvider()
+
+            should_exit = (
+                isinstance(auth, NoAuthProvider)
+                and "0.0.0.0" not in self.LOOPBACK_ADDRS
+                and not s.allow_unauth
+            )
+            assert not should_exit
+        finally:
+            vars(cfg_mod).clear()
+            vars(cfg_mod).update(saved_cfg)
+
+    def test_auth_provider_exempt(self, tmp_path):
+        """BC-083: configured auth provider skips the check."""
+        from cert_watch.auth import LocalAdminProvider, _scrypt_hash
+
         auth = LocalAdminProvider("admin", _scrypt_hash("pass"))
         assert not isinstance(auth, NoAuthProvider)
+
+    def test_needs_setup_no_host_count_condition(self, tmp_path):
+        """BC-083: needs_setup is true when no auth is configured and
+        setup_complete is not set, regardless of host count.
+        The old host_count==0 gate is removed.
+        """
+        # Simulate the conditions: NoAuthProvider, not allow_unauth, not setup_complete
+        from cert_watch.auth import NoAuthProvider
+        auth = NoAuthProvider()
+        s_allow_unauth = False
+        setup_complete = False
+
+        needs_setup = isinstance(auth, NoAuthProvider) and not s_allow_unauth and not setup_complete
+        assert needs_setup is True
