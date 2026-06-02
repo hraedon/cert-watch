@@ -217,6 +217,68 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     # Get renewal history
     renewal_history = get_renewal_history(db, cert_id)
 
+    # Get drift events from cert_history (compare consecutive entries)
+    drift_events = []
+    if hostname:
+        from cert_watch.database import list_cert_history
+
+        history_entries = list_cert_history(db, hostname, port, limit=50)
+        for i in range(len(history_entries) - 1):
+            curr = history_entries[i]
+            prev = history_entries[i + 1]
+            changes = []
+            if (
+                curr.get("issuer") and prev.get("issuer")
+                and curr["issuer"] != prev["issuer"]
+            ):
+                prev_issuer = issuer_cn(prev["issuer"])
+                curr_issuer = issuer_cn(curr["issuer"])
+                changes.append({
+                    "field": "Issuer changed",
+                    "change": f"{prev_issuer} → {curr_issuer}",
+                    "sev": "high",
+                })
+            if (
+                curr.get("key_algo") and prev.get("key_algo")
+                and curr["key_algo"] != prev["key_algo"]
+            ):
+                changes.append({
+                    "field": "Key algorithm changed",
+                    "change": f'{prev["key_algo"]} → {curr["key_algo"]}',
+                    "sev": "high",
+                })
+            if (
+                curr.get("sig_algo") and prev.get("sig_algo")
+                and curr["sig_algo"] != prev["sig_algo"]
+            ):
+                curr_sig = (curr["sig_algo"] or "").lower()
+                prev_sig = (prev["sig_algo"] or "").lower()
+                is_downgrade = "sha1" in curr_sig and "sha1" not in prev_sig
+                changes.append({
+                    "field": "Signature algorithm changed",
+                    "change": f'{prev["sig_algo"]} → {curr["sig_algo"]}',
+                    "sev": "high" if is_downgrade else "info",
+                })
+            if (
+                curr.get("posture_grade") and prev.get("posture_grade")
+                and curr["posture_grade"] != prev["posture_grade"]
+            ):
+                grade_order = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+                curr_g = grade_order.get(curr["posture_grade"], 0)
+                prev_g = grade_order.get(prev["posture_grade"], 0)
+                if curr_g > prev_g:
+                    changes.append({
+                        "field": "Posture grade dropped",
+                        "change": (
+                            f'{prev["posture_grade"]} '
+                            f'→ {curr["posture_grade"]}'
+                        ),
+                        "sev": "high",
+                    })
+            for c in changes:
+                c["when"] = curr.get("scanned_at", "")[:10]
+                drift_events.append(c)
+
     # Get posture evaluation
     from cert_watch.database import get_posture_for_cert
     from cert_watch.posture import evaluate_posture
@@ -279,6 +341,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "renewal_method_indicator": renewal_method_indicator,
             "now": datetime.now(UTC),
             "posture": posture_data,
+            "drift_events": drift_events,
             **csrf_ctx,
         },
     )

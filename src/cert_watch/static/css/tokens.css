@@ -912,3 +912,106 @@ body {
 }
 .cw-table-pivot td { cursor: pointer; }
 
+/* ============================================================
+   WAVE 2: Posture grade chip, meta chip tones, metarow
+   ============================================================ */
+
+/* ---- POSTURE GRADE CHIP (.cw-grade) ---- */
+.cw-grade {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 21px; height: 19px; padding: 0 5px; border-radius: var(--radius-sm);
+  border: 1.5px solid currentColor; background: transparent;
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 1; letter-spacing: 0;
+}
+.cw-grade.lg { min-width: 38px; height: 34px; font-size: 18px; border-radius: 9px; }
+
+/* ---- META CHIP TONES (chain state / renewal / owner) ---- */
+.cw-chip.tone-warn   { color: var(--warn);   border-color: color-mix(in srgb, var(--warn) 32%, transparent);   background: var(--warn-soft); }
+.cw-chip.tone-crit   { color: var(--crit);   border-color: color-mix(in srgb, var(--crit) 32%, transparent);   background: var(--crit-soft); }
+.cw-chip.tone-accent { color: var(--accent); border-color: var(--accent-line);                                  background: var(--accent-soft); }
+.cw-chip.tone-ok     { color: var(--ok);     border-color: color-mix(in srgb, var(--ok) 30%, transparent);     background: var(--ok-soft); }
+.cw-chip .rdot { width: 5px; height: 5px; border-radius: 50%; flex: 0 0 auto; }
+.cw-metarow { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+/* ---- DROPDOWN MENU (Reports, Account) ---- */
+.cw-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; min-width: 220px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow); z-index: 50; padding: 6px 0;
+}
+.cw-menu-label {
+  padding: 6px 14px; font-size: 11px; font-weight: 600; color: var(--text-3);
+  letter-spacing: .04em; text-transform: uppercase;
+}
+.cw-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 14px; font-size: 13px; color: var(--text-2); background: none; border: none;
+  cursor: pointer; font-family: var(--font-sans); text-align: left; transition: all .12s;
+}
+.cw-menu-item:hover { background: var(--panel-2); color: var(--text); }
+.cw-acct { position: relative; }
+.cw-acct-btn {
+  display: flex; align-items: center; gap: 6px; background: none; border: none;
+  cursor: pointer; color: var(--text-2); font-family: var(--font-sans);
+}
+.cw-avatar {
+  width: 28px; height: 28px; border-radius: 8px; background: var(--accent-soft);
+  color: var(--accent); font-size: 11px; font-weight: 700; display: flex;
+  align-items: center; justify-content: center;
+}
+
+/* ---- INSIGHTS / DISCOVER: stacked bar chart ---- */
+.cw-chart-bar {
+  width: 100%; max-width: 46px; display: flex; flex-direction: column;
+  border-radius: 6px; overflow: hidden; box-shadow: 0 1px 0 rgba(0,0,0,.15);
+}
+
+/* ---- COVERAGE BAR (Discover) ---- */
+.cw-coverage-track { height: 7px; border-radius: 4px; background: var(--inset); overflow: hidden; }
+.cw-coverage-fill { height: 100%; border-radius: 4px; }
+
+/* ---- DRIFT EVENT CARD ---- */
+.cw-drift-card {
+  display: flex; gap: 11px; padding: 10px 12px; border-radius: 9px;
+  border: 1px solid var(--border);
+}
+.cw-drift-card.cw-drift-high {
+  background: var(--crit-soft);
+  border-color: color-mix(in srgb, var(--crit) 26%, transparent);
+}
+
+/* ---- SETTINGS SUBPAGE ---- */
+.cw-set-section { padding: 15px 18px; margin-bottom: 12px; }
+.cw-set-title { font-size: 14px; font-weight: 600; }
+.cw-set-desc { font-size: 12.5px; color: var(--text-3); margin-top: 4px; }
+.cw-set-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.cw-set-row:last-child { border-bottom: none; }
+.cw-set-row .lab { font-size: 13px; font-weight: 500; color: var(--text); min-width: 180px; }
+.cw-set-row .hint { font-size: 11.5px; color: var(--text-3); display: block; margin-top: 2px; font-weight: 400; }
+.cw-set-ctrl { flex: 1; min-width: 0; max-width: 400px; }
+.cw-envbadge {
+  display: inline-flex; align-items: center; gap: 4px; font-size: 10px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+  border-radius: 5px; padding: 1px 6px; font-family: var(--font-mono);
+}
+.cw-switch { position: relative; display: inline-flex; width: 40px; height: 22px; cursor: pointer; }
+.cw-switch input { opacity: 0; width: 0; height: 0; }
+.cw-switch .track { position: absolute; inset: 0; background: var(--border-2); border-radius: 11px; transition: background .2s; }
+.cw-switch input:checked + .track { background: var(--accent); }
+.cw-switch .knob { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; pointer-events: none; }
+.cw-switch input:checked ~ .knob { transform: translateX(18px); }
+.cw-pwreq { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-3); }
+.cw-settings-grid { display: grid; grid-template-columns: 180px 1fr; gap: 24px; align-items: start; }
+.cw-settings-nav { display: flex; flex-direction: column; gap: 2px; }
+.cw-settings-nav button {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; border-radius: var(--radius); font-size: 13px; font-weight: 500; color: var(--text-2);
+  transition: all .12s; font-family: var(--font-sans);
+}
+.cw-settings-nav button:hover { background: var(--panel-2); color: var(--text); }
+.cw-settings-nav button.on { background: var(--panel-3); color: var(--text); }
+.cw-testres { font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+.cw-testres.ok { color: var(--ok); }
+.cw-testres.run { color: var(--text-3); }
+.cw-testres.err { color: var(--crit); }
+

@@ -1,0 +1,197 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — insights{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+
+{% block content %}
+<div class="cw-page-wrap">
+  <div class="cw-page-head">
+    <div>
+      <h1>Insights</h1>
+      <div class="cw-page-head-sub">Fleet-wide expiry concentration and posture trends over time.</div>
+    </div>
+    <div class="cw-seg">
+      <a href="/insights?tab=calendar" class="cw-btn cw-no-decoration {% if tab == 'calendar' %}on{% endif %}" style="padding:5px 11px;font-size:12.5px">{{ icons.svg_icon('calendar', 13) }}Expiry calendar</a>
+      <a href="/insights?tab=trends" class="cw-btn cw-no-decoration {% if tab == 'trends' %}on{% endif %}" style="padding:5px 11px;font-size:12.5px">{{ icons.svg_icon('trend', 13) }}Trends</a>
+    </div>
+  </div>
+
+  {% if tab == 'calendar' %}
+    {# ---- Expiry calendar ---- #}
+    {% set ns = namespace(storms=0, within=0, later=0, leaf_total=0) %}
+    {% for b in calendar_data %}
+      {% if b.cert_count >= 3 %}{% set ns.storms = ns.storms + 1 %}{% endif %}
+      {% set ns.within = ns.within + b.cert_count %}
+    {% endfor %}
+
+    <div class="cw-stats cw-mb-18">
+      <div class="cw-stat">
+        <div class="cw-stat-rail {% if ns.storms > 0 %}cw-stat-rail-crit{% else %}cw-stat-rail-ok{% endif %}"></div>
+        <div class="cw-stat-top {% if ns.storms > 0 %}cw-stat-top-crit{% else %}cw-stat-top-ok{% endif %}">
+          {{ icons.svg_icon('alert', 15, 1.8) }}
+          <span class="cw-stat-label cw-stat-label-color">Renewal storms</span>
+        </div>
+        <div class="cw-stat-val {% if ns.storms > 0 %}cw-stat-val-crit{% else %}cw-stat-val-ok{% endif %}">{{ ns.storms }}</div>
+        <div class="cw-stat-sub">weeks with 3+ expiries</div>
+      </div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-warn"></div>
+        <div class="cw-stat-top cw-stat-top-warn">
+          {{ icons.svg_icon('calendar', 15, 1.8) }}
+          <span class="cw-stat-label cw-stat-label-color">Expiring soon</span>
+        </div>
+        <div class="cw-stat-val cw-stat-val-warn">{{ ns.within }}</div>
+        <div class="cw-stat-sub">leaf certificates in view</div>
+      </div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">
+          {{ icons.svg_icon('clock', 15, 1.8) }}
+          <span class="cw-stat-label cw-stat-label-color">Buckets</span>
+        </div>
+        <div class="cw-stat-val cw-stat-val-default">{{ calendar_data | length }}</div>
+        <div class="cw-stat-sub">time periods tracked</div>
+      </div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">
+          {{ icons.svg_icon('shield', 15, 1.8) }}
+          <span class="cw-stat-label cw-stat-label-color">Fleet</span>
+        </div>
+        <div class="cw-stat-val cw-stat-val-default">{{ ns.within }}</div>
+        <div class="cw-stat-sub">total certificates</div>
+      </div>
+    </div>
+
+    <div class="cw-panel cw-p-16-18">
+      <div class="cw-flex cw-items-center cw-gap-9 cw-mb-4">
+        {{ icons.svg_icon('calendar', 16) }}
+        <span class="cw-fz-14 cw-fw-600">Expiry calendar</span>
+        <span class="cw-fz-12 cw-text-text-3">by time period</span>
+        <div class="cw-spacer"></div>
+        <div class="cw-flex cw-gap-14 cw-fz-11-5 cw-text-text-2">
+          <span class="cw-inline-flex cw-items-center cw-gap-5">
+            <span style="width:8px;height:8px;border-radius:4px;background:var(--crit)"></span>≤ 7d
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-5">
+            <span style="width:8px;height:8px;border-radius:4px;background:var(--warn)"></span>≤ 14d
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-5">
+            <span style="width:8px;height:8px;border-radius:4px;background:var(--ok)"></span>later
+          </span>
+        </div>
+      </div>
+
+      <div class="cw-mt-14">
+        {% for b in calendar_data %}
+          {% set empty = b.cert_count == 0 %}
+          <div class="cw-flex cw-items-center cw-gap-14" style="padding:{% if empty %}5px 0{% else %}9px 0{% endif %};{% if not loop.first %}border-top:1px solid var(--border){% endif %}">
+            <div style="min-width:136px">
+              <span class="mono cw-fz-12 {% if empty %}cw-text-text-3{% else %}cw-text-text cw-fw-500{% endif %}">{{ b.label }}</span>
+              {% if loop.first %}<div class="cw-fz-10 cw-fw-700 cw-text-accent cw-ls-04em" style="letter-spacing:.04em">THIS PERIOD</div>{% endif %}
+            </div>
+            {% if empty %}
+              <div style="height:1px;flex:1"></div>
+            {% else %}
+              <div class="cw-flex cw-items-center cw-gap-8 cw-wrap cw-flex-1">
+                {% if b.cert_count >= 3 %}
+                  <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>
+                {% endif %}
+                <span class="cw-chip">{{ b.cert_count }} cert{{ 's' if b.cert_count != 1 }}</span>
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+        {% if not calendar_data %}
+          <div class="cw-empty cw-pt-16">
+            <div class="cw-empty-title">No upcoming expirations</div>
+            <div class="cw-empty-sub">All tracked certificates are well within their validity window.</div>
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+  {% elif tab == 'trends' %}
+    {# ---- Trends: TLS versions + posture grades ---- #}
+    <div class="cw-layout-16-1" style="grid-template-columns:1fr 1fr">
+      <div class="cw-panel cw-p-16-18">
+        <div class="cw-flex cw-items-baseline cw-gap-9 cw-mb-2">
+          <span class="cw-fz-14 cw-fw-600">TLS versions across the fleet</span>
+          <span class="cw-fz-12 cw-text-text-3">negotiated protocol · monthly</span>
+        </div>
+        <div class="cw-flex cw-gap-16 cw-mt-12 cw-mb-14">
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--ok)"></span>TLS 1.3
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--warn)"></span>TLS 1.2
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--crit)"></span>TLS 1.0
+          </span>
+        </div>
+        {% if tls_trends %}
+        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px">
+          {% for t in tls_trends %}
+            {% set total = (t.tls_1_3 or 0) + (t.tls_1_2 or 0) + (t.tls_1_0 or 0) %}
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
+              {% if total > 0 %}
+              <div class="cw-chart-bar" style="height:{{ (total / 12 * 100) | int }}%">
+                {% if t.tls_1_3 %}<div style="flex:{{ t.tls_1_3 }};background:var(--ok);min-height:2px"></div>{% endif %}
+                {% if t.tls_1_2 %}<div style="flex:{{ t.tls_1_2 }};background:var(--warn);min-height:2px"></div>{% endif %}
+                {% if t.tls_1_0 %}<div style="flex:{{ t.tls_1_0 }};background:var(--crit);min-height:2px"></div>{% endif %}
+              </div>
+              {% endif %}
+              <span class="mono cw-fz-11 cw-text-text-3">{{ t.month }}</span>
+            </div>
+          {% endfor %}
+        </div>
+        {% else %}
+          <div class="cw-empty"><div class="cw-empty-sub">Not enough history to show trends.</div></div>
+        {% endif %}
+      </div>
+
+      <div class="cw-panel cw-p-16-18">
+        <div class="cw-flex cw-items-baseline cw-gap-9 cw-mb-2">
+          <span class="cw-fz-14 cw-fw-600">Posture grade distribution</span>
+          <span class="cw-fz-12 cw-text-text-3">worst-weighted grade · monthly</span>
+        </div>
+        <div class="cw-flex cw-gap-16 cw-mt-12 cw-mb-14">
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--ok)"></span>A
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--accent)"></span>B
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--warn)"></span>C
+          </span>
+          <span class="cw-inline-flex cw-items-center cw-gap-6 cw-fz-11-5 cw-text-text-2">
+            <span style="width:10px;height:10px;border-radius:3px;background:var(--crit)"></span>F
+          </span>
+        </div>
+        {% if grade_trends %}
+        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px">
+          {% for g in grade_trends %}
+            {% set total = (g.grade_a or 0) + (g.grade_b or 0) + (g.grade_c or 0) + (g.grade_f or 0) %}
+            <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
+              {% if total > 0 %}
+              <div class="cw-chart-bar" style="height:{{ (total / 12 * 100) | int }}%">
+                {% if g.grade_a %}<div style="flex:{{ g.grade_a }};background:var(--ok);min-height:2px"></div>{% endif %}
+                {% if g.grade_b %}<div style="flex:{{ g.grade_b }};background:var(--accent);min-height:2px"></div>{% endif %}
+                {% if g.grade_c %}<div style="flex:{{ g.grade_c }};background:var(--warn);min-height:2px"></div>{% endif %}
+                {% if g.grade_f %}<div style="flex:{{ g.grade_f }};background:var(--crit);min-height:2px"></div>{% endif %}
+              </div>
+              {% endif %}
+              <span class="mono cw-fz-11 cw-text-text-3">{{ g.month }}</span>
+            </div>
+          {% endfor %}
+        </div>
+        {% else %}
+          <div class="cw-empty"><div class="cw-empty-sub">Not enough history to show trends.</div></div>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

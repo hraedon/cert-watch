@@ -520,8 +520,9 @@ def list_alerts_with_subject(db_path: str | Path, *, page: int = 1, limit: int =
             offset = max(0, (page - 1) * limit)
             rows = conn.execute(
                 """
-                SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
-                       a.sent_at, a.error_message, a.message, c.subject AS subject
+                SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
+                       a.threshold_days, a.sent_at, a.error_message, a.message,
+                       c.subject AS subject
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
                 ORDER BY a.created_at DESC
@@ -532,8 +533,9 @@ def list_alerts_with_subject(db_path: str | Path, *, page: int = 1, limit: int =
         else:
             rows = conn.execute(
                 """
-                SELECT a.id, a.created_at, a.alert_type, a.status, a.threshold_days,
-                       a.sent_at, a.error_message, a.message, c.subject AS subject
+                SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
+                       a.threshold_days, a.sent_at, a.error_message, a.message,
+                       c.subject AS subject
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
                 ORDER BY a.created_at DESC

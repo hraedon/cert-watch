@@ -50,16 +50,24 @@
   {% if alerts %}
     <div class="cw-flex-col cw-gap-10">
       {% for a in alerts %}
-        {% set sev_color = 'var(--crit)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn)' if (a.alert_type == 'expiry_warning' or a.alert_type == 'drift') else 'var(--accent)' %}
-        {% set sev_bg = 'var(--crit-soft)' if (a.alert_type == 'expired' or a.alert_type == 'scan_failure') else 'var(--warn-soft)' if (a.alert_type == 'expiry_warning' or a.alert_type == 'drift') else 'var(--accent-soft)' %}
-        {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'alert' if a.alert_type == 'expired' else 'refresh' if a.alert_type == 'drift' else 'clock' %}
+        {% set sev_color = 'var(--crit)' if (a.alert_type in ('expired', 'scan_failure')) else 'var(--warn)' if (a.alert_type in ('expiry_warning', 'drift')) else 'var(--accent)' if a.alert_type == 'mis_issuance' else 'var(--accent)' %}
+        {% set sev_bg = 'var(--crit-soft)' if (a.alert_type in ('expired', 'scan_failure')) else 'var(--warn-soft)' if (a.alert_type in ('expiry_warning', 'drift')) else 'var(--accent-soft)' if a.alert_type == 'mis_issuance' else 'var(--accent-soft)' %}
+        {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'swap' if a.alert_type == 'drift' else 'globe' if a.alert_type == 'mis_issuance' else 'alert' if a.alert_type == 'expired' else 'clock' %}
         <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}">
           <div class="cw-alert-icon cw-sev-icon" style="--sev-color:{{ sev_color }};--sev-bg:{{ sev_bg }}">
             {{ icons.svg_icon(icon_name, 17) }}
           </div>
           <div class="cw-alert-body">
-            <div class="cw-flex cw-items-center cw-gap-8">
+            <div class="cw-flex cw-items-center cw-gap-8 cw-wrap">
               <span class="cw-host">{{ a.subject or "(deleted)" }}</span>
+              {% if a.alert_type == 'drift' %}
+                <span class="cw-chip tone-crit">{{ icons.svg_icon('swap', 10, 1.7) }}drift</span>
+              {% elif a.alert_type == 'mis_issuance' %}
+                <span class="cw-chip tone-accent">{{ icons.svg_icon('globe', 10, 1.7) }}CT mis-issuance</span>
+              {% endif %}
+              {% if a.group_name %}
+                <span class="cw-chip" title="Routed to alert group {{ a.group_name }}">{{ icons.svg_icon('users', 11, 1.6) }}{{ a.group_name }}</span>
+              {% endif %}
             </div>
             <div class="cw-fz-12-5 cw-text-text-2 cw-mt-3">{{ a.message }}</div>
           </div>

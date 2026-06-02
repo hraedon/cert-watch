@@ -241,6 +241,26 @@ def dashboard(
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
     posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
 
+    # Fleet posture grade (worst-weighted across scanned certs)
+    fleet_grade = None
+    with _connect(db) as conn:
+        grade_rows = conn.execute(
+            "SELECT grade, COUNT(*) as cnt FROM scan_posture GROUP BY grade"
+        ).fetchall()
+    if grade_rows:
+        grade_order = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+        counts = {}
+        worst = 0
+        for r in grade_rows:
+            g = r["grade"]
+            counts[g] = r["cnt"]
+            worst = max(worst, grade_order.get(g, 0))
+        has_f = counts.get("F", 0)
+        has_c = counts.get("C", 0)
+        has_b = counts.get("B", 0)
+        fleet_g = "C" if has_f else ("B" if has_c or has_b else "A")
+        fleet_grade = {"grade": fleet_g, "counts": counts, "worst": worst}
+
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
@@ -268,6 +288,7 @@ def dashboard(
             "has_next": page < total_pages,
             "grouped": grouped,
             "posture_grades": posture_grades,
+            "fleet_grade": fleet_grade,
             **csrf_ctx,
         },
     )
@@ -281,6 +302,32 @@ def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
     rows = list_alerts_with_subject(db, page=page, limit=per_page)
+
+    # Resolve alert-group routing names for each alert's cert
+    from cert_watch.database import SqliteAlertGroupRepository, SqliteCertificateRepository
+    from cert_watch.tags import tags_match
+
+    group_repo = SqliteAlertGroupRepository(db)
+    cert_repo = SqliteCertificateRepository(db)
+    all_groups = group_repo.list_all()
+    _group_cache: dict[str, str | None] = {}
+
+    for a in rows:
+        cert_id = a.get("cert_id") or ""
+        if not cert_id:
+            a["group_name"] = None
+            continue
+        if cert_id not in _group_cache:
+            effective = cert_repo.effective_tags(cert_id)
+            manual_ids = set(group_repo.groups_for_cert_manual(cert_id))
+            matched = None
+            for g in all_groups:
+                if g.id in manual_ids or tags_match(effective, g.match_tags):
+                    matched = g.name
+                    break
+            _group_cache[cert_id] = matched
+        a["group_name"] = _group_cache.get(cert_id)
+
     return templates.TemplateResponse(
         request=request,
         name="alerts.html",
@@ -367,6 +414,110 @@ def caa_check_view(request: Request, domain: str) -> dict:
         "issue_allowed": result.issue_allowed,
         "issuewild_allowed": result.issuewild_allowed,
     }
+
+
+@router.get("/insights", response_class=HTMLResponse)
+def insights_view(
+    request: Request,
+    tab: str = "calendar",
+) -> HTMLResponse:
+    db = _db_path(request)
+    from cert_watch.database import list_calendar, list_grade_trends, list_tls_version_trends
+
+    calendar_data = list_calendar(db, bucket="week")
+    tls_trends = list_tls_version_trends(db, days=180)
+    grade_trends = list_grade_trends(db, days=180)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="insights.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            "active_page": "insights",
+            "tab": tab,
+            "calendar_data": calendar_data,
+            "tls_trends": tls_trends,
+            "grade_trends": grade_trends,
+        },
+    )
+
+
+@router.get("/discover", response_class=HTMLResponse)
+def discover_view(request: Request) -> HTMLResponse:
+    db = _db_path(request)
+    from cert_watch.ct_monitor import ct_reconciliation as ct_recon
+
+    domains_data = []
+    tracked_count = 0
+    ct_total = 0
+    untracked_all = []
+    misissuance_all = []
+    private_count = 0
+
+    # Count private-CA hosts
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM certificates c "
+            "WHERE c.is_leaf = 1 AND c.source = 'scanned' "
+            "AND c.issuer NOT LIKE '%Let%' AND c.issuer NOT LIKE '%ISRG%' "
+            "AND c.issuer NOT LIKE '%Sectigo%' AND c.issuer NOT LIKE '%DigiCert%' "
+            "AND c.issuer NOT LIKE '%GlobalSign%' AND c.issuer NOT LIKE '%Amazon%' "
+            "AND c.issuer NOT LIKE '%Google%' AND c.issuer NOT LIKE '%Apple%'"
+        ).fetchone()
+        private_count = row[0] if row else 0
+
+    # Get unique base domains from tracked hosts
+    with _connect(db) as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT hostname FROM certificates "
+            "WHERE is_leaf = 1 AND hostname IS NOT NULL"
+        ).fetchall()
+
+    base_domains: set[str] = set()
+    for r in rows:
+        host = r["hostname"]
+        parts = host.split(".")
+        if len(parts) >= 2:
+            base_domains.add(".".join(parts[-2:]))
+
+    for domain in sorted(base_domains):
+        result = ct_recon(db, domain)
+        if result.error:
+            continue
+        domains_data.append({
+            "domain": domain,
+            "ct": len(result.ct_hostnames),
+            "tracked": len(result.tracked_hostnames),
+        })
+        ct_total += len(result.ct_hostnames)
+        tracked_count += len(result.tracked_hostnames)
+        for h in result.ct_only_hostnames:
+            untracked_all.append({
+                "host": h,
+                "domain": domain,
+                "issuer": "",
+                "firstSeen": "",
+            })
+
+    coverage = round(tracked_count / ct_total * 100) if ct_total > 0 else 0
+
+    return templates.TemplateResponse(
+        request=request,
+        name="discover.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            "active_page": "discover",
+            "domains": domains_data,
+            "coverage": coverage,
+            "total_ct": ct_total,
+            "total_tracked": tracked_count,
+            "untracked": untracked_all,
+            "misissuance": misissuance_all,
+            "private_count": private_count,
+        },
+    )
 
 
 @router.get("/metrics", response_class=PlainTextResponse)

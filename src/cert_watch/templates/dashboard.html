@@ -61,9 +61,23 @@
       <h1>Certificates</h1>
       <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
     </div>
-    <div class="cw-flex cw-gap-8">
-      <a href="/api/export/certificates.csv" class="cw-btn">{{ icons.svg_icon('download', 14) }}Export CSV</a>
-      <a href="/api/export/certificates.json" class="cw-btn">{{ icons.svg_icon('download', 14) }}Export JSON</a>
+    <div class="cw-flex cw-items-center cw-gap-10">
+      {% if fleet_grade %}
+      <div title="Fleet TLS posture — worst-weighted across scanned hosts" style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:10px;border:1px solid var(--border);background:var(--panel)">
+        <span class="cw-grade lg" style="color:{% if fleet_grade.grade in ('A+', 'A') %}var(--ok){% elif fleet_grade.grade == 'B' %}var(--accent){% elif fleet_grade.grade == 'C' %}var(--warn){% else %}var(--crit){% endif %}">{{ fleet_grade.grade }}</span>
+        <div>
+          <div class="cw-fz-11-5 cw-fw-500 cw-text-text-2">Fleet posture</div>
+          <div class="mono cw-fz-11 cw-text-text-3 cw-mt-2 cw-flex cw-gap-7">
+            {% for g, cnt in fleet_grade.counts.items() %}
+              <span style="color:{% if g in ('F', 'C') %}var(--text-2){% else %}var(--text-3){% endif %}">{{ g }}·{{ cnt }}</span>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      <div class="cw-acct" id="reports-menu-wrap">
+        <button class="cw-btn" id="reports-btn">{{ icons.svg_icon('download', 14) }}Reports{{ icons.svg_icon('chevron-down', 13) }}</button>
+      </div>
     </div>
   </div>
 
@@ -162,31 +176,18 @@
                 <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
                 <span class="cw-host">{{ e.name or '—' }}</span>
                 <span class="cw-chip cw-chip-hosts">{{ e.host_count }} hosts</span>
-                {% if e.healthy_count < e.host_count %}
-                  <span class="cw-chip cw-chip-incomplete">{{ e.healthy_count }}/{{ e.host_count }} healthy</span>
+              </div>
+              <div class="cw-metarow cw-mt-7">
+                {% if e.renewal_method %}
+                  {% set is_manual = e.renewal_method in ('manual', '') %}
+                  <span class="cw-chip {% if is_manual %}tone-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
+                {% endif %}
+                {% if e.owner_name %}
+                  <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
                 {% else %}
-                  <span class="cw-chip cw-chip-public">all healthy</span>
-                {% endif %}
-                {% if e.chain_status == 'public' %}
-                  <span class="cw-chip cw-chip-public">public</span>
-                {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}incomplete</span>
-                {% endif %}
-                {% if e.replaces_cert_id %}
-                  <span class="cw-chip cw-chip-renewed">renewed</span>
+                  <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
                 {% endif %}
               </div>
-              {% if e.san_dns_names %}
-                <div class="cw-san-list">
-                  {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
-                  {% for san in (san_list[:2] if san_list else []) %}
-                    <span class="cw-chip san">{{ san }}</span>
-                  {% endfor %}
-                  {% if san_list and san_list | length > 2 %}
-                    <span class="cw-chip more">+{{ san_list | length - 2 }} more</span>
-                  {% endif %}
-                </div>
-              {% endif %}
             </td>
             <td>
               <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
@@ -195,7 +196,17 @@
             <td>
               <div class="cw-table-chip-col">
                 <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
-                {% if e.chain_valid == true %}
+                {% if e.chain_status == 'public' %}
+                  <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
+                {% elif e.chain_status == 'private' %}
+                  <span class="cw-chip tone-accent">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
+                {% elif e.chain_status == 'incomplete' %}
+                  <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                {% elif e.chain_status == 'invalid' %}
+                  <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
+                {% elif e.chain_status == 'self-signed' %}
+                  <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
+                {% elif e.chain_valid == true %}
                   <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
                 {% elif e.chain_valid == false %}
                   <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
@@ -226,7 +237,7 @@
                 </span>
                 {% set pg = posture_grades.get(e.id) if posture_grades else None %}
                 {% if pg %}
-                <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }}">{{ pg }}</span>
+                <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
                 {% endif %}
               </div>
             </td>
@@ -277,23 +288,19 @@
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
-                {% if e.chain_status == 'public' %}
-                  <span class="cw-chip cw-chip-public">public</span>
-                {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}incomplete</span>
-                {% endif %}
-                {% if e.replaces_cert_id %}
-                  <span class="cw-chip cw-chip-renewed">renewed</span>
-                {% endif %}
-                {% if e.renewal_status == 'in_progress' %}
-                  <span class="cw-chip cw-chip-renewing">renewing</span>
-                {% elif e.renewal_status == 'renewed' %}
-                  <span class="cw-chip cw-chip-renewed">renewed</span>
+              </div>
+              <div class="cw-metarow cw-mt-7">
+                {% if e.renewal_method and e.source == 'scanned' %}
+                  {% set is_manual = e.renewal_method in ('manual', '') %}
+                  <span class="cw-chip {% if is_manual %}tone-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
                 {% endif %}
                 {% if e.owner_name %}
-                  <span class="cw-chip cw-chip-owner">{{ e.owner_name }}</span>
+                  <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
+                {% elif e.source == 'scanned' %}
+                  <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
                 {% endif %}
               </div>
+            </td>
               {% if e.san_dns_names %}
                 <div class="cw-san-list">
                   {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
@@ -320,7 +327,17 @@
                   <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
                 {% endif %}
                 {% if e.source == 'scanned' %}
-                  {% if e.chain_valid == true %}
+                  {% if e.chain_status == 'public' %}
+                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
+                  {% elif e.chain_status == 'private' %}
+                    <span class="cw-chip tone-accent">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
+                  {% elif e.chain_status == 'incomplete' %}
+                    <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+                  {% elif e.chain_status == 'invalid' %}
+                    <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
+                  {% elif e.chain_status == 'self-signed' %}
+                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
+                  {% elif e.chain_valid == true %}
                     <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
                   {% elif e.chain_valid == false %}
                     <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
@@ -352,7 +369,7 @@
                 </span>
                 {% set pg = posture_grades.get(e.id) if posture_grades else None %}
                 {% if pg %}
-                <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }}">{{ pg }}</span>
+                <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
                 {% endif %}
               </div>
             </td>
@@ -577,6 +594,40 @@ function escHtml(s) {
   d.appendChild(document.createTextNode(s == null ? '' : String(s)));
   return d.innerHTML;
 }
+
+/* Reports dropdown menu */
+(function() {
+  var wrap = document.getElementById('reports-menu-wrap');
+  var btn = document.getElementById('reports-btn');
+  if (!wrap || !btn) return;
+  var menu = document.createElement('div');
+  menu.className = 'cw-menu';
+  menu.style.display = 'none';
+  menu.style.right = '0';
+  menu.style.left = 'auto';
+  menu.style.width = '286px';
+  menu.innerHTML = '<div class="cw-menu-label">Download a report</div>'
+    + '<div style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
+    + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>'
+    + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Certificate inventory</div><div style="font-size:11px;color:var(--text-3)">all tracked certs + status</div></div>'
+    + '<div style="display:flex;gap:5px"><a href="/api/reports/inventory.csv" class="cw-btn sm" style="padding:3px 8px">CSV</a><a href="/api/export/certificates.json" class="cw-btn sm" style="padding:3px 8px">JSON</a></div></div>'
+    + '<div style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
+    + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>'
+    + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Hosts</div><div style="font-size:11px;color:var(--text-3)">owners · renewal · tags</div></div>'
+    + '<div style="display:flex;gap:5px"><a href="/api/hosts?format=csv" class="cw-btn sm" style="padding:3px 8px">CSV</a></div></div>'
+    + '<div class="cw-divider" style="margin:4px 0"></div>'
+    + '<div style="padding:6px 10px 8px;font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:6px">'
+    + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>'
+    + 'Point-in-time snapshot · UTC</div>';
+  wrap.appendChild(menu);
+  btn.addEventListener('click', function(e) {
+    e.stopPropagation();
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  });
+  document.addEventListener('mousedown', function(e) {
+    if (!wrap.contains(e.target)) menu.style.display = 'none';
+  });
+})();
 
 function togglePivotGroup(idx) {
   var row = document.getElementById('pivot-detail-' + idx);

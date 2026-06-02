@@ -22,12 +22,12 @@
           {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
         </span>
         {% if posture %}
-        <span class="cw-chip cw-chip-{{ 'ok' if posture.grade in ('A', 'A+') else 'warn' if posture.grade == 'B' else 'incomplete' if posture.grade == 'C' else 'crit' }}">{{ posture.grade }}</span>
+        <span class="cw-grade" style="color:{% if posture.grade in ('A+', 'A') %}var(--ok){% elif posture.grade == 'B' %}var(--accent){% elif posture.grade == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ posture.grade }}">{{ posture.grade }}</span>
         {% endif %}
         {% if chain_issue == 'incomplete' %}
-          <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 12, 1.7) }}Chain incomplete</span>
+          <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.8) }}Incomplete chain</span>
         {% elif chain_issue == 'invalid' %}
-          <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 12, 1.7) }}Chain invalid</span>
+          <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.8) }}Invalid chain</span>
         {% endif %}
       </div>
       <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
@@ -273,6 +273,34 @@
         </div>
       </div>
 
+      {# Drift events #}
+      {% if drift_events %}
+      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-13">
+          {{ icons.svg_icon('swap', 15) }}
+          <span class="cw-fz-13-5 cw-fw-600">Configuration drift</span>
+          <div class="cw-spacer"></div>
+          <span class="cw-fz-11-5 cw-text-text-3">detected across re-scans</span>
+        </div>
+        <div class="cw-flex cw-flex-col cw-gap-9">
+          {% for d in drift_events %}
+            {% set high = d.sev == 'high' %}
+            <div class="cw-drift-card {% if high %}cw-drift-high{% else %}cw-bg-inset{% endif %}">
+              {{ icons.svg_icon('swap' if not high else 'alert', 14, 1.8) }}
+              <div style="min-width:0;flex:1">
+                <div class="cw-flex cw-items-center cw-gap-9 cw-wrap">
+                  <span class="cw-fz-12-5 cw-fw-600" style="color:{% if high %}var(--crit){% else %}var(--text){% endif %}">{{ d.field }}</span>
+                  {% if high %}<span class="cw-chip tone-crit">high</span>{% endif %}
+                  <span class="mono cw-fz-11 cw-text-text-3">{{ d.when }}</span>
+                </div>
+                <div class="mono cw-fz-12 cw-text-text-2 cw-mt-4">{{ d.change }}</div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+
       {# Notes #}
       <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
         <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
@@ -360,29 +388,18 @@
         </div>
       {% endfor %}
 
-      {# Chain status banner #}
+      {# Chain status banner — 5-state #}
       {% set _banner_map = {
-        'public': ('var(--ok-soft)', 'var(--ok)'),
-        'private': ('var(--ok-soft)', 'var(--ok)'),
-        'incomplete': ('var(--crit-soft)', 'var(--crit)'),
-        'self-signed': ('var(--accent-soft)', 'var(--accent)'),
-        'invalid': ('var(--crit-soft)', 'var(--crit)')
+        'public': ('var(--panel-2)', 'var(--text-3)', 'link', 'public chain'),
+        'private': ('var(--accent-soft)', 'var(--accent)', 'shield', 'private root'),
+        'incomplete': ('var(--warn-soft)', 'var(--warn)', 'alert', 'chain incomplete'),
+        'self-signed': ('var(--panel-2)', 'var(--text-3)', 'key', 'self-signed'),
+        'invalid': ('var(--crit-soft)', 'var(--crit)', 'alert', 'chain invalid')
       } %}
-      {% set _bg, _fg = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text)' )) %}
+      {% set _bg, _fg, _icon, _label = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text)', 'link', 'unknown')) %}
       <div class="cw-chain-banner cw-mt-4 cw-p-9-11 cw-banner-tone" style="--banner-bg:{{ _bg }};--banner-color:{{ _fg }}">
-        {% if chain_status == 'public' or chain_status == 'private' %}
-          {{ icons.svg_icon('check-circle', 14) }}
-          <span class="cw-fz-12 cw-fw-500">Chain verified to trusted root</span>
-        {% elif chain_status == 'incomplete' %}
-          {{ icons.svg_icon('alert', 14) }}
-          <span class="cw-fz-12 cw-fw-500">Server did not send intermediate(s) — chain rebuilt from known CAs</span>
-        {% elif chain_status == 'self-signed' %}
-          {{ icons.svg_icon('key', 14) }}
-          <span class="cw-fz-12 cw-fw-500">Self-signed certificate</span>
-        {% elif chain_status == 'invalid' %}
-          {{ icons.svg_icon('alert', 14) }}
-          <span class="cw-fz-12 cw-fw-500">Chain validation failed</span>
-        {% endif %}
+        {{ icons.svg_icon(_icon, 14) }}
+        <span class="cw-fz-12 cw-fw-500">{{ _label }}</span>
       </div>
     </div>
   </div>
