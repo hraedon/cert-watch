@@ -60,6 +60,10 @@ def test_scan_host_success_native(monkeypatch, chain_triplet):
 def test_scan_host_connection_failure_native(monkeypatch):
     """Test that connection errors are reported correctly on native path."""
     monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection",
         _fake_open_err(ConnectionRefusedError("refused")),
     )
@@ -72,6 +76,10 @@ def test_scan_host_connection_failure_native(monkeypatch):
 
 def test_scan_host_timeout_native(monkeypatch):
     monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection",
         _fake_open_err(TimeoutError("timed out")),
     )
@@ -82,6 +90,10 @@ def test_scan_host_timeout_native(monkeypatch):
 
 
 def test_scan_host_no_cert_native(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
     monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection", _fake_open_ok([]),
     )
@@ -130,6 +142,10 @@ def test_scan_host_via_openssl_fallback_to_leaf_only(monkeypatch, chain_triplet)
 def test_scan_host_via_openssl_connection_failure(monkeypatch):
     """Test that openssl fallback propagates connection errors."""
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
         lambda *a, **kw: ([], ""),

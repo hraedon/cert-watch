@@ -58,15 +58,18 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-Open: BC-031 (medium, deferred), BC-048 (high), BC-049 (high), BC-051 (high), BC-046 (medium), BC-047 (medium), BC-050 (medium).
+3 open design/latent issues: 0 critical, 0 high, 2 medium, 1 low.
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
-- **BC-048** (high) — `_require_admin` in settings.py only checks authentication, not authorization
-- **BC-049** (high) — DNS-rebinding bypass when host resolution fails in `_scan_host_once`
-- **BC-051** (high) — `Alert.extra_recipients` never persisted — alert group routing silently drops recipients
-- **BC-046** (medium) — `list_unified_entries_page` loads entire dataset into memory before filtering
-- **BC-047** (medium) — Export/report CSV endpoints load full dataset into memory without pagination
+- **BC-061** (medium) — Chain validation is name-matching only, never verifies cryptographic signatures
+- **BC-064** (low) — TLS verification off by default; `verified` not persisted in scan_posture
 - **BC-050** (medium) — `delete_certificate_cascade` doesn't clean `cert_history`, `alert_group_certs`
+
+### Planned consolidation
+
+- **Plan 018** — Auth & data-layer consolidation: Depends sweep (A3), SecurityContext + create_app factory (B1), purpose-built dashboard queries (B2)
+- **Plan 020** — Security middleware consolidation: rate-limit deps, audit logging deps, CSP nonces, get_db dep, proxy-aware IP extraction
+- **Plan 021** — Auth module decomposition: split auth.py into session/protocol/ldap/oauth/local_admin/factory
 
 ### Recently resolved
 

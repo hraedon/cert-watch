@@ -409,6 +409,14 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})", all_ids
         )
+        conn.execute(
+            f"DELETE FROM cert_history WHERE fingerprint_sha256 IN "
+            f"(SELECT fingerprint_sha256 FROM certificates WHERE id IN ({placeholders}))",
+            all_ids,
+        )
+        conn.execute(
+            f"DELETE FROM alert_group_certs WHERE cert_id IN ({placeholders})", all_ids
+        )
         conn.execute("DELETE FROM certificates WHERE parent_cert_id = ?", (cert_id,))
         conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
         conn.commit()

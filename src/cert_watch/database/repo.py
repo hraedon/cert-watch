@@ -1,6 +1,7 @@
 """Repository implementations."""
 from __future__ import annotations
 
+import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -253,8 +254,8 @@ class SqliteAlertRepository(AlertRepository):
                 """
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
-                 created_at, sent_at, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 extra_recipients, created_at, sent_at, error_message)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     alert_id,
@@ -263,6 +264,7 @@ class SqliteAlertRepository(AlertRepository):
                     alert.status,
                     alert.message,
                     alert.threshold_days,
+                    json.dumps(alert.extra_recipients or []),
                     _iso(alert.created_at),
                     _iso(alert.sent_at) if alert.sent_at else None,
                     alert.error_message,
@@ -308,6 +310,12 @@ class SqliteAlertRepository(AlertRepository):
 
     @staticmethod
     def _row_to_alert(row) -> Alert:
+        row_dict = dict(row)
+        extra = row_dict.get("extra_recipients", "[]")
+        try:
+            extra_recipients = json.loads(extra) if extra else []
+        except (json.JSONDecodeError, TypeError):
+            extra_recipients = []
         return Alert(
             id=row["id"],
             cert_id=row["cert_id"],
@@ -318,6 +326,7 @@ class SqliteAlertRepository(AlertRepository):
             created_at=_parse_iso(row["created_at"]),
             sent_at=_parse_iso(row["sent_at"]) if row["sent_at"] else None,
             error_message=row["error_message"],
+            extra_recipients=extra_recipients,
         )
 
 
@@ -543,12 +552,20 @@ class SqliteHostRepository:
                     f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})",
                     all_cert_ids,
                 )
+                conn.execute(
+                    f"DELETE FROM alert_group_certs WHERE cert_id IN ({placeholders})",
+                    all_cert_ids,
+                )
             conn.execute(
                 "DELETE FROM certificates WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
             conn.execute(
                 "DELETE FROM scan_history WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            )
+            conn.execute(
+                "DELETE FROM cert_history WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))

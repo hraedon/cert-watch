@@ -31,14 +31,26 @@ def _db_path(request: Request) -> Path:
 
 
 def _require_admin(request: Request) -> RedirectResponse | None:
-    """Return redirect to /login if not authenticated, or None if OK."""
-    from cert_watch.auth import NoAuthProvider
+    """Return redirect to /login if not authenticated, 403 if not admin, or None if OK."""
+    from cert_watch.auth import LocalAdminProvider, NoAuthProvider, _CompositeProvider
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return None  # No auth configured — allow access
     user = request.scope.get("auth_user")
     if not user:
         return RedirectResponse(url="/login", status_code=303)
+    # Local admin / break-glass always has admin access
+    if isinstance(auth, LocalAdminProvider):
+        return None
+    if isinstance(auth, _CompositeProvider) and auth._local and user == auth._local.username:
+        return None
+    # Check CERT_WATCH_ADMINS list
+    settings = getattr(request.app.state, "settings", None)
+    if settings and settings.admin_users and user not in settings.admin_users:
+        return JSONResponse(
+            content={"error": "forbidden: admin access required"},
+            status_code=403,
+        )
     return None
 
 

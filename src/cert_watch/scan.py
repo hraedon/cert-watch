@@ -491,8 +491,12 @@ def _scan_host_once(
                 dns_servers=dns_servers,
             )
             pinned_ip = _saddr[0]
-        except OSError:
-            pass
+        except OSError as exc:
+            return ScanError(
+                hostname=hostname,
+                port=port,
+                error_message=f"DNS resolution failed: {_friendly_scan_error(exc)}",
+            )
 
     if not _has_native_chain_api():
         return _scan_host_via_openssl(

@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS alerts (
     status TEXT NOT NULL,
     message TEXT NOT NULL,
     threshold_days INTEGER,
+    extra_recipients TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     sent_at TEXT,
     error_message TEXT

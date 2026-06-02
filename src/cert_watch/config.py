@@ -138,6 +138,8 @@ class Settings:
     # Authorization
     allowed_groups: tuple[str, ...] = ()
     allowed_roles: tuple[str, ...] = ()
+    # Admin users (comma-separated usernames allowed to access /settings)
+    admin_users: tuple[str, ...] = ()
     # Local break-glass admin
     local_admin_user: str = ""
     local_admin_password_hash: str = ""
@@ -272,6 +274,12 @@ class Settings:
                 r.strip()
                 for r in os.environ.get("CERT_WATCH_ALLOWED_ROLES", "").split(",")
                 if r.strip()
+            ),
+            # Admin users
+            admin_users=tuple(
+                u.strip()
+                for u in os.environ.get("CERT_WATCH_ADMINS", "").split(",")
+                if u.strip()
             ),
             # Local break-glass admin
             local_admin_user=os.environ.get("CERT_WATCH_LOCAL_ADMIN_USER", ""),
@@ -410,7 +418,10 @@ class Settings:
         ldap_required_groups = _kv_tuple(base.ldap_required_groups, "ldap_required_groups")
         ldap_connect_timeout_str = kv.get("ldap_connect_timeout", "")
         if ldap_connect_timeout_str:
-            ldap_connect_timeout = int(ldap_connect_timeout_str)
+            try:
+                ldap_connect_timeout = int(ldap_connect_timeout_str)
+            except ValueError:
+                ldap_connect_timeout = base.ldap_connect_timeout
         else:
             ldap_connect_timeout = base.ldap_connect_timeout
         oauth_client_id = _kv(base.oauth_client_id, "oauth_client_id")
@@ -427,7 +438,10 @@ class Settings:
         # Merge SMTP fields
         smtp_host = _kv(base.smtp_host or "", "smtp_host") or None
         smtp_port_str = kv.get("smtp_port", "")
-        smtp_port = int(smtp_port_str) if smtp_port_str else base.smtp_port
+        try:
+            smtp_port = int(smtp_port_str) if smtp_port_str else base.smtp_port
+        except ValueError:
+            smtp_port = base.smtp_port
         smtp_user = _kv(base.smtp_user or "", "smtp_user") or None
         smtp_password = _kv(base.smtp_password or "", "smtp_password") or None
         alert_from = _kv(base.alert_from or "", "alert_from") or None
@@ -502,6 +516,8 @@ class Settings:
             # Authorization
             allowed_groups=base.allowed_groups,
             allowed_roles=base.allowed_roles,
+            # Admin users
+            admin_users=base.admin_users,
             # Local break-glass admin
             local_admin_user=local_admin_user,
             local_admin_password_hash=local_admin_password_hash,
