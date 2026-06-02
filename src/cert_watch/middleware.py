@@ -211,7 +211,12 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                 conn.commit()
                 return True
         except Exception:
-            logger.debug("rate limit DB error, falling back to in-memory", exc_info=True)
+            # WARNING, not DEBUG (BC-078): a silent DB-error fallback degrades
+            # rate limiting to per-process counters without anyone noticing.
+            logger.warning(
+                "rate limit DB error, falling back to per-process in-memory limiting",
+                exc_info=True,
+            )
             # Fallback to in-memory on DB errors
             if key not in _rate_cache:
                 _rate_cache[key] = []

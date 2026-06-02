@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import ipaddress
+import logging
 import re
 import secrets
 import socket
@@ -13,6 +14,7 @@ import struct
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from cert_watch.certificate_model import Certificate, parse_certificate
@@ -79,9 +81,35 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
         return None
 
 
+@lru_cache(maxsize=64)
+def _parse_allowed_subnets(allowed_subnets: tuple[str, ...]) -> tuple:
+    """Parse a tuple of CIDR strings into ip_network objects (invalid entries skipped)."""
+    nets = []
+    for cidr in allowed_subnets:
+        try:
+            nets.append(ipaddress.ip_network(cidr.strip(), strict=False))
+        except ValueError:
+            logging.getLogger("cert_watch.scan").warning(
+                "ignoring invalid CERT_WATCH_ALLOWED_SUBNETS entry: %r", cidr
+            )
+    return tuple(nets)
+
+
 def _is_blocked_ip(
-    ip: ipaddress.IPv4Address | ipaddress.IPv6Address, *, allow_private: bool = True
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
 ) -> bool:
+    """Return True if *ip* must not be scanned (SSRF guard).
+
+    - Loopback / link-local / unspecified are ALWAYS blocked (incl. the cloud
+      metadata endpoint 169.254.169.254), regardless of policy.
+    - Public IPs are allowed (scanning public certs is the baseline function).
+    - Private (RFC 1918 / ULA) IPs: when ``allowed_subnets`` is configured, a
+      private IP is allowed only if it falls inside one of those CIDRs (the
+      explicit-allowlist model); otherwise governed by ``allow_private``.
+    """
     check_ip = (
         ip.ipv4_mapped
         if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
@@ -89,7 +117,12 @@ def _is_blocked_ip(
     )
     if any(check_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
         return True
-    return not allow_private and any(check_ip in net for net in _PRIVATE_NETWORKS)
+    if not any(check_ip in net for net in _PRIVATE_NETWORKS):
+        return False  # public — allowed
+    if allowed_subnets:
+        nets = _parse_allowed_subnets(tuple(allowed_subnets))
+        return not any(check_ip in net for net in nets)
+    return not allow_private
 
 
 @dataclass
@@ -190,9 +223,23 @@ def _resolve_with_dns(
             ancount = struct.unpack("!H", response[6:8])[0]
             offset = 12
             qdcount = struct.unpack("!H", response[4:6])[0]
-            for _ in range(qdcount):
-                _, offset = _parse_dns_name(response, offset)
+            question_ok = qdcount >= 1
+            for i in range(qdcount):
+                qname, offset = _parse_dns_name(response, offset)
+                if offset + 4 > len(response):
+                    question_ok = False
+                    break
+                q_qtype, _q_qclass = struct.unpack("!HH", response[offset : offset + 4])
                 offset += 4
+                # Anti-spoofing (BC-079): the echoed question must match what we
+                # asked. A matching txid alone isn't enough — verify name + qtype.
+                if i == 0 and (
+                    qname.rstrip(".").lower() != hostname.rstrip(".").lower()
+                    or q_qtype != qtype
+                ):
+                    question_ok = False
+            if not question_ok:
+                continue
             for _ in range(ancount):
                 _, offset = _parse_dns_name(response, offset)
                 rtype, rclass, _, rdlength = struct.unpack(
@@ -231,6 +278,7 @@ def resolve_hostname(
 
 def _resolve_host(
     hostname: str, port: int, *, allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
 ) -> tuple[int, tuple]:
     """Resolve hostname and check all IPs against the SSRF blocklist.
@@ -247,7 +295,7 @@ def _resolve_host(
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_blocked_ip(ip, allow_private=allow_private):
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
             continue
         return family, sockaddr
     raise OSError(f"hostname {hostname} resolves only to blocked addresses")
@@ -255,7 +303,8 @@ def _resolve_host(
 
 def _open_tls_connection(
     hostname: str, port: int, timeout: float, *, verify: bool = False,
-    allow_private: bool = True, dns_servers: tuple[str, ...] = (),
+    allow_private: bool = True, allowed_subnets: tuple[str, ...] = (),
+    dns_servers: tuple[str, ...] = (),
     pinned_ip: str | None = None,
 ):
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
@@ -272,11 +321,12 @@ def _open_tls_connection(
         ip = _ip.ip_address(pinned_ip)
         family = socket.AF_INET6 if isinstance(ip, _ip.IPv6Address) else socket.AF_INET
         sockaddr = (pinned_ip, port, 0, 0) if family == socket.AF_INET6 else (pinned_ip, port)
-        if _is_blocked_ip(ip, allow_private=allow_private):
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
             raise OSError(f"pinned IP {pinned_ip} is a blocked address")
     else:
         _family, sockaddr = _resolve_host(
-            hostname, port, allow_private=allow_private, dns_servers=dns_servers,
+            hostname, port, allow_private=allow_private,
+            allowed_subnets=allowed_subnets, dns_servers=dns_servers,
         )
     sock = socket.socket(family if pinned_ip else _family, socket.SOCK_STREAM)
     sock.settimeout(timeout)
@@ -334,6 +384,7 @@ _PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNOREC
 
 def _scan_via_openssl(
     hostname: str, port: int, timeout: float, *, allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (), pinned_ip: str | None = None,
 ) -> tuple[list[bytes], str]:
     """Extract the full certificate chain and protocol version using a single
@@ -347,12 +398,13 @@ def _scan_via_openssl(
             import ipaddress as _ip
 
             ip = _ip.ip_address(pinned_ip)
-            if _is_blocked_ip(ip, allow_private=allow_private):
+            if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
                 return [], ""
             host = pinned_ip
         else:
             _family, sockaddr = _resolve_host(
-                hostname, port, allow_private=allow_private, dns_servers=dns_servers,
+                hostname, port, allow_private=allow_private,
+                allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             )
             host = sockaddr[0]
     except OSError:
@@ -373,6 +425,13 @@ def _scan_via_openssl(
         return [], ""
 
     if proc.returncode not in (0, 1):
+        # Surface openssl's diagnostics (BC-077) — silently dropping stderr made
+        # scan failures undebuggable. Debug level keeps normal runs quiet.
+        logging.getLogger("cert_watch.scan").debug(
+            "openssl s_client for %s:%s exited %s: %s",
+            hostname, port, proc.returncode,
+            proc.stderr.decode("utf-8", errors="replace")[:500] if proc.stderr else "",
+        )
         return [], ""
 
     protocol_version = ""
@@ -439,6 +498,7 @@ def scan_host(
     timeout: float = DEFAULT_TIMEOUT,
     verify: bool = False,
     allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
@@ -452,7 +512,7 @@ def scan_host(
     for attempt in range(1 + retries):
         result = _scan_host_once(
             hostname, port, timeout=timeout, verify=verify,
-            allow_private=allow_private, dns_servers=dns_servers,
+            allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip,
         )
         if isinstance(result, ScannedEntry):
@@ -471,6 +531,7 @@ def _scan_host_once(
     timeout: float = DEFAULT_TIMEOUT,
     verify: bool = False,
     allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
     pinned_ip: str | None = None,
 ) -> ScannedEntry | ScanError:
@@ -487,7 +548,7 @@ def _scan_host_once(
     if pinned_ip is None:
         try:
             _fam, _saddr = _resolve_host(
-                hostname, port, allow_private=allow_private,
+                hostname, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
                 dns_servers=dns_servers,
             )
             pinned_ip = _saddr[0]
@@ -501,13 +562,14 @@ def _scan_host_once(
     if not _has_native_chain_api():
         return _scan_host_via_openssl(
             hostname, port, timeout=timeout,
-            allow_private=allow_private, dns_servers=dns_servers,
+            allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, verify=verify,
         )
 
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=verify, allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
             dns_servers=dns_servers, pinned_ip=pinned_ip,
         )
     except (TimeoutError, OSError) as exc:
@@ -563,6 +625,7 @@ def _scan_host_via_openssl(
     *,
     timeout: float,
     allow_private: bool,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...],
     pinned_ip: str | None = None,
     verify: bool = False,
@@ -574,7 +637,8 @@ def _scan_host_via_openssl(
     connection (leaf-only, no chain).
     """
     der_chain, protocol_version = _scan_via_openssl(
-        hostname, port, timeout, allow_private=allow_private, dns_servers=dns_servers,
+        hostname, port, timeout, allow_private=allow_private,
+        allowed_subnets=allowed_subnets, dns_servers=dns_servers,
         pinned_ip=pinned_ip,
     )
 
@@ -602,7 +666,7 @@ def _scan_host_via_openssl(
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=False,
-            allow_private=allow_private, dns_servers=dns_servers,
+            allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip,
         )
     except (TimeoutError, OSError) as exc:

@@ -110,6 +110,12 @@ class Settings:
     alert_digest_only: bool = False
     tls_verify: bool = False
     allow_private: bool = True
+    # CIDR allowlist scoping which PRIVATE ranges may be scanned. When set, a
+    # private target IP is allowed only if it falls inside one of these CIDRs
+    # (public hosts stay scannable; loopback/link-local stay blocked). Empty =
+    # no allowlist, governed by allow_private. Makes internal scanning an
+    # explicit, auditable capability rather than an ambient default.
+    allowed_subnets: tuple[str, ...] = ()
     dns_servers: tuple[str, ...] = ()
     log_format: str = "text"
     audit_retention_days: int = 90
@@ -236,6 +242,11 @@ class Settings:
             check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
+            allowed_subnets=tuple(
+                s.strip()
+                for s in os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "").split(",")
+                if s.strip()
+            ),
             log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"),
             dns_servers=tuple(
                 s.strip()
@@ -383,12 +394,16 @@ class Settings:
                 return env_val
             return kv.get(kv_key, "") or default
 
-        def _kv_bool(env_val: bool, kv_key: str) -> bool:
-            """Return env_val if explicitly set via env, else kv_store value."""
-            # If the env var is set, it takes precedence
-            # We can't easily distinguish "False from default" vs "False from env"
-            # So we check if the env var exists at all
-            # For now, kv_store only overrides when env is the default
+        def _kv_bool(env_val: bool, kv_key: str, env_name: str) -> bool:
+            """Env wins when the env var is explicitly set (even to 0); else
+            kv_store; else the parsed env default.
+
+            Checking ``env_name in os.environ`` is what makes explicit env
+            precedence work for booleans whose default is False — without it a
+            kv_store "1" silently overrode an operator's explicit ``=0`` (BC-076).
+            """
+            if env_name in os.environ:
+                return env_val
             kv_val = kv.get(kv_key, "")
             if kv_val:
                 return kv_val == "1" or kv_val.lower() == "true"
@@ -413,7 +428,8 @@ class Settings:
             base.ldap_user_filter, "ldap_user_filter",
             "(sAMAccountName={username})",
         )
-        ldap_start_tls = _kv_bool(base.ldap_start_tls, "ldap_start_tls")
+        ldap_start_tls = _kv_bool(base.ldap_start_tls, "ldap_start_tls", "LDAP_START_TLS")
+        allowed_subnets = _kv_tuple(base.allowed_subnets, "allowed_subnets")
         ldap_ca_cert = _kv(base.ldap_ca_cert, "ldap_ca_cert")
         ldap_required_groups = _kv_tuple(base.ldap_required_groups, "ldap_required_groups")
         ldap_connect_timeout_str = kv.get("ldap_connect_timeout", "")
@@ -488,6 +504,7 @@ class Settings:
             alert_digest_only=alert_digest_only,
             tls_verify=base.tls_verify,
             allow_private=base.allow_private,
+            allowed_subnets=allowed_subnets,
             dns_servers=base.dns_servers,
             log_format=base.log_format,
             audit_retention_days=base.audit_retention_days,

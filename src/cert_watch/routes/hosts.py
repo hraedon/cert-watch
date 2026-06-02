@@ -49,6 +49,7 @@ def _is_blocked_host_check(
     hostname: str,
     *,
     allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
 ) -> tuple[str | None, str | None]:
     """SSRF pre-check for the add-host form.
@@ -74,7 +75,7 @@ def _is_blocked_host_check(
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_blocked_ip(ip, allow_private=allow_private):
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
             check_ip = (
                 ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
             )
@@ -86,6 +87,12 @@ def _is_blocked_host_check(
     if pinned_ip is None:
         if blocked_info is not None:
             ip, is_private = blocked_info
+            if is_private and allowed_subnets:
+                return (
+                    f"hostname resolves to private address {ip}, which is outside the "
+                    f"configured CERT_WATCH_ALLOWED_SUBNETS. Add its range to scan it.",
+                    None,
+                )
             if is_private and not allow_private:
                 return (
                     f"hostname resolves to blocked address {ip}. "
@@ -126,6 +133,7 @@ async def add_host(
     ssrf_err, pinned_ip = _is_blocked_host_check(
         hostname,
         allow_private=s.allow_private,
+        allowed_subnets=s.allowed_subnets,
         dns_servers=s.dns_servers,
     )
     if ssrf_err:
@@ -157,6 +165,7 @@ async def add_host(
             hostname,
             p,
             allow_private=s.allow_private,
+            allowed_subnets=s.allowed_subnets,
             dns_servers=s.dns_servers,
             pinned_ip=pinned_ip,
         )
@@ -239,6 +248,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         ssrf_err, row_pinned_ip = _is_blocked_host_check(
             hostname,
             allow_private=s.allow_private,
+            allowed_subnets=s.allowed_subnets,
             dns_servers=s.dns_servers,
         )
         if ssrf_err:
@@ -264,6 +274,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
     # Scan hosts concurrently
     allow_priv = s.allow_private
+    allowed_nets = s.allowed_subnets
     dns_srv = s.dns_servers
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
@@ -283,6 +294,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             hostname,
             port,
             allow_private=allow_priv,
+            allowed_subnets=allowed_nets,
             dns_servers=dns_srv,
             pinned_ip=pinned,
         )
@@ -363,6 +375,7 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         host.hostname,
         host.port,
         allow_private=s.allow_private,
+        allowed_subnets=s.allowed_subnets,
         dns_servers=s.dns_servers,
     )
     if not isinstance(result, ScanError):

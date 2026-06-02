@@ -166,6 +166,7 @@ async def lifespan(app: FastAPI):
         return run_scan_now(
             scan_fn=lambda host, port: scan_host(
                 host, port, verify=s.tls_verify, allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
                 dns_servers=s.dns_servers,
             ),
             alert_fn=lambda: {"sent": 0, "failed": 0},

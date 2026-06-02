@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -56,6 +57,7 @@ async def setup_submit(
     username: str = Form(""),
     password: str = Form(""),
     password_confirm: str = Form(""),
+    allowed_subnets: str = Form(""),
 ) -> RedirectResponse:
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
@@ -90,10 +92,29 @@ async def setup_submit(
             return RedirectResponse(
                 url="/setup?step=1&error=passwords+do+not+match", status_code=303
             )
+        # Optional: scan-allowlist of private CIDRs (SSRF policy). Validate before
+        # persisting so a typo doesn't half-complete setup.
+        import ipaddress
+        from dataclasses import replace as _dc_replace
+
+        subnet_list = [c.strip() for c in allowed_subnets.split(",") if c.strip()]
+        for cidr in subnet_list:
+            try:
+                ipaddress.ip_network(cidr, strict=False)
+            except ValueError:
+                return RedirectResponse(
+                    url=f"/setup?step=1&error=invalid+subnet:+{quote(cidr)}", status_code=303
+                )
         # Store in kv_store
         password_hash = _scrypt_hash(password)
         kv_set(db, "local_admin_user", username)
         kv_set(db, "local_admin_password_hash", password_hash)
+        if subnet_list:
+            kv_set(db, "allowed_subnets", ",".join(subnet_list))
+            # Apply immediately to the running app (Settings is frozen).
+            request.app.state.settings = _dc_replace(s, allowed_subnets=tuple(subnet_list))
+            s = request.app.state.settings
+            logger.info("setup wizard: scan allowlist set to %s", subnet_list)
         kv_set(db, "setup_complete", "1")
 
         # Rebuild auth provider with the new local admin

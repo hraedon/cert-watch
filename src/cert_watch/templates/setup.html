@@ -48,6 +48,20 @@
             <input class="cw-input" type="password" id="password_confirm" name="password_confirm" required
                    placeholder="re-enter password" minlength="8" autocomplete="new-password">
           </div>
+          <div class="cw-field cw-mb-16">
+            <label class="cw-label" for="allowed_subnets">Internal networks to allow scanning <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input" type="text" id="allowed_subnets" name="allowed_subnets"
+                   placeholder="10.0.0.0/8, 192.168.0.0/16">
+            <div class="cw-muted cw-mt-8" style="font-size:0.8rem">
+              Comma-separated CIDR ranges that cert-watch may scan. Leave blank to
+              allow all private addresses (RFC 1918), or list only the internal
+              networks you intend to monitor — anything outside them (and outside
+              public hosts) is refused. Loopback and link-local (incl. cloud
+              metadata) are always blocked. You can change this later under
+              <strong>Settings</strong> or via the <code>CERT_WATCH_ALLOWED_SUBNETS</code>
+              environment variable.
+            </div>
+          </div>
           <button type="submit" class="cw-btn primary cw-btn--expand">Create admin &amp; continue</button>
         </form>
 

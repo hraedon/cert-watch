@@ -284,6 +284,38 @@ class TestSetupWizard:
         assert pw_hash is not None
         assert verify_scrypt_hash("SecurePass123", pw_hash)
 
+    def test_create_admin_with_allowed_subnets(self, setup_app_client, fresh_db):
+        """The wizard persists the optional scan allowlist to kv_store."""
+        setup_app_client.get("/setup", follow_redirects=False)
+        sid = next(c.value for c in setup_app_client.cookies.jar if c.name == "cw_sid")
+        r = setup_app_client.post("/setup", data={
+            "_csrf_token": make_csrf_token(sid),
+            "step": "1",
+            "username": "admin2",
+            "password": "SecurePass123",
+            "password_confirm": "SecurePass123",
+            "allowed_subnets": "10.0.0.0/8, 192.168.0.0/16",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        assert r.headers.get("location", "") == "/"
+        assert kv_get(fresh_db, "allowed_subnets") == "10.0.0.0/8,192.168.0.0/16"
+
+    def test_invalid_allowed_subnet_rejected(self, setup_app_client, fresh_db):
+        """An invalid CIDR aborts setup before any admin is created."""
+        setup_app_client.get("/setup", follow_redirects=False)
+        sid = next(c.value for c in setup_app_client.cookies.jar if c.name == "cw_sid")
+        r = setup_app_client.post("/setup", data={
+            "_csrf_token": make_csrf_token(sid),
+            "step": "1",
+            "username": "admin3",
+            "password": "SecurePass123",
+            "password_confirm": "SecurePass123",
+            "allowed_subnets": "not-a-cidr",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        assert "invalid+subnet" in r.headers.get("location", "")
+        assert kv_get(fresh_db, "local_admin_user") is None
+
     def test_password_mismatch(self, setup_app_client):
         """Password confirmation mismatch returns error."""
         r = setup_app_client.get("/setup", follow_redirects=False)
