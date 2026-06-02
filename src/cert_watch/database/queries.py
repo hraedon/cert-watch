@@ -254,7 +254,7 @@ def _compute_drift_events(
 
     # Key algorithm change — check for key size drop → high
     old_key = old.get("key_algo", "")
-    new_key = new_key_algo or old_key  # fall back if not provided
+    new_key = new_key_algo
     if old_key and new_key and old_key != new_key:
         old_type, old_size = _parse_key_algo(old_key)
         new_type, new_size = _parse_key_algo(new_key)
@@ -265,7 +265,7 @@ def _compute_drift_events(
 
     # Signature algorithm weakened (e.g. SHA-256 → SHA-1) → high
     old_sig = old.get("sig_algo", "")
-    new_sig = new_sig_algo or old_sig
+    new_sig = new_sig_algo
     if old_sig and new_sig and old_sig != new_sig:
         if _is_sha1_algo(new_sig) and not _is_sha1_algo(old_sig):
             events.append(DriftEvent("sig_algo", old_sig, new_sig, "high"))
@@ -274,7 +274,7 @@ def _compute_drift_events(
 
     # Posture grade dropped → high
     old_grade = old.get("posture_grade", "")
-    grade = new_posture_grade or old_grade
+    grade = new_posture_grade
     if old_grade and grade and old_grade != grade:
         if _grade_value(grade) < _grade_value(old_grade):
             events.append(DriftEvent("posture_grade", old_grade, grade, "high"))
@@ -283,7 +283,7 @@ def _compute_drift_events(
 
     # Protocol version downgraded → high
     old_proto = old.get("protocol_version", "")
-    proto = new_protocol_version or old_proto
+    proto = new_protocol_version
     if old_proto and proto and old_proto != proto:
         if _tls_value(proto) < _tls_value(old_proto):
             events.append(DriftEvent("protocol_version", old_proto, proto, "high"))

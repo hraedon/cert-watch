@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Request
@@ -131,7 +131,7 @@ def api_health(request: Request) -> JSONResponse:
 
     # Failed alerts in last 24h
     try:
-        cutoff = (datetime.now(UTC) - __import__("datetime").timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
         with _connect(db) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
@@ -284,7 +284,7 @@ def dashboard(
         name="dashboard.html",
         context={
             "entries": display_entries,
-            "all_entries": page_entries if pivot_groups else page_entries,
+            "all_entries": page_entries,
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
             "pivot_view": view if pivot_groups else "",

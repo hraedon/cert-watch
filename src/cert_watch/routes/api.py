@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import csv
 import io
+import ipaddress
 import logging
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -76,6 +78,24 @@ def _get_settings(request: Request) -> Settings:
 
 def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
+
+
+def _validate_webhook_url(url: str) -> JSONResponse | None:
+    parsed = urlparse(url)
+    if parsed.scheme not in ("https", "http"):
+        return JSONResponse(content={"error": "webhook_url must use http(s)"}, status_code=400)
+    if not parsed.hostname:
+        return JSONResponse(content={"error": "webhook_url must have a hostname"}, status_code=400)
+    try:
+        ip = ipaddress.ip_address(parsed.hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            return JSONResponse(
+                content={"error": "webhook_url must not point to private/local"},
+                status_code=400,
+            )
+    except ValueError:
+        pass
+    return None
 
 
 # ---------- Certificates ----------
@@ -487,6 +507,9 @@ async def api_create_alert_group(
     if not isinstance(webhook_url, str):
         return JSONResponse(content={"error": "webhook_url must be a string"}, status_code=400)
 
+    if webhook_url:
+        _validate_webhook_url(webhook_url)
+
     # Validate emails minimally
     for r in recipients_raw:
         if "@" not in r:
@@ -568,6 +591,10 @@ async def api_update_alert_group(
             )
     if webhook_url is not None and not isinstance(webhook_url, str):
         return JSONResponse(content={"error": "webhook_url must be a string"}, status_code=400)
+    if webhook_url:
+        err = _validate_webhook_url(webhook_url)
+        if err:
+            return err
 
     # Check unique name on rename
     if name is not None:

@@ -178,7 +178,11 @@ def evaluate_all_certs(
             issuer=leaf_row["issuer"],
             not_before=_parse_iso(leaf_row["not_before"]),
             not_after=_parse_iso(leaf_row["not_after"]),
-            san_dns_names=json.loads(leaf_row["san_dns_names"]),
+            san_dns_names=(
+                json.loads(leaf_row["san_dns_names"])
+                if leaf_row["san_dns_names"]
+                else []
+            ),
             fingerprint_sha256=leaf_row["fingerprint_sha256"],
             raw_der=bytes(leaf_row["raw_der"]),
             is_leaf=True,

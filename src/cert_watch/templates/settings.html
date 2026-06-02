@@ -328,7 +328,7 @@
       result.textContent = '';
 
       var form = new FormData();
-      form.append('_csrf_token', '{{ csrf_token }}');
+      form.append('_csrf_token', {{ csrf_token | tojson }});
       form.append('ldap_server', document.getElementById('ldap_server').value);
       form.append('ldap_base_dn', document.getElementById('ldap_base_dn').value);
       form.append('ldap_bind_dn', document.getElementById('ldap_bind_dn').value);
@@ -362,7 +362,7 @@
       result.textContent = '';
 
       var form = new FormData();
-      form.append('_csrf_token', '{{ csrf_token }}');
+      form.append('_csrf_token', {{ csrf_token | tojson }});
       form.append('smtp_host', document.getElementById('smtp_host').value);
       form.append('smtp_port', document.getElementById('smtp_port').value);
       form.append('smtp_user', document.getElementById('smtp_user').value);

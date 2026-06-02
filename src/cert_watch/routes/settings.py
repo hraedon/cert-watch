@@ -221,7 +221,7 @@ async def save_auth_config(request: Request) -> RedirectResponse:
     except (ValueError, Exception) as exc:
         logger.warning("settings: auth provider rebuild failed: %s", exc)
         return RedirectResponse(
-            url=f"/settings?tab=auth&error={exc}", status_code=303
+            url=f"/settings?tab=auth&error={str(exc)[:120].replace(chr(10), ' ')}", status_code=303
         )
 
     return RedirectResponse(url="/settings?tab=auth&saved=1", status_code=303)
@@ -316,29 +316,39 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
         is_ldaps = any(s.lower().startswith("ldaps://") for s in server_urls)
 
         tls_kwargs: dict = {}
+        tmp_path: str | None = None
         if is_ldaps or start_tls:
             tls_kwargs["validate"] = ssl.CERT_REQUIRED
             if ca_cert:
+                import contextlib
+                import os
                 import tempfile
-                with tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False) as f:
-                    f.write(ca_cert)
-                    tls_kwargs["ca_certs_file"] = f.name
+                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)  # noqa: SIM115
+                tmp.write(ca_cert)
+                tmp.close()
+                tmp_path = tmp.name
+                tls_kwargs["ca_certs_file"] = tmp_path
 
-        tls = ldap3.Tls(**tls_kwargs) if tls_kwargs else None
-        servers = [
-            ldap3.Server(url, tls=tls, connect_timeout=connect_timeout)
-            for url in server_urls
-        ]
-        pool = ldap3.ServerPool(servers, ldap3.FIRST)
+        try:
+            tls = ldap3.Tls(**tls_kwargs) if tls_kwargs else None
+            servers = [
+                ldap3.Server(url, tls=tls, connect_timeout=connect_timeout)
+                for url in server_urls
+            ]
+            pool = ldap3.ServerPool(servers, ldap3.FIRST)
 
-        conn = ldap3.Connection(
-            pool,
-            user=bind_dn or None,
-            password=bind_password or None,
-            auto_bind=True if not start_tls else ldap3.AUTO_BIND_TLS_BEFORE_BIND,
-            read_only=True,
-        )
-        conn.unbind()
+            conn = ldap3.Connection(
+                pool,
+                user=bind_dn or None,
+                password=bind_password or None,
+                auto_bind=True if not start_tls else ldap3.AUTO_BIND_TLS_BEFORE_BIND,
+                read_only=True,
+            )
+            conn.unbind()
+        finally:
+            if tmp_path:
+                with contextlib.suppress(OSError):
+                    os.unlink(tmp_path)
         return JSONResponse({"ok": True, "message": f"Connected to {server}"})
     except ImportError:
         return JSONResponse({

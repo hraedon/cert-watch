@@ -58,9 +58,15 @@ E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t
 
 ## Known issues (open breadcrumbs)
 
-Open: BC-031 (medium, deferred).
+Open: BC-031 (medium, deferred), BC-048 (high), BC-049 (high), BC-051 (high), BC-046 (medium), BC-047 (medium), BC-050 (medium).
 
 - **BC-031** (medium, deferred) — Add PostgreSQL and MSSQL support alongside SQLite
+- **BC-048** (high) — `_require_admin` in settings.py only checks authentication, not authorization
+- **BC-049** (high) — DNS-rebinding bypass when host resolution fails in `_scan_host_once`
+- **BC-051** (high) — `Alert.extra_recipients` never persisted — alert group routing silently drops recipients
+- **BC-046** (medium) — `list_unified_entries_page` loads entire dataset into memory before filtering
+- **BC-047** (medium) — Export/report CSV endpoints load full dataset into memory without pagination
+- **BC-050** (medium) — `delete_certificate_cascade` doesn't clean `cert_history`, `alert_group_certs`
 
 ### Recently resolved
 
