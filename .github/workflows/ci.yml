@@ -15,8 +15,14 @@ jobs:
       - run: uv pip install -e ".[dev]"
       - name: pip-audit
         run: |
+          # Audit the third-party dependency closure. Snapshot it before
+          # installing pip-audit (so the audit tool's own deps aren't included)
+          # and drop cert-watch itself — it's an unpublished editable install
+          # (rendered by uv as an `-e file://…/cert-watch` line), which --strict
+          # would otherwise fail on ("not found on PyPI").
+          uv pip freeze | grep -v 'cert-watch' > /tmp/audit-reqs.txt
           uv pip install pip-audit
-          .venv/bin/pip-audit --strict --requirement <(uv pip freeze)
+          .venv/bin/pip-audit --strict --requirement /tmp/audit-reqs.txt
       - name: ruff
         run: .venv/bin/ruff check .
       - name: pytest
