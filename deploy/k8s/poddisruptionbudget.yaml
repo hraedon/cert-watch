@@ -1,0 +1,14 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cert-watch
+  namespace: cert-watch
+spec:
+  # SQLite single-writer + Recreate rollout strategy means the pod is already
+  # unavailable during deployments. A PDB with minAvailable: 0 documents that
+  # this is intentional, not an oversight, so cluster disruption controllers
+  # (e.g. cluster-autoscaler, node upgrades) don't fight the deployment.
+  minAvailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cert-watch

@@ -99,6 +99,7 @@ def get_session_id(request: Request) -> str:
 
 _rate_lock = threading.Lock()
 _rate_db_path: Path | None = None
+_rate_db_initialized = False
 # In-memory cache for reduced DB I/O (per-key, synced to SQLite)
 _rate_cache: dict[str, list[float]] = {}
 _RATE_CACHE_TTL = 10.0  # seconds before cache entry is considered stale
@@ -198,7 +199,10 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
             from cert_watch.database.connection import _connect
             from cert_watch.database.schema import init_schema
 
-            init_schema(_rate_db_path)
+            global _rate_db_initialized
+            if not _rate_db_initialized:
+                init_schema(_rate_db_path)
+                _rate_db_initialized = True
             with _connect(_rate_db_path) as conn:
                 # Periodic cleanup of stale entries
                 cache_ts = _rate_cache.get(key)

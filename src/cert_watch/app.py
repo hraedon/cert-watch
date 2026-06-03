@@ -54,6 +54,10 @@ def _setup_logging(log_format: str = "text") -> None:
     import json as _json
     import sys
 
+    _LOG_RECORD_KEYS = frozenset(
+        logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+    )
+
     class _JsonFormatter(logging.Formatter):
         def format(self, record: logging.LogRecord) -> str:
             entry = {
@@ -66,9 +70,7 @@ def _setup_logging(log_format: str = "text") -> None:
                 entry["exception"] = self.formatException(record.exc_info)
             extra = {
                 k: v for k, v in record.__dict__.items()
-                if k not in logging.LogRecord(
-                    "", 0, "", 0, "", (), None
-                ).__dict__ and k not in ("message", "asctime")
+                if k not in _LOG_RECORD_KEYS and k not in ("message", "asctime")
             }
             if extra:
                 entry["extra"] = extra

@@ -10,6 +10,7 @@ resources:
 - prometheus-rules.yaml
 - networkpolicy.yaml
 - https-redirect.yaml
+- poddisruptionbudget.yaml
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch

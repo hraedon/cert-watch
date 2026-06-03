@@ -146,6 +146,7 @@ class ScannedEntry:
     protocol_version: str = ""
     hsts: bool | None = None
     tls_verified: bool | None = None
+    chain_incomplete: bool = False
 
 
 def _build_dns_query(name: str, qtype: int) -> bytes:
@@ -664,6 +665,10 @@ def _scan_host_via_openssl(
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
+    logger.warning(
+        "openssl scan degraded for %s:%s — certificate chain will be incomplete",
+        hostname, port,
+    )
     try:
         ssl_sock = _open_tls_connection(
             hostname, port, timeout, verify=False,
@@ -705,6 +710,7 @@ def _scan_host_via_openssl(
         protocol_version=protocol_version_fb,
         hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
         tls_verified=False,
+        chain_incomplete=True,
     )
 
 
@@ -724,6 +730,11 @@ def store_scanned(
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
+        if entry.chain_incomplete:
+            logger.warning(
+                "stored scan for %s:%s with incomplete chain (openssl degraded)",
+                entry.host, entry.port,
+            )
         leaf_id = replace_scanned(
             repo_path_or_repo,
             hostname=entry.host,

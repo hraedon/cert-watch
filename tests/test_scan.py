@@ -137,6 +137,7 @@ def test_scan_host_via_openssl_fallback_to_leaf_only(monkeypatch, chain_triplet)
     result = scan_host("example.com", 443)
     assert isinstance(result, ScannedEntry)
     assert result.chain == []
+    assert result.chain_incomplete is True
 
 
 def test_scan_host_via_openssl_connection_failure(monkeypatch):

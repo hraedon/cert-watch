@@ -9,7 +9,7 @@ def _load_runtime_version() -> tuple[str, str]:
         vf = files("cert_watch").joinpath("_version.txt")
         if vf.is_file():
             content = vf.read_text().strip()
-            parts = content.split("\n")
+            parts = [p for p in content.split("\n") if not p.startswith("#")]
             ver = parts[0].lstrip("v") if parts else ""
             commit = parts[1] if len(parts) > 1 else ""
             return ver or __version__, commit
