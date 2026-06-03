@@ -199,8 +199,14 @@ class LDAPAuthProvider(AuthProvider):
             )
             if self.start_tls and tls:
                 user_conn.start_tls()
-            user_conn.bind()
+            # ldap3's bind() returns False on bad credentials (it does not raise
+            # unless raise_exceptions=True), so the result MUST be checked. This
+            # is the actual password-verification step — ignoring it is an auth
+            # bypass (any password would be accepted for an existing user).
+            bound = user_conn.bind()
             user_conn.unbind()
+            if not bound:
+                return AuthResult(success=False, error="invalid credentials")
 
             return AuthResult(
                 success=True,

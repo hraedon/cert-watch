@@ -95,6 +95,38 @@ def test_bc115_starttls_user_conn_tls_before_bind(_mock_ldap3):
     user_conn.bind.assert_called_once()
 
 
+def test_bc115_user_bind_failure_rejected(_mock_ldap3):
+    """A failed user bind (wrong password) must NOT authenticate.
+
+    ldap3's bind() returns False on bad credentials rather than raising, so the
+    provider must check the result. Without that check this is an auth bypass:
+    any password authenticates an existing user.
+    """
+    from cert_watch.auth import LDAPAuthProvider
+
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+    )
+
+    svc_conn = MagicMock()
+    entry = MagicMock()
+    entry.distinguishedName = "CN=user,DC=test"
+    entry.memberOf.values = ["CN=Users,DC=test"]
+    svc_conn.entries = [entry]
+
+    user_conn = MagicMock()
+    user_conn.bind.return_value = False  # wrong password → bind fails (no raise)
+
+    _mock_ldap3.Connection.side_effect = [svc_conn, user_conn]
+
+    result = provider.authenticate("user", "wrong-password")
+    assert result.success is False
+    assert "invalid credentials" in result.error
+
+
 def test_bc115_no_starttls_binds_normally(_mock_ldap3):
     """Without StartTLS, service conn just binds normally."""
     from cert_watch.auth import LDAPAuthProvider

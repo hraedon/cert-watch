@@ -1,4 +1,15 @@
-"""SSRF-safe HTTP client — validates every hop (initial + redirects)."""
+"""SSRF-guarded HTTP client — resolves and checks the initial URL and every
+redirect target against the scan blocklist before the request proceeds.
+
+Residual limitation (deliberate, documented): validation resolves the hostname
+with ``getaddrinfo`` and rejects the request if *any* returned address is
+blocked, but urllib re-resolves independently when it connects. A hostname whose
+DNS flips between the check and the connect (DNS rebinding) therefore retains a
+narrow window. Closing it fully requires pinning the resolved IP and connecting
+to it with SNI (as ``scan.py`` does for the TLS scanner); that is a follow-up.
+This guard is a large improvement over unvalidated ``urlopen`` — it is not an
+airtight pin.
+"""
 
 from __future__ import annotations
 
@@ -83,11 +94,11 @@ def ssrf_safe_urlopen(
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
 ) -> HTTPResponse:
-    """Open a URL with SSRF validation on every hop.
+    """Open a URL with SSRF validation on the initial URL and each redirect hop.
 
-    Validates the initial URL and each redirect target against the scan
-    blocklist.  Returns the final response object (caller must close it).
-    Raises ``SSRFBlockedError`` when any hop resolves to a blocked address.
+    Returns the final response object (caller must close it). Raises
+    ``SSRFBlockedError`` when a hop resolves to a blocked address at check time.
+    See the module docstring for the residual DNS-rebinding limitation.
     """
     _validate_url(url, allow_private=allow_private, allowed_subnets=allowed_subnets)
 
