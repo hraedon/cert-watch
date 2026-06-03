@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.13-slim AS builder
 
-ARG GIT_TAG=0.3.0
+ARG GIT_TAG=0.4.0
 ARG GIT_COMMIT=unknown
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \

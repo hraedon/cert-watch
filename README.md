@@ -1,6 +1,11 @@
 # cert-watch
 
-Track expirations of TLS certificates from scanned hosts and uploaded files, with a web dashboard, REST API, and alerting.
+All-in-one observability for the **certificate lifecycle** — built for small and
+mid-sized businesses that need one self-hosted place to see every TLS
+certificate they depend on. Live host scanning **and** offline file upload feed a
+web dashboard, REST API, and alerting; signature-verified chain validation, TLS
+posture grading, and Certificate Transparency reconciliation turn "is it
+expiring?" into "is the whole estate healthy?"
 
 Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), and multi-cert chain bundles.
 
@@ -24,7 +29,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 
 ## Stack
 
-- Python 3.12+ / FastAPI / Jinja2 / `cryptography`
+- Python 3.12+ / FastAPI / Jinja2 / `cryptography` / `dnspython` (CAA + custom-nameserver resolution)
 - SQLite (single-file, WAL mode)
 - Optional: `ldap3` (LDAP auth), `authlib` (OAuth auth)
 - Docker image published to GHCR (multi-arch: amd64 + arm64)
@@ -419,16 +424,20 @@ deploy/
 ## Prior art & positioning
 
 cert-watch is not the first TLS-certificate monitor, and it doesn't pretend to
-be. It exists as a controlled build-method experiment (a hand-built comparison
-point for [software-factory-2](https://github.com/hraedon/software-factory-2))
-and as deep, read-only certificate **observability** for a regulated,
-directory-authenticated, self-hosted environment. For simple "tell me before a
-cert expires," tools like **Uptime Kuma** are an excellent fit; for pure CT
-watch, **SSLMate Cert Spotter**; for ACME issuance/renewal, **Certimate**.
+be. Its niche is being the **all-in-one** certificate-observability tool a small
+or mid-sized business can self-host: deep, read-only insight into the whole
+certificate estate in one unit, rather than stitching several single-purpose
+tools together. For simple "tell me before a cert expires," tools like **Uptime
+Kuma** are an excellent fit; for pure CT watch, **SSLMate Cert Spotter**; for
+ACME issuance/renewal, **Certimate**.
 
-cert-watch's niche is the bundle a regulated AD shop needs in one self-contained
-unit: live scan **+** offline upload, signature-verified chain validation, TLS
-posture grading, CT reconciliation, LDAP/Entra auth, and an audit log.
+cert-watch's value is the bundle an SMB otherwise has to assemble piecemeal,
+delivered as one self-contained unit: live scan **+** offline upload,
+signature-verified chain validation, TLS posture grading, CT reconciliation,
+directory auth (LDAP/Entra), and an audit log. (It also began life as a
+hand-built comparison point for
+[software-factory-2](https://github.com/hraedon/software-factory-2); that origin
+is documented in the positioning notes but is no longer what the tool is for.)
 
 See [`docs/positioning.md`](docs/positioning.md) for the full landscape table,
 an honest account of where the alternatives are better, and how this shapes the

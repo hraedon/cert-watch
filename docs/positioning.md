@@ -7,30 +7,32 @@ and understand why this exists anyway.
 
 ## Why this project exists
 
-1. **It started as a controlled build-method experiment.** cert-watch is the
-   hand-/single-agent-built comparison point for
-   [software-factory-2](https://github.com/hraedon/software-factory-2): the same
-   MVP spec, produced without factory orchestration. The artifact *is* the
-   point — adopting an off-the-shelf tool would have produced zero signal about
-   the build method. This is the primary reason and it is independent of any
-   feature comparison.
+1. **All-in-one certificate observability for an SMB.** The purpose is to be the
+   single self-hosted tool a small or mid-sized business can point at its whole
+   estate and answer "is every certificate we depend on healthy?" — not just
+   "what expires next." That means breadth in one unit: live host scanning **and**
+   offline cert-file upload, read-only signature-verified chain validation, TLS
+   posture grading, CT *reconciliation* (coverage gaps, not just lookup), and
+   fleet-level analytics. An SMB otherwise assembles this from several
+   single-purpose tools; cert-watch is the bundle.
 
-2. **It targets a regulated, directory-centric, self-hosted environment.** The
-   intended home is an audited Active Directory shop that will not make a
-   third-party cloud service a dependency in the trust path of a security tool.
-   (This is a governance choice, not a network constraint — the environment has
-   egress; it just declines external-SaaS dependencies.) That makes a specific
-   combination first-class: LDAP/Entra authentication, an append-only audit log,
-   no dependency on an external cloud service, and Windows/IIS hosting. Most of
-   the prior art treats one or more of those as out of scope.
+2. **No external-SaaS dependency in the trust path, with first-class directory
+   auth.** It runs self-hosted with no third-party cloud service in the trust
+   path of a security tool, and treats LDAP/Entra authentication, an append-only
+   audit log, and Windows/IIS hosting as first-class rather than out of scope.
+   This makes it a natural fit for the more regulated / audited end of the SMB
+   range, where a directory and an audit trail are non-negotiable — but the tool
+   no longer presumes that environment.
 
-3. **It goes deep on certificate *observability* specifically.** Read-only,
-   signature-verified chain validation; TLS posture grading; CT *reconciliation*
-   (coverage gaps, not just lookup); offline cert-file upload; and fleet-level
-   analytics — bundled in one self-contained unit.
+3. **Origin (historical).** cert-watch began as a hand-/single-agent-built
+   comparison point for
+   [software-factory-2](https://github.com/hraedon/software-factory-2) — the same
+   MVP spec produced without factory orchestration. That comparison still holds
+   for anyone studying the build method, but it has been overtaken by the tool's
+   actual use: it is now maintained as software people run, not as an artifact.
 
-Reasons 1 and 2 are the durable ones. Reason 3 is true today but is the kind of
-depth a competitor can close, so it is a supporting argument, not the identity.
+Reasons 1 and 2 are the identity. Reason 3 is how it got here, not what it is
+for.
 
 ## Where the alternatives are genuinely better
 
@@ -46,10 +48,11 @@ Stating this is what makes the rest credible:
 - **Certsentry** — a single Go binary with an embedded frontend; if avoiding a
   Python runtime matters, that packaging is simpler.
 
-cert-watch's claim is narrow: deep, read-only certificate observability inside
-an audited, directory-authenticated, self-hosted environment — built to compare
-build methods. It is not trying to beat Uptime Kuma's community or be a
-certificate-lifecycle automation platform.
+cert-watch's claim is bounded: deep, read-only, all-in-one certificate
+observability that an SMB can self-host, with directory auth and an audit trail
+as first-class. It is not trying to beat Uptime Kuma's community or be a
+certificate-lifecycle *automation* platform (issuance/renewal) — it observes the
+lifecycle, it doesn't drive it.
 
 ## Landscape
 
@@ -73,17 +76,18 @@ survey time," not as a definitive claim of absence.
 A near-functional clone (**Certsentry**) appeared in early 2026 with the same
 core combination — host scan, dashboard, CT, alerts, SQLite. Independent
 convergence on this feature set is evidence the niche is real and underserved,
-not crowded. cert-watch's differentiation against it is the directory
-auth + audit log + posture grading + offline upload that a regulated shop needs.
+not crowded. cert-watch's differentiation against it is the all-in-one breadth
+an SMB wants without stitching tools together: directory auth + audit log +
+posture grading + offline upload, on top of the shared core.
 
 ## How this informs the roadmap
 
 The positioning above is the lens for what we build next. Concretely:
 
 - **Lean into observability depth and environment fit** — certificate change
-  history & drift detection (plan 016), and the regulated-environment
-  differentiators: discovery (AD CS / Windows cert stores), revocation-endpoint
-  health, and audit-grade reporting (plan 017).
+  history & drift detection (plan 016), and the differentiators an audited SMB
+  values: discovery (AD CS / Windows cert stores), revocation-endpoint health,
+  and audit-grade reporting (plan 017).
 - **Fold multi-channel alerting into alert groups** (plan 015) rather than
   treating it as a separate epic.
 - **Deliberately decline** features that make an external cloud service a

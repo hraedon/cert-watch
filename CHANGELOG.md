@@ -2,6 +2,61 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.4.0] — 2026-06-03
+
+First all-in-one release: repositioned as certificate-lifecycle observability for
+small and mid-sized businesses, with the DNS path, OAuth callback, and
+first-run-posture hardening below. (The 0.4.0 version was bumped earlier without a
+changelog entry; this is the complete, consolidated record.)
+
+### Added
+- **`/readyz` endpoint (BC-110)** — split from `/healthz` so k8s liveness and
+  readiness probes can be distinguished.
+- **`cert_scan_errors_total` counter (BC-109)** on `/metrics`.
+- **Scan degradation signal (BC-108)** — `ScannedEntry.chain_incomplete`
+  surfaces a degraded-scan reason in the UI; warnings logged on openssl fallback
+  and degraded-scan storage.
+- **Inline-style ratchet test** — `tests/test_no_inline_styles.py` tracks the
+  remaining `style=` attributes that block full CSP tightening.
+- **OAuth callback tests (BC-113)** — `tests/test_oauth_callback.py` covers every
+  branch of `/auth/callback` (state forgery, state/cookie mismatch, missing
+  code/cookie, token-exchange failure, authz denial, happy path), asserting no
+  session is minted on any failure. `routes/auth.py` coverage 52% → 83%.
+
+### Changed
+- **Positioning** — reframed as an all-in-one certificate-lifecycle observability
+  tool for small and mid-sized businesses (README, package description,
+  `docs/positioning.md`). The software-factory-2 build-method origin is retained
+  as history, not identity.
+- **DNS resolution** — the custom-nameserver path (`CERT_WATCH_DNS_SERVERS`) now
+  uses **dnspython** instead of a hand-rolled UDP packet parser. dnspython
+  validates each response against the query and falls back to TCP on truncation
+  (the old path was UDP-only with a fixed 4 KiB buffer and a retrofitted
+  anti-spoof check — resolved BC-079). `dnspython` is now a **core** dependency
+  (it already backed the CAA lookup), so the custom-DNS feature and CAA checks no
+  longer depend on an optional, undocumented install. The unused `[dns]` extra was
+  removed.
+- **First-run posture decision refactor (BC-114)** — extracted the
+  secure-by-default decision (serve open / auto-provision admin / fail closed) out
+  of `app.lifespan` into pure functions in `cert_watch/firstrun.py`
+  (`is_network_exposed`, `first_run_action` → `FirstRunPosture`). Behaviour is
+  unchanged; the decision is now table-tested over all input combinations in
+  `tests/test_firstrun_posture.py`.
+- **`/metrics` now uses the `prometheus_client` library (BC-111)** instead of
+  hand-built exposition.
+- **Performance** — `_LOG_RECORD_KEYS` extracted to a module-level frozenset (no
+  per-log-line `LogRecord` allocation); `check_rate_limit` guards schema init with
+  a `_rate_db_initialized` flag.
+- **Kubernetes polish** — added a `PodDisruptionBudget` (with the SQLite
+  `Recreate`-strategy rationale) and secret-management reminders in the example
+  manifests.
+
+### Fixed
+- **BC-106** — stale integration-test mock signatures for `_resolve_host`.
+- **BC-107** — `asyncio.run()` event-loop conflicts in `test_bc083_081` and
+  `test_middleware_deps`.
+- **BC-112** — added a unit test for the `_rate_db_initialized` flag.
+
 ## [0.3.0] — 2026-06-03
 
 ### Added
