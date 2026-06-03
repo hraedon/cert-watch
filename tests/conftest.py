@@ -212,11 +212,21 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
 
+    from cert_watch import middleware as _mw
     from cert_watch.auth import set_signing_key
     from cert_watch.middleware import set_csrf_secret
 
     set_signing_key("test-auth-secret-for-tests")
     set_csrf_secret("test-csrf-secret-for-tests")
+    # Reset rate-limit state between tests. The limiter's in-memory cache and
+    # SQLite-path globals are process-wide; without this, calls accumulate
+    # across the whole session and trip the 60/min /api cap on a fast (no
+    # coverage) run — flaky, order/timing-dependent CI failures. Each test that
+    # needs to exercise rate limiting bursts within its own body, so a clean
+    # window at the start is correct.
+    _mw._rate_cache.clear()
+    _mw._rate_db_path = None
+    _mw._rate_db_initialized = False
     yield
 
 
