@@ -18,6 +18,9 @@ from cert_watch.migrations.m0010_alert_extra_recipients import (
 from cert_watch.migrations.m0011_session_versions import (
     upgrade as session_versions_upgrade,
 )
+from cert_watch.migrations.m0012_scan_degraded import (
+    upgrade as scan_degraded_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -38,4 +41,8 @@ runner.register(
 runner.register(
     "0011", "add session_versions table for session revocation (BC-081)",
     session_versions_upgrade,
+)
+runner.register(
+    "0012", "add chain_incomplete column to scan_posture (BC-108)",
+    scan_degraded_upgrade,
 )

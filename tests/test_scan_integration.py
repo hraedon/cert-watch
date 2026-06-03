@@ -128,11 +128,15 @@ def test_openssl_chain_extraction(monkeypatch, tls_server_chain):
 
     monkeypatch.setattr(
         "cert_watch.scan._resolve_host",
-        lambda hostname, p, *, allow_private=True, dns_servers=(): (
+        lambda hostname, p, *, allow_private=True, allowed_subnets=(), dns_servers=(): (
             socket.AF_INET, ("127.0.0.1", p)
         ),
     )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._is_blocked_ip",
+        lambda ip, *, allow_private=True, allowed_subnets=(): False,
+    )
 
     result = scan_host("localhost", port, timeout=5, allow_private=True)
     assert isinstance(result, ScannedEntry), f"expected ScannedEntry, got {result}"
@@ -156,11 +160,15 @@ def test_openssl_self_signed_leaf_only(monkeypatch, tls_server_self_signed):
 
     monkeypatch.setattr(
         "cert_watch.scan._resolve_host",
-        lambda hostname, p, *, allow_private=True, dns_servers=(): (
+        lambda hostname, p, *, allow_private=True, allowed_subnets=(), dns_servers=(): (
             socket.AF_INET, ("127.0.0.1", p)
         ),
     )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._is_blocked_ip",
+        lambda ip, *, allow_private=True, allowed_subnets=(): False,
+    )
 
     result = scan_host("localhost", port, timeout=5, allow_private=True)
     assert isinstance(result, ScannedEntry), f"expected ScannedEntry, got {result}"
@@ -177,7 +185,7 @@ def test_openssl_connection_refused(monkeypatch):
 
     monkeypatch.setattr(
         "cert_watch.scan._resolve_host",
-        lambda hostname, p, *, allow_private=True, dns_servers=(): (
+        lambda hostname, p, *, allow_private=True, allowed_subnets=(), dns_servers=(): (
             socket.AF_INET, ("127.0.0.1", p)
         ),
     )

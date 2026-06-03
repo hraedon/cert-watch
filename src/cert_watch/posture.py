@@ -148,6 +148,7 @@ def evaluate_posture(
     ocsp_stapling: bool | None = None,
     hsts: bool | None = None,
     chain_status: str | None = None,
+    chain_incomplete: bool = False,
     check_revocation: bool = False,
     revocation_timeout: int = 5,
     port: int = 443,
@@ -289,10 +290,19 @@ def evaluate_posture(
             message="OCSP Must-Staple not required",
         ))
 
-    if chain_status == "incomplete":
+    if chain_incomplete:
         findings.append(Finding(
             check="chain_completeness", status="warn",
-            message="Incomplete chain - server missing intermediate(s)",
+            message=(
+                "Incomplete chain — scan ran with degraded extraction (leaf only)."
+                " Consider upgrading to Python 3.13 or ensuring openssl is available."
+            ),
+        ))
+        grade_severity = max(grade_severity, 1)
+    elif chain_status == "incomplete":
+        findings.append(Finding(
+            check="chain_completeness", status="warn",
+            message="Incomplete chain — server missing intermediate(s)",
         ))
         grade_severity = max(grade_severity, 1)
     elif chain_status == "invalid":

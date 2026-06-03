@@ -290,7 +290,11 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     else:
         try:
             cs_for_posture = cs
-            result = evaluate_posture(cert=cert, chain_status=cs_for_posture)
+            result = evaluate_posture(
+                cert=cert,
+                chain_status=cs_for_posture,
+                chain_incomplete=posture.get('chain_incomplete') if posture else False,
+            )
             posture_data = {
                 "grade": result.grade,
                 "findings": [

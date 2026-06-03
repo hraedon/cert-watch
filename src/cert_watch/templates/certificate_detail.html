@@ -104,6 +104,9 @@
               {% else %}
                 <span class="cw-chip cw-chip-muted">Unknown</span>
               {% endif %}
+              {% if posture and posture.get('chain_incomplete') %}
+                <span class="cw-chip tone-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
+              {% endif %}
             </div>
           </div>
         </div>

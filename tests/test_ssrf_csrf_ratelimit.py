@@ -283,3 +283,30 @@ def test_cross_worker_rate_limit_shared(tmp_path: Path, monkeypatch: pytest.Monk
         ).fetchone()
     assert row is not None
     assert len(json.loads(row[0])) == 2
+
+
+def test_rate_limit_init_schema_called_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """init_schema is only invoked once across multiple check_rate_limit calls."""
+    from cert_watch.database.schema import init_schema
+    from cert_watch.middleware import _init_rate_db, check_rate_limit
+
+    call_count = 0
+    original_init = init_schema
+
+    def counting_init(db_path: Path | str) -> None:
+        nonlocal call_count
+        call_count += 1
+        original_init(db_path)
+
+    monkeypatch.setattr("cert_watch.database.schema.init_schema", counting_init)
+
+    db = tmp_path / "rate_limits.sqlite3"
+    _init_rate_db(db)
+    monkeypatch.setattr("cert_watch.middleware._rate_db_initialized", False)
+
+    key = f"init_once:{time.time()}"
+    assert check_rate_limit(key, 2, 60)
+    assert check_rate_limit(key, 2, 60)
+    assert call_count == 1

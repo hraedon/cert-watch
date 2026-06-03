@@ -848,6 +848,7 @@ def _evaluate_and_store_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
         chain_status=cs,
+        chain_incomplete=entry.chain_incomplete,
         hsts=entry.hsts,
         check_revocation=check_revocation,
         port=entry.port,
@@ -865,6 +866,7 @@ def _evaluate_and_store_posture(
         hsts=result.hsts,
         must_staple=result.must_staple,
         tls_verified=entry.tls_verified,
+        chain_incomplete=entry.chain_incomplete,
     )
     return result.grade
 
