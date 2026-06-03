@@ -72,6 +72,18 @@ def test_healthz():
     assert r.json()["status"] == "ok"
 
 
+def test_readyz(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/readyz")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] in ("ok", "degraded")
+    assert "checks" in data
+    assert "database" in data["checks"]
+    assert "scheduler" in data["checks"]
+
+
 def _reload(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     import importlib
