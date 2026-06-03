@@ -1,5 +1,7 @@
 # cert-watch
 
+[![CI](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml)
+
 All-in-one observability for the **certificate lifecycle** — built for small and
 mid-sized businesses that need one self-hosted place to see every TLS
 certificate they depend on. Live host scanning **and** offline file upload feed a
