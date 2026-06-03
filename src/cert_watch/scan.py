@@ -8,10 +8,8 @@ import contextlib
 import ipaddress
 import logging
 import re
-import secrets
 import socket
 import ssl
-import struct
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -149,117 +147,43 @@ class ScannedEntry:
     chain_incomplete: bool = False
 
 
-def _build_dns_query(name: str, qtype: int) -> bytes:
-    header = struct.pack(
-        "!HHHHHH",
-        secrets.randbelow(65536),
-        0x0100,
-        1,
-        0,
-        0,
-        0,
-    )
-    question = b""
-    for label in name.rstrip(".").split("."):
-        encoded = label.encode("ascii")
-        question += struct.pack("B", len(encoded)) + encoded
-    question += b"\x00" + struct.pack("!HH", qtype, 1)
-    return header + question
-
-
-def _parse_dns_name(data: bytes, offset: int) -> tuple[str, int]:
-    parts: list[str] = []
-    original = offset
-    jumped = False
-    max_offset = original
-    seen_offsets: set[int] = set()
-    while offset < len(data):
-        length = data[offset]
-        if length == 0:
-            offset += 1
-            break
-        if (length & 0xC0) == 0xC0:
-            if not jumped:
-                max_offset = offset + 2
-            pointer = struct.unpack("!H", data[offset : offset + 2])[0] & 0x3FFF
-            if pointer in seen_offsets:
-                break
-            seen_offsets.add(pointer)
-            offset = pointer
-            jumped = True
-            continue
-        offset += 1
-        parts.append(data[offset : offset + length].decode("ascii", errors="replace"))
-        offset += length
-    return ".".join(parts), max_offset if jumped else offset
-
-
-_QTYPE_A = 1
-_QTYPE_AAAA = 28
-
-
 def _resolve_with_dns(
     hostname: str, port: int, dns_servers: tuple[str, ...], timeout: float = 5.0
 ) -> list[tuple[int, tuple]]:
+    """Resolve A/AAAA for *hostname* against the configured nameservers.
+
+    Uses dnspython rather than a hand-rolled packet parser. dnspython validates
+    each response against the outstanding query (transaction id + question) and
+    transparently retries over TCP when a UDP answer is truncated (the TC bit) —
+    two gaps in the previous implementation: it was UDP-only with a fixed 4 KiB
+    buffer (large internal AD responses could silently truncate), and its
+    question check had to be retrofitted after a blind-spoof finding (resolved
+    BC-079). The same dnspython dependency already backs the CAA lookup.
+
+    Returns the same ``(family, sockaddr)`` shape as :func:`socket.getaddrinfo`
+    so callers (``resolve_hostname`` / ``_resolve_host``) are unchanged. Returns
+    an empty list on any resolution failure, letting ``resolve_hostname`` fall
+    back to the system resolver.
+    """
+    import dns.resolver
+
+    resolver = dns.resolver.Resolver(configure=False)
+    resolver.nameservers = list(dns_servers)
+    resolver.timeout = timeout
+    resolver.lifetime = timeout
     results: list[tuple[int, tuple]] = []
-    for qtype, family in [(_QTYPE_A, socket.AF_INET), (_QTYPE_AAAA, socket.AF_INET6)]:
-        query = _build_dns_query(hostname, qtype)
-        query_id = struct.unpack("!H", query[:2])[0]
-        for server in dns_servers:
-            try:
-                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                sock.settimeout(timeout)
-                try:
-                    sock.sendto(query, (server, 53))
-                    response, _ = sock.recvfrom(4096)
-                finally:
-                    sock.close()
-            except (TimeoutError, OSError):
-                continue
-            if len(response) < 12:
-                continue
-            resp_id = struct.unpack("!H", response[:2])[0]
-            if resp_id != query_id:
-                continue
-            flags = struct.unpack("!H", response[2:4])[0]
-            rcode = flags & 0x000F
-            if rcode != 0:
-                continue
-            ancount = struct.unpack("!H", response[6:8])[0]
-            offset = 12
-            qdcount = struct.unpack("!H", response[4:6])[0]
-            question_ok = qdcount >= 1
-            for i in range(qdcount):
-                qname, offset = _parse_dns_name(response, offset)
-                if offset + 4 > len(response):
-                    question_ok = False
-                    break
-                q_qtype, _q_qclass = struct.unpack("!HH", response[offset : offset + 4])
-                offset += 4
-                # Anti-spoofing (BC-079): the echoed question must match what we
-                # asked. A matching txid alone isn't enough — verify name + qtype.
-                if i == 0 and (
-                    qname.rstrip(".").lower() != hostname.rstrip(".").lower()
-                    or q_qtype != qtype
-                ):
-                    question_ok = False
-            if not question_ok:
-                continue
-            for _ in range(ancount):
-                _, offset = _parse_dns_name(response, offset)
-                rtype, rclass, _, rdlength = struct.unpack(
-                    "!HHIH", response[offset : offset + 10]
-                )
-                offset += 10
-                if rtype == _QTYPE_A and rdlength == 4 and rclass == 1:
-                    ip_str = socket.inet_ntoa(response[offset : offset + 4])
-                    addr = (ip_str, port, 0, 0) if family == socket.AF_INET6 else (ip_str, port)
-                    results.append((family, addr))
-                elif rtype == _QTYPE_AAAA and rdlength == 16 and rclass == 1:
-                    ip_str = socket.inet_ntop(socket.AF_INET6, response[offset : offset + 16])
-                    results.append((family, (ip_str, port, 0, 0)))
-                offset += rdlength
-            break
+    for qtype, family in (("A", socket.AF_INET), ("AAAA", socket.AF_INET6)):
+        try:
+            answer = resolver.resolve(hostname, qtype)
+        except Exception:
+            # NXDOMAIN / NoAnswer / Timeout / NoNameservers — try the next type.
+            continue
+        for rdata in answer:
+            ip_str = rdata.address
+            if family == socket.AF_INET6:
+                results.append((family, (ip_str, port, 0, 0)))
+            else:
+                results.append((family, (ip_str, port)))
     return results
 
 

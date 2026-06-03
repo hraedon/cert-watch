@@ -13,6 +13,7 @@ dependencies = [
     "python-multipart>=0.0.12",
     "cryptography>=43.0",
     "prometheus-client>=0.21",
+    "dnspython>=2.6",
 ]
 
 [project.optional-dependencies]
@@ -36,9 +37,6 @@ auth-oauth = [
 ]
 auth = [
     "cert-watch[auth-ldap,auth-oauth]",
-]
-dns = [
-    "dnspython>=2.6",
 ]
 
 [project.scripts]

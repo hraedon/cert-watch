@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+import dns.rdatatype
+import dns.resolver
+
 logger = logging.getLogger("cert_watch.caa_check")
 
 
@@ -18,13 +21,7 @@ class CAAResult:
 
 
 def _query_caa_records(domain: str) -> list[str] | str:
-    """Query CAA records for a domain using dnspython if available, else dig/system."""
-    try:
-        import dns.rdatatype  # noqa: I001
-        import dns.resolver
-    except ImportError:
-        return "dnspython not installed; install with: pip install dnspython"
-
+    """Query CAA records for a domain using dnspython (a core dependency)."""
     # Walk up the domain tree looking for CAA records
     parts = domain.rstrip(".").split(".")
     for i in range(len(parts)):

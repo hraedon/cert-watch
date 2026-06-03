@@ -3,13 +3,19 @@ from unittest.mock import MagicMock, patch
 from cert_watch.caa_check import CAAResult, check_caa
 
 
-def test_check_caa_no_records():
-    """When dnspython is not installed, should return an error."""
+def test_check_caa_resolver_failure_surfaces_error(monkeypatch):
+    """A resolver failure (SERVFAIL/no nameservers) is surfaced as an error,
+    not raised. dnspython is a core dependency, so the lookup path is live."""
+    import dns.resolver
+
+    def _boom(domain, rdtype):
+        raise RuntimeError("nameserver unreachable")
+
+    monkeypatch.setattr(dns.resolver, "resolve", _boom)
     result = check_caa("example.com")
     assert isinstance(result, CAAResult)
     assert result.domain == "example.com"
-    assert result.error != ""
-    assert "dnspython" in result.error
+    assert "DNS lookup failed" in result.error
 
 
 def test_check_caa_with_mocked_dns():

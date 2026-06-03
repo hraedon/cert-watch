@@ -1,91 +1,95 @@
-"""Tests for the stdlib DNS resolver (CERT_WATCH_DNS_SERVERS)."""
+"""Tests for the custom-nameserver resolver (CERT_WATCH_DNS_SERVERS).
+
+The resolver delegates to dnspython; these tests mock ``dns.resolver.Resolver``
+so they exercise our wiring (record shapes, nameserver passthrough, and the
+fall-back-to-system semantics) without real network I/O.
+"""
 
 from __future__ import annotations
 
 import socket
-import struct
 
 
-def test_build_dns_query_valid():
-    from cert_watch.scan import _build_dns_query
-
-    pkt = _build_dns_query("example.com", 1)
-    assert len(pkt) > 12
-    qdcount = struct.unpack("!H", pkt[4:6])[0]
-    assert qdcount == 1
-    assert b"example" in pkt
-    assert b"com" in pkt
+class _FakeRdata:
+    def __init__(self, address: str):
+        self.address = address
 
 
-def test_parse_dns_name_simple():
-    from cert_watch.scan import _parse_dns_name
+class _FakeAnswer:
+    def __init__(self, addresses):
+        self._rdatas = [_FakeRdata(a) for a in addresses]
 
-    data = b"\x07example\x03com\x00"
-    name, offset = _parse_dns_name(data, 0)
-    assert name == "example.com"
-    assert offset == len(data)
-
-
-def test_parse_dns_name_pointer():
-    from cert_watch.scan import _parse_dns_name
-
-    base = b"\x03www\x07example\x03com\x00"
-    pointer = struct.pack("!H", 0xC000 | 4)
-    data = base + b"\x03foo" + pointer
-    name, offset = _parse_dns_name(data, len(base))
-    assert name == "foo.example.com"
+    def __iter__(self):
+        return iter(self._rdatas)
 
 
-def test_resolve_with_dns_builds_packet(monkeypatch):
-    from cert_watch.scan import _resolve_with_dns
+def _make_fake_resolver(mapping, *, record=None):
+    """Build a fake ``dns.resolver.Resolver``.
 
-    class FakeSock:
-        def __init__(self):
-            self._query_data = None
+    ``mapping`` maps qtype ("A"/"AAAA") to a list of addresses; a missing or
+    empty entry raises (mimicking NXDOMAIN/NoAnswer). When ``record`` is given,
+    each ``resolve()`` call appends ``(hostname, qtype, nameservers)``.
+    """
 
-        def settimeout(self, v):
-            pass
+    class _FakeResolver:
+        def __init__(self, configure=True):
+            self.nameservers: list[str] = []
+            self.timeout = None
+            self.lifetime = None
 
-        def sendto(self, data, addr):
-            self._query_data = data
+        def resolve(self, hostname, qtype):
+            if record is not None:
+                record.append((hostname, qtype, tuple(self.nameservers)))
+            addrs = mapping.get(qtype)
+            if not addrs:
+                raise Exception(f"no {qtype} record")
+            return _FakeAnswer(addrs)
 
-        def recvfrom(self, bufsize):
-            qid = self._query_data[:2]
-            hdr = qid + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
-            question = b"\x07example\x03com\x00" + struct.pack("!HH", 1, 1)
-            name_ptr = struct.pack("!H", 0xC00C)
-            rd_data = socket.inet_aton("93.184.216.34")
-            answer = name_ptr + struct.pack("!HHIH", 1, 1, 300, 4) + rd_data
-            return hdr + question + answer, ("1.2.3.4", 53)
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: FakeSock())
-
-    results = _resolve_with_dns("example.com", 443, ("1.2.3.4",))
-    assert any(sockaddr[0] == "93.184.216.34" for _, sockaddr in results)
+    return _FakeResolver
 
 
-def test_resolve_with_dns_timeout(monkeypatch):
-    from cert_watch.scan import _resolve_with_dns
+def test_resolve_with_dns_returns_a_records(monkeypatch):
+    import dns.resolver
 
-    class TimeoutSock:
-        def settimeout(self, v):
-            pass
+    from cert_watch import scan
 
-        def sendto(self, data, addr):
-            pass
+    monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({"A": ["10.0.0.5"]}))
+    results = scan._resolve_with_dns("host.internal", 443, ("10.0.0.1",))
+    assert (socket.AF_INET, ("10.0.0.5", 443)) in results
 
-        def recvfrom(self, bufsize):
-            raise TimeoutError
 
-        def close(self):
-            pass
+def test_resolve_with_dns_returns_aaaa_as_four_tuple(monkeypatch):
+    import dns.resolver
 
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: TimeoutSock())
-    results = _resolve_with_dns("example.com", 443, ("1.2.3.4",))
-    assert results == []
+    from cert_watch import scan
+
+    monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({"AAAA": ["fd00::1"]}))
+    results = scan._resolve_with_dns("host.internal", 443, ("10.0.0.1",))
+    # AAAA sockaddr must be a 4-tuple so the AF_INET6 socket can connect.
+    assert (socket.AF_INET6, ("fd00::1", 443, 0, 0)) in results
+
+
+def test_resolve_with_dns_empty_on_failure(monkeypatch):
+    import dns.resolver
+
+    from cert_watch import scan
+
+    monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({}))
+    assert scan._resolve_with_dns("nope.internal", 443, ("10.0.0.1",)) == []
+
+
+def test_resolve_with_dns_uses_configured_nameservers(monkeypatch):
+    import dns.resolver
+
+    from cert_watch import scan
+
+    record: list = []
+    monkeypatch.setattr(
+        dns.resolver, "Resolver", _make_fake_resolver({"A": ["10.0.0.5"]}, record=record)
+    )
+    scan._resolve_with_dns("host.internal", 443, ("10.0.0.1", "10.0.0.2"))
+    assert record, "resolve() was never called"
+    assert record[0][2] == ("10.0.0.1", "10.0.0.2")
 
 
 def test_resolve_hostname_falls_back_to_system(monkeypatch):
@@ -105,6 +109,8 @@ def test_resolve_hostname_falls_back_to_system(monkeypatch):
 
 
 def test_resolve_hostname_uses_custom_dns(monkeypatch):
+    import dns.resolver
+
     from cert_watch.scan import resolve_hostname
 
     system_called = False
@@ -114,31 +120,31 @@ def test_resolve_hostname_uses_custom_dns(monkeypatch):
         system_called = True
         return [(socket.AF_INET, 1, 0, "", ("1.1.1.1", port))]
 
-    class FakeSock:
-        def __init__(self):
-            self._query_data = None
-
-        def settimeout(self, v):
-            pass
-
-        def sendto(self, data, addr):
-            self._query_data = data
-
-        def recvfrom(self, bufsize):
-            qid = self._query_data[:2]
-            hdr = qid + struct.pack("!HHHHH", 0x8180, 1, 1, 0, 0)
-            question = b"\x07example\x03com\x00" + struct.pack("!HH", 1, 1)
-            name_ptr = struct.pack("!H", 0xC00C)
-            rd_data = socket.inet_aton("10.0.0.1")
-            answer = name_ptr + struct.pack("!HHIH", 1, 1, 300, 4) + rd_data
-            return hdr + question + answer, ("10.0.0.1", 53)
-
-        def close(self):
-            pass
-
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
-    monkeypatch.setattr(socket, "socket", lambda *a, **kw: FakeSock())
+    monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({"A": ["10.0.0.1"]}))
 
-    results = resolve_hostname("example.com", 443, dns_servers=("10.0.0.1",))
+    results = resolve_hostname("host.internal", 443, dns_servers=("10.0.0.53",))
     assert not system_called
     assert results[0][1][0] == "10.0.0.1"
+
+
+def test_resolve_hostname_custom_empty_falls_back_to_system(monkeypatch):
+    """When the configured nameservers yield nothing, fall back to the system
+    resolver (preserves prior behaviour)."""
+    import dns.resolver
+
+    from cert_watch.scan import resolve_hostname
+
+    system_called = False
+
+    def fake_getaddrinfo(host, port, **kw):
+        nonlocal system_called
+        system_called = True
+        return [(socket.AF_INET, 1, 0, "", ("1.1.1.1", port))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({}))
+
+    results = resolve_hostname("host.internal", 443, dns_servers=("10.0.0.53",))
+    assert system_called
+    assert results[0][1][0] == "1.1.1.1"
