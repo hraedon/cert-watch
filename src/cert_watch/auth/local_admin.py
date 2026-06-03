@@ -8,6 +8,7 @@ small and tightly coupled to `LocalAdminProvider`.
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -74,15 +75,31 @@ class LocalAdminProvider(AuthProvider):
         mismatch (BC-072). Without this, a non-matching username returns
         immediately while a matching username spends ~100ms in scrypt, letting
         an attacker enumerate the break-glass username by response timing.
+
+        Uses the *stored* hash's cost parameters (review F#1): a custom-cost
+        admin hash (e.g. n=2**16, or an imported third-party hash with weaker
+        params) would otherwise make the verify path cost differently than this
+        dummy, reintroducing the very timing oracle this method exists to close.
         """
-        hashlib.scrypt(
-            password.encode(),
-            salt=_DUMMY_SALT,
-            n=_DUMMY_N,
-            r=_DUMMY_R,
-            p=_DUMMY_P,
-            dklen=32,
-        )
+        n, r, p = _DUMMY_N, _DUMMY_R, _DUMMY_P
+        parts = self.password_hash.split("$") if self.password_hash else []
+        if len(parts) == 6:
+            try:
+                n, r, p = int(parts[1]), int(parts[2]), int(parts[3])
+            except ValueError:
+                n, r, p = _DUMMY_N, _DUMMY_R, _DUMMY_P
+        try:
+            hashlib.scrypt(
+                password.encode(), salt=_DUMMY_SALT, n=n, r=r, p=p, dklen=32
+            )
+        except (ValueError, MemoryError):
+            # Pathological stored params — still spend baseline time so the
+            # mismatch path never returns conspicuously fast (and never raises).
+            with contextlib.suppress(ValueError, MemoryError):
+                hashlib.scrypt(
+                    password.encode(), salt=_DUMMY_SALT,
+                    n=_DUMMY_N, r=_DUMMY_R, p=_DUMMY_P, dklen=32,
+                )
 
     def authenticate(self, username: str, password: str) -> AuthResult:
         if not username or not password:

@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import csv
 import io
-import ipaddress
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from cert_watch import __commit__, __version__
 from cert_watch.alerts import Alert, resolve_group_recipients, send_webhook
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
@@ -29,7 +28,7 @@ from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import require_auth, require_write
+from cert_watch.middleware import rate_limit, require_auth, require_write
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
@@ -80,48 +79,32 @@ def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
 
 
+def _runbook_url_error(url: str) -> str | None:
+    """Return an error message if *url* is unsafe to store as a runbook link.
+
+    runbook_url is rendered as an ``<a href>`` on the cert detail page. Jinja
+    autoescaping neutralizes HTML metacharacters but NOT a ``javascript:`` /
+    ``data:`` scheme, so a write-user could otherwise plant a click-to-execute
+    stored-XSS payload. Allow empty (clears the field) and http(s) only.
+    """
+    if not url.strip():
+        return None
+    from urllib.parse import urlparse
+
+    if urlparse(url.strip()).scheme.lower() not in ("http", "https"):
+        return "runbook_url must be an http(s) URL"
+    return None
+
+
 def _validate_webhook_url(url: str) -> JSONResponse | None:
-    import socket
+    from cert_watch.http_client import validate_webhook_url as _validate
 
-    from cert_watch.scan import _ALWAYS_BLOCKED_NETWORKS, _PRIVATE_NETWORKS
-
-    parsed = urlparse(url)
-    if parsed.scheme not in ("https", "http"):
-        return JSONResponse(content={"error": "webhook_url must use http(s)"}, status_code=400)
-    if not parsed.hostname:
-        return JSONResponse(content={"error": "webhook_url must have a hostname"}, status_code=400)
-    try:
-        ip = ipaddress.ip_address(parsed.hostname)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return JSONResponse(
-                content={"error": "webhook_url must not point to private/local"},
-                status_code=400,
-            )
-    except ValueError:
-        try:
-            infos = socket.getaddrinfo(parsed.hostname, None, proto=socket.IPPROTO_TCP)
-        except socket.gaierror:
-            host = parsed.hostname
-            return JSONResponse(
-                content={"error": f"webhook_url hostname '{host}' could not be resolved"},
-                status_code=400,
-            )
-        for _family, _type, _proto, _canon, sockaddr in infos:
-            ip_str = sockaddr[0]
-            try:
-                resolved_ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if any(resolved_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
-                return JSONResponse(
-                    content={"error": "webhook_url must not point to private/local"},
-                    status_code=400,
-                )
-            if any(resolved_ip in net for net in _PRIVATE_NETWORKS):
-                return JSONResponse(
-                    content={"error": "webhook_url must not point to private/local"},
-                    status_code=400,
-                )
+    error = _validate(url)
+    if error:
+        return JSONResponse(
+            content={"error": f"webhook_url rejected: {error}"},
+            status_code=400,
+        )
     return None
 
 
@@ -406,11 +389,15 @@ async def api_update_host_owner(
             status_code=400,
         )
     runbook_url = body.get("runbook_url")
-    if runbook_url is not None and not isinstance(runbook_url, str):
-        return JSONResponse(
-            content={"error": "runbook_url must be a string"},
-            status_code=400,
-        )
+    if runbook_url is not None:
+        if not isinstance(runbook_url, str):
+            return JSONResponse(
+                content={"error": "runbook_url must be a string"},
+                status_code=400,
+            )
+        err = _runbook_url_error(runbook_url)
+        if err:
+            return JSONResponse(content={"error": err}, status_code=400)
 
     db = _db_path(request)
     repo = SqliteHostRepository(db)
@@ -934,6 +921,75 @@ def api_report_expiring_csv(
     )
 
 
+# ---------- Compliance report (Plan 025) ----------
+
+
+def compliance_signing_key(request: Request) -> str:
+    """Return the report signing key, or raise 503 if the app isn't fully booted.
+
+    Signing with an empty key produces a report whose HMAC is trivially
+    forgeable — worse than no signature, because it *looks* verifiable. Fail
+    closed rather than hand an auditor an unverifiable "signed" report.
+    """
+    security = getattr(request.app.state, "security", None)
+    if security is None or not getattr(security, "signing_key", ""):
+        raise HTTPException(status_code=503, detail="signing key unavailable")
+    return security.signing_key
+
+
+@router.get("/api/reports/compliance.json")
+def api_compliance_report_json(
+    request: Request,
+    _auth: str = Depends(require_auth),
+    tag: str = "",
+) -> JSONResponse:
+    from cert_watch.compliance import build_compliance_report, report_to_dict
+
+    db = _db_path(request)
+    signing_key = compliance_signing_key(request)
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    return JSONResponse(
+        content=report_to_dict(report),
+        headers={"Content-Disposition": "attachment; filename=compliance-report.json"},
+    )
+
+
+@router.get("/api/reports/compliance.csv")
+def api_compliance_report_csv(
+    request: Request,
+    _auth: str = Depends(require_auth),
+    tag: str = "",
+) -> PlainTextResponse:
+    import io as _io
+
+    from cert_watch.compliance import build_compliance_report, report_to_csv_rows
+
+    db = _db_path(request)
+    signing_key = compliance_signing_key(request)
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    output = _io.StringIO()
+    writer = csv.writer(output)
+    for row in report_to_csv_rows(report):
+        writer.writerow(row)
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=compliance-report.csv"},
+    )
+
+
 # ---------- Webhook test ----------
 
 
@@ -967,7 +1023,10 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
     )
 
 
-@router.get("/api/ct/reconciliation")
+@router.get(
+    "/api/ct/reconciliation",
+    dependencies=[Depends(rate_limit("ct_recon", 10, 60))],
+)
 def ct_reconciliation(request: Request, _auth: str = Depends(require_auth), domain: str = ""):
     """CT reconciliation: compare CT log entries against tracked hosts.
 

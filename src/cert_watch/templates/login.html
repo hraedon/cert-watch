@@ -31,6 +31,7 @@
 
         {% if supports_form_login %}
           <form method="post" action="/login">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
               <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
@@ -43,6 +44,7 @@
           </form>
         {% elif local_admin_configured %}
           <form method="post" action="/login">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
               <input class="cw-input" type="text" name="username" required autofocus placeholder="username">

@@ -9,10 +9,34 @@ import secrets
 import time
 from dataclasses import dataclass
 
+from cert_watch.http_client import SSRFBlockedError, _validate_url, ssrf_safe_urlopen
+
 from .protocol import AuthProvider, AuthResult
 from .session import _sign_state, _verify_state
 
 logger = logging.getLogger("cert_watch.auth")
+
+# Asymmetric signature algorithms only. The IdP's discovery document advertises
+# its supported algs, but we never let that list widen ours: `none` (unsigned)
+# and the HS* family (symmetric — vulnerable to the RS/HS key-confusion attack,
+# since the verification "key" is the *public* JWKS key) must never be accepted
+# for an ID token, no matter what a malicious or misconfigured IdP advertises.
+_ALLOWED_JWT_ALGS = (
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+)
+
+
+def _safe_algs(advertised: list[str]) -> list[str]:
+    """Intersect IdP-advertised algs with our asymmetric allowlist.
+
+    Falls back to ``["RS256"]`` if the IdP advertised nothing we accept, so a
+    hostile ``["none"]`` can never reduce the verifier to accepting unsigned
+    tokens.
+    """
+    filtered = [a for a in advertised if a in _ALLOWED_JWT_ALGS]
+    return filtered or ["RS256"]
 
 
 @dataclass
@@ -26,6 +50,9 @@ class OAuthConfig:
     token_endpoint: str = ""
     userinfo_endpoint: str = ""
     jwks_uri: str = ""
+    # SSRF policy (must match the scanner's allowlist so private IdPs work)
+    allow_private: bool = False
+    allowed_subnets: tuple[str, ...] = ()
 
 
 class OAuthProvider(AuthProvider):
@@ -48,6 +75,8 @@ class OAuthProvider(AuthProvider):
         self._jwks: dict | None = None
         self._jwks_fetched_at: float = 0.0
         self._jwks_ttl: int = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
+        self._allow_private = config.allow_private
+        self._allowed_subnets = config.allowed_subnets
         try:
             from authlib.integrations.requests_client import OAuth2Session  # noqa: F401
         except ImportError:
@@ -69,13 +98,17 @@ class OAuthProvider(AuthProvider):
                 "id_token_signing_alg_values_supported": "RS256",
             }
             return self._discovered
-        import urllib.request
-
         well_known = self.config.issuer_url.rstrip("/") + "/.well-known/openid-configuration"
         try:
-            req = urllib.request.Request(well_known, headers={"User-Agent": "cert-watch"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
+            resp = ssrf_safe_urlopen(
+                well_known,
+                headers={"User-Agent": "cert-watch"},
+                timeout=10,
+                allow_private=self._allow_private,
+                allowed_subnets=self._allowed_subnets,
+            )
+            data = json.loads(resp.read())
+            resp.close()
             self._discovered = {
                 "authorization_endpoint": data["authorization_endpoint"],
                 "token_endpoint": data["token_endpoint"],
@@ -108,13 +141,17 @@ class OAuthProvider(AuthProvider):
         jwks_uri = endpoints.get("jwks_uri", "")
         if not jwks_uri:
             return None
-        import urllib.request
-
         try:
-            req = urllib.request.Request(jwks_uri, headers={"User-Agent": "cert-watch"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                self._jwks = json.loads(resp.read())
-                self._jwks_fetched_at = time.monotonic()
+            resp = ssrf_safe_urlopen(
+                jwks_uri,
+                headers={"User-Agent": "cert-watch"},
+                timeout=10,
+                allow_private=self._allow_private,
+                allowed_subnets=self._allowed_subnets,
+            )
+            self._jwks = json.loads(resp.read())
+            self._jwks_fetched_at = time.monotonic()
+            resp.close()
         except Exception as exc:
             logger.warning("JWKS fetch failed: %s", exc)
             return None
@@ -144,9 +181,9 @@ class OAuthProvider(AuthProvider):
             return None
 
         endpoints = self._discover()
-        alg_values = endpoints.get(
-            "id_token_signing_alg_values_supported", "RS256"
-        ).split(",")
+        alg_values = _safe_algs(
+            endpoints.get("id_token_signing_alg_values_supported", "RS256").split(",")
+        )
 
         issuer = self.config.issuer_url.rstrip("/")
 
@@ -156,9 +193,12 @@ class OAuthProvider(AuthProvider):
                 token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
                 raw_claims = token.claims
             else:
-                from authlib.jose import JsonWebKey
+                from authlib.jose import JsonWebKey, JsonWebToken
                 key_set = JsonWebKey.import_key_set(jwks)
-                data = _jwt.decode(id_token, key=key_set)
+                # authlib's module-level jwt.decode allows a broad default alg
+                # set; pin it to our asymmetric allowlist instead.
+                restricted = JsonWebToken(alg_values)
+                data = restricted.decode(id_token, key=key_set)
                 raw_claims = data
 
             claims_options = {
@@ -316,6 +356,20 @@ class OAuthProvider(AuthProvider):
                         "code exchange alone. Configure an OIDC-compliant IdP that "
                         "returns an id_token for full session binding."
                     )
+                    # SSRF guard: validate userinfo endpoint before calling it
+                    # (authlib uses requests, so we can't route through ssrf_safe_urlopen)
+                    try:
+                        _validate_url(
+                            userinfo_endpoint,
+                            allow_private=self._allow_private,
+                            allowed_subnets=self._allowed_subnets,
+                        )
+                    except SSRFBlockedError as exc:
+                        logger.warning("OAuth userinfo endpoint blocked by SSRF policy: %s", exc)
+                        return AuthResult(
+                            success=False,
+                            error="OAuth userinfo endpoint blocked by SSRF policy",
+                        )
                     resp = client.get(userinfo_endpoint)
                     if resp.status_code == 200:
                         info = resp.json()

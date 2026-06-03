@@ -53,6 +53,7 @@ def build_auth_provider(
     ldap_ca_cert: str = "",
     ldap_required_groups: list[str] | None = None,
     ldap_connect_timeout: int = 5,
+    ldap_group_filter: str = "",
     # OAuth options
     oauth_client_id: str = "",
     oauth_client_secret: str = "",
@@ -61,6 +62,9 @@ def build_auth_provider(
     oauth_authorization_endpoint: str = "",
     oauth_token_endpoint: str = "",
     oauth_userinfo_endpoint: str = "",
+    # SSRF policy for OAuth IdP fetches
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
     # Authorization options
     allowed_groups: list[str] | None = None,
     allowed_roles: list[str] | None = None,
@@ -96,6 +100,7 @@ def build_auth_provider(
             ca_cert=ldap_ca_cert,
             required_groups=ldap_required_groups,
             connect_timeout=ldap_connect_timeout,
+            group_filter=ldap_group_filter,
         )
         if local_admin:
             return _CompositeProvider(local_admin, primary)
@@ -115,6 +120,8 @@ def build_auth_provider(
                 authorization_endpoint=oauth_authorization_endpoint,
                 token_endpoint=oauth_token_endpoint,
                 userinfo_endpoint=oauth_userinfo_endpoint,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
             )
         )
         if local_admin:

@@ -2,6 +2,117 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.5.0] — 2026-06-03
+
+Hardens the integration edges (LDAP, outbound HTTP) and leans into the
+regulated-SMB observability story: first-class alert channels, an auditor-facing
+compliance report, an ACME renewal-stall alert, SIEM/log export, and a batch of
+security-hardening fixes from two adversarial reviews.
+
+> **Upgrade note (breaking, OAuth only):** OAuth login now **requires
+> `CERT_WATCH_BASE_URL`**. The redirect URI is no longer derived from the
+> request `Host` header (that allowed Host-injection of the OAuth callback —
+> review #3). Set `CERT_WATCH_BASE_URL` to your external URL (e.g.
+> `https://certs.example.com`) before upgrading if you use OAuth/OIDC.
+
+### Added
+- **ACME renewal-stall alert (Plan 027)** — a `renewal_stalled` alert fires when
+  a leaf certificate is inside its renewal window
+  (`CERT_WATCH_RENEWAL_WINDOW_DAYS`, default 30) and **no successor certificate
+  has appeared**, flagging a broken Certbot / cert-manager / ACME job well before
+  the generic expiry warning. Distinct signal, distinct remediation; delivered
+  through the existing email/webhook/adapter channels. Set the window to `0` to
+  disable.
+- **SIEM / log export (Plan 028)** — make the audit log consumable by a SIEM.
+  **Syslog** (`CERT_WATCH_SYSLOG_HOST`/`_PORT`/`_PROTO`, stdlib RFC-5424 handler,
+  serves any SIEM and the Azure AMA path) and **Splunk HEC**
+  (`CERT_WATCH_HEC_URL` + `CERT_WATCH_HEC_TOKEN`(`_FILE`), through the SSRF-safe
+  opener, delivered on a bounded background pool), plus a **Windows Event Log**
+  sink (`CERT_WATCH_EVENTLOG=1`, Application log via pywin32 — install the
+  `cert-watch[windows]` extra; disables itself off-Windows). All sinks are
+  **fail-open** — a down SIEM never blocks or breaks an audited action; with
+  nothing configured the audit path is unchanged.
+- **Compliance / Auditor Report (Plan 025)** — a one-click, point-in-time
+  posture report for SOC 2 / ISO 27001 / PCI-DSS auditors. `GET
+  /reports/compliance` renders a print-optimized HTML page (browser "Save as
+  PDF" → clean auditor PDF, zero new dependencies); `GET
+  /api/reports/compliance.json` and `.csv` export the same data. Reports are
+  **tamper-evident**: a canonical JSON of the report is HMAC-SHA256-signed with
+  the app signing key, and `cert-watch verify-report <file.json>` re-checks the
+  hash and signature (PASS/FAIL). Covers grade distribution, fleet grade, the
+  compliance-metric checklist (no SHA-1, strong key, TLS ≥ 1.2, HSTS; CAA shown
+  as "Not collected" pending per-scan storage), and a 7/30/90-day remediation
+  schedule. Linked from the Insights page.
+- **Alert channel adapters (Plan 022)** — Microsoft Teams (Adaptive Card via
+  Workflows), Discord, and PagerDuty (Events API v2, trigger + resolve-on-renewal).
+  All delivery routes through the SSRF-safe HTTP opener.
+- **SSRF-guarded HTTP opener** (`http_client.ssrf_safe_urlopen`) — resolves and
+  checks the initial URL and **every redirect hop** against the scan blocklist,
+  enforces an `http(s)` scheme allowlist, and honours the configurable
+  `allow_private` / `allowed_subnets` policy. Webhook (incl. digest) and
+  OCSP/CRL revocation probes now flow through it. *(Documented residual: urllib
+  re-resolves on connect, so this is a large improvement over unvalidated
+  `urlopen`, not the airtight pinned-IP guarantee the TLS scanner has — see the
+  `http_client` module docstring; **BC-116/BC-117**.)*
+- **Configurable LDAP group filter (BC-118)** — `CERT_WATCH_LDAP_GROUP_FILTER`
+  with a `{group}` placeholder (defaults to the AD transitive-membership OID),
+  unblocking OpenLDAP/FreeIPA `LDAP_REQUIRED_GROUPS`.
+
+### Fixed
+- **LDAP authentication bypass (security, BC-115)** — the user-bind step ignored
+  `ldap3.bind()`'s return value; ldap3 returns `False` on bad credentials rather
+  than raising, so any password authenticated an existing user. The result is now
+  checked and a failed bind is rejected. Regression test added.
+- **Compliance "TLS ≥ 1.2" metric over-reported.** The check upper-cased the
+  protocol string but compared it against mixed-case prefixes, so TLS 1.0/1.1
+  were counted as compliant; it also missed the bare `"TLSv1"` string both scan
+  paths actually emit for TLS 1.0. TLS-version classification is now a shared
+  `posture.tls_version_meets_1_2` helper used by both the posture grade and the
+  compliance metric, with the same blind spot fixed in the posture engine's own
+  TLS finding.
+- **Fleet grade rollup** in the compliance report no longer reports `A+` for an
+  all-`A` fleet (grade severity collapsed `A+`/`A`); it now returns the worst
+  actual grade present.
+
+### Security (hardening from two adversarial reviews — Plan 029)
+- **OAuth ID-token algorithm allowlist** — discovered `alg` values are now
+  intersected with an asymmetric allowlist (RS/ES/PS); `none` and the symmetric
+  `HS*` family (RS/HS key-confusion) can never be accepted, no matter what the
+  IdP advertises. The authlib fallback decode is pinned to the same list.
+- **OAuth redirect_uri no longer trusts the Host header** — requires
+  `CERT_WATCH_BASE_URL` (see upgrade note above; review #3).
+- **OAuth IdP fetches routed through the SSRF-safe opener** — discovery, JWKS,
+  and userinfo requests honour the `allow_private`/`allowed_subnets` policy
+  instead of fetching arbitrary IdP-supplied URLs (review #8).
+- **Stored-XSS guard on `runbook_url`** — http(s) scheme only; a `javascript:`
+  runbook link can no longer be planted and rendered on the cert detail page.
+- **Login CSRF** — `POST /login` now enforces the double-submit token (review #19).
+- **scrypt username-timing oracle fixed** — the username-mismatch dummy hash now
+  uses the stored hash's cost parameters, so a custom-cost admin hash no longer
+  makes the match path measurably slower than a mismatch (review F#1).
+- **Proxy IP trust** — with `CERT_WATCH_TRUST_PROXY=1` and no
+  `CERT_WATCH_TRUSTED_PROXIES`, the **rightmost** `X-Forwarded-For` entry is used
+  (the hop the trusted proxy appended), not the spoofable leftmost one; a startup
+  warning is logged.
+- **Compliance report fails closed** (HTTP 503) rather than signing with an empty
+  key when the app isn't fully initialized.
+- `cw_sid` is now `HttpOnly`; added `Referrer-Policy`, `Permissions-Policy`, and
+  `X-Permitted-Cross-Domain-Policies` response headers; `/healthz` no longer
+  discloses version/commit.
+- **First-run admin password** is no longer written to the log on a file-write
+  failure; recovery instructions are logged instead.
+
+### Changed
+- **Coverage gate raised to 88%** (Plan 024); suite at ~88.7%.
+- Compliance export uses one batched posture query instead of an N+1 over the
+  fleet.
+- **Configurable CT log** (`CERT_WATCH_CT_LOG_URL`) and a short-TTL cache on CT
+  reconciliation; dedicated rate limit on `/api/ct/reconciliation`.
+- **Supply chain:** CI pins actions by SHA and adds `pip-audit`; the Docker base
+  image is pinned by digest; the example k8s `NetworkPolicy` restricts ingress to
+  the ingress/monitoring namespaces (**verify the namespace names match your
+  cluster before deploying**).
+
 ## [0.4.0] — 2026-06-03
 
 First all-in-one release: repositioned as certificate-lifecycle observability for

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import smtplib
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -13,6 +12,7 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
+from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
@@ -38,9 +38,13 @@ class WebhookConfig:
     """Webhook/Slack alert configuration."""
 
     url: str
+    kind: str = "generic"
+    routing_key: str = ""
     headers: dict[str, str] = field(default_factory=dict)
     timeout: int = 15
-    template: str = ""  # Jinja-style template; empty = default JSON
+    template: str = ""
+    allow_private: bool = False
+    allowed_subnets: tuple[str, ...] = ()
 
 
 def evaluate_thresholds(
@@ -216,6 +220,92 @@ def evaluate_all_certs(
     return all_alerts
 
 
+def evaluate_renewal_window(
+    db_path: str | Path,
+    alert_repo: AlertRepository,
+    window_days: int = 30,
+) -> list[Alert]:
+    """Create ``renewal_stalled`` alerts for leaf certs inside their renewal
+    window with no successor certificate (Plan 027).
+
+    A signal distinct from ``expiry_warning``: the cert *should* have been
+    rotated by automation by now, but no replacement has appeared — flagging a
+    broken Certbot / cert-manager / ACME job well before the generic expiry
+    alarm. A successor is any cert whose ``replaces_cert_id`` points at this one.
+    Idempotent: at most one pending ``renewal_stalled`` alert per cert.
+    """
+    if window_days <= 0:
+        return []
+    from cert_watch.database import _connect, _parse_iso
+
+    now = datetime.now(UTC)
+    with _connect(db_path) as conn:
+        superseded = {
+            r["replaces_cert_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT replaces_cert_id FROM certificates "
+                "WHERE replaces_cert_id IS NOT NULL"
+            ).fetchall()
+        }
+        host_owners: dict[tuple, dict] = {}
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            host_owners[(row["hostname"], row["port"])] = {
+                "owner_name": dict(row).get("owner_name", ""),
+                "owner_email": dict(row).get("owner_email", ""),
+            }
+        leaves = conn.execute("SELECT * FROM certificates WHERE is_leaf = 1").fetchall()
+
+    created: list[Alert] = []
+    for leaf in leaves:
+        cid = leaf["id"]
+        if cid in superseded:
+            continue  # a successor cert already exists → renewal worked
+        try:
+            days = (_parse_iso(leaf["not_after"]) - now).days
+        except Exception:
+            continue
+        if days < 0 or days > window_days:
+            continue  # expired (expiry_warning owns it) or outside the window
+        existing = (
+            alert_repo.list_for_cert(cid)
+            if hasattr(alert_repo, "list_for_cert")
+            else [a for a in alert_repo.list_pending() if a.cert_id == cid]
+        )
+        if any(
+            a.alert_type == "renewal_stalled" and a.status == "pending"
+            for a in existing
+        ):
+            continue  # already flagged this window
+        owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
+        alert = Alert(
+            cert_id=cid,
+            alert_type="renewal_stalled",
+            status="pending",
+            message=_format_renewal_message(leaf, days, window_days, owner),
+            threshold_days=window_days,
+            extra_recipients=(
+                [owner["owner_email"]] if owner.get("owner_email") else []
+            ),
+        )
+        alert.id = alert_repo.create(alert)
+        created.append(alert)
+    return created
+
+
+def _format_renewal_message(leaf, days: int, window_days: int, owner: dict) -> str:
+    name = leaf["subject"] or leaf["hostname"] or leaf["id"]
+    target = leaf["hostname"] or "this certificate"
+    msg = (
+        f"Certificate '{name}' is inside its renewal window "
+        f"({days} days remaining; window: {window_days}d) but no successor "
+        f"certificate has appeared. Check the renewal automation "
+        f"(Certbot / cert-manager / ACME client) for {target}."
+    )
+    if owner.get("owner_name"):
+        msg += f" Owner: {owner['owner_name']}."
+    return msg
+
+
 def _format_message(
     cert: Certificate, days: int, threshold: int, *, owner_info: dict | None = None
 ) -> str:
@@ -260,9 +350,11 @@ def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
 
 
 def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
-    """Strip webhook URL and header values from error messages to avoid logging secrets."""
+    """Strip webhook URL, header values, and routing key from error messages."""
     if config and config.url:
         msg = msg.replace(config.url, "***")
+    if config and config.routing_key and len(config.routing_key) >= 4:
+        msg = msg.replace(config.routing_key, "***")
     if config and config.headers:
         for val in config.headers.values():
             if len(val) >= 4:
@@ -307,45 +399,112 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
 
 
 def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
-    """Send alert as JSON POST to a webhook URL. Returns True on success.
+    """Send alert via the configured channel adapter. Returns True on success.
 
-    If config.template is set, uses it as the payload with {{var}} substitution.
-    Available variables: alert_type, cert_id, message, threshold_days, status.
+    Dispatches to the adapter matching ``config.kind`` and sends the resulting
+    request through ``ssrf_safe_urlopen``. PagerDuty returns HTTP 202 on success;
+    all other providers return 2xx.
     """
+    from cert_watch.alert_adapters import get_adapter
+
     if config is None:
         return False
-    if config.template:
-        payload = config.template
-        for key in ("alert_type", "cert_id", "message", "threshold_days", "status"):
-            value = str(getattr(alert, key, ""))
-            payload = payload.replace("{{" + key + "}}", value)
-        content_type = "text/plain"
-        if payload.lstrip().startswith("{"):
-            content_type = "application/json"
-    else:
-        payload_dict = {
-            "alert_type": alert.alert_type,
-            "cert_id": alert.cert_id,
-            "message": alert.message,
-            "threshold_days": alert.threshold_days,
-            "status": alert.status,
-        }
-        if alert.extra_recipients:
-            payload_dict["extra_recipients"] = alert.extra_recipients
-        payload = json.dumps(payload_dict)
-        content_type = "application/json"
-    req = urllib.request.Request(
-        config.url,
-        data=payload.encode("utf-8"),
-        headers={"Content-Type": content_type, **config.headers},
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=config.timeout) as resp:
+        adapter = get_adapter(config.kind)
+        req = adapter.build(alert, config)
+        resp = ssrf_safe_urlopen(
+            req.url,
+            data=req.body,
+            timeout=config.timeout,
+            method=req.method,
+            headers=req.headers,
+            allow_private=config.allow_private,
+            allowed_subnets=config.allowed_subnets,
+        )
+        with resp:
+            if config.kind == "pagerduty":
+                return resp.status == 202
             return 200 <= resp.status < 300
-    except Exception as exc:  # noqa: BLE001
-        alert.error_message = str(exc)
+    except SSRFBlockedError as exc:
+        alert.error_message = f"webhook URL blocked by SSRF policy: {exc}"
         return False
+    except Exception as exc:  # noqa: BLE001
+        alert.error_message = _sanitize_webhook_error(str(exc), config)
+        return False
+
+
+def send_pagerduty_resolve(
+    cert_id: str,
+    alert_type: str,
+    threshold_days: int | None,
+    config: WebhookConfig,
+    *,
+    summary: str = "",
+) -> bool:
+    """Send a PagerDuty resolve event to auto-close an incident.
+
+    Uses the same ``dedup_key`` as the original trigger so PagerDuty
+    coalesces the resolve with the open incident. Returns True on
+    HTTP 202 (PagerDuty acknowledgement).
+    """
+    from cert_watch.alert_adapters import PagerDutyAdapter
+
+    adapter = PagerDutyAdapter()
+    req = adapter.build_resolve(cert_id, alert_type, threshold_days, config, summary=summary)
+    try:
+        resp = ssrf_safe_urlopen(
+            req.url,
+            data=req.body,
+            timeout=config.timeout,
+            method=req.method,
+            headers=req.headers,
+            allow_private=config.allow_private,
+            allowed_subnets=config.allowed_subnets,
+        )
+        with resp:
+            return resp.status == 202
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "pagerduty resolve failed for cert %s: %s",
+            cert_id,
+            _sanitize_webhook_error(str(exc), config),
+        )
+        return False
+
+
+def resolve_pagerduty_for_renewed_cert(
+    db_path: str | Path,
+    old_cert_id: str,
+    webhook_config: WebhookConfig | None = None,
+) -> int:
+    """Resolve all PagerDuty incidents for a cert that has been renewed.
+
+    Looks up pending alerts for the old cert and sends a resolve event
+    for each unique (alert_type, threshold_days) combination. Returns
+    the number of resolve events sent.
+
+    No-ops when ``webhook_config`` is None or ``kind != "pagerduty"``.
+    """
+    if webhook_config is None or webhook_config.kind != "pagerduty":
+        return 0
+    from cert_watch.database import SqliteAlertRepository
+
+    alert_repo = SqliteAlertRepository(db_path)
+    cert_alerts = alert_repo.list_for_cert(old_cert_id)
+    seen: set[tuple[str, int | None]] = set()
+    resolved = 0
+    for alert in cert_alerts:
+        key = (alert.alert_type, alert.threshold_days)
+        if key in seen:
+            continue
+        seen.add(key)
+        if send_pagerduty_resolve(
+            old_cert_id, alert.alert_type, alert.threshold_days,
+            webhook_config,
+            summary=f"cert-watch: certificate renewed, resolving {alert.alert_type} alert",
+        ):
+            resolved += 1
+    return resolved
 
 
 ALERT_MAX_RETRIES = 3
@@ -527,23 +686,30 @@ def send_expiry_digest(
 
     # Send via webhook
     if webhook_config is not None:
-        import urllib.request as _urlreq
-
         payload = json.dumps({
             "alert_type": "expiry_digest",
             "cert_count": len(expiring),
             "message": message,
             "certificates": expiring,
         })
-        req = _urlreq.Request(
-            webhook_config.url,
-            data=payload.encode("utf-8"),
-            headers={"Content-Type": "application/json", **webhook_config.headers},
-            method="POST",
-        )
+        req_headers = {"Content-Type": "application/json", **webhook_config.headers}
         try:
-            with _urlreq.urlopen(req, timeout=webhook_config.timeout) as resp:
+            resp = ssrf_safe_urlopen(
+                webhook_config.url,
+                data=payload.encode("utf-8"),
+                timeout=webhook_config.timeout,
+                method="POST",
+                headers=req_headers,
+                allow_private=webhook_config.allow_private,
+                allowed_subnets=webhook_config.allowed_subnets,
+            )
+            with resp:
                 return 200 <= resp.status < 300
+        except SSRFBlockedError as exc:
+            logger.warning(
+                "digest webhook blocked by SSRF policy: %s", exc,
+            )
+            return False
         except Exception as exc:
             logger.warning(
                 "digest webhook failed: %s",

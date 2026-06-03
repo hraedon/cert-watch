@@ -107,6 +107,8 @@ class Settings:
     webhook_url: str | None = None
     webhook_headers: dict[str, str] | None = None
     webhook_template: str = ""
+    webhook_kind: str = "generic"
+    pagerduty_routing_key: str = ""
     alert_digest_only: bool = False
     tls_verify: bool = False
     allow_private: bool = True
@@ -122,6 +124,7 @@ class Settings:
     history_retention_days: int = 365
     alert_retention_days: int = 90
     drift_alerts: bool = True
+    renewal_window_days: int = 30  # 0 disables the renewal-stall alert (Plan 027)
     check_revocation: bool = False
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
@@ -134,6 +137,7 @@ class Settings:
     ldap_ca_cert: str = ""
     ldap_required_groups: tuple[str, ...] = ()
     ldap_connect_timeout: int = 5
+    ldap_group_filter: str = ""
     oauth_client_id: str = ""
     oauth_client_secret: str = ""
     oauth_issuer_url: str = ""
@@ -206,6 +210,15 @@ class Settings:
                 audit_retention_str,
             )
             audit_retention_days = 90
+        renewal_window_str = os.environ.get("CERT_WATCH_RENEWAL_WINDOW_DAYS", "30")
+        try:
+            renewal_window_days = int(renewal_window_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_RENEWAL_WINDOW_DAYS=%r, using default 30",
+                renewal_window_str,
+            )
+            renewal_window_days = 30
         history_retention_str = os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365")
         try:
             history_retention_days = int(history_retention_str)
@@ -238,11 +251,14 @@ class Settings:
             webhook_url=webhook_url,
             webhook_headers=webhook_headers,
             webhook_template=os.environ.get("ALERT_WEBHOOK_TEMPLATE", ""),
+            webhook_kind=os.environ.get("ALERT_WEBHOOK_KIND", "generic"),
+            pagerduty_routing_key=read_secret("ALERT_PAGERDUTY_ROUTING_KEY") or "",
             alert_digest_only=os.environ.get("ALERT_DIGEST_ONLY", "0") == "1",
             audit_retention_days=audit_retention_days,
             history_retention_days=history_retention_days,
             alert_retention_days=alert_retention_days,
             drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
+            renewal_window_days=renewal_window_days,
             check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
@@ -272,6 +288,7 @@ class Settings:
                 if g.strip()
             ),
             ldap_connect_timeout=ldap_connect_timeout,
+            ldap_group_filter=os.environ.get("LDAP_GROUP_FILTER", ""),
             oauth_client_id=os.environ.get("OAUTH_CLIENT_ID", ""),
             oauth_client_secret=read_secret("OAUTH_CLIENT_SECRET") or "",
             oauth_issuer_url=os.environ.get("OAUTH_ISSUER_URL", ""),
@@ -337,8 +354,12 @@ class Settings:
             return None
         return WebhookConfig(
             url=self.webhook_url,
+            kind=self.webhook_kind,
+            routing_key=self.pagerduty_routing_key,
             headers=self.webhook_headers or {},
             template=self.webhook_template,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
         )
 
     def build_auth_provider(self):
@@ -368,6 +389,7 @@ class Settings:
             ldap_ca_cert=self.ldap_ca_cert,
             ldap_required_groups=list(self.ldap_required_groups),
             ldap_connect_timeout=self.ldap_connect_timeout,
+            ldap_group_filter=self.ldap_group_filter,
             oauth_client_id=self.oauth_client_id,
             oauth_client_secret=self.oauth_client_secret,
             oauth_issuer_url=self.oauth_issuer_url,
@@ -375,6 +397,8 @@ class Settings:
             oauth_authorization_endpoint=self.oauth_authorization_endpoint,
             oauth_token_endpoint=self.oauth_token_endpoint,
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
             allowed_groups=list(self.allowed_groups),
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,
@@ -403,6 +427,7 @@ class Settings:
         _SENSITIVE = frozenset({
             "ldap_bind_password", "ldap_ca_cert",
             "oauth_client_secret", "smtp_password",
+            "pagerduty_routing_key",
         })
 
         def _decrypt(key: str, val: str) -> str:
@@ -463,6 +488,7 @@ class Settings:
                 ldap_connect_timeout = base.ldap_connect_timeout
         else:
             ldap_connect_timeout = base.ldap_connect_timeout
+        ldap_group_filter = _kv(base.ldap_group_filter, "ldap_group_filter")
         oauth_client_id = _kv(base.oauth_client_id, "oauth_client_id")
         oauth_client_secret = _kv(base.oauth_client_secret, "oauth_client_secret")
         oauth_issuer_url = _kv(base.oauth_issuer_url, "oauth_issuer_url")
@@ -497,6 +523,8 @@ class Settings:
         # Merge alert fields
         webhook_url = _kv(base.webhook_url or "", "webhook_url") or None
         webhook_template = _kv(base.webhook_template, "webhook_template")
+        webhook_kind = _kv(base.webhook_kind, "webhook_kind")
+        pagerduty_routing_key = _kv(base.pagerduty_routing_key, "pagerduty_routing_key")
         alert_digest_only_str = kv.get("alert_digest_only", "")
         alert_digest_only = base.alert_digest_only
         if alert_digest_only_str and not base.alert_digest_only:
@@ -524,6 +552,8 @@ class Settings:
             webhook_url=webhook_url,
             webhook_headers=base.webhook_headers,
             webhook_template=webhook_template,
+            webhook_kind=webhook_kind,
+            pagerduty_routing_key=pagerduty_routing_key,
             alert_digest_only=alert_digest_only,
             tls_verify=base.tls_verify,
             allow_private=base.allow_private,
@@ -534,6 +564,7 @@ class Settings:
             history_retention_days=base.history_retention_days,
             alert_retention_days=base.alert_retention_days,
             drift_alerts=base.drift_alerts,
+            renewal_window_days=base.renewal_window_days,
             check_revocation=base.check_revocation,
             # Auth
             auth_provider=auth_provider,
@@ -546,6 +577,7 @@ class Settings:
             ldap_ca_cert=ldap_ca_cert,
             ldap_required_groups=ldap_required_groups,
             ldap_connect_timeout=ldap_connect_timeout,
+            ldap_group_filter=ldap_group_filter,
             oauth_client_id=oauth_client_id,
             oauth_client_secret=oauth_client_secret,
             oauth_issuer_url=oauth_issuer_url,
