@@ -662,6 +662,8 @@ def _build_dashboard_rows(
                 "notes": dict(leaf).get("notes", ""),
                 "fingerprint_sha256": leaf.get("fingerprint_sha256", ""),
                 "san_dns_names": json.loads(leaf.get("san_dns_names", "[]")),
+                "tags": leaf.get("tags", ""),
+                "owner_name": "",
             }
         )
 

@@ -10,6 +10,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from cert_watch import __commit__, __version__
 from cert_watch.alerts import Alert, resolve_group_recipients, send_webhook
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
@@ -896,6 +897,64 @@ def api_report_expiring_csv(
         content=output.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=expiring-{days}d.csv"},
+    )
+
+
+# ---------- Compliance report (Plan 025) ----------
+
+
+@router.get("/api/reports/compliance.json")
+def api_compliance_report_json(
+    request: Request,
+    _auth: str = Depends(require_auth),
+    tag: str = "",
+) -> JSONResponse:
+    from cert_watch.compliance import build_compliance_report, report_to_dict
+
+    db = _db_path(request)
+    security = getattr(request.app.state, "security", None)
+    signing_key = security.signing_key if security else ""
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    return JSONResponse(
+        content=report_to_dict(report),
+        headers={"Content-Disposition": "attachment; filename=compliance-report.json"},
+    )
+
+
+@router.get("/api/reports/compliance.csv")
+def api_compliance_report_csv(
+    request: Request,
+    _auth: str = Depends(require_auth),
+    tag: str = "",
+) -> PlainTextResponse:
+    import io as _io
+
+    from cert_watch.compliance import build_compliance_report, report_to_csv_rows
+
+    db = _db_path(request)
+    security = getattr(request.app.state, "security", None)
+    signing_key = security.signing_key if security else ""
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    output = _io.StringIO()
+    writer = csv.writer(output)
+    for row in report_to_csv_rows(report):
+        writer.writerow(row)
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=compliance-report.csv"},
     )
 
 

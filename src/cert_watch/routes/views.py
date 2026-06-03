@@ -675,3 +675,33 @@ def metrics(request: Request) -> PlainTextResponse:
         generate_latest(registry).decode("utf-8"),
         media_type="text/plain; version=0.0.4; charset=utf-8",
     )
+
+
+@router.get("/reports/compliance", response_class=HTMLResponse)
+def compliance_report_view(
+    request: Request,
+    tag: str = "",
+) -> HTMLResponse:
+    from cert_watch.compliance import build_compliance_report, report_to_dict
+
+    db = _db_path(request)
+    security = getattr(request.app.state, "security", None)
+    signing_key = security.signing_key if security else ""
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="compliance.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            "active_page": "insights",
+            "report": report_to_dict(report),
+            "tag": tag,
+        },
+    )
