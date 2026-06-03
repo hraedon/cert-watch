@@ -48,7 +48,7 @@ spec:
             - name: CERT_WATCH_DNS_SERVERS
               value: "192.168.1.29,192.168.1.19"
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:

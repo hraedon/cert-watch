@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.templating import Jinja2Templates
+from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from cert_watch import __commit__, __version__, ct_lookup
 from cert_watch.config import Settings
@@ -51,6 +52,17 @@ def _db_path(request: Request) -> Path:
 
 @router.get("/healthz")
 def healthz(request: Request) -> dict:
+    """Lightweight liveness probe — process is alive."""
+    return {
+        "status": "ok",
+        "version": __version__,
+        "commit": __commit__,
+    }
+
+
+@router.get("/readyz")
+def readyz(request: Request) -> dict:
+    """Readiness probe — DB reachable and scheduler healthy."""
     db = _db_path(request)
     checks: dict[str, str] = {}
     ok = True
@@ -578,32 +590,66 @@ def discover_view(request: Request) -> HTMLResponse:
     )
 
 
+def _scan_error_reason(error_message: str | None) -> str:
+    """Map a scan error_message to a canonical counter reason label."""
+    if not error_message:
+        return "unknown"
+    msg = error_message.lower()
+    if "refused" in msg:
+        return "connection_refused"
+    if "timed out" in msg or "timeout" in msg:
+        return "timeout"
+    if "resolve" in msg or "dns" in msg:
+        return "dns_failure"
+    if "blocked" in msg:
+        return "blocked"
+    return "unknown"
+
+
 @router.get("/metrics", response_class=PlainTextResponse)
-def metrics(request: Request) -> str:
+def metrics(request: Request) -> PlainTextResponse:
     if not check_metrics_token(request):
         return PlainTextResponse("unauthorized", status_code=401)
     db = _db_path(request)
-    lines: list[str] = []
+    registry = CollectorRegistry()
+
+    cert_expiry_gauge = Gauge(
+        "cert_watch_cert_expiry_days",
+        "Days until certificate expiry",
+        ["host", "subject"],
+        registry=registry,
+    )
+    hosts_gauge = Gauge(
+        "cert_watch_hosts_tracked",
+        "Number of tracked hosts",
+        registry=registry,
+    )
+    certs_gauge = Gauge(
+        "cert_watch_certificates_tracked",
+        "Number of certificate groups",
+        registry=registry,
+    )
+    expired_gauge = Gauge(
+        "cert_watch_certificates_expired",
+        "Number of expired certificates",
+        registry=registry,
+    )
+    scan_errors_counter = Counter(
+        "cert_scan_errors_total",
+        "Total scan errors by host and reason",
+        ["host", "reason"],
+        registry=registry,
+    )
+
     with _connect(db) as conn:
-        lines.append("# HELP cert_watch_cert_expiry_days Days until certificate expiry")
-        lines.append("# TYPE cert_watch_cert_expiry_days gauge")
         cert_rows = conn.execute(
             "SELECT hostname, port, subject, not_after FROM certificates WHERE is_leaf = 1"
         ).fetchall()
         for r in cert_rows:
-            host_label = (
-                f'{r["hostname"]}:{r["port"]}' if r["hostname"] else "(uploaded)"
-            ).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            subject_label = (
-                r["subject"]
-                .replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-            )
+            host_label = f'{r["hostname"]}:{r["port"]}' if r["hostname"] else "(uploaded)"
             not_after = _parse_iso(r["not_after"])
             days = (not_after - datetime.now(UTC)).days
-            lines.append(
-                f'cert_watch_cert_expiry_days{{host="{host_label}",'
-                f'subject="{subject_label}"}} {days}'
-            )
+            cert_expiry_gauge.labels(host=host_label, subject=r["subject"]).set(days)
         total_certs = len(cert_rows)
         expired = sum(
             1 for r in cert_rows
@@ -611,13 +657,21 @@ def metrics(request: Request) -> str:
         )
         hosts_row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
         total_hosts = hosts_row[0] if hosts_row else 0
-    lines.append("# HELP cert_watch_hosts_tracked Number of tracked hosts")
-    lines.append("# TYPE cert_watch_hosts_tracked gauge")
-    lines.append(f"cert_watch_hosts_tracked {total_hosts}")
-    lines.append("# HELP cert_watch_certificates_tracked Number of certificate groups")
-    lines.append("# TYPE cert_watch_certificates_tracked gauge")
-    lines.append(f"cert_watch_certificates_tracked {total_certs}")
-    lines.append("# HELP cert_watch_certificates_expired Number of expired certificates")
-    lines.append("# TYPE cert_watch_certificates_expired gauge")
-    lines.append(f"cert_watch_certificates_expired {expired}")
-    return "\n".join(lines) + "\n"
+
+        # Scan errors (BC-109)
+        error_rows = conn.execute(
+            "SELECT hostname, port, error_message FROM scan_history WHERE status = 'failure'"
+        ).fetchall()
+        for r in error_rows:
+            host_label = f'{r["hostname"]}:{r["port"]}'
+            reason = _scan_error_reason(r["error_message"])
+            scan_errors_counter.labels(host=host_label, reason=reason).inc()
+
+    hosts_gauge.set(total_hosts)
+    certs_gauge.set(total_certs)
+    expired_gauge.set(expired)
+
+    return PlainTextResponse(
+        generate_latest(registry).decode("utf-8"),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )

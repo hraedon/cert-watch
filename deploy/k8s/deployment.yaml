@@ -98,7 +98,7 @@ spec:
             # - name: OAUTH_ISSUER_URL
             #   value: https://login.microsoftonline.com/{tenant}/v2.0
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
