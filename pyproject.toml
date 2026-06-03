@@ -38,6 +38,9 @@ auth-oauth = [
 auth = [
     "cert-watch[auth-ldap,auth-oauth]",
 ]
+windows = [
+    "pywin32>=306; sys_platform == 'win32'",
+]
 
 [project.scripts]
 cert-watch = "cert_watch.__main__:main"

@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.13-slim AS builder
+# Pinned digest at 2026-06-03 (python:3.13-slim)
+FROM python:3.13-slim@sha256:b04b5d7233d2ad9c379e22ea8927cd1378cd15c60d4ef876c065b25ea8fb3bf3 AS builder
 
-ARG GIT_TAG=0.4.0
+ARG GIT_TAG=0.5.0
 ARG GIT_COMMIT=unknown
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
@@ -18,7 +19,8 @@ COPY src ./src
 RUN printf '%s\n%s\n' "$GIT_TAG" "$GIT_COMMIT" > src/cert_watch/_version.txt
 RUN pip install --no-cache-dir .
 
-FROM python:3.13-slim AS runtime
+# Pinned digest at 2026-06-03 (python:3.13-slim)
+FROM python:3.13-slim@sha256:b04b5d7233d2ad9c379e22ea8927cd1378cd15c60d4ef876c065b25ea8fb3bf3 AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \

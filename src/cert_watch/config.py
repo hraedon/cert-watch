@@ -124,6 +124,7 @@ class Settings:
     history_retention_days: int = 365
     alert_retention_days: int = 90
     drift_alerts: bool = True
+    renewal_window_days: int = 30  # 0 disables the renewal-stall alert (Plan 027)
     check_revocation: bool = False
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
@@ -209,6 +210,15 @@ class Settings:
                 audit_retention_str,
             )
             audit_retention_days = 90
+        renewal_window_str = os.environ.get("CERT_WATCH_RENEWAL_WINDOW_DAYS", "30")
+        try:
+            renewal_window_days = int(renewal_window_str)
+        except ValueError:
+            logger.warning(
+                "Invalid CERT_WATCH_RENEWAL_WINDOW_DAYS=%r, using default 30",
+                renewal_window_str,
+            )
+            renewal_window_days = 30
         history_retention_str = os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365")
         try:
             history_retention_days = int(history_retention_str)
@@ -248,6 +258,7 @@ class Settings:
             history_retention_days=history_retention_days,
             alert_retention_days=alert_retention_days,
             drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
+            renewal_window_days=renewal_window_days,
             check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
@@ -386,6 +397,8 @@ class Settings:
             oauth_authorization_endpoint=self.oauth_authorization_endpoint,
             oauth_token_endpoint=self.oauth_token_endpoint,
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
             allowed_groups=list(self.allowed_groups),
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,
@@ -551,6 +564,7 @@ class Settings:
             history_retention_days=base.history_retention_days,
             alert_retention_days=base.alert_retention_days,
             drift_alerts=base.drift_alerts,
+            renewal_window_days=base.renewal_window_days,
             check_revocation=base.check_revocation,
             # Auth
             auth_provider=auth_provider,

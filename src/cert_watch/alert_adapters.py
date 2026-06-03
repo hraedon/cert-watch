@@ -32,9 +32,7 @@ class AlertAdapter(Protocol):
 def _status_color(alert_type: str) -> int:
     if alert_type == "expired":
         return 0xCC0000
-    if alert_type == "expiry_warning":
-        return 0xE0A800
-    if alert_type == "drift":
+    if alert_type in ("expiry_warning", "drift", "renewal_stalled"):
         return 0xE0A800
     return 0x808080
 
@@ -42,7 +40,7 @@ def _status_color(alert_type: str) -> int:
 def _status_urgency(alert_type: str) -> str:
     if alert_type == "expired":
         return "attention"
-    if alert_type == "expiry_warning":
+    if alert_type in ("expiry_warning", "renewal_stalled"):
         return "warning"
     return "default"
 
@@ -53,6 +51,8 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
     if alert_type in ("expiry_warning", "drift"):
         if threshold_days is not None and threshold_days <= 3:
             return "error"
+        return "warning"
+    if alert_type == "renewal_stalled":
         return "warning"
     return "info"
 

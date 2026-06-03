@@ -38,6 +38,8 @@ uv pip install -e ".[e2e]" && .venv/bin/playwright install --with-deps chromium
 .venv/bin/pytest -m e2e tests/e2e -q
 ```
 
+**Dependency resolution:** `pyproject.toml` uses open-ended `>=` lower bounds. The resolved dependency set is locked in `uv.lock` (managed by `uv pip compile` / `uv pip install`). CI and reproducible builds should use `uv.lock` as the source of truth; a bare `pip install -e .` will re-resolve and may pull newer versions. When changing dependencies, run `uv pip compile pyproject.toml -o uv.lock` to update the lockfile.
+
 The default pytest config (`pyproject.toml` `addopts`) runs `-m 'not e2e and not integration'`. The `@integration` openssl-`s_client` tests are environment-sensitive (need openssl on PATH + a local TLS server) and are excluded from the default run. E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t64 libxcomposite1 libxdamage1 libxrandr2 libgtk-3-0t64 libasound2t64` (one-time sudo install). CI handles this via `playwright install --with-deps`.
 
 ## Conventions

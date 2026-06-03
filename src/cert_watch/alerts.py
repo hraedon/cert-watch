@@ -220,6 +220,92 @@ def evaluate_all_certs(
     return all_alerts
 
 
+def evaluate_renewal_window(
+    db_path: str | Path,
+    alert_repo: AlertRepository,
+    window_days: int = 30,
+) -> list[Alert]:
+    """Create ``renewal_stalled`` alerts for leaf certs inside their renewal
+    window with no successor certificate (Plan 027).
+
+    A signal distinct from ``expiry_warning``: the cert *should* have been
+    rotated by automation by now, but no replacement has appeared — flagging a
+    broken Certbot / cert-manager / ACME job well before the generic expiry
+    alarm. A successor is any cert whose ``replaces_cert_id`` points at this one.
+    Idempotent: at most one pending ``renewal_stalled`` alert per cert.
+    """
+    if window_days <= 0:
+        return []
+    from cert_watch.database import _connect, _parse_iso
+
+    now = datetime.now(UTC)
+    with _connect(db_path) as conn:
+        superseded = {
+            r["replaces_cert_id"]
+            for r in conn.execute(
+                "SELECT DISTINCT replaces_cert_id FROM certificates "
+                "WHERE replaces_cert_id IS NOT NULL"
+            ).fetchall()
+        }
+        host_owners: dict[tuple, dict] = {}
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            host_owners[(row["hostname"], row["port"])] = {
+                "owner_name": dict(row).get("owner_name", ""),
+                "owner_email": dict(row).get("owner_email", ""),
+            }
+        leaves = conn.execute("SELECT * FROM certificates WHERE is_leaf = 1").fetchall()
+
+    created: list[Alert] = []
+    for leaf in leaves:
+        cid = leaf["id"]
+        if cid in superseded:
+            continue  # a successor cert already exists → renewal worked
+        try:
+            days = (_parse_iso(leaf["not_after"]) - now).days
+        except Exception:
+            continue
+        if days < 0 or days > window_days:
+            continue  # expired (expiry_warning owns it) or outside the window
+        existing = (
+            alert_repo.list_for_cert(cid)
+            if hasattr(alert_repo, "list_for_cert")
+            else [a for a in alert_repo.list_pending() if a.cert_id == cid]
+        )
+        if any(
+            a.alert_type == "renewal_stalled" and a.status == "pending"
+            for a in existing
+        ):
+            continue  # already flagged this window
+        owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
+        alert = Alert(
+            cert_id=cid,
+            alert_type="renewal_stalled",
+            status="pending",
+            message=_format_renewal_message(leaf, days, window_days, owner),
+            threshold_days=window_days,
+            extra_recipients=(
+                [owner["owner_email"]] if owner.get("owner_email") else []
+            ),
+        )
+        alert.id = alert_repo.create(alert)
+        created.append(alert)
+    return created
+
+
+def _format_renewal_message(leaf, days: int, window_days: int, owner: dict) -> str:
+    name = leaf["subject"] or leaf["hostname"] or leaf["id"]
+    target = leaf["hostname"] or "this certificate"
+    msg = (
+        f"Certificate '{name}' is inside its renewal window "
+        f"({days} days remaining; window: {window_days}d) but no successor "
+        f"certificate has appeared. Check the renewal automation "
+        f"(Certbot / cert-manager / ACME client) for {target}."
+    )
+    if owner.get("owner_name"):
+        msg += f" Owner: {owner['owner_name']}."
+    return msg
+
+
 def _format_message(
     cert: Certificate, days: int, threshold: int, *, owner_info: dict | None = None
 ) -> str:

@@ -9,6 +9,8 @@ import secrets
 import time
 from dataclasses import dataclass
 
+from cert_watch.http_client import SSRFBlockedError, _validate_url, ssrf_safe_urlopen
+
 from .protocol import AuthProvider, AuthResult
 from .session import _sign_state, _verify_state
 
@@ -48,6 +50,9 @@ class OAuthConfig:
     token_endpoint: str = ""
     userinfo_endpoint: str = ""
     jwks_uri: str = ""
+    # SSRF policy (must match the scanner's allowlist so private IdPs work)
+    allow_private: bool = False
+    allowed_subnets: tuple[str, ...] = ()
 
 
 class OAuthProvider(AuthProvider):
@@ -70,6 +75,8 @@ class OAuthProvider(AuthProvider):
         self._jwks: dict | None = None
         self._jwks_fetched_at: float = 0.0
         self._jwks_ttl: int = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
+        self._allow_private = config.allow_private
+        self._allowed_subnets = config.allowed_subnets
         try:
             from authlib.integrations.requests_client import OAuth2Session  # noqa: F401
         except ImportError:
@@ -91,13 +98,17 @@ class OAuthProvider(AuthProvider):
                 "id_token_signing_alg_values_supported": "RS256",
             }
             return self._discovered
-        import urllib.request
-
         well_known = self.config.issuer_url.rstrip("/") + "/.well-known/openid-configuration"
         try:
-            req = urllib.request.Request(well_known, headers={"User-Agent": "cert-watch"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read())
+            resp = ssrf_safe_urlopen(
+                well_known,
+                headers={"User-Agent": "cert-watch"},
+                timeout=10,
+                allow_private=self._allow_private,
+                allowed_subnets=self._allowed_subnets,
+            )
+            data = json.loads(resp.read())
+            resp.close()
             self._discovered = {
                 "authorization_endpoint": data["authorization_endpoint"],
                 "token_endpoint": data["token_endpoint"],
@@ -130,13 +141,17 @@ class OAuthProvider(AuthProvider):
         jwks_uri = endpoints.get("jwks_uri", "")
         if not jwks_uri:
             return None
-        import urllib.request
-
         try:
-            req = urllib.request.Request(jwks_uri, headers={"User-Agent": "cert-watch"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                self._jwks = json.loads(resp.read())
-                self._jwks_fetched_at = time.monotonic()
+            resp = ssrf_safe_urlopen(
+                jwks_uri,
+                headers={"User-Agent": "cert-watch"},
+                timeout=10,
+                allow_private=self._allow_private,
+                allowed_subnets=self._allowed_subnets,
+            )
+            self._jwks = json.loads(resp.read())
+            self._jwks_fetched_at = time.monotonic()
+            resp.close()
         except Exception as exc:
             logger.warning("JWKS fetch failed: %s", exc)
             return None
@@ -341,6 +356,20 @@ class OAuthProvider(AuthProvider):
                         "code exchange alone. Configure an OIDC-compliant IdP that "
                         "returns an id_token for full session binding."
                     )
+                    # SSRF guard: validate userinfo endpoint before calling it
+                    # (authlib uses requests, so we can't route through ssrf_safe_urlopen)
+                    try:
+                        _validate_url(
+                            userinfo_endpoint,
+                            allow_private=self._allow_private,
+                            allowed_subnets=self._allowed_subnets,
+                        )
+                    except SSRFBlockedError as exc:
+                        logger.warning("OAuth userinfo endpoint blocked by SSRF policy: %s", exc)
+                        return AuthResult(
+                            success=False,
+                            error="OAuth userinfo endpoint blocked by SSRF policy",
+                        )
                     resp = client.get(userinfo_endpoint)
                     if resp.status_code == 200:
                         info = resp.json()

@@ -52,6 +52,8 @@ class FakeOAuthProvider(AuthProvider):
 
 def _make_app(monkeypatch, tmp_path, provider, **env):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    # OAuth requires an explicit base URL (review #3 — no Host-header fallback).
+    env.setdefault("CERT_WATCH_BASE_URL", "https://cert-watch.example")
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     from cert_watch.app import create_app
@@ -190,6 +192,19 @@ def test_callback_authz_allowed_when_in_allowed_group(monkeypatch, tmp_path):
 
 
 # ── Happy path ──────────────────────────────────────────────────────────────
+
+
+def test_callback_refuses_without_base_url(monkeypatch, tmp_path):
+    # review #3: with no CERT_WATCH_BASE_URL, OAuth must not derive redirect_uri
+    # from the Host header — it refuses rather than risk redirect injection.
+    provider = FakeOAuthProvider(AuthResult(success=True, username="alice@example.com"))
+    app_mod = _make_app(monkeypatch, tmp_path, provider, CERT_WATCH_BASE_URL="")
+    with TestClient(app_mod.app) as client:
+        client.cookies.set(STATE_COOKIE, _sign("rawstate"))
+        r = client.get("/auth/callback?code=abc&state=rawstate", follow_redirects=False)
+    assert r.status_code == 303
+    assert "CERT_WATCH_BASE_URL" in r.headers["location"]
+    assert r.cookies.get(SESSION_COOKIE) is None
 
 
 def test_callback_happy_path_mints_session(monkeypatch, tmp_path):

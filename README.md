@@ -18,6 +18,8 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Web dashboard** — color-coded expiry status (red/yellow/green), chain visualization, host management
 - **REST API** — JSON endpoints for certificates, hosts, and alerts with pagination
 - **Alerting** — email (SMTP), generic webhook, and first-class **Microsoft Teams / Discord / PagerDuty** channels, with configurable per-host thresholds
+- **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
+- **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
 - **Certificate Transparency** — lookup certificates via crt.sh
 - **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
@@ -151,6 +153,14 @@ Then configure the IIS site — see [`deploy/iis/README.md`](deploy/iis/README.m
 Set `CERT_WATCH_TRUST_PROXY=1` so the client IP (for rate limiting and the audit
 log) is read from IIS's forwarded headers rather than the loopback connection.
 
+To land audit events in the **Windows Event Log** (Application log, where AMA /
+SIEM agents collect them), install the extra and enable the sink:
+
+```powershell
+uv pip install -e ".[windows]"   # pywin32
+$env:CERT_WATCH_EVENTLOG = "1"
+```
+
 ## Configuration
 
 All configuration is via environment variables.
@@ -170,6 +180,8 @@ All configuration is via environment variables.
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of alert records to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_DRIFT_ALERTS` | `1` | Set `0` to disable drift alerts (issuer change, key-size drop, SHA-1 downgrade, posture/TLS downgrade) |
+| `CERT_WATCH_RENEWAL_WINDOW_DAYS` | `30` | Window for the renewal-stall alert: a leaf cert this many days from expiry with no successor certificate raises a `renewal_stalled` alert. `0` disables it |
+| `CERT_WATCH_CT_LOG_URL` | `https://crt.sh` | CT log base URL for Discover/CT lookups; point at a private CT log if needed (validated http/https) |
 | `CERT_WATCH_CHECK_REVOCATION` | `0` | Set `1` to probe OCSP/CRL reachability during posture grading (findings are warnings, not penalties) |
 | `CERT_WATCH_RELOAD` | `0` | Set `1` to enable uvicorn auto-reload on code changes (development only) |
 | `CERT_WATCH_DNS_SERVERS` | — | Comma-separated DNS server IPs for hostname resolution during scans (e.g. internal DCs). Falls back to the system resolver |
@@ -225,6 +237,26 @@ All webhook delivery — including the Teams/Discord/PagerDuty channels — is r
 through an **SSRF-guarded HTTP opener** that resolves and re-checks every redirect
 hop against the scan blocklist (see [Scanning & SSRF policy](#scanning--ssrf-policy)).
 
+### SIEM / log export
+
+Ship the structured audit log (`ts, actor, action, target_type, target_id,
+detail, source_ip`) to a SIEM. Each sink is enabled only when configured, and all
+are **fail-open** — a down or slow SIEM never blocks or breaks an audited action.
+With nothing configured the audit write path is unchanged.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERT_WATCH_SYSLOG_HOST` | — | Syslog server host; enables the syslog sink. Serves any SIEM (QRadar, Sentinel via AMA, Splunk via UF) |
+| `CERT_WATCH_SYSLOG_PORT` | `514` | Syslog port |
+| `CERT_WATCH_SYSLOG_PROTO` | `udp` | `udp` or `tcp` |
+| `CERT_WATCH_HEC_URL` | — | Splunk HTTP Event Collector URL; enables the HEC sink (delivered through the SSRF-safe opener on a background pool) |
+| `CERT_WATCH_HEC_TOKEN` | — | Splunk HEC token (required for HEC). `*_FILE` supported |
+| `CERT_WATCH_HEC_INDEX` | — | Optional Splunk index |
+| `CERT_WATCH_HEC_SOURCETYPE` | `cert_watch` | Splunk sourcetype |
+| `CERT_WATCH_EVENTLOG` | `0` | Set `1` to write to the **Windows Event Log** (Application log). Windows only; install the `cert-watch[windows]` extra (pywin32) |
+| `CERT_WATCH_EVENTLOG_SOURCE` | `cert-watch` | Event source name for the Windows Event Log sink |
+| `CERT_WATCH_INSTANCE_ID` | hostname | Instance identifier stamped on exported events |
+
 ### Authentication
 
 No authentication *provider* is configured by default — set `AUTH_PROVIDER` to
@@ -267,6 +299,12 @@ Requires: `pip install cert-watch[auth-ldap]`
 
 Requires: `pip install cert-watch[auth-oauth]`
 
+> **`CERT_WATCH_BASE_URL` is required for OAuth.** The OAuth redirect URI is built
+> from this value and is **not** derived from the request `Host` header (that
+> would let a Host-injection attack steer the IdP's callback). Set it to your
+> external URL, e.g. `https://certs.example.com`. OAuth login refuses to proceed
+> until it is set.
+
 When behind a reverse proxy/TLS terminator, also set `CERT_WATCH_BASE_URL` (see
 below) so the OAuth redirect URI is built with your public host.
 
@@ -307,7 +345,7 @@ cert-watch (see [`deploy/iis/README.md`](deploy/iis/README.md)).
 |----------|---------|-------------|
 | `CERT_WATCH_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` / `X-Real-IP` (for rate limiting + audit log) instead of the proxy's connection IP |
 | `CERT_WATCH_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for the above; restricts which sources may set forwarded headers |
-| `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Used to build the OAuth redirect URI from the public host rather than the loopback bind |
+| `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Builds the OAuth redirect URI from a trusted value rather than the request `Host` header. **Required when OAuth/OIDC is enabled** |
 | `CERT_WATCH_METRICS_TOKEN` | — | When set, `/metrics` requires `Authorization: Bearer <token>` |
 | `CERT_WATCH_ALLOW_UNAUTH` | `0` | Set `1` to allow running with no auth provider on a non-loopback bind (suppresses the secure-by-default refusal and the `/setup` redirect) |
 

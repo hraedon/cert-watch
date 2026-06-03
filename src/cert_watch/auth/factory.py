@@ -62,6 +62,9 @@ def build_auth_provider(
     oauth_authorization_endpoint: str = "",
     oauth_token_endpoint: str = "",
     oauth_userinfo_endpoint: str = "",
+    # SSRF policy for OAuth IdP fetches
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
     # Authorization options
     allowed_groups: list[str] | None = None,
     allowed_roles: list[str] | None = None,
@@ -117,6 +120,8 @@ def build_auth_provider(
                 authorization_endpoint=oauth_authorization_endpoint,
                 token_endpoint=oauth_token_endpoint,
                 userinfo_endpoint=oauth_userinfo_endpoint,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
             )
         )
         if local_admin:

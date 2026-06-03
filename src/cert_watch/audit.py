@@ -43,6 +43,34 @@ def record_audit(
             exc_info=True,
         )
 
+    # SIEM export (Plan 028) — after the DB row is the source of truth; fail-open
+    # and a no-op when no sink is configured, so the audit path is unchanged.
+    try:
+        from cert_watch.siem import export_audit_event, siem_enabled
+
+        if siem_enabled():
+            export_audit_event(
+                {
+                    "event_type": "cert_watch.audit",
+                    "ts": ts,
+                    "actor": actor,
+                    "action": action,
+                    "target_type": target_type,
+                    "target_id": target_id,
+                    "detail": detail,
+                    "source_ip": source_ip,
+                    "instance": _siem_instance(),
+                }
+            )
+    except Exception:
+        logger.warning("siem audit export failed", exc_info=True)
+
+
+def _siem_instance() -> str:
+    from cert_watch.siem import _instance_id
+
+    return _instance_id()
+
 
 def purge_old_audit(db_path: str | Path, retention_days: int) -> int:
     """Delete audit rows older than *retention_days*. Returns the count deleted.

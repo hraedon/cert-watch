@@ -112,7 +112,13 @@ _TRUSTED_PROXIES = frozenset(
 
 
 def _extract_client_ip(request: Request) -> str:
-    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured."""
+    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured.
+
+    When ``TRUST_PROXY=1`` and ``TRUSTED_PROXIES`` is empty, we use the **rightmost**
+    XFF entry (the hop the trusted proxy appended) rather than the leftmost
+    (client-controlled) entry, which is spoofable. This is the correct behavior
+    for a single trusted proxy; multi-proxy chains should use ``TRUSTED_PROXIES``.
+    """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
     xff = request.headers.get("x-forwarded-for", "")
@@ -123,7 +129,8 @@ def _extract_client_ip(request: Request) -> str:
                 if part not in _TRUSTED_PROXIES:
                     return part
         else:
-            return parts[0] if parts else (request.client.host if request.client else "unknown")
+            # Rightmost entry = the proxy that directly contacted us (BC-029)
+            return parts[-1] if parts else (request.client.host if request.client else "unknown")
     real_ip = request.headers.get("x-real-ip", "")
     if real_ip:
         return real_ip

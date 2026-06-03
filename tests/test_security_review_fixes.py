@@ -89,6 +89,78 @@ class TestComplianceFailsClosed:
         assert exc.value.status_code == 503
 
 
+class TestLoginCsrf:
+    """Login CSRF (review #19): POST /login enforces the double-submit check."""
+
+    def _app(self, reload_app, monkeypatch):
+        from cert_watch.auth.local_admin import _scrypt_hash
+
+        h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+        # The cw_sid cookie defaults to Secure; TestClient speaks http, so flip
+        # it off here or the double-submit cookie never round-trips in the test.
+        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        # CSRF is globally disabled in the test env (autouse fixture); re-enable
+        # it here so we actually exercise the new enforcement.
+        return reload_app(
+            CERT_WATCH_CSRF_DISABLED="0",
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+        )
+
+    def test_post_without_token_rejected(self, reload_app, monkeypatch):
+        app_mod = self._app(reload_app, monkeypatch)
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            r = client.post(
+                "/login",
+                data={"username": "admin", "password": "right-pw"},
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert "login" in r.headers["location"]  # bounced back, not signed in
+
+    def test_post_with_valid_token_succeeds(self, reload_app, login_csrf, monkeypatch):
+        app_mod = self._app(reload_app, monkeypatch)
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            token = login_csrf(client)
+            assert token, "login form should render a CSRF token"
+            r = client.post(
+                "/login",
+                data={
+                    "username": "admin",
+                    "password": "right-pw",
+                    "_csrf_token": token,
+                },
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert r.headers["location"] in ("/", "http://testserver/")
+
+
+class TestScryptDummyTiming:
+    """review F#1: the username-mismatch dummy hash must use the stored hash's
+    cost parameters, not a hardcoded n, or it reintroduces a timing oracle."""
+
+    def test_dummy_verify_uses_stored_params(self, monkeypatch):
+        import cert_watch.auth.local_admin as la
+        from cert_watch.auth.local_admin import LocalAdminProvider, _scrypt_hash
+
+        stored = _scrypt_hash("pw", n=2**4, r=1, p=1)
+        parts = stored.split("$")
+        parts[1] = "1024"  # advertise a distinctive, non-default cost
+        provider = LocalAdminProvider("admin", "$".join(parts))
+
+        seen: list[int | None] = []
+
+        def fake_scrypt(*a, **k):
+            seen.append(k.get("n"))
+            return b"\x00" * 32
+
+        monkeypatch.setattr(la.hashlib, "scrypt", fake_scrypt)
+        # Mismatching username drives the dummy path.
+        provider.authenticate("not-admin", "pw")
+        assert seen and seen[-1] == 1024  # used stored n, not the hardcoded floor
+
+
 class TestResponseHeaders:
     def test_security_headers_present(self, reload_app):
         app_mod = reload_app()

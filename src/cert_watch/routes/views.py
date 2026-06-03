@@ -52,12 +52,12 @@ def _db_path(request: Request) -> Path:
 
 @router.get("/healthz")
 def healthz(request: Request) -> dict:
-    """Lightweight liveness probe — process is alive."""
-    return {
-        "status": "ok",
-        "version": __version__,
-        "commit": __commit__,
-    }
+    """Lightweight liveness probe — process is alive.
+
+    Build metadata (version/commit) is intentionally omitted from the public
+    liveness body to avoid unnecessary disclosure (BC-029 H).
+    """
+    return {"status": "ok"}
 
 
 @router.get("/readyz")
@@ -606,7 +606,11 @@ def _scan_error_reason(error_message: str | None) -> str:
     return "unknown"
 
 
-@router.get("/metrics", response_class=PlainTextResponse)
+@router.get(
+    "/metrics",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(rate_limit("metrics", 120, 60))],
+)
 def metrics(request: Request) -> PlainTextResponse:
     if not check_metrics_token(request):
         return PlainTextResponse("unauthorized", status_code=401)

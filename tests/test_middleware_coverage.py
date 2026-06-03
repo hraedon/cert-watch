@@ -200,7 +200,8 @@ def test_extract_client_ip_xff(monkeypatch):
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "203.0.113.1, 10.0.0.1"}
-    assert mw._extract_client_ip(req) == "203.0.113.1"
+    # BC-029 C: when TRUSTED_PROXIES is empty, use the rightmost (proxy) entry
+    assert mw._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_xff_trusted_proxy(monkeypatch):
