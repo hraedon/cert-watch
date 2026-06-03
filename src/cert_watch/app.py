@@ -23,6 +23,7 @@ from cert_watch.database import (
 )
 from cert_watch.database.queries import check_encrypted_values, derive_encryption_key
 from cert_watch.filters import register_filters
+from cert_watch.firstrun import FirstRunPosture, first_run_action, is_network_exposed
 from cert_watch.middleware import (
     CSPNonceMiddleware,
     _init_rate_db,
@@ -177,28 +178,34 @@ async def lifespan(app: FastAPI):
 
     auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider()
 
-    # BC-083 / first-run posture. "Network-exposed" = reachable from the network:
-    # a routable bind, or a loopback bind fronted by a proxy that republishes it
-    # (CERT_WATCH_TRUST_PROXY=1, e.g. IIS/nginx). CERT_WATCH_HOST is the source of
-    # truth for the bind — the entrypoint (__main__) normalizes it to what it
-    # passes to uvicorn, so this can't diverge from the real bind (BC-090).
+    # BC-083 / first-run posture. CERT_WATCH_HOST is the source of truth for the
+    # bind — the entrypoint (__main__) normalizes --host/env into it so exposure
+    # detection can't diverge from the real bind (BC-090). The decision itself is
+    # the pure first_run_action (BC-114), kept out of this side-effecting lifespan
+    # so it can be table-tested.
     bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
     trust_proxy = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
-    network_exposed = bind_host not in ("127.0.0.1", "::1", "localhost") or trust_proxy
+    exposed = is_network_exposed(bind_host, trust_proxy)
+
+    def _posture() -> FirstRunPosture:
+        return first_run_action(
+            has_provider=not isinstance(auth, NoAuthProvider),
+            allow_unauth=s.allow_unauth,
+            network_exposed=exposed,
+        )
 
     # First run on a network-exposed instance with no auth: provision a local
     # admin with a generated password so the app comes up *authenticated* rather
     # than open. Bare loopback dev stays open (+ the /setup wizard); an explicit
-    # CERT_WATCH_ALLOW_UNAUTH=1 forces open anywhere. Skipped when a provider was
-    # injected (tests) or already resolved (LDAP/OAuth/existing local admin).
-    if (
+    # CERT_WATCH_ALLOW_UNAUTH=1 forces open anywhere. Provisioning is skipped when
+    # a provider was injected (tests) — the injection is the escape hatch.
+    posture = _posture()
+    if posture is FirstRunPosture.PROVISION_ADMIN and (
         getattr(app.state, "_injected_auth", None) is None
-        and isinstance(auth, NoAuthProvider)
-        and not s.allow_unauth
-        and network_exposed
     ):
         _provision_initial_admin(s)
         auth = s.build_auth_provider()
+        posture = _posture()
 
     # Setup wizard detection (bare loopback dev path; provisioned instances have
     # a provider now, so needs_setup is False for them).
@@ -221,10 +228,12 @@ async def lifespan(app: FastAPI):
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
 
-    # BC-083 fail-closed fallback: if the instance is network-exposed and we
-    # *still* have no auth (e.g. auto-provisioning above could not persist the
-    # admin), refuse to serve open rather than expose an unauthenticated app.
-    if isinstance(auth, NoAuthProvider) and not s.allow_unauth and network_exposed:
+    # BC-083 fail-closed fallback: if after the provisioning attempt we still
+    # have no auth on a network-exposed bind (e.g. provisioning could not persist
+    # the admin, or a NoAuth provider was injected on an exposed bind), the
+    # posture is still PROVISION_ADMIN — refuse to serve open rather than expose
+    # an unauthenticated app.
+    if posture is FirstRunPosture.PROVISION_ADMIN:
         raise SystemExit(
             "cert-watch could not auto-provision an admin and no authentication "
             f"is configured, but the instance is network-exposed (bind={bind_host}, "
