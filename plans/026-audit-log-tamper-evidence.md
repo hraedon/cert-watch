@@ -107,6 +107,19 @@ most recent checkpoint forward*, and that checkpoints are themselves signed.
   "Honest limits".)
 - Exit non-zero on FAIL, like `verify-report`.
 
+### DB-enforced append-only (defense-in-depth, from review #18)
+
+Add SQLite `BEFORE UPDATE` / `BEFORE DELETE` triggers on `audit_log` that
+`RAISE(ABORT, 'audit_log is append-only')`, so a stray `UPDATE`/`DELETE` through
+the app's own connection is refused. **Honest scope:** this stops accidental and
+in-app tampering, **not** an attacker with direct SQLite/file access (they can
+drop the triggers or edit the file). It is a cheap complement to — not a
+replacement for — the hash chain, which is what actually *detects* offline
+edits. Note the interaction with purge: the checkpoint-sealing purge (above) must
+be the *only* sanctioned deleter, so either the trigger allows a guarded delete
+path (e.g. a session flag) or purge runs via a maintenance path that recreates
+the table. Decide at implementation; the hash chain is the real guarantee.
+
 ### Head attestation & external anchor
 
 - Stamp the current head `entry_hash` + signature into the **compliance report**

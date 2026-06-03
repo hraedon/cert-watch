@@ -388,8 +388,11 @@ async def csrf_session_middleware(request: Request, call_next):
         sid = secrets.token_hex(16)
         request.scope["session_id"] = sid
         response = await call_next(request)
+        # HttpOnly: the CSRF token is HMAC'd with a server-side secret and
+        # rendered into forms server-side, so no client JS ever reads cw_sid.
+        # Keeping it HttpOnly denies an XSS one more primitive at zero cost.
         response.set_cookie(
-            "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL,
+            "cw_sid", sid, httponly=True, samesite="strict", max_age=_CSRF_TOKEN_TTL,
             secure=_COOKIE_SECURE, path="/",
         )
         return response
@@ -493,6 +496,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Content-Security-Policy"] = _build_csp(nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+    )
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     return response
 
 

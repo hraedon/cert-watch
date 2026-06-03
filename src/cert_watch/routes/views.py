@@ -683,10 +683,10 @@ def compliance_report_view(
     tag: str = "",
 ) -> HTMLResponse:
     from cert_watch.compliance import build_compliance_report, report_to_dict
+    from cert_watch.routes.api import compliance_signing_key
 
     db = _db_path(request)
-    security = getattr(request.app.state, "security", None)
-    signing_key = security.signing_key if security else ""
+    signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,
         scope_tag=tag,

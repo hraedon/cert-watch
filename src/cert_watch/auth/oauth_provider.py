@@ -14,6 +14,28 @@ from .session import _sign_state, _verify_state
 
 logger = logging.getLogger("cert_watch.auth")
 
+# Asymmetric signature algorithms only. The IdP's discovery document advertises
+# its supported algs, but we never let that list widen ours: `none` (unsigned)
+# and the HS* family (symmetric — vulnerable to the RS/HS key-confusion attack,
+# since the verification "key" is the *public* JWKS key) must never be accepted
+# for an ID token, no matter what a malicious or misconfigured IdP advertises.
+_ALLOWED_JWT_ALGS = (
+    "RS256", "RS384", "RS512",
+    "ES256", "ES384", "ES512",
+    "PS256", "PS384", "PS512",
+)
+
+
+def _safe_algs(advertised: list[str]) -> list[str]:
+    """Intersect IdP-advertised algs with our asymmetric allowlist.
+
+    Falls back to ``["RS256"]`` if the IdP advertised nothing we accept, so a
+    hostile ``["none"]`` can never reduce the verifier to accepting unsigned
+    tokens.
+    """
+    filtered = [a for a in advertised if a in _ALLOWED_JWT_ALGS]
+    return filtered or ["RS256"]
+
 
 @dataclass
 class OAuthConfig:
@@ -144,9 +166,9 @@ class OAuthProvider(AuthProvider):
             return None
 
         endpoints = self._discover()
-        alg_values = endpoints.get(
-            "id_token_signing_alg_values_supported", "RS256"
-        ).split(",")
+        alg_values = _safe_algs(
+            endpoints.get("id_token_signing_alg_values_supported", "RS256").split(",")
+        )
 
         issuer = self.config.issuer_url.rstrip("/")
 
@@ -156,9 +178,12 @@ class OAuthProvider(AuthProvider):
                 token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
                 raw_claims = token.claims
             else:
-                from authlib.jose import JsonWebKey
+                from authlib.jose import JsonWebKey, JsonWebToken
                 key_set = JsonWebKey.import_key_set(jwks)
-                data = _jwt.decode(id_token, key=key_set)
+                # authlib's module-level jwt.decode allows a broad default alg
+                # set; pin it to our asymmetric allowlist instead.
+                restricted = JsonWebToken(alg_values)
+                data = restricted.decode(id_token, key=key_set)
                 raw_claims = data
 
             claims_options = {

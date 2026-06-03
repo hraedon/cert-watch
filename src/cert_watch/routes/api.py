@@ -7,7 +7,7 @@ import io
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch import __commit__, __version__
@@ -28,7 +28,7 @@ from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import require_auth, require_write
+from cert_watch.middleware import rate_limit, require_auth, require_write
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
@@ -77,6 +77,23 @@ def _get_settings(request: Request) -> Settings:
 
 def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
+
+
+def _runbook_url_error(url: str) -> str | None:
+    """Return an error message if *url* is unsafe to store as a runbook link.
+
+    runbook_url is rendered as an ``<a href>`` on the cert detail page. Jinja
+    autoescaping neutralizes HTML metacharacters but NOT a ``javascript:`` /
+    ``data:`` scheme, so a write-user could otherwise plant a click-to-execute
+    stored-XSS payload. Allow empty (clears the field) and http(s) only.
+    """
+    if not url.strip():
+        return None
+    from urllib.parse import urlparse
+
+    if urlparse(url.strip()).scheme.lower() not in ("http", "https"):
+        return "runbook_url must be an http(s) URL"
+    return None
 
 
 def _validate_webhook_url(url: str) -> JSONResponse | None:
@@ -372,11 +389,15 @@ async def api_update_host_owner(
             status_code=400,
         )
     runbook_url = body.get("runbook_url")
-    if runbook_url is not None and not isinstance(runbook_url, str):
-        return JSONResponse(
-            content={"error": "runbook_url must be a string"},
-            status_code=400,
-        )
+    if runbook_url is not None:
+        if not isinstance(runbook_url, str):
+            return JSONResponse(
+                content={"error": "runbook_url must be a string"},
+                status_code=400,
+            )
+        err = _runbook_url_error(runbook_url)
+        if err:
+            return JSONResponse(content={"error": err}, status_code=400)
 
     db = _db_path(request)
     repo = SqliteHostRepository(db)
@@ -903,6 +924,19 @@ def api_report_expiring_csv(
 # ---------- Compliance report (Plan 025) ----------
 
 
+def compliance_signing_key(request: Request) -> str:
+    """Return the report signing key, or raise 503 if the app isn't fully booted.
+
+    Signing with an empty key produces a report whose HMAC is trivially
+    forgeable — worse than no signature, because it *looks* verifiable. Fail
+    closed rather than hand an auditor an unverifiable "signed" report.
+    """
+    security = getattr(request.app.state, "security", None)
+    if security is None or not getattr(security, "signing_key", ""):
+        raise HTTPException(status_code=503, detail="signing key unavailable")
+    return security.signing_key
+
+
 @router.get("/api/reports/compliance.json")
 def api_compliance_report_json(
     request: Request,
@@ -912,8 +946,7 @@ def api_compliance_report_json(
     from cert_watch.compliance import build_compliance_report, report_to_dict
 
     db = _db_path(request)
-    security = getattr(request.app.state, "security", None)
-    signing_key = security.signing_key if security else ""
+    signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,
         scope_tag=tag,
@@ -938,8 +971,7 @@ def api_compliance_report_csv(
     from cert_watch.compliance import build_compliance_report, report_to_csv_rows
 
     db = _db_path(request)
-    security = getattr(request.app.state, "security", None)
-    signing_key = security.signing_key if security else ""
+    signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,
         scope_tag=tag,
@@ -991,7 +1023,10 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
     )
 
 
-@router.get("/api/ct/reconciliation")
+@router.get(
+    "/api/ct/reconciliation",
+    dependencies=[Depends(rate_limit("ct_recon", 10, 60))],
+)
 def ct_reconciliation(request: Request, _auth: str = Depends(require_auth), domain: str = ""):
     """CT reconciliation: compare CT log entries against tracked hosts.
 
