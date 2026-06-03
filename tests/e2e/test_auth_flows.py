@@ -9,8 +9,6 @@ Two fixtures:
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import os
 import socket
 import subprocess
@@ -23,19 +21,13 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page, expect
 
+from cert_watch.auth.local_admin import _scrypt_hash
+
 
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
-
-
-def _scrypt_hash(password: str) -> str:
-    """Generate a scrypt hash in cert-watch's format: scrypt$n$r$p$b64salt$b64dk."""
-    n, r, p = 2**14, 8, 1
-    salt = os.urandom(16)
-    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
-    return f"scrypt${n}${r}${p}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
 
 
 def _start_server(
