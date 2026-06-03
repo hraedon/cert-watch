@@ -50,7 +50,7 @@ def test_settings_save_smtp_roundtrip(page: Page, cert_watch_server: str) -> Non
     form = page.locator("form[action='/settings/smtp']")
     form.locator('button[type="submit"]').click()
 
-    expect(page).to_have_url(lambda url: "saved=1" in url, timeout=5000)
+    expect(page).to_have_url(r"saved=1", timeout=5000)
 
     expect(page.locator("body")).to_contain_text("Settings saved")
 
@@ -70,7 +70,7 @@ def test_settings_save_alerts_roundtrip(page: Page, cert_watch_server: str) -> N
     form = page.locator("form[action='/settings/alerts']")
     form.locator('button[type="submit"]').click()
 
-    expect(page).to_have_url(lambda url: "saved=1" in url, timeout=5000)
+    expect(page).to_have_url(r"saved=1", timeout=5000)
     expect(page.locator("body")).to_contain_text("Settings saved")
 
     page.goto(f"{cert_watch_server}/settings?tab=alerts")
