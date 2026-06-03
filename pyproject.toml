@@ -58,7 +58,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not e2e and not integration' --cov=cert_watch --cov-report=term-missing --cov-fail-under=75"
+addopts = "-ra -m 'not e2e and not integration' --cov=cert_watch --cov-report=term-missing --cov-fail-under=88"
 # E2E tests opt-in via `pytest -m e2e` (requires Playwright + browsers).
 # E2E workflows must pass --no-cov to override the coverage settings above.
 markers = [

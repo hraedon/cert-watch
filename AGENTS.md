@@ -84,6 +84,7 @@ Plan status:
 - **Plan 020** (security middleware consolidation): S1 (= 018 A3) **done**; S2 (`rate_limit` dependency) **done**; **S4 (CSP nonces) done** (BC-075 — all inline handlers converted, nonce CSP active); **S3 (audit side-effect) and S5 (`get_db` dependency) deferred** — low leverage (S3 undercut by dynamic audit details; S5 is ~40 mechanical edits for a cosmetic convention).
 - **Plan 021** (auth module decomposition): **done** — `auth.py` is now the `auth/` package.
 - **Plan 022** (alert channel adapters): **done** — `alert_adapters.py` with Discord, Teams, PagerDuty adapters; `send_webhook` dispatches via adapter registry; PagerDuty resolve-on-renewal wired into `store_scanned`. `ALERT_WEBHOOK_KIND` and `ALERT_PAGERDUTY_ROUTING_KEY` env vars.
+- **Plan 024** (test coverage to 90%): **partial — 82.8% → 88.3%** — 6 new test files (~300 tests), ratchet bumped 75 → 88. Route layer (views/api/hosts/audit) lifted to 88–96%; middleware to 89%; scheduler to 81%. Remaining gap: `scan.py` (subprocess/network mocking), `routes/settings.py` (LDAP/SMTP test-connection functions), `routes/certificates.py` (complex detail page branches).
 
 ## Architecture notes
 
