@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import logging
-import urllib.request
 from dataclasses import dataclass, field
 
 from cert_watch.certificate_model import Certificate
+from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
 logger = logging.getLogger("cert_watch.posture")
 
@@ -26,6 +26,23 @@ class PostureResult:
     ocsp_stapling: bool | None = None
     hsts: bool | None = None
     must_staple: bool = False
+
+
+def tls_version_meets_1_2(protocol_version: str | None) -> bool:
+    """Return True if *protocol_version* is TLS 1.2 or newer.
+
+    Handles the strings both scan paths actually produce: ``ssl.version()`` and
+    openssl ``s_client`` both report TLS 1.0 as the bare ``"TLSv1"`` (not
+    ``"TLSv1.0"``), so a naive ``"1.0" in proto`` / ``startswith("TLSv1.0")``
+    check misses it. SSLv2/SSLv3 and TLS 1.0/1.1 are all sub-1.2; TLS 1.2/1.3
+    (and any future TLS 1.4+) pass.
+    """
+    if not protocol_version:
+        return False
+    p = protocol_version.strip().lower()
+    return p in ("tlsv1.2", "tlsv1.3") or (
+        p.startswith("tlsv1.") and p not in ("tlsv1.0", "tlsv1.1")
+    )
 
 
 # ---------- Revocation endpoint health (Plan 017 A1) ----------
@@ -70,43 +87,92 @@ def _extract_crl_urls(cert_der: bytes) -> list[str]:
     return urls
 
 
-def _check_ocsp_reachable(url: str, timeout: int = 5) -> bool:
-    """Check if an OCSP responder URL is reachable (HTTP HEAD)."""
+def _check_ocsp_reachable(
+    url: str,
+    timeout: int = 5,
+    *,
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    """Check if an OCSP responder URL is reachable (HTTP HEAD).
+
+    Returns (reachable, message). When blocked by SSRF policy, returns
+    (False, "endpoint blocked by SSRF policy").
+    """
     try:
-        req = urllib.request.Request(url, method="HEAD")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 500
+        resp = ssrf_safe_urlopen(
+            url,
+            timeout=timeout,
+            method="HEAD",
+            allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
+        )
+        with resp:
+            return 200 <= resp.status < 500, ""
+    except SSRFBlockedError:
+        return False, "endpoint blocked by SSRF policy"
     except Exception:
-        return False
+        return False, ""
 
 
-def _check_crl_reachable(url: str, timeout: int = 5) -> bool:
-    """Check if a CRL distribution point URL is reachable (HTTP GET, minimal)."""
+def _check_crl_reachable(
+    url: str,
+    timeout: int = 5,
+    *,
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
+) -> tuple[bool, str]:
+    """Check if a CRL distribution point URL is reachable (HTTP GET, minimal).
+
+    Returns (reachable, message). When blocked by SSRF policy, returns
+    (False, "endpoint blocked by SSRF policy").
+    """
     try:
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return 200 <= resp.status < 500
+        resp = ssrf_safe_urlopen(
+            url,
+            timeout=timeout,
+            method="GET",
+            allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
+        )
+        with resp:
+            return 200 <= resp.status < 500, ""
+    except SSRFBlockedError:
+        return False, "endpoint blocked by SSRF policy"
     except Exception:
-        return False
+        return False, ""
 
 
 def check_revocation_endpoints(
     cert_der: bytes,
     timeout: int = 5,
+    *,
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
 ) -> list[Finding]:
     """Check reachability of OCSP and CRL endpoints for a certificate.
 
     Returns a list of Finding objects for each endpoint checked.
+    When an endpoint is blocked by SSRF policy, the finding carries
+    a clear message rather than a generic "unreachable".
     """
     findings: list[Finding] = []
 
     ocsp_url = _extract_ocsp_url(cert_der)
     if ocsp_url:
-        reachable = _check_ocsp_reachable(ocsp_url, timeout=timeout)
+        reachable, block_msg = _check_ocsp_reachable(
+            ocsp_url, timeout=timeout,
+            allow_private=allow_private, allowed_subnets=allowed_subnets,
+        )
         if reachable:
             findings.append(Finding(
                 check="ocsp_endpoint", status="pass",
                 message=f"OCSP responder reachable at {ocsp_url}",
+            ))
+        elif block_msg:
+            findings.append(Finding(
+                check="ocsp_endpoint", status="warn",
+                message=f"OCSP endpoint {ocsp_url} {block_msg}",
             ))
         else:
             findings.append(Finding(
@@ -122,11 +188,19 @@ def check_revocation_endpoints(
     crl_urls = _extract_crl_urls(cert_der)
     if crl_urls:
         for url in crl_urls:
-            reachable = _check_crl_reachable(url, timeout=timeout)
+            reachable, block_msg = _check_crl_reachable(
+                url, timeout=timeout,
+                allow_private=allow_private, allowed_subnets=allowed_subnets,
+            )
             if reachable:
                 findings.append(Finding(
                     check="crl_endpoint", status="pass",
                     message=f"CRL endpoint reachable at {url}",
+                ))
+            elif block_msg:
+                findings.append(Finding(
+                    check="crl_endpoint", status="warn",
+                    message=f"CRL endpoint {url} {block_msg}",
                 ))
             else:
                 findings.append(Finding(
@@ -152,6 +226,9 @@ def evaluate_posture(
     check_revocation: bool = False,
     revocation_timeout: int = 5,
     port: int = 443,
+    *,
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
 ) -> PostureResult:
     """Evaluate TLS posture grade and lint findings from certificate data.
 
@@ -318,8 +395,7 @@ def evaluate_posture(
         ))
 
     if protocol_version:
-        proto_lower = protocol_version.lower()
-        if "1.0" in proto_lower or "1.1" in proto_lower:
+        if not tls_version_meets_1_2(protocol_version):
             findings.append(Finding(
                 check="tls_version", status="warn",
                 message=f"TLS {protocol_version} offered - consider disabling",
@@ -346,6 +422,7 @@ def evaluate_posture(
     if check_revocation and cert.raw_der:
         revocation_findings = check_revocation_endpoints(
             cert.raw_der, timeout=revocation_timeout,
+            allow_private=allow_private, allowed_subnets=allowed_subnets,
         )
         findings.extend(revocation_findings)
         # Unreachable OCSP/CRL is a warning, not a grade penalty

@@ -644,6 +644,9 @@ def store_scanned(
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+    webhook_config: object | None = None,
 ) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
@@ -651,6 +654,9 @@ def store_scanned(
     Removes any previous leaf + chain certs for the same (hostname, port) first to
     avoid accumulation on repeated scans. Also evaluates and stores TLS posture.
     See AC-07.
+
+    When ``webhook_config`` is a ``WebhookConfig`` with ``kind="pagerduty"``,
+    sends resolve events for any open PagerDuty incidents on the replaced cert.
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
@@ -659,7 +665,7 @@ def store_scanned(
                 "stored scan for %s:%s with incomplete chain (openssl degraded)",
                 entry.host, entry.port,
             )
-        leaf_id = replace_scanned(
+        leaf_id, replaced_cert_id = replace_scanned(
             repo_path_or_repo,
             hostname=entry.host,
             port=entry.port,
@@ -667,11 +673,30 @@ def store_scanned(
             chain=entry.chain,
             chain_valid=None,
         )
+        if replaced_cert_id and webhook_config is not None:
+            try:
+                from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
+                resolved = resolve_pagerduty_for_renewed_cert(
+                    repo_path_or_repo, replaced_cert_id, webhook_config,
+                )
+                if resolved:
+                    logger.info(
+                        "resolved %d pagerduty incident(s) for replaced cert %s",
+                        resolved, replaced_cert_id,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "pagerduty resolve skipped for %s:%s",
+                    entry.host, entry.port,
+                    exc_info=True,
+                )
         posture_grade = ""
         try:
             posture_grade = _evaluate_and_store_posture(
                 repo_path_or_repo, leaf_id, entry,
                 check_revocation=check_revocation,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
             )
         except Exception:  # noqa: BLE001
             logger.debug(
@@ -746,6 +771,8 @@ def _evaluate_and_store_posture(
     entry: ScannedEntry,
     *,
     check_revocation: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
 ) -> str:
     """Evaluate TLS posture and store the result. Returns the grade string."""
     from cert_watch.cert_chain import chain_status
@@ -776,6 +803,8 @@ def _evaluate_and_store_posture(
         hsts=entry.hsts,
         check_revocation=check_revocation,
         port=entry.port,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
     )
 
     store_scan_posture(
@@ -828,6 +857,9 @@ async def store_scanned_async(
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+    webhook_config: object | None = None,
 ) -> str:
     """Async wrapper around store_scanned — runs the blocking DB writes in a thread."""
     return await asyncio.to_thread(
@@ -836,4 +868,7 @@ async def store_scanned_async(
         repo_path_or_repo,
         drift_alerts=drift_alerts,
         check_revocation=check_revocation,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+        webhook_config=webhook_config,
     )

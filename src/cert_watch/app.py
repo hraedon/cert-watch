@@ -140,11 +140,16 @@ def _provision_initial_admin(s: Settings) -> None:
         pw_file.chmod(0o600)
         wrote_file = True
     except OSError:
-        logger.warning("could not write %s; the password is in the log line below", pw_file)
+        logger.warning("could not write %s", pw_file)
 
     where = (
         f"One-time password written to {pw_file} (chmod 600)."
-        if wrote_file else f"One-time password: {password}"
+        if wrote_file
+        else (
+            f"Could not write password file to {pw_file}. "
+            "To recover: set CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH via "
+            "'cert-watch hash-password' or fix the data directory permissions and restart."
+        )
     )
     logger.warning(
         "No authentication was configured; created an initial admin '%s' so the "
@@ -185,6 +190,13 @@ async def lifespan(app: FastAPI):
     # so it can be table-tested.
     bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
     trust_proxy = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
+    trusted_proxies = os.environ.get("CERT_WATCH_TRUSTED_PROXIES", "")
+    if trust_proxy and not trusted_proxies:
+        logger.warning(
+            "CERT_WATCH_TRUST_PROXY=1 but CERT_WATCH_TRUSTED_PROXIES is empty. "
+            "Using rightmost X-Forwarded-For entry for client IP. "
+            "Set CERT_WATCH_TRUSTED_PROXIES if you have multiple proxy hops."
+        )
     exposed = is_network_exposed(bind_host, trust_proxy)
 
     def _posture() -> FirstRunPosture:
@@ -267,17 +279,26 @@ async def lifespan(app: FastAPI):
                 r, s.db_path,
                 drift_alerts=s.drift_alerts,
                 check_revocation=s.check_revocation,
+                allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
+                webhook_config=webhook_cfg,
             ),
         )
 
     def _alerts() -> dict:
-        from cert_watch.alerts import evaluate_all_certs, process_pending, send_expiry_digest
+        from cert_watch.alerts import (
+            evaluate_all_certs,
+            evaluate_renewal_window,
+            process_pending,
+            send_expiry_digest,
+        )
 
         repo = SqliteAlertRepository(s.db_path)
         if s.alert_digest_only:
             delivered = send_expiry_digest(s.db_path, alert_cfg, webhook_config=webhook_cfg)
             return {"sent": 1 if delivered else 0, "failed": 0 if delivered else 1}
         evaluate_all_certs(s.db_path, repo)
+        evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
         return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
 
     def _ct_check() -> dict:

@@ -319,9 +319,9 @@ class TestBC081SessionRevocation:
             }, follow_redirects=False)
             assert response.status_code == 303
 
-            # The session version for admin should be 0 (no bumps yet)
+            # The session version for admin should be >=1 after login (BC-029 D)
             ver_before = get_session_version(db, "admin")
-            assert ver_before == 0
+            assert ver_before >= 1
 
             # Now log out — should bump the session version.
             # Note: CSRF is disabled by the autouse conftest fixture.

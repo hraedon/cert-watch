@@ -221,6 +221,24 @@ def _isolated_data_dir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def login_csrf():
+    """Return a helper that GETs /login and extracts its CSRF token.
+
+    POST /login enforces the double-submit CSRF check (review #19), so a login
+    POST must carry the token rendered into the login form — exactly as a real
+    browser does after fetching the page.
+    """
+    import re
+
+    def _token(client) -> str:
+        resp = client.get("/login")
+        m = re.search(r'name="_csrf_token" value="([^"]+)"', resp.text)
+        return m.group(1) if m else ""
+
+    return _token
+
+
+@pytest.fixture
 def reload_app(monkeypatch, tmp_path):
     """Build a fresh app via ``create_app()`` — no module reloading (Plan 018 B1).
 

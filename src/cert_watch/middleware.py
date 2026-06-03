@@ -112,7 +112,13 @@ _TRUSTED_PROXIES = frozenset(
 
 
 def _extract_client_ip(request: Request) -> str:
-    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured."""
+    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured.
+
+    When ``TRUST_PROXY=1`` and ``TRUSTED_PROXIES`` is empty, we use the **rightmost**
+    XFF entry (the hop the trusted proxy appended) rather than the leftmost
+    (client-controlled) entry, which is spoofable. This is the correct behavior
+    for a single trusted proxy; multi-proxy chains should use ``TRUSTED_PROXIES``.
+    """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
     xff = request.headers.get("x-forwarded-for", "")
@@ -123,7 +129,8 @@ def _extract_client_ip(request: Request) -> str:
                 if part not in _TRUSTED_PROXIES:
                     return part
         else:
-            return parts[0] if parts else (request.client.host if request.client else "unknown")
+            # Rightmost entry = the proxy that directly contacted us (BC-029)
+            return parts[-1] if parts else (request.client.host if request.client else "unknown")
     real_ip = request.headers.get("x-real-ip", "")
     if real_ip:
         return real_ip
@@ -388,8 +395,11 @@ async def csrf_session_middleware(request: Request, call_next):
         sid = secrets.token_hex(16)
         request.scope["session_id"] = sid
         response = await call_next(request)
+        # HttpOnly: the CSRF token is HMAC'd with a server-side secret and
+        # rendered into forms server-side, so no client JS ever reads cw_sid.
+        # Keeping it HttpOnly denies an XSS one more primitive at zero cost.
         response.set_cookie(
-            "cw_sid", sid, httponly=False, samesite="strict", max_age=_CSRF_TOKEN_TTL,
+            "cw_sid", sid, httponly=True, samesite="strict", max_age=_CSRF_TOKEN_TTL,
             secure=_COOKIE_SECURE, path="/",
         )
         return response
@@ -493,6 +503,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Content-Security-Policy"] = _build_csp(nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = (
+        "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
+    )
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
     return response
 
 

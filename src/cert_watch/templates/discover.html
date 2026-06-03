@@ -115,7 +115,7 @@
           <td class="mono cw-fz-12 cw-text-text-3">{{ u.firstSeen or '—' }}</td>
           <td style="padding-right:20px">
             {% if may_write %}
-            <a href="/?hostname={{ u.host }}" class="cw-btn sm" title="Add this host">{{ icons.svg_icon('plus', 12, 2) }}Add host</a>
+            <a href="/?hostname={{ u.host | urlencode }}" class="cw-btn sm" title="Add this host">{{ icons.svg_icon('plus', 12, 2) }}Add host</a>
             {% endif %}
           </td>
         </tr>

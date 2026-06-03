@@ -82,6 +82,14 @@ posture grading + offline upload, on top of the shared core.
 
 ## How this informs the roadmap
 
+**Delivered in 0.5.0** (the regulated-SMB differentiators this lens prioritized):
+a one-click, tamper-evident **compliance/auditor report**; first-class **Teams /
+Discord / PagerDuty** channels; **SIEM/log export** (syslog, Splunk HEC, Windows
+Event Log) so cert-watch lands next to everything else a SOC already watches; and
+a **renewal-stall alert** that catches a broken ACME/cert-manager job before
+outage — observability of the *renewal automation* without becoming an ACME
+client itself (the line stays "no external-SaaS dependency").
+
 The positioning above is the lens for what we build next. Concretely:
 
 - **Lean into observability depth and environment fit** — certificate change

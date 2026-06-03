@@ -280,7 +280,13 @@ AUTH_PROVIDER=entra
 OAUTH_CLIENT_ID=<app-registration-id>
 OAUTH_CLIENT_SECRET_FILE=/run/secrets/oauth_secret
 OAUTH_ISSUER_URL=https://login.microsoftonline.com/<tenant>/v2.0
+CERT_WATCH_BASE_URL=https://certs.example.com   # REQUIRED for OAuth
 ```
+
+`CERT_WATCH_BASE_URL` is mandatory when OAuth is enabled: the redirect URI is
+built from it, never from the request `Host` header (which an attacker could
+inject). OAuth login refuses to start until it is set, and it must match the
+redirect URI registered with the IdP (`{BASE_URL}/auth/callback`).
 
 ### Local break-glass admin
 
@@ -350,6 +356,34 @@ All other paths (dashboard, scan history, alerts, host management) require authe
 The `/metrics` endpoint is intentionally left unauthenticated for compatibility with standard Prometheus scraping. It exposes aggregate counts (certificate totals, scan counts) but not hostnames, certificate details, or any identifying information.
 
 **Recommendation:** Restrict `/metrics` at the ingress level (network policy, IP allowlist) so only your Prometheus scraper can reach it. If a security review requires auth on metrics, set `CERT_WATCH_METRICS_TOKEN=<token>` — the endpoint then requires `Authorization: Bearer <token>` (point your scraper's `bearer_token` at the same value). No reverse-proxy shim needed.
+
+---
+
+## SIEM / Log Export
+
+The audit log can be mirrored to a SIEM. Every sink is **fail-open** — a down or
+slow SIEM never blocks or breaks an audited action, and the database row remains
+the source of truth. Enable one or more:
+
+```bash
+# Syslog (RFC 5424; serves any SIEM — QRadar, Sentinel via AMA, Splunk via UF)
+CERT_WATCH_SYSLOG_HOST=10.0.0.20
+CERT_WATCH_SYSLOG_PROTO=tcp          # udp (default) or tcp
+
+# Splunk HTTP Event Collector (delivered via the SSRF-safe opener)
+CERT_WATCH_HEC_URL=https://splunk.internal:8088/services/collector
+CERT_WATCH_HEC_TOKEN_FILE=/run/secrets/hec_token
+CERT_WATCH_HEC_INDEX=cert_watch      # optional
+
+# Windows Event Log (Windows only; pip install cert-watch[windows])
+CERT_WATCH_EVENTLOG=1
+```
+
+Events are JSON with stable field names (`event_type, ts, actor, action,
+target_type, target_id, detail, source_ip, instance`). HEC delivery happens on a
+small background pool so it never adds latency to the request path. The Windows
+Event Log sink writes to the Application log, where AMA / Sentinel agents collect
+it; on non-Windows hosts the sink disables itself.
 
 ---
 

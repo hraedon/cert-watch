@@ -118,12 +118,13 @@ def replace_scanned(
     leaf: Certificate,
     chain: list[Certificate],
     chain_valid: bool | None,
-) -> str:
+) -> tuple[str, str | None]:
     """Atomically replace all certs for host:port with new leaf + chain.
 
     Deletes old leaf + chain children, inserts new ones, all in a single
-    transaction. Returns the new leaf cert_id.  Records a renewal diff
-    when the certificate fingerprint changed.
+    transaction. Returns ``(new_leaf_id, replaced_cert_id)`` — the
+    ``replaced_cert_id`` is the old leaf's id when a cert was replaced
+    (None when this is a fresh insert with no prior leaf).
     """
     from cert_watch.cert_chain import validate_chain_order
 
@@ -252,7 +253,7 @@ def replace_scanned(
             )
             conn.commit()
 
-    return leaf_id
+    return leaf_id, replaces_id
 
 
 def _compute_renewal_diff(old_row, new_leaf: Certificate) -> list[str]:
@@ -661,6 +662,8 @@ def _build_dashboard_rows(
                 "notes": dict(leaf).get("notes", ""),
                 "fingerprint_sha256": leaf.get("fingerprint_sha256", ""),
                 "san_dns_names": json.loads(leaf.get("san_dns_names", "[]")),
+                "tags": leaf.get("tags", ""),
+                "owner_name": "",
             }
         )
 
@@ -2024,6 +2027,47 @@ def get_posture_grades_for_certs(
             cert_ids,
         ).fetchall()
     return {r["cert_id"]: r["grade"] for r in rows}
+
+
+def get_posture_for_certs(
+    db_path: str | Path, cert_ids: list[str]
+) -> dict[str, dict]:
+    """Get the latest full posture row for each cert_id in a single query.
+
+    Same per-cert shape as :func:`get_posture_for_cert`, but batched so a
+    fleet-wide report (e.g. the compliance export) doesn't issue one query per
+    certificate. Returns ``{cert_id: posture_dict}`` for certs with posture data.
+    """
+    if not cert_ids:
+        return {}
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        ph = ",".join("?" * len(cert_ids))
+        rows = conn.execute(
+            f"""SELECT sp.* FROM scan_posture sp
+            WHERE sp.cert_id IN ({ph})
+              AND sp.id = (
+                SELECT sp2.id FROM scan_posture sp2
+                WHERE sp2.cert_id = sp.cert_id
+                ORDER BY sp2.scanned_at DESC, sp2.id DESC
+                LIMIT 1
+              )""",
+            cert_ids,
+        ).fetchall()
+    result: dict[str, dict] = {}
+    for row in rows:
+        d = dict(row)
+        try:
+            d["findings"] = (
+                json.loads(d["findings"])
+                if isinstance(d["findings"], str)
+                else d["findings"]
+            )
+        except (json.JSONDecodeError, TypeError):
+            d["findings"] = []
+        d["chain_incomplete"] = bool(d.get("chain_incomplete"))
+        result[d["cert_id"]] = d
+    return result
 
 
 # ---------- kv_store helpers ----------

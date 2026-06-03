@@ -3,8 +3,9 @@
 Provides ``cert-watch`` (web server), ``cert-watch backup <path>``
 (WAL-safe database backup), ``cert-watch hash-password``
 (generate scrypt password hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH),
-and ``cert-watch re-encrypt <old_key>`` (re-encrypt kv_store secrets after
-signing key rotation).
+``cert-watch re-encrypt <old_key>`` (re-encrypt kv_store secrets after
+signing key rotation), and ``cert-watch verify-report <file>`` (verify
+HMAC signature of a compliance report).
 """
 
 from __future__ import annotations
@@ -39,6 +40,15 @@ def main(argv: list[str] | None = None) -> None:
         "old_key",
         help="The old signing key (from the previous .auth_secret file, "
         "or set CERT_WATCH_AUTH_SECRET to the old value)",
+    )
+
+    verify_parser = sub.add_parser(
+        "verify-report",
+        help="Verify HMAC signature of a signed compliance report (JSON)",
+    )
+    verify_parser.add_argument(
+        "report_path",
+        help="Path to the compliance report JSON file to verify",
     )
 
     # Server bind options (default command). These are the *single source of
@@ -100,6 +110,39 @@ def main(argv: list[str] | None = None) -> None:
         old_enc_key = derive_encryption_key(args.old_key)
         count = re_encrypt_kv_store(s.db_path, old_enc_key, new_key)
         print(f"Re-encrypted {count} kv_store value(s).")
+        return
+
+    if args.command == "verify-report":
+        import json as _json
+
+        from cert_watch.compliance import verify_report_signature
+        from cert_watch.config import Settings, resolve_or_persist_secret
+
+        s = Settings.from_env()
+        signing_key = resolve_or_persist_secret(
+            "CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret"
+        )
+        try:
+            with open(args.report_path) as f:
+                report_data = _json.load(f)
+        except _json.JSONDecodeError:
+            print(
+                "FAIL — could not parse as JSON. Tamper-evidence is verified "
+                "against the JSON report (compliance-report.json), not the CSV "
+                "export. Re-download the JSON report and verify that."
+            )
+            raise SystemExit(1) from None
+        if not isinstance(report_data, dict):
+            print("FAIL — report is not a JSON object")
+            raise SystemExit(1)
+        ok, msg = verify_report_signature(report_data, signing_key)
+        if ok:
+            print(f"PASS — {msg}")
+            print(f"  Generated at: {report_data.get('generated_at', 'unknown')}")
+            print(f"  Content SHA-256: {report_data.get('content_sha256', '')}")
+        else:
+            print(f"FAIL — {msg}")
+            raise SystemExit(1)
         return
 
     # Default: run the web server

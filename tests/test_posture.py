@@ -213,6 +213,30 @@ class TestPostureEvaluation:
         result = evaluate_posture(cert=cert, protocol_version="TLSv1.1")
         assert result.grade == "B"
 
+    def test_bare_tlsv1_is_tls_10_and_drops_to_b(self):
+        # ssl.version() and openssl both report TLS 1.0 as bare "TLSv1" — the
+        # form the old `"1.0" in proto` substring check missed (graded it pass).
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(cert=cert, protocol_version="TLSv1")
+        assert result.grade == "B"
+        tls = [f for f in result.findings if f.check == "tls_version"]
+        assert len(tls) == 1
+        assert tls[0].status == "warn"
+
+    def test_tls_version_meets_1_2_helper(self):
+        from cert_watch.posture import tls_version_meets_1_2
+
+        assert tls_version_meets_1_2("TLSv1.2")
+        assert tls_version_meets_1_2("TLSv1.3")
+        assert tls_version_meets_1_2("tlsv1.2")  # case-insensitive
+        assert not tls_version_meets_1_2("TLSv1")    # bare = TLS 1.0
+        assert not tls_version_meets_1_2("TLSv1.0")
+        assert not tls_version_meets_1_2("TLSv1.1")
+        assert not tls_version_meets_1_2("SSLv3")
+        assert not tls_version_meets_1_2("")
+        assert not tls_version_meets_1_2(None)
+
     def test_tls_12_no_penalty(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)
@@ -818,40 +842,46 @@ def test_check_ocsp_reachable_success():
     from unittest.mock import MagicMock, patch
 
     from cert_watch.posture import _check_ocsp_reachable
-    with patch("cert_watch.posture.urllib.request") as mock_req:
+    with patch("cert_watch.posture.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
-        assert _check_ocsp_reachable("http://ocsp.test") is True
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        reachable, msg = _check_ocsp_reachable("http://ocsp.test")
+        assert reachable is True
 
 
 def test_check_ocsp_reachable_failure():
     from unittest.mock import patch
 
     from cert_watch.posture import _check_ocsp_reachable
-    with patch("cert_watch.posture.urllib.request.urlopen", side_effect=Exception("timeout")):
-        assert _check_ocsp_reachable("http://ocsp.test") is False
+    with patch("cert_watch.posture.ssrf_safe_urlopen", side_effect=Exception("timeout")):
+        reachable, msg = _check_ocsp_reachable("http://ocsp.test")
+        assert reachable is False
 
 
 def test_check_crl_reachable_success():
     from unittest.mock import MagicMock, patch
 
     from cert_watch.posture import _check_crl_reachable
-    with patch("cert_watch.posture.urllib.request") as mock_req:
+    with patch("cert_watch.posture.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
-        assert _check_crl_reachable("http://crl.test/ca.crl") is True
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        reachable, msg = _check_crl_reachable("http://crl.test/ca.crl")
+        assert reachable is True
 
 
 def test_check_crl_reachable_failure():
     from unittest.mock import patch
 
     from cert_watch.posture import _check_crl_reachable
-    with patch("cert_watch.posture.urllib.request.urlopen", side_effect=Exception("refused")):
-        assert _check_crl_reachable("http://crl.test/ca.crl") is False
+    with patch("cert_watch.posture.ssrf_safe_urlopen", side_effect=Exception("refused")):
+        reachable, msg = _check_crl_reachable("http://crl.test/ca.crl")
+        assert reachable is False
 
 
 def test_check_revocation_endpoints_ocsp_reachable():
@@ -859,7 +889,7 @@ def test_check_revocation_endpoints_ocsp_reachable():
 
     from cert_watch.posture import check_revocation_endpoints
     der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
-    with patch("cert_watch.posture._check_ocsp_reachable", return_value=True):
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=(True, "")):
         findings = check_revocation_endpoints(der)
     assert any(f.check == "ocsp_endpoint" and f.status == "pass" for f in findings)
 
@@ -869,7 +899,7 @@ def test_check_revocation_endpoints_ocsp_unreachable():
 
     from cert_watch.posture import check_revocation_endpoints
     der = _cert_with_aia_and_crl(ocsp_url="http://ocsp.test")
-    with patch("cert_watch.posture._check_ocsp_reachable", return_value=False):
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=(False, "")):
         findings = check_revocation_endpoints(der)
     assert any(f.check == "ocsp_endpoint" and f.status == "warn" for f in findings)
 
@@ -879,7 +909,7 @@ def test_check_revocation_endpoints_crl_reachable():
 
     from cert_watch.posture import check_revocation_endpoints
     der = _cert_with_aia_and_crl(crl_urls=["http://crl.test/ca.crl"])
-    with patch("cert_watch.posture._check_crl_reachable", return_value=True):
+    with patch("cert_watch.posture._check_crl_reachable", return_value=(True, "")):
         findings = check_revocation_endpoints(der)
     assert any(f.check == "crl_endpoint" and f.status == "pass" for f in findings)
 
@@ -889,7 +919,7 @@ def test_check_revocation_endpoints_crl_unreachable():
 
     from cert_watch.posture import check_revocation_endpoints
     der = _cert_with_aia_and_crl(crl_urls=["http://crl.test/ca.crl"])
-    with patch("cert_watch.posture._check_crl_reachable", return_value=False):
+    with patch("cert_watch.posture._check_crl_reachable", return_value=(False, "")):
         findings = check_revocation_endpoints(der)
     assert any(f.check == "crl_endpoint" and f.status == "warn" for f in findings)
 
@@ -915,7 +945,7 @@ def test_evaluate_posture_with_revocation_check():
         fingerprint_sha256="AA" * 32,
         raw_der=der,
     )
-    with patch("cert_watch.posture._check_ocsp_reachable", return_value=True):
+    with patch("cert_watch.posture._check_ocsp_reachable", return_value=(True, "")):
         result = evaluate_posture(cert, check_revocation=True)
     assert any(f.check == "ocsp_endpoint" for f in result.findings)
 

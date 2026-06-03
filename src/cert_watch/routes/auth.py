@@ -27,6 +27,7 @@ from cert_watch.middleware import (
     _request_security,
     check_csrf,
     check_rate_limit,
+    get_csrf_context,
 )
 
 logger = logging.getLogger("cert_watch.routes.auth")
@@ -52,6 +53,10 @@ def login_page(request: Request, error: str | None = None) -> HTMLResponse:
             "supports_form_login": auth.supports_form_login,
             "local_admin_configured": local_admin_configured,
             "error": error,
+            # CSRF token so POST /login can enforce the double-submit check
+            # (login CSRF, review #19). cw_sid is issued to unauthenticated
+            # visitors too, so the token binds to it.
+            **get_csrf_context(request),
         },
     )
 
@@ -66,6 +71,14 @@ async def login_submit(
     if not check_rate_limit(f"login:{client_ip}", 10, 300):
         return RedirectResponse(
             url="/login?error=rate+limited:+too+many+login+attempts", status_code=303
+        )
+    # Login CSRF (review #19): reuse the existing double-submit machinery
+    # (cw_sid cookie + form token) rather than a bespoke per-IP nonce. The login
+    # page renders the token; reject a POST that doesn't carry a matching one.
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(
+            url=f"/login?error={quote(csrf_err)}", status_code=303
         )
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
@@ -108,6 +121,10 @@ async def login_submit(
     settings = getattr(request.app.state, "settings", None)
     db_path = str(settings.db_path) if settings else None
     version = get_session_version(db_path, result.username) if db_path else 0
+    # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out
+    if version == 0 and db_path:
+        bump_session_version(settings.db_path, result.username)
+        version = get_session_version(db_path, result.username)
     token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
@@ -123,14 +140,16 @@ async def login_submit(
 
 
 def _get_base_url(request: Request) -> str:
-    """Return base URL for OAuth redirect URIs.
+    """Return the configured OAuth base URL (``CERT_WATCH_BASE_URL``), or "".
 
-    Prefers CERT_WATCH_BASE_URL when set (prevents Host header injection).
-    Falls back to request.base_url.
+    Deliberately does **not** fall back to ``request.base_url`` (review #3): the
+    redirect_uri must never be derived from the attacker-influenced Host header,
+    or a Host-injection / rebinding attack could steer the IdP's redirect to an
+    attacker-controlled callback. Callers refuse to start OAuth when this is
+    empty.
     """
     settings = getattr(request.app.state, "settings", None)
-    base = getattr(settings, "base_url", "") if settings else ""
-    return base or str(request.base_url).rstrip("/")
+    return getattr(settings, "base_url", "") if settings else ""
 
 
 @router.get("/auth/login")
@@ -139,6 +158,11 @@ def oauth_start(request: Request) -> RedirectResponse:
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
     base = _get_base_url(request)
+    if not base:
+        return RedirectResponse(
+            url="/login?error=OAuth+redirect+URI+not+configured:+set+CERT_WATCH_BASE_URL",
+            status_code=303,
+        )
     redirect_uri = f"{base}/auth/callback"
     result = auth.start_oauth_flow(redirect_uri)
     if not result.success:
@@ -212,6 +236,11 @@ def oauth_callback(
         )
         return response
     base = _get_base_url(request)
+    if not base:
+        return RedirectResponse(
+            url="/login?error=OAuth+redirect+URI+not+configured:+set+CERT_WATCH_BASE_URL",
+            status_code=303,
+        )
     redirect_uri = f"{base}/auth/callback"
     result = auth.complete_oauth_flow(code, redirect_uri, state=signed_state)
     if not result.success:
@@ -239,6 +268,10 @@ def oauth_callback(
     settings = getattr(request.app.state, "settings", None)
     db_path = str(settings.db_path) if settings else None
     version = get_session_version(db_path, result.username) if db_path else 0
+    # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out
+    if version == 0 and db_path:
+        bump_session_version(settings.db_path, result.username)
+        version = get_session_version(db_path, result.username)
     token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
     response.delete_cookie(

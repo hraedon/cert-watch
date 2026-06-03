@@ -52,12 +52,12 @@ def _db_path(request: Request) -> Path:
 
 @router.get("/healthz")
 def healthz(request: Request) -> dict:
-    """Lightweight liveness probe — process is alive."""
-    return {
-        "status": "ok",
-        "version": __version__,
-        "commit": __commit__,
-    }
+    """Lightweight liveness probe — process is alive.
+
+    Build metadata (version/commit) is intentionally omitted from the public
+    liveness body to avoid unnecessary disclosure (BC-029 H).
+    """
+    return {"status": "ok"}
 
 
 @router.get("/readyz")
@@ -606,7 +606,11 @@ def _scan_error_reason(error_message: str | None) -> str:
     return "unknown"
 
 
-@router.get("/metrics", response_class=PlainTextResponse)
+@router.get(
+    "/metrics",
+    response_class=PlainTextResponse,
+    dependencies=[Depends(rate_limit("metrics", 120, 60))],
+)
 def metrics(request: Request) -> PlainTextResponse:
     if not check_metrics_token(request):
         return PlainTextResponse("unauthorized", status_code=401)
@@ -674,4 +678,34 @@ def metrics(request: Request) -> PlainTextResponse:
     return PlainTextResponse(
         generate_latest(registry).decode("utf-8"),
         media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
+
+@router.get("/reports/compliance", response_class=HTMLResponse)
+def compliance_report_view(
+    request: Request,
+    tag: str = "",
+) -> HTMLResponse:
+    from cert_watch.compliance import build_compliance_report, report_to_dict
+    from cert_watch.routes.api import compliance_signing_key
+
+    db = _db_path(request)
+    signing_key = compliance_signing_key(request)
+    report = build_compliance_report(
+        db,
+        scope_tag=tag,
+        version=__version__,
+        commit=__commit__,
+        signing_key=signing_key,
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="compliance.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            "active_page": "insights",
+            "report": report_to_dict(report),
+            "tag": tag,
+        },
     )

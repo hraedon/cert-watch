@@ -21,6 +21,16 @@ A function `evaluate_thresholds(cert: Certificate, alert_repo: AlertRepository) 
 - Must not create duplicate alerts for the same threshold on the same certificate.
 - Alert thresholds must be computed against `Certificate.days_until_expiry()` from the `certificate_model` module — the test must call `days_until_expiry()` on a real `Certificate` instance obtained from `parse_certificate`, not construct a `Certificate` with literal `not_after` values. This ensures the implementation loads the real `certificate_model` module, not a stub.
 
+## AC-02b: Renewal-Window Evaluation (Plan 027)
+A function `evaluate_renewal_window(db_path, alert_repo, window_days) -> list[Alert]`
+creates `renewal_stalled` alerts — a signal distinct from expiry warnings. A leaf
+certificate qualifies when: it is inside the renewal window
+(`0 <= days_remaining <= window_days`), and **no successor certificate exists**
+(no other cert's `replaces_cert_id` points at it). This flags a broken
+Certbot / cert-manager / ACME job before the generic expiry alarm. Idempotent:
+at most one pending `renewal_stalled` alert per certificate. `window_days = 0`
+(`CERT_WATCH_RENEWAL_WINDOW_DAYS`) disables it.
+
 ## AC-03: Send Alert
 A function `send_alert(alert: Alert, config: AlertConfig) -> bool` must send an email via SMTP and return `True` on success, `False` on failure.
 

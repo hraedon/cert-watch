@@ -1237,6 +1237,8 @@ def _make_oauth_provider(
     provider._jwks = jwks
     provider._jwks_fetched_at = time.monotonic()
     provider._jwks_ttl = 86400
+    provider._allow_private = False
+    provider._allowed_subnets = ()
     return provider
 
 
@@ -1432,7 +1434,7 @@ class TestOAuthJWKSVerification:
             assert result.success is False
             assert "ID token verification failed" in result.error
 
-    def test_complete_flow_no_id_token_uses_userinfo(self):
+    def test_complete_flow_no_id_token_uses_userinfo(self, monkeypatch):
         """When no ID token is returned, userinfo endpoint is used."""
         provider = _make_oauth_provider(jwks=None)
 
@@ -1449,6 +1451,10 @@ class TestOAuthJWKSVerification:
         mock_authlib = MagicMock()
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
         signed_state = _sign_state("test-state")
+        # Bypass SSRF validation in test (DNS resolution won't work for fake host)
+        monkeypatch.setattr(
+            "cert_watch.auth.oauth_provider._validate_url", lambda *a, **kw: None,
+        )
         with _inject_mock_authlib(mock_authlib):
             result = provider.complete_oauth_flow(
                 "auth-code", "http://localhost/callback", state=signed_state,
@@ -1572,18 +1578,19 @@ class TestJWKSCacheTTL:
 
         fetch_count = 0
 
-        def fake_urlopen(req, timeout=10):
+        def fake_urlopen(
+            url, *, data=None, timeout=15, method=None, headers=None,
+            allow_private=False, allowed_subnets=(),
+        ):
             nonlocal fetch_count
             fetch_count += 1
             resp = MagicMock()
             resp.read.return_value = json.dumps(jwks_new).encode()
-            resp.__enter__ = lambda s: s
-            resp.__exit__ = MagicMock(return_value=False)
+            resp.close = MagicMock()
             return resp
 
-        import urllib.request
         monkeypatch.setattr(time, "monotonic", lambda: now + 200)
-        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_urlopen)
 
         result = provider._fetch_jwks()
         assert result["keys"][0]["kid"] == "key-2"
@@ -1628,17 +1635,18 @@ class TestJWKSCacheTTL:
 
         fetch_count = 0
 
-        def fake_urlopen(req, timeout=10):
+        def fake_urlopen(
+            url, *, data=None, timeout=15, method=None, headers=None,
+            allow_private=False, allowed_subnets=(),
+        ):
             nonlocal fetch_count
             fetch_count += 1
             resp = MagicMock()
             resp.read.return_value = json.dumps(jwks_new).encode()
-            resp.__enter__ = lambda s: s
-            resp.__exit__ = MagicMock(return_value=False)
+            resp.close = MagicMock()
             return resp
 
-        import urllib.request
-        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_urlopen)
 
         result = provider._verify_id_token(token)
         assert result is not None

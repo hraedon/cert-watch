@@ -12,14 +12,18 @@ spec:
     - Egress
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik
       ports:
         - port: http
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
           podSelector:
             matchLabels:
               app.kubernetes.io/name: prometheus

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import urlparse
 
 _DOMAIN_RE = re.compile(
     r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
@@ -14,6 +16,12 @@ _DOMAIN_RE = re.compile(
     r"\.[a-zA-Z]{2,}$"
 )
 _MAX_DOMAIN_LEN = 253
+
+# Configurable CT log base URL (default: crt.sh). Private CT logs can be
+# targeted by setting CERT_WATCH_CT_LOG_URL (validated, must be http/https).
+_CT_LOG_URL = os.environ.get("CERT_WATCH_CT_LOG_URL", "https://crt.sh").rstrip("/")
+if urlparse(_CT_LOG_URL).scheme not in ("http", "https"):
+    _CT_LOG_URL = "https://crt.sh"
 
 
 @dataclass
@@ -37,7 +45,7 @@ def query_ct_log(
     """
     if not domain or len(domain) > _MAX_DOMAIN_LEN or not _DOMAIN_RE.match(domain):
         return f"Invalid domain: {domain}"
-    url = f"https://crt.sh/?q={domain}&output=json"
+    url = f"{_CT_LOG_URL}/?q={domain}&output=json"
     req = urllib.request.Request(url, headers={"User-Agent": "cert-watch/0.3"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
