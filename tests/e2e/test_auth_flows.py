@@ -88,11 +88,9 @@ def auth_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def setup_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """Open server (ALLOW_UNAUTH) for testing the setup wizard."""
+    """Server with needs_setup=True (no auth, no ALLOW_UNAUTH) for setup wizard."""
     data_dir: Path = tmp_path_factory.mktemp("cw-setup-data")
-    proc, base = _start_server(data_dir, extra_env={
-        "CERT_WATCH_ALLOW_UNAUTH": "1",
-    })
+    proc, base = _start_server(data_dir)
     try:
         yield base
     finally:
@@ -183,5 +181,12 @@ class TestLoginAndSession:
         page.locator("form[action='/login'] button[type='submit']").click()
         page.wait_for_url("**/*", timeout=5000)
 
-        response = page.request.get(f"{auth_server}/api/hosts")
+        # page.request shares the browser context's cookie jar, but httpOnly
+        # cookies may not be forwarded. Build a Cookie header from the context.
+        cookies = page.context.cookies()
+        cookie_header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+        response = page.request.get(
+            f"{auth_server}/api/hosts",
+            headers={"Cookie": cookie_header},
+        )
         assert response.status == 200
