@@ -17,7 +17,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Certificate upload** — PEM, DER, PKCS#12, PKCS#7 with automatic chain extraction
 - **Web dashboard** — color-coded expiry status (red/yellow/green), chain visualization, host management
 - **REST API** — JSON endpoints for certificates, hosts, and alerts with pagination
-- **Alerting** — email (SMTP) and webhook notifications with configurable per-host thresholds
+- **Alerting** — email (SMTP), generic webhook, and first-class **Microsoft Teams / Discord / PagerDuty** channels, with configurable per-host thresholds
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
 - **Certificate Transparency** — lookup certificates via crt.sh
 - **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
@@ -27,6 +27,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Renewal tracking** — links renewed certificates to their predecessors
 - **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
 - **Audit log** — append-only record of mutations and logins, with configurable retention
+- **Compliance report** — one-click, point-in-time posture report for SOC 2 / ISO 27001 / PCI-DSS auditors (print-to-PDF HTML + signed JSON/CSV), with a `cert-watch verify-report` tamper-evidence check
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
 ## Stack
@@ -214,9 +215,15 @@ shop — but should be tightened for sensitive environments:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ALERT_WEBHOOK_URL` | — | Webhook URL for JSON POST alerts |
+| `ALERT_WEBHOOK_URL` | — | Webhook URL for JSON POST alerts (also the incoming-webhook URL for Teams / Discord) |
 | `ALERT_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers |
-| `ALERT_WEBHOOK_TEMPLATE` | — | Optional payload template; when unset a default JSON body is sent |
+| `ALERT_WEBHOOK_TEMPLATE` | — | Optional payload template (generic kind only); when unset a default JSON body is sent |
+| `ALERT_WEBHOOK_KIND` | `generic` | `generic`, `teams` (Adaptive Card via Workflows), `discord`, or `pagerduty` — selects the payload format |
+| `ALERT_PAGERDUTY_ROUTING_KEY` | — | PagerDuty Events API v2 routing key (triggers an incident; auto-resolves on renewal). `*_FILE` supported |
+
+All webhook delivery — including the Teams/Discord/PagerDuty channels — is routed
+through an **SSRF-guarded HTTP opener** that resolves and re-checks every redirect
+hop against the scan blocklist (see [Scanning & SSRF policy](#scanning--ssrf-policy)).
 
 ### Authentication
 
@@ -313,6 +320,7 @@ cert-watch                  # Start the web server (default)
 cert-watch backup <path>    # Create a WAL-safe SQLite backup
 cert-watch hash-password    # Generate a scrypt password hash (interactive)
 cert-watch re-encrypt <key> # Re-encrypt kv_store after .auth_secret rotation
+cert-watch verify-report <file.json>  # Verify a signed compliance report
 ```
 
 ### `cert-watch backup <path>`
@@ -346,6 +354,32 @@ After rotating `CERT_WATCH_AUTH_SECRET`, re-encrypts any secrets stored in the
 cert-watch re-encrypt <old-signing-key>
 ```
 
+### `cert-watch verify-report <file.json>`
+
+Verifies a signed compliance report exported from `/api/reports/compliance.json`.
+Recomputes the content hash and HMAC signature using `CERT_WATCH_AUTH_SECRET` and
+prints `PASS`/`FAIL` (non-zero exit on failure):
+
+```bash
+cert-watch verify-report compliance-report.json
+```
+
+> **What the signature proves — and what it doesn't.** The report is
+> *tamper-evident*: the HMAC-SHA256 over the report's canonical JSON detects any
+> edit to a downloaded report by anyone **without** `CERT_WATCH_AUTH_SECRET`. It
+> is **not non-repudiable** — the instance holds the signing key, so an operator
+> with the key could produce a differently-signed report. For a self-hosted,
+> point-in-time auditor export this is the appropriate guarantee; treat the
+> signature as "this came from this instance and wasn't altered afterward," not
+> as independent third-party attestation. The CSV export carries the same hash
+> and signature for cross-checking, but `verify-report` reads the **JSON** export
+> (the signature covers the canonical JSON, not the CSV bytes). Rotating
+> `CERT_WATCH_AUTH_SECRET` invalidates verification of previously-issued reports.
+>
+> The **CAA** compliance metric currently shows **"Not collected"**: CAA is an
+> on-demand lookup (`/caa-check`), not yet stored per scan, so it is reported
+> honestly rather than estimated. Per-scan CAA storage is a planned follow-on.
+
 ## Endpoints
 
 JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
@@ -360,6 +394,7 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/insights` | Expiration calendar + TLS/grade trends |
 | `GET` | `/discover` | CT coverage reconciliation + private-CA inventory |
 | `GET` | `/audit` | Audit log |
+| `GET` | `/reports/compliance` | Compliance report (print-to-PDF; `?tag=` to scope) |
 | `GET` | `/settings` | Settings (admin) |
 | `GET` | `/setup` | First-run setup wizard |
 
@@ -380,6 +415,8 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/ct-lookup/{domain}` | Certificate Transparency lookup |
 | `GET` | `/caa-check/{domain}` | CAA record lookup |
 | `GET` | `/api/ct/reconciliation?domain=` | CT reconciliation (coverage gaps) |
+| `GET` | `/api/reports/compliance.json` | Signed compliance report (JSON; `?tag=` to scope) |
+| `GET` | `/api/reports/compliance.csv` | Signed compliance report (CSV) |
 | `POST` | `/hosts` | Add host (form) |
 | `POST` | `/hosts/import` | Bulk import CSV |
 | `POST` | `/hosts/{id}/scan` | Trigger immediate scan |

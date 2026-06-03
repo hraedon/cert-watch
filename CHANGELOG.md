@@ -6,9 +6,7 @@ All notable changes to cert-watch are documented in this file.
 
 Hardens the integration edges (LDAP, outbound HTTP) and leans into the
 regulated-SMB observability story: first-class alert channels and an
-auditor-facing compliance report. SIEM/log export (Splunk HEC, syslog) and the
-ACME renewal-window alert were scoped (Plan 023 §E/§F) but deferred to a later
-release.
+auditor-facing compliance report.
 
 ### Added
 - **Compliance / Auditor Report (Plan 025)** — a one-click, point-in-time
