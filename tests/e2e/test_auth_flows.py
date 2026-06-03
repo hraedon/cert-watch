@@ -107,7 +107,7 @@ class TestSetupWizard:
     ) -> None:
         """On a fresh open instance, the setup wizard is accessible at /setup."""
         page.goto(f"{setup_server}/setup")
-        expect(page.locator("body")).to_contain_text("Setup")
+        expect(page.locator("body")).to_contain_text("Welcome to cert-watch")
 
         page.locator('input[name="username"]').fill("setupadmin")
         page.locator('input[name="password"]').fill("setupPass123")
