@@ -213,6 +213,30 @@ class TestPostureEvaluation:
         result = evaluate_posture(cert=cert, protocol_version="TLSv1.1")
         assert result.grade == "B"
 
+    def test_bare_tlsv1_is_tls_10_and_drops_to_b(self):
+        # ssl.version() and openssl both report TLS 1.0 as bare "TLSv1" — the
+        # form the old `"1.0" in proto` substring check missed (graded it pass).
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(cert=cert, protocol_version="TLSv1")
+        assert result.grade == "B"
+        tls = [f for f in result.findings if f.check == "tls_version"]
+        assert len(tls) == 1
+        assert tls[0].status == "warn"
+
+    def test_tls_version_meets_1_2_helper(self):
+        from cert_watch.posture import tls_version_meets_1_2
+
+        assert tls_version_meets_1_2("TLSv1.2")
+        assert tls_version_meets_1_2("TLSv1.3")
+        assert tls_version_meets_1_2("tlsv1.2")  # case-insensitive
+        assert not tls_version_meets_1_2("TLSv1")    # bare = TLS 1.0
+        assert not tls_version_meets_1_2("TLSv1.0")
+        assert not tls_version_meets_1_2("TLSv1.1")
+        assert not tls_version_meets_1_2("SSLv3")
+        assert not tls_version_meets_1_2("")
+        assert not tls_version_meets_1_2(None)
+
     def test_tls_12_no_penalty(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)

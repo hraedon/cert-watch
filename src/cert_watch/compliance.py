@@ -22,6 +22,11 @@ class ComplianceMetric:
     label: str
     passing: int
     total: int
+    # False when the underlying signal isn't collected yet (e.g. CAA), so the
+    # report shows "Not collected" rather than a misleading 0/0 = N/A. This is
+    # presentation-only and is deliberately excluded from the signed canonical
+    # form (the signed facts are passing/total).
+    collected: bool = True
 
     @property
     def pct(self) -> float:
@@ -29,6 +34,8 @@ class ComplianceMetric:
 
     @property
     def display(self) -> str:
+        if not self.collected:
+            return "Not collected"
         if self.total == 0:
             return "N/A"
         return f"{self.passing} of {self.total} ({self.pct:.1f}%)"
@@ -72,17 +79,18 @@ class ComplianceReport:
 
 
 _GRADE_ORDER = {"A+": 0, "A": 1, "B": 2, "C": 3, "F": 4}
-_GRADE_SEVERITY = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
 
 
 def _fleet_grade(grades: list[str]) -> str:
-    if not grades:
+    """Fleet grade is the worst grade present (the conservative rollup).
+
+    Uses the full grade ordering so an all-``A`` fleet reports ``A`` — not
+    ``A+`` — and any single ``F`` drags the fleet to ``F``.
+    """
+    present = [g for g in grades if g in _GRADE_ORDER]
+    if not present:
         return ""
-    worst_sev = max(_GRADE_SEVERITY.get(g, 4) for g in grades)
-    for g, sev in _GRADE_SEVERITY.items():
-        if sev == worst_sev:
-            return g
-    return "F"
+    return max(present, key=lambda g: _GRADE_ORDER[g])
 
 
 def _canonical_json(report: ComplianceReport) -> bytes:
@@ -199,10 +207,12 @@ def build_compliance_report(
     signing_key: str = "",
 ) -> ComplianceReport:
     from cert_watch.database import (
+        get_posture_for_certs,
         get_posture_grades_for_certs,
         init_schema,
         list_dashboard_rows,
     )
+    from cert_watch.posture import tls_version_meets_1_2
 
     init_schema(db_path)
     rows = list_dashboard_rows(db_path)
@@ -236,14 +246,9 @@ def build_compliance_report(
 
     fleet_grade = _fleet_grade(all_grades) if all_grades else ""
 
-    posture_data: dict[str, dict] = {}
-    for r in rows:
-        cid = r.get("id", "")
-        if cid and cid in grade_map:
-            from cert_watch.database.queries import get_posture_for_cert
-            p = get_posture_for_cert(db_path, cid)
-            if p:
-                posture_data[cid] = p
+    # One batched query for the full latest posture of every cert, rather than
+    # an N+1 over a large fleet (the exact scenario this export targets).
+    posture_data = get_posture_for_certs(db_path, cert_ids)
 
     sha1_ok = 0
     sha1_total = 0
@@ -278,11 +283,8 @@ def build_compliance_report(
             strong_key_ok += 1
 
         tls_total += 1
-        proto = (p.get("protocol_version") or "").upper()
-        if proto and not proto.startswith(("TLSv1.0", "TLSv1.1", "SSL")):
+        if tls_version_meets_1_2(p.get("protocol_version")):
             tls_ok += 1
-        elif proto:
-            tls_ok += 0
 
         hsts_total += 1
         if p.get("hsts"):
@@ -293,6 +295,11 @@ def build_compliance_report(
         ComplianceMetric("Strong key (RSA >= 2048 or ECDSA)", strong_key_ok, strong_key_total),
         ComplianceMetric("TLS >= 1.2 at last scan", tls_ok, tls_total),
         ComplianceMetric("HSTS present (port 443)", hsts_ok, hsts_total),
+        # CAA is currently an on-demand lookup, not stored per scan, so it isn't
+        # aggregated here. Surfaced as an explicit "Not collected" row rather
+        # than omitted, so an auditor sees the checklist item was considered.
+        # Storing CAA per scan is a small follow-on (Plan 025 risk note).
+        ComplianceMetric("CAA present for domain", 0, 0, collected=False),
     ]
 
     now = datetime.now(UTC)
@@ -428,7 +435,10 @@ def report_to_csv_rows(report: ComplianceReport) -> list[list[str]]:
     rows.append(["Compliance metrics"])
     rows.append(["Metric", "Passing", "Total", "Percentage"])
     for m in report.compliance_metrics:
-        rows.append([m.label, str(m.passing), str(m.total), f"{m.pct:.1f}%"])
+        if not m.collected:
+            rows.append([m.label, "—", "—", "Not collected"])
+        else:
+            rows.append([m.label, str(m.passing), str(m.total), f"{m.pct:.1f}%"])
     rows.append([])
 
     for b in report.remediation_buckets:
@@ -454,6 +464,13 @@ def report_to_csv_rows(report: ComplianceReport) -> list[list[str]]:
     rows.append(["HMAC-SHA256 signature", report.signature])
     rows.append(["Generated at", report.generated_at])
     rows.append([])
-    rows.append(["Verify with: cert-watch verify-report <this-file>"])
+    # The signature covers the canonical JSON report, not these CSV bytes. The
+    # SHA-256/signature above are identical to the JSON export's, so an auditor
+    # cross-checks them against the verified JSON. verify-report reads JSON only.
+    rows.append([
+        "The signature above covers the canonical JSON report. To verify "
+        "tamper-evidence, download the matching JSON export and run: "
+        "cert-watch verify-report compliance-report.json"
+    ])
 
     return rows

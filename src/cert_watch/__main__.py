@@ -122,8 +122,19 @@ def main(argv: list[str] | None = None) -> None:
         signing_key = resolve_or_persist_secret(
             "CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret"
         )
-        with open(args.report_path) as f:
-            report_data = _json.load(f)
+        try:
+            with open(args.report_path) as f:
+                report_data = _json.load(f)
+        except _json.JSONDecodeError:
+            print(
+                "FAIL — could not parse as JSON. Tamper-evidence is verified "
+                "against the JSON report (compliance-report.json), not the CSV "
+                "export. Re-download the JSON report and verify that."
+            )
+            raise SystemExit(1) from None
+        if not isinstance(report_data, dict):
+            print("FAIL — report is not a JSON object")
+            raise SystemExit(1)
         ok, msg = verify_report_signature(report_data, signing_key)
         if ok:
             print(f"PASS — {msg}")

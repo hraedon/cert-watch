@@ -2,6 +2,62 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.5.0] — 2026-06-03
+
+Hardens the integration edges (LDAP, outbound HTTP) and leans into the
+regulated-SMB observability story: first-class alert channels and an
+auditor-facing compliance report. SIEM/log export (Splunk HEC, syslog) and the
+ACME renewal-window alert were scoped (Plan 023 §E/§F) but deferred to a later
+release.
+
+### Added
+- **Compliance / Auditor Report (Plan 025)** — a one-click, point-in-time
+  posture report for SOC 2 / ISO 27001 / PCI-DSS auditors. `GET
+  /reports/compliance` renders a print-optimized HTML page (browser "Save as
+  PDF" → clean auditor PDF, zero new dependencies); `GET
+  /api/reports/compliance.json` and `.csv` export the same data. Reports are
+  **tamper-evident**: a canonical JSON of the report is HMAC-SHA256-signed with
+  the app signing key, and `cert-watch verify-report <file.json>` re-checks the
+  hash and signature (PASS/FAIL). Covers grade distribution, fleet grade, the
+  compliance-metric checklist (no SHA-1, strong key, TLS ≥ 1.2, HSTS; CAA shown
+  as "Not collected" pending per-scan storage), and a 7/30/90-day remediation
+  schedule. Linked from the Insights page.
+- **Alert channel adapters (Plan 022)** — Microsoft Teams (Adaptive Card via
+  Workflows), Discord, and PagerDuty (Events API v2, trigger + resolve-on-renewal).
+  All delivery routes through the SSRF-safe HTTP opener.
+- **SSRF-guarded HTTP opener** (`http_client.ssrf_safe_urlopen`) — resolves and
+  checks the initial URL and **every redirect hop** against the scan blocklist,
+  enforces an `http(s)` scheme allowlist, and honours the configurable
+  `allow_private` / `allowed_subnets` policy. Webhook (incl. digest) and
+  OCSP/CRL revocation probes now flow through it. *(Documented residual: urllib
+  re-resolves on connect, so this is a large improvement over unvalidated
+  `urlopen`, not the airtight pinned-IP guarantee the TLS scanner has — see the
+  `http_client` module docstring; **BC-116/BC-117**.)*
+- **Configurable LDAP group filter (BC-118)** — `CERT_WATCH_LDAP_GROUP_FILTER`
+  with a `{group}` placeholder (defaults to the AD transitive-membership OID),
+  unblocking OpenLDAP/FreeIPA `LDAP_REQUIRED_GROUPS`.
+
+### Fixed
+- **LDAP authentication bypass (security, BC-115)** — the user-bind step ignored
+  `ldap3.bind()`'s return value; ldap3 returns `False` on bad credentials rather
+  than raising, so any password authenticated an existing user. The result is now
+  checked and a failed bind is rejected. Regression test added.
+- **Compliance "TLS ≥ 1.2" metric over-reported.** The check upper-cased the
+  protocol string but compared it against mixed-case prefixes, so TLS 1.0/1.1
+  were counted as compliant; it also missed the bare `"TLSv1"` string both scan
+  paths actually emit for TLS 1.0. TLS-version classification is now a shared
+  `posture.tls_version_meets_1_2` helper used by both the posture grade and the
+  compliance metric, with the same blind spot fixed in the posture engine's own
+  TLS finding.
+- **Fleet grade rollup** in the compliance report no longer reports `A+` for an
+  all-`A` fleet (grade severity collapsed `A+`/`A`); it now returns the worst
+  actual grade present.
+
+### Changed
+- **Coverage gate raised to 88%** (Plan 024); suite at ~88.7%.
+- Compliance export uses one batched posture query instead of an N+1 over the
+  fleet.
+
 ## [0.4.0] — 2026-06-03
 
 First all-in-one release: repositioned as certificate-lifecycle observability for

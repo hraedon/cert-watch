@@ -33,9 +33,12 @@ def _seed_fleet(db_path: str | Path) -> list[str]:
     entries = [
         ("host-a.example.com", 443, "A+", [], "TLSv1.3", True, 365),
         ("host-b.example.com", 443, "A", [], "TLSv1.2", True, 200),
+        # Bare "TLSv1" is what both scan paths actually emit for TLS 1.0 — the
+        # form the old metric missed. host-e uses the "TLSv1.0" spelling so both
+        # are exercised.
         ("host-c.example.com", 443, "B",
          [{"check": "tls_version", "status": "warn", "message": "TLS 1.0"}],
-         "TLSv1.0", False, 90),
+         "TLSv1", False, 90),
         ("host-d.example.com", 443, "C",
          [{"check": "rsa_key_size", "status": "fail", "message": "RSA key < 2048 bits"}],
          "TLSv1.2", False, 45),
@@ -114,6 +117,13 @@ class TestComplianceAggregation:
 
         tls = metrics["TLS >= 1.2 at last scan"]
         assert tls.total == 5
+        # host-a (1.3), host-b (1.2), host-d (1.2) pass; host-c ("TLSv1") and
+        # host-e ("TLSv1.0") are TLS 1.0 and must NOT count as compliant.
+        assert tls.passing == 3
+
+        caa = metrics["CAA present for domain"]
+        assert caa.collected is False
+        assert caa.display == "Not collected"
 
         hsts = metrics["HSTS present (port 443)"]
         assert hsts.passing == 2
@@ -251,7 +261,9 @@ class TestReportFormats:
         _seed_empty(db)
         report = build_compliance_report(str(db), signing_key="key")
         rows = report_to_csv_rows(report)
-        assert rows[-1] == ["Verify with: cert-watch verify-report <this-file>"]
+        # The signature covers the JSON report, not the CSV bytes; the footer
+        # directs the auditor to verify the JSON export.
+        assert "verify-report compliance-report.json" in rows[-1][0]
 
 
 class TestComplianceRoutes:
@@ -275,7 +287,8 @@ class TestComplianceRoutes:
         data = r.json()
         assert data["total_certs"] == 5
         assert data["fleet_grade"] == "F"
-        assert len(data["compliance_metrics"]) == 4
+        # SHA-1, strong key, TLS, HSTS, plus the CAA "Not collected" row.
+        assert len(data["compliance_metrics"]) == 5
 
     def test_compliance_csv(self, reload_app):
         app_mod = reload_app()
@@ -356,6 +369,31 @@ class TestCLI:
         from cert_watch.__main__ import main
         try:
             main(["verify-report", str(report_file)])
+            raise AssertionError("should have raised SystemExit")
+        except SystemExit as e:
+            assert e.code == 1
+
+    def test_verify_report_on_csv_fails_cleanly(self, tmp_path, monkeypatch):
+        # Handing the CSV export to verify-report must fail with a clear message
+        # (not a raw JSON traceback) and a non-zero exit — the signature covers
+        # the JSON, not the CSV.
+        from cert_watch.compliance import build_compliance_report, report_to_csv_rows
+
+        db = tmp_path / "test.sqlite3"
+        _seed_empty(db)
+        report = build_compliance_report(str(db), signing_key="test-auth-secret-for-tests")
+        csv_file = tmp_path / "report.csv"
+        import csv as _csv
+        with open(csv_file, "w", newline="") as f:
+            w = _csv.writer(f)
+            for row in report_to_csv_rows(report):
+                w.writerow(row)
+
+        monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
+        from cert_watch.__main__ import main
+        try:
+            main(["verify-report", str(csv_file)])
             raise AssertionError("should have raised SystemExit")
         except SystemExit as e:
             assert e.code == 1

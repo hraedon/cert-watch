@@ -608,12 +608,8 @@ def send_expiry_digest(
         })
         req_headers = {"Content-Type": "application/json", **webhook_config.headers}
         try:
-            if webhook_config.kind == "generic":
-                target_url = webhook_config.url
-            else:
-                target_url = webhook_config.url
             resp = ssrf_safe_urlopen(
-                target_url,
+                webhook_config.url,
                 data=payload.encode("utf-8"),
                 timeout=webhook_config.timeout,
                 method="POST",

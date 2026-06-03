@@ -28,6 +28,23 @@ class PostureResult:
     must_staple: bool = False
 
 
+def tls_version_meets_1_2(protocol_version: str | None) -> bool:
+    """Return True if *protocol_version* is TLS 1.2 or newer.
+
+    Handles the strings both scan paths actually produce: ``ssl.version()`` and
+    openssl ``s_client`` both report TLS 1.0 as the bare ``"TLSv1"`` (not
+    ``"TLSv1.0"``), so a naive ``"1.0" in proto`` / ``startswith("TLSv1.0")``
+    check misses it. SSLv2/SSLv3 and TLS 1.0/1.1 are all sub-1.2; TLS 1.2/1.3
+    (and any future TLS 1.4+) pass.
+    """
+    if not protocol_version:
+        return False
+    p = protocol_version.strip().lower()
+    return p in ("tlsv1.2", "tlsv1.3") or (
+        p.startswith("tlsv1.") and p not in ("tlsv1.0", "tlsv1.1")
+    )
+
+
 # ---------- Revocation endpoint health (Plan 017 A1) ----------
 
 
@@ -378,8 +395,7 @@ def evaluate_posture(
         ))
 
     if protocol_version:
-        proto_lower = protocol_version.lower()
-        if "1.0" in proto_lower or "1.1" in proto_lower:
+        if not tls_version_meets_1_2(protocol_version):
             findings.append(Finding(
                 check="tls_version", status="warn",
                 message=f"TLS {protocol_version} offered - consider disabling",
