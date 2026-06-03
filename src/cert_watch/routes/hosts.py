@@ -176,7 +176,13 @@ async def add_host(
             pinned_ip=pinned_ip,
         )
         if not isinstance(result, ScanError):
-            await store_scanned_async(result, db)
+            await store_scanned_async(
+                result, db,
+                check_revocation=s.check_revocation,
+                allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
+                webhook_config=s.build_webhook_config(),
+            )
             record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))
             logger.info("added and scanned host %s:%d", hostname, p)
             return True
@@ -307,7 +313,13 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     imported = 0
     for hostname, port, result in await asyncio.gather(*[_scan_one(j) for j in scan_jobs]):
         if not isinstance(result, ScanError):
-            await store_scanned_async(result, db)
+            await store_scanned_async(
+                result, db,
+                check_revocation=s.check_revocation,
+                allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
+                webhook_config=s.build_webhook_config(),
+            )
             record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
         else:
             record_scan_history(
@@ -382,7 +394,13 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         dns_servers=s.dns_servers,
     )
     if not isinstance(result, ScanError):
-        await store_scanned_async(result, db)
+        await store_scanned_async(
+            result, db,
+            check_revocation=s.check_revocation,
+            allow_private=s.allow_private,
+            allowed_subnets=s.allowed_subnets,
+            webhook_config=s.build_webhook_config(),
+        )
         record_scan_history(
             db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
         )

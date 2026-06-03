@@ -53,6 +53,7 @@ def build_auth_provider(
     ldap_ca_cert: str = "",
     ldap_required_groups: list[str] | None = None,
     ldap_connect_timeout: int = 5,
+    ldap_group_filter: str = "",
     # OAuth options
     oauth_client_id: str = "",
     oauth_client_secret: str = "",
@@ -96,6 +97,7 @@ def build_auth_provider(
             ca_cert=ldap_ca_cert,
             required_groups=ldap_required_groups,
             connect_timeout=ldap_connect_timeout,
+            group_filter=ldap_group_filter,
         )
         if local_admin:
             return _CompositeProvider(local_admin, primary)

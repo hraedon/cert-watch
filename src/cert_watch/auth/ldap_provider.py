@@ -31,6 +31,7 @@ class LDAPAuthProvider(AuthProvider):
         ca_cert: str = "",
         required_groups: list[str] | None = None,
         connect_timeout: int = 5,
+        group_filter: str = "",
     ) -> None:
         self.server_url = server_url
         self.base_dn = base_dn
@@ -41,6 +42,7 @@ class LDAPAuthProvider(AuthProvider):
         self.ca_cert = ca_cert
         self.required_groups = required_groups or []
         self.connect_timeout = connect_timeout
+        self.group_filter = group_filter
         is_ldaps = any(s.lower().startswith("ldaps://") for s in server_url.split(","))
         if not is_ldaps and not start_tls and (bind_dn or bind_password):
             logger.warning(
@@ -113,6 +115,20 @@ class LDAPAuthProvider(AuthProvider):
             return p
         return None
 
+    def _build_group_filter(self, group_dn: str) -> str:
+        """Build a single group-membership LDAP filter fragment.
+
+        Uses ``self.group_filter`` as a template with ``{group}`` placeholder.
+        When empty (default), uses the AD transitive OID
+        ``(memberOf:1.2.840.113556.1.4.1941:={group})`` for backward compat.
+        """
+        import ldap3
+
+        escaped = ldap3.utils.conv.escape_filter_chars(group_dn)
+        if self.group_filter:
+            return "(" + self.group_filter.replace("{group}", escaped) + ")"
+        return f"(memberOf:1.2.840.113556.1.4.1941:={escaped})"
+
     def authenticate(self, username: str, password: str) -> AuthResult:
         if not username or not password:
             return AuthResult(success=False, error="username and password required")
@@ -142,8 +158,7 @@ class LDAPAuthProvider(AuthProvider):
             )
             if self.start_tls and tls:
                 conn.start_tls()
-            else:
-                conn.bind()
+            conn.bind()
 
             search_filter = self.user_search_filter.replace(
                 "{username}", ldap3.utils.conv.escape_filter_chars(username)
@@ -151,7 +166,7 @@ class LDAPAuthProvider(AuthProvider):
 
             if self.required_groups:
                 group_filters = " ".join(
-                    f"(memberOf:1.2.840.113556.1.4.1941:={ldap3.utils.conv.escape_filter_chars(g)})"
+                    self._build_group_filter(g)
                     for g in self.required_groups
                 )
                 search_filter = f"(&{search_filter}(|{group_filters}))"
@@ -180,8 +195,11 @@ class LDAPAuthProvider(AuthProvider):
 
             user_conn = ldap3.Connection(
                 pool_or_single, user=user_dn, password=password,
-                auto_bind=True, use_ssl=use_ssl,
+                auto_bind=False, use_ssl=use_ssl,
             )
+            if self.start_tls and tls:
+                user_conn.start_tls()
+            user_conn.bind()
             user_conn.unbind()
 
             return AuthResult(

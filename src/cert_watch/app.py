@@ -267,6 +267,9 @@ async def lifespan(app: FastAPI):
                 r, s.db_path,
                 drift_alerts=s.drift_alerts,
                 check_revocation=s.check_revocation,
+                allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
+                webhook_config=webhook_cfg,
             ),
         )
 

@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import csv
 import io
-import ipaddress
 import logging
 from pathlib import Path
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -81,47 +79,14 @@ def _db_path(request: Request) -> Path:
 
 
 def _validate_webhook_url(url: str) -> JSONResponse | None:
-    import socket
+    from cert_watch.http_client import validate_webhook_url as _validate
 
-    from cert_watch.scan import _ALWAYS_BLOCKED_NETWORKS, _PRIVATE_NETWORKS
-
-    parsed = urlparse(url)
-    if parsed.scheme not in ("https", "http"):
-        return JSONResponse(content={"error": "webhook_url must use http(s)"}, status_code=400)
-    if not parsed.hostname:
-        return JSONResponse(content={"error": "webhook_url must have a hostname"}, status_code=400)
-    try:
-        ip = ipaddress.ip_address(parsed.hostname)
-        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
-            return JSONResponse(
-                content={"error": "webhook_url must not point to private/local"},
-                status_code=400,
-            )
-    except ValueError:
-        try:
-            infos = socket.getaddrinfo(parsed.hostname, None, proto=socket.IPPROTO_TCP)
-        except socket.gaierror:
-            host = parsed.hostname
-            return JSONResponse(
-                content={"error": f"webhook_url hostname '{host}' could not be resolved"},
-                status_code=400,
-            )
-        for _family, _type, _proto, _canon, sockaddr in infos:
-            ip_str = sockaddr[0]
-            try:
-                resolved_ip = ipaddress.ip_address(ip_str)
-            except ValueError:
-                continue
-            if any(resolved_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
-                return JSONResponse(
-                    content={"error": "webhook_url must not point to private/local"},
-                    status_code=400,
-                )
-            if any(resolved_ip in net for net in _PRIVATE_NETWORKS):
-                return JSONResponse(
-                    content={"error": "webhook_url must not point to private/local"},
-                    status_code=400,
-                )
+    error = _validate(url)
+    if error:
+        return JSONResponse(
+            content={"error": f"webhook_url rejected: {error}"},
+            status_code=400,
+        )
     return None
 
 

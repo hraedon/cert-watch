@@ -118,12 +118,13 @@ def replace_scanned(
     leaf: Certificate,
     chain: list[Certificate],
     chain_valid: bool | None,
-) -> str:
+) -> tuple[str, str | None]:
     """Atomically replace all certs for host:port with new leaf + chain.
 
     Deletes old leaf + chain children, inserts new ones, all in a single
-    transaction. Returns the new leaf cert_id.  Records a renewal diff
-    when the certificate fingerprint changed.
+    transaction. Returns ``(new_leaf_id, replaced_cert_id)`` — the
+    ``replaced_cert_id`` is the old leaf's id when a cert was replaced
+    (None when this is a fresh insert with no prior leaf).
     """
     from cert_watch.cert_chain import validate_chain_order
 
@@ -252,7 +253,7 @@ def replace_scanned(
             )
             conn.commit()
 
-    return leaf_id
+    return leaf_id, replaces_id
 
 
 def _compute_renewal_diff(old_row, new_leaf: Certificate) -> list[str]:

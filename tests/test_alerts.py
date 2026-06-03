@@ -141,7 +141,7 @@ def test_alert_formatting_includes_required_fields(alert_repo, expiring_cert):
 def test_send_webhook_success():
     config = WebhookConfig(url="https://hooks.example.com/alert")
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="msg")
-    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -156,7 +156,7 @@ def test_send_webhook_failure():
     config = WebhookConfig(url="https://hooks.example.com/alert")
     alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
     with patch(
-        "cert_watch.alerts.urllib.request.urlopen",
+        "cert_watch.alerts.ssrf_safe_urlopen",
         side_effect=Exception("connection refused"),
     ):
         ok = send_webhook(alert, config)
@@ -181,7 +181,7 @@ def test_send_webhook_template():
         status="pending",
         message="Cert expiring soon",
     )
-    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -189,8 +189,10 @@ def test_send_webhook_template():
         mock_urlopen.return_value = mock_resp
         ok = send_webhook(alert, config)
     assert ok is True
-    req = mock_urlopen.call_args[0][0]
-    body = req.data.decode("utf-8")
+    call_kwargs = mock_urlopen.call_args
+    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
     assert "expiry_warning" in body
     assert "Cert expiring soon" in body
     assert "abc123" in body
@@ -208,7 +210,7 @@ def test_send_webhook_template_non_json():
         status="pending",
         message="Cert has expired",
     )
-    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -216,8 +218,9 @@ def test_send_webhook_template_non_json():
         mock_urlopen.return_value = mock_resp
         ok = send_webhook(alert, config)
     assert ok is True
-    req = mock_urlopen.call_args[0][0]
-    assert req.headers.get("Content-type") == "text/plain"
+    call_kwargs = mock_urlopen.call_args
+    headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
+    assert headers.get("Content-Type") == "text/plain"
 
 
 def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
@@ -236,7 +239,7 @@ def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
     smtp_mock.send_message.side_effect = Exception("smtp down")
     with (
         patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock),
-        patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen,
+        patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen,
     ):
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -251,7 +254,7 @@ def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
 def test_process_pending_webhook_only(alert_repo, expiring_cert):
     evaluate_thresholds(expiring_cert, alert_repo)
     webhook_config = WebhookConfig(url="https://hooks.example.com/alert")
-    with patch("cert_watch.alerts.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -260,6 +263,21 @@ def test_process_pending_webhook_only(alert_repo, expiring_cert):
         counts = process_pending(alert_repo, None, webhook_config=webhook_config)
     assert counts["sent"] > 0
     assert counts["failed"] == 0
+
+
+def test_send_webhook_ssrf_blocked():
+    """BC-116: webhook to a blocked IP must be refused."""
+    from cert_watch.http_client import SSRFBlockedError
+
+    config = WebhookConfig(url="https://127.0.0.1/webhook")
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="msg")
+    with patch(
+        "cert_watch.alerts.ssrf_safe_urlopen",
+        side_effect=SSRFBlockedError("blocked IP: 127.0.0.1"),
+    ):
+        ok = send_webhook(alert, config)
+    assert ok is False
+    assert "SSRF" in (alert.error_message or "") or "blocked" in (alert.error_message or "")
 
 
 def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
@@ -427,11 +445,12 @@ def test_send_expiry_digest_sends_webhook_when_no_smtp(tmp_path):
     soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
     _insert_cert(db, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.urllib.request") as mock_req:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
         result = send_expiry_digest(db, None, webhook)
     assert result is True
 
@@ -445,12 +464,12 @@ def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
     _insert_cert(db, subject="CN=important", hostname="web.example.com",
                  port=443, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.urllib.request") as mock_req:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
-        mock_req.Request.return_value = MagicMock()
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
         result = send_expiry_digest(db, None, webhook)
     assert result is True
 
@@ -482,10 +501,11 @@ def test_send_expiry_digest_respects_30_day_window(tmp_path):
     _insert_cert(db, subject="CN=inside", hostname="in.example.com", not_after=inside)
     _insert_cert(db, subject="CN=outside", hostname="out.example.com", not_after=outside)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.urllib.request") as mock_req:
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
-        mock_req.urlopen.return_value.__enter__ = lambda s: mock_resp
-        mock_req.urlopen.return_value.__exit__ = MagicMock(return_value=False)
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
         result = send_expiry_digest(db, None, webhook)
     assert result is True
