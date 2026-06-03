@@ -12,6 +12,13 @@ services:
       - cert-watch-data:/var/lib/cert-watch
     environment:
       CERT_WATCH_DATA_DIR: /var/lib/cert-watch
+      # --- First run (secure-by-default) ---
+      # The container binds 0.0.0.0 (network-exposed), so on first run cert-watch
+      # auto-provisions an 'admin' with a generated password and comes up
+      # authenticated. Grab it from `docker compose logs` or the data volume file
+      # /var/lib/cert-watch/initial-admin-password. For production, configure a
+      # provider below instead of relying on the generated credential.
+      # To intentionally run open (dev only): CERT_WATCH_ALLOW_UNAUTH: "1"
       # --- Scanning options ---
       # CERT_WATCH_ALLOW_PRIVATE_IPS: "1"
       # --- Secrets: set fixed values in production to survive restarts ---
@@ -26,7 +33,7 @@ services:
       # ALERT_RECIPIENTS: ops@example.com
       # --- Alerts (Webhook) ---
       # ALERT_WEBHOOK_URL: https://hooks.slack.com/services/...
-      # --- Authentication (disabled by default) ---
+      # --- Authentication (configure one of these to run securely) ---
       # AUTH_PROVIDER: ldap            # or: oauth, entra
       # LDAP_SERVER: ldap://dc.example.com
       # LDAP_BASE_DN: DC=example,DC=com
@@ -35,6 +42,10 @@ services:
       # OAUTH_CLIENT_ID: ""
       # OAUTH_CLIENT_SECRET: ""
       # OAUTH_ISSUER_URL: https://login.microsoftonline.com/{tenant}/v2.0
+      # Or a local admin (leave AUTH_PROVIDER unset): generate the hash with
+      # `cert-watch hash-password`.
+      # CERT_WATCH_LOCAL_ADMIN_USER: admin
+      # CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH: scrypt$...
 
 volumes:
   cert-watch-data:

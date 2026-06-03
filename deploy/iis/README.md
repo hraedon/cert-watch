@@ -117,12 +117,24 @@ Administrators + the IIS app-pool identity). See the script for parameters
 
 ## Configuration notes
 
+- **First run comes up authenticated.** Both models bind uvicorn to loopback,
+  but set `CERT_WATCH_TRUST_PROXY=1` (the web.config / NSSM env already do), which
+  tells cert-watch it's network-exposed behind a proxy. So on first run with no
+  auth configured it **auto-provisions an `admin`** with a generated password
+  rather than serving open. Retrieve it from
+  `C:\ProgramData\cert-watch\logs\stdout*.log` or
+  `C:\ProgramData\cert-watch\initial-admin-password` (the data dir). For
+  production, configure `AUTH_PROVIDER` (LDAP/OAuth) or pin
+  `CERT_WATCH_LOCAL_ADMIN_USER` + `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` instead
+  of the generated credential, then delete the password file.
 - **All config is environment variables** — identical to Linux/Docker (see the
   root `README.md`). Set them in `web.config` `<environmentVariables>`
   (HttpPlatformHandler) or via `nssm set ... AppEnvironmentExtra` (service).
-- **`CERT_WATCH_TRUST_PROXY=1` is required** behind IIS so client IP (rate
-  limiting, audit log) and request scheme come from the forwarded headers
-  rather than the loopback connection.
+- **`CERT_WATCH_TRUST_PROXY=1` is required** behind IIS so the client IP (rate
+  limiting, audit log) comes from the forwarded headers rather than the loopback
+  connection. Session/CSRF cookies are always `Secure`-flagged
+  (`CERT_WATCH_COOKIE_SECURE` defaults to `1`), so the browser↔IIS HTTPS leg
+  keeps them working without the app needing to infer the scheme.
 - **OAuth/Entra:** set `CERT_WATCH_BASE_URL=https://certs.example.com` so the
   redirect URI is built with your public host, not the loopback address.
 - **Data dir default:** on Windows, with `CERT_WATCH_DATA_DIR` unset, cert-watch

@@ -285,11 +285,11 @@ def _login_admin(client, monkeypatch):
     monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
     monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
 
-    from cert_watch.auth import SESSION_COOKIE, create_session
-    from cert_watch.middleware import _request_security
-
     # Build a fake request to get the security context
     from starlette.requests import Request as StRequest
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.middleware import _request_security
     scope = {
         "type": "http", "method": "GET", "path": "/",
         "query_string": b"", "headers": [],

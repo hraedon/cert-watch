@@ -38,7 +38,26 @@ Installs to `/opt/cert-watch`, enables `cert-watch.service`. See `deploy/systemd
 
 ### First run (no auth)
 
-Without `AUTH_PROVIDER` set, cert-watch is fully open — no login required. This is intentional for local development and air-gapped demos. **For any network-reachable deployment, set `AUTH_PROVIDER`.**
+cert-watch is **secure by default** — it never serves anonymously on a network
+by accident. With no auth configured, behaviour depends on whether the instance
+is *network-exposed*:
+
+| Situation | Behaviour |
+|-----------|-----------|
+| Bare loopback (`127.0.0.1`, no proxy) | Serves open, redirects to `/setup` to create an admin |
+| Routable bind (`0.0.0.0`) **or** loopback + `CERT_WATCH_TRUST_PROXY=1` (IIS/nginx) | **Auto-provisions** a local `admin` with a generated password and comes up authenticated |
+| Any bind + `CERT_WATCH_ALLOW_UNAUTH=1` | Serves open (explicit opt-out; dev / air-gapped only) |
+
+When it auto-provisions, the one-time password is written to
+`${CERT_WATCH_DATA_DIR}/initial-admin-password` (mode 0600) and logged (check
+`docker logs` / `journalctl -u cert-watch` / `kubectl logs`). **For production,
+don't rely on the generated credential** — configure `AUTH_PROVIDER` (LDAP/OAuth)
+or pin a password via `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`
+(hash with `cert-watch hash-password`), then delete the password file.
+
+> If auto-provisioning can't persist the admin (e.g. the data dir isn't
+> writable), a network-exposed instance **fails closed** — it refuses to serve
+> open rather than expose itself unauthenticated.
 
 ---
 
@@ -296,6 +315,11 @@ CERT_WATCH_LOG_FORMAT=json      # structured logs for SIEM
 CERT_WATCH_AUTH_SECRET=<stable-key>  # persist sessions across restarts
 CERT_WATCH_ALLOWED_SUBNETS=10.0.0.0/8,192.168.0.0/16  # only scan approved internal ranges
 CERT_WATCH_COOKIE_SECURE=1      # HTTPS-only cookies (default)
+
+# Behind a reverse proxy / IIS that terminates TLS:
+CERT_WATCH_TRUST_PROXY=1                          # client IP from forwarded headers
+# CERT_WATCH_TRUSTED_PROXIES=10.0.0.5             # restrict who may set them
+CERT_WATCH_BASE_URL=https://certs.example.com     # correct OAuth redirect URI
 ```
 
 Scope `CERT_WATCH_ALLOWED_SUBNETS` to exactly the internal networks you intend
@@ -325,7 +349,7 @@ All other paths (dashboard, scan history, alerts, host management) require authe
 
 The `/metrics` endpoint is intentionally left unauthenticated for compatibility with standard Prometheus scraping. It exposes aggregate counts (certificate totals, scan counts) but not hostnames, certificate details, or any identifying information.
 
-**Recommendation:** Restrict `/metrics` at the ingress level (network policy, IP allowlist) so only your Prometheus scraper can reach it. If a security review requires auth on metrics, add a reverse proxy that injects a service account token.
+**Recommendation:** Restrict `/metrics` at the ingress level (network policy, IP allowlist) so only your Prometheus scraper can reach it. If a security review requires auth on metrics, set `CERT_WATCH_METRICS_TOKEN=<token>` — the endpoint then requires `Authorization: Bearer <token>` (point your scraper's `bearer_token` at the same value). No reverse-proxy shim needed.
 
 ---
 

@@ -51,8 +51,10 @@ spec:
             # --- Scanning options ---
             - name: CERT_WATCH_ALLOW_PRIVATE_IPS
               value: "1"
-            - name: CERT_WATCH_DNS_SERVERS
-              value: "192.168.1.29,192.168.1.19"
+            # Internal resolvers for scanning by hostname (e.g. AD DCs). Set to
+            # your environment's DNS servers; falls back to the cluster resolver.
+            # - name: CERT_WATCH_DNS_SERVERS
+            #   value: "10.0.0.10,10.0.0.11"
             # --- Alerts (SMTP) — uncomment to enable ---
             # - name: SMTP_HOST
             #   value: smtp.example.com
@@ -63,7 +65,13 @@ spec:
             # --- Alerts (Webhook) ---
             # - name: ALERT_WEBHOOK_URL
             #   value: https://hooks.slack.com/services/...
-            # --- Authentication (disabled by default) ---
+            # --- Authentication (secure-by-default) ---
+            # The pod binds 0.0.0.0 (network-exposed), so on first run cert-watch
+            # auto-provisions an 'admin' with a generated password and comes up
+            # authenticated: `kubectl logs deploy/cert-watch | grep "initial admin"`
+            # (also at /var/lib/cert-watch/initial-admin-password on the PVC).
+            # For production, configure a provider below or a local admin via a
+            # Secret instead of the generated credential.
             # - name: AUTH_PROVIDER
             #   value: ldap    # or: oauth, entra
             # - name: LDAP_SERVER

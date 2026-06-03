@@ -31,3 +31,7 @@ systemctl enable --now cert-watch.service
 
 echo "Installed. Logs: journalctl -u cert-watch -f"
 echo "Dashboard: http://$(hostname -f):8000/"
+echo
+echo "First run auto-provisions an 'admin'. Get the one-time password with:"
+echo "  sudo cat $DATA_DIR/initial-admin-password"
+echo "For production, configure AUTH_PROVIDER (LDAP/OAuth) in $UNIT and restart."

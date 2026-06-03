@@ -8,6 +8,20 @@ Type=simple
 User=cert-watch
 Group=cert-watch
 Environment=CERT_WATCH_DATA_DIR=/var/lib/cert-watch
+# First run (secure-by-default): the service binds 0.0.0.0 (network-exposed), so
+# cert-watch auto-provisions an 'admin' with a generated password and comes up
+# authenticated. Find it with: journalctl -u cert-watch | grep "initial admin"
+# (also written to /var/lib/cert-watch/initial-admin-password, mode 0600).
+# For production, configure real auth instead of the generated credential:
+#   a) a directory provider:
+# Environment=AUTH_PROVIDER=ldap
+# Environment=LDAP_SERVER=ldap://dc.example.com
+# Environment=LDAP_BASE_DN=DC=example,DC=com
+#   b) a pinned local admin (hash via `cert-watch hash-password`):
+# Environment=CERT_WATCH_LOCAL_ADMIN_USER=admin
+# Environment=CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=scrypt$...
+#   c) (not for production) run open:
+# Environment=CERT_WATCH_ALLOW_UNAUTH=1
 # Scanning options
 # Environment=CERT_WATCH_ALLOW_PRIVATE_IPS=1
 # Secrets: set fixed values in production to survive restarts
