@@ -13,10 +13,13 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Alerting** — email (SMTP) and webhook notifications with configurable per-host thresholds
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
 - **Certificate Transparency** — lookup certificates via crt.sh
+- **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
+- **Discover** — CT-based coverage reconciliation: surfaces hostnames seen in CT but not tracked, plus a private-CA inventory
 - **Bulk import** — CSV upload for adding many hosts at once
-- **Prometheus metrics** — `/metrics` endpoint for monitoring integration
+- **Prometheus metrics** — `/metrics` endpoint for monitoring integration (optionally bearer-token gated)
 - **Renewal tracking** — links renewed certificates to their predecessors
 - **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
+- **Audit log** — append-only record of mutations and logins, with configurable retention
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
 ## Stack
@@ -31,9 +34,14 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 
 ```bash
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m cert_watch        # serves http://localhost:8000
-.venv/bin/pytest -q                    # run tests
+.venv/bin/python -m cert_watch --host 127.0.0.1   # serves http://localhost:8000
+.venv/bin/pytest -q                                # run tests
 ```
+
+> The loopback bind matters: a bare loopback instance (no proxy) serves open and
+> sends you to the `/setup` wizard — exactly what you want for local dev. A
+> *network-exposed* instance instead comes up with an auto-provisioned admin (see
+> [First run](#first-run)).
 
 ## First run
 
@@ -46,6 +54,22 @@ To skip the wizard (for local dev or air-gapped environments):
 ```bash
 CERT_WATCH_ALLOW_UNAUTH=1 .venv/bin/python -m cert_watch
 ```
+
+> **Secure by default — never open on a network by accident.** What happens with
+> no auth configured depends on whether the instance is *network-exposed*:
+>
+> | Situation | Behaviour |
+> |-----------|-----------|
+> | Bare loopback (`127.0.0.1`, no proxy) | Serves open, redirects to `/setup` |
+> | Routable bind (`0.0.0.0`) **or** loopback + `CERT_WATCH_TRUST_PROXY=1` (IIS/nginx) | **Auto-provisions** a local `admin` with a generated password — comes up *authenticated* |
+> | Any bind + `CERT_WATCH_ALLOW_UNAUTH=1` | Serves open (explicit opt-out; dev / air-gapped only) |
+>
+> When it auto-provisions, the one-time password is written to
+> `${CERT_WATCH_DATA_DIR}/initial-admin-password` (mode 0600) and logged. Log in,
+> then configure `AUTH_PROVIDER` (LDAP/OAuth) **or** pin a password via
+> `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (generate with `cert-watch hash-password`),
+> and delete the file. A network-exposed instance therefore comes up working
+> *and* authenticated — it never serves anonymously unless you ask it to.
 
 ### Settings page
 
@@ -64,12 +88,17 @@ account and optionally walks through SMTP and first-host configuration. Set
 
 ## Docker
 
+The container binds `0.0.0.0`, so on first run it auto-provisions an `admin`
+(see [First run](#first-run)) and comes up authenticated:
+
 ```bash
 docker build -t cert-watch:dev .
 docker run --rm -p 8000:8000 -v cert-watch-data:/var/lib/cert-watch cert-watch:dev
+docker logs <container>     # grab the one-time admin password (also in the data volume)
 ```
 
-Or with compose:
+For production, configure `AUTH_PROVIDER` (LDAP/OAuth) or pin `CERT_WATCH_LOCAL_ADMIN_*`
+instead of relying on the generated password. Or with compose:
 
 ```bash
 docker compose -f deploy/compose/docker-compose.yml up -d
@@ -111,8 +140,8 @@ Windows service. Bootstrap with:
 ```
 
 Then configure the IIS site — see [`deploy/iis/README.md`](deploy/iis/README.md).
-Set `CERT_WATCH_TRUST_PROXY=1` so client IP and scheme come from IIS's forwarded
-headers.
+Set `CERT_WATCH_TRUST_PROXY=1` so the client IP (for rate limiting and the audit
+log) is read from IIS's forwarded headers rather than the loopback connection.
 
 ## Configuration
 
@@ -123,13 +152,19 @@ All configuration is via environment variables.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CERT_WATCH_DATA_DIR` | `/var/lib/cert-watch` (POSIX), `%PROGRAMDATA%\cert-watch` (Windows) | Directory for SQLite database |
-| `CERT_WATCH_HOST` | `0.0.0.0` | Listen address |
-| `CERT_WATCH_PORT` | `8000` | Listen port |
+| `CERT_WATCH_HOST` | `0.0.0.0` | Listen address. Also overridable with `--host`; the entrypoint normalizes the two so the secure-by-default check sees the real bind |
+| `CERT_WATCH_PORT` | `8000` | Listen port (also `--port`) |
 | `CERT_WATCH_SCHED_HOUR` | `6` | Hour to run daily scan (UTC) |
 | `CERT_WATCH_SCHED_MIN` | `0` | Minute to run daily scan |
 | `CERT_WATCH_TLS_VERIFY` | `0` | Set `1` to verify TLS certificates when scanning |
+| `CERT_WATCH_LOG_FORMAT` | `text` | Log output format; set `json` for structured logs |
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of alert records to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_DRIFT_ALERTS` | `1` | Set `0` to disable drift alerts (issuer change, key-size drop, SHA-1 downgrade, posture/TLS downgrade) |
+| `CERT_WATCH_CHECK_REVOCATION` | `0` | Set `1` to probe OCSP/CRL reachability during posture grading (findings are warnings, not penalties) |
+| `CERT_WATCH_RELOAD` | `0` | Set `1` to enable uvicorn auto-reload on code changes (development only) |
+| `CERT_WATCH_DNS_SERVERS` | — | Comma-separated DNS server IPs for hostname resolution during scans (e.g. internal DCs). Falls back to the system resolver |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
 | `CERT_WATCH_ALLOWED_SUBNETS` | — | Comma-separated CIDR allowlist scoping which **private** ranges may be scanned (e.g. `10.0.0.0/8,192.168.0.0/16`). When set, a private target is allowed only if it falls inside one of these ranges; public hosts stay scannable and loopback/link-local (incl. cloud metadata) stay blocked. Makes internal scanning an explicit, auditable capability. |
 
@@ -163,9 +198,10 @@ shop — but should be tightened for sensitive environments:
 | `SMTP_HOST` | — | SMTP server hostname |
 | `SMTP_PORT` | `587` | SMTP server port |
 | `SMTP_USER` | — | SMTP username (optional) |
-| `SMTP_PASSWORD` | — | SMTP password (optional) |
+| `SMTP_PASSWORD` | — | SMTP password (optional; `SMTP_PASSWORD_FILE` supported) |
 | `ALERT_FROM` | — | Sender email address |
 | `ALERT_RECIPIENTS` | — | Comma-separated recipient addresses |
+| `ALERT_DIGEST_ONLY` | `0` | Set `1` to batch alerts into a single digest rather than one message per certificate |
 
 ### Alerts (Webhook)
 
@@ -173,10 +209,16 @@ shop — but should be tightened for sensitive environments:
 |----------|---------|-------------|
 | `ALERT_WEBHOOK_URL` | — | Webhook URL for JSON POST alerts |
 | `ALERT_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers |
+| `ALERT_WEBHOOK_TEMPLATE` | — | Optional payload template; when unset a default JSON body is sent |
 
 ### Authentication
 
-Authentication is disabled by default. Set `AUTH_PROVIDER` to enable.
+No authentication *provider* is configured by default — set `AUTH_PROVIDER` to
+enable LDAP or OAuth/OIDC. cert-watch is nonetheless **secure by default**: a
+network-exposed instance with no provider configured **auto-provisions a local
+admin** on first run rather than serving open (see [First run](#first-run) for
+the full behaviour matrix and where the generated password lands). To run open
+anyway (dev / air-gapped), set `CERT_WATCH_ALLOW_UNAUTH=1`.
 
 #### LDAP / Active Directory
 
@@ -207,25 +249,120 @@ Requires: `pip install cert-watch[auth-ldap]`
 | `OAUTH_AUTHORIZATION_ENDPOINT` | — | Override (skip discovery) |
 | `OAUTH_TOKEN_ENDPOINT` | — | Override (skip discovery) |
 | `OAUTH_USERINFO_ENDPOINT` | — | Override (skip discovery) |
+| `CERT_WATCH_JWKS_CACHE_TTL` | `86400` | Seconds to cache the issuer's JWKS for ID-token verification |
 
 Requires: `pip install cert-watch[auth-oauth]`
 
-### CSRF
+When behind a reverse proxy/TLS terminator, also set `CERT_WATCH_BASE_URL` (see
+below) so the OAuth redirect URI is built with your public host.
+
+#### Authorization
+
+Once a provider authenticates a user, these optional gates decide what they can
+do. All are comma-separated and unset by default (any authenticated user gets
+full access).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CERT_WATCH_CSRF_SECRET` | random | HMAC key for CSRF tokens |
+| `CERT_WATCH_ALLOWED_GROUPS` | — | Directory group DNs/names; users outside them are denied |
+| `CERT_WATCH_ALLOWED_ROLES` | — | OAuth/OIDC roles required for access |
+| `CERT_WATCH_ADMINS` | — | Usernames allowed to reach `/settings` |
+| `CERT_WATCH_WRITE_USERS` | — | Usernames allowed to mutate data; when set, everyone else is read-only (admins always write) |
+| `CERT_WATCH_LOCAL_ADMIN_USER` | — | Break-glass local admin username (works even when the directory is down) |
+| `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` | — | scrypt hash for the break-glass admin; generate with `cert-watch hash-password` (`*_FILE` supported) |
+
+### Secrets, sessions & CSRF
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERT_WATCH_AUTH_SECRET` | persisted | HMAC key for session cookies. If unset, a key is generated and persisted to `${DATA_DIR}/.auth_secret` so sessions survive restarts. `*_FILE` supported. Set explicitly in production (or use the file the installers write) |
+| `CERT_WATCH_CSRF_SECRET` | persisted | HMAC key for CSRF tokens; same persistence behaviour as `CERT_WATCH_AUTH_SECRET`. `*_FILE` supported |
+| `CERT_WATCH_COOKIE_SECURE` | `1` | Cookies are `Secure`-flagged by default. Set `0` only for plain-HTTP local dev |
 | `CERT_WATCH_CSRF_DISABLED` | `0` | Set `1` to disable CSRF (testing only) |
 
-## API endpoints
+> Rotating `CERT_WATCH_AUTH_SECRET` invalidates existing sessions and requires
+> re-encrypting stored secrets — run `cert-watch re-encrypt <old_key>` after
+> changing it.
 
-All JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
+### Reverse proxy / TLS termination
+
+Set these when IIS, nginx, or an ingress terminates TLS and forwards to
+cert-watch (see [`deploy/iis/README.md`](deploy/iis/README.md)).
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERT_WATCH_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` / `X-Real-IP` (for rate limiting + audit log) instead of the proxy's connection IP |
+| `CERT_WATCH_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for the above; restricts which sources may set forwarded headers |
+| `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Used to build the OAuth redirect URI from the public host rather than the loopback bind |
+| `CERT_WATCH_METRICS_TOKEN` | — | When set, `/metrics` requires `Authorization: Bearer <token>` |
+| `CERT_WATCH_ALLOW_UNAUTH` | `0` | Set `1` to allow running with no auth provider on a non-loopback bind (suppresses the secure-by-default refusal and the `/setup` redirect) |
+
+## CLI commands
+
+The `cert-watch` entrypoint supports several subcommands:
+
+```bash
+cert-watch                  # Start the web server (default)
+cert-watch backup <path>    # Create a WAL-safe SQLite backup
+cert-watch hash-password    # Generate a scrypt password hash (interactive)
+cert-watch re-encrypt <key> # Re-encrypt kv_store after .auth_secret rotation
+```
+
+### `cert-watch backup <path>`
+
+Creates a consistent snapshot of the SQLite database using the Online Backup
+API (safe to run while the server is running):
+
+```bash
+cert-watch backup /backups/cert-watch-$(date +%F).sqlite3
+```
+
+### `cert-watch hash-password`
+
+Interactive prompt to generate a scrypt hash suitable for
+`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`:
+
+```bash
+cert-watch hash-password
+# Password: ********
+# Confirm:  ********
+# $scrypt$N=...  (paste into CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH)
+```
+
+### `cert-watch re-encrypt <old_key>`
+
+After rotating `CERT_WATCH_AUTH_SECRET`, re-encrypts any secrets stored in the
+`kv_store` table with the new key. Pass the old key as an argument (or set
+`CERT_WATCH_AUTH_SECRET` to the old value and pass the new key):
+
+```bash
+cert-watch re-encrypt <old-signing-key>
+```
+
+## Endpoints
+
+JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
+
+### Web pages (HTML)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Web dashboard |
+| `GET` | `/` | Dashboard |
+| `GET` | `/alerts` | Alerts view |
+| `GET` | `/scan-history` | Per-scan history |
+| `GET` | `/insights` | Expiration calendar + TLS/grade trends |
+| `GET` | `/discover` | CT coverage reconciliation + private-CA inventory |
+| `GET` | `/audit` | Audit log |
+| `GET` | `/settings` | Settings (admin) |
+| `GET` | `/setup` | First-run setup wizard |
+
+### JSON / operational
+
+| Method | Path | Description |
+|--------|------|-------------|
 | `GET` | `/healthz` | Health check (DB, scheduler, cert counts) |
-| `GET` | `/metrics` | Prometheus metrics |
+| `GET` | `/api/health` | Health check (JSON) |
+| `GET` | `/metrics` | Prometheus metrics (bearer-gated when `CERT_WATCH_METRICS_TOKEN` set) |
 | `GET` | `/api/certificates` | List certificates (paginated) |
 | `GET` | `/api/certificates/{id}` | Certificate detail (includes `tags` + `effective_tags`) |
 | `GET` | `/api/tags` | Distinct tags across hosts + certs |
@@ -234,6 +371,7 @@ All JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/api/hosts` | List tracked hosts |
 | `GET` | `/api/alerts` | List alerts |
 | `GET` | `/ct-lookup/{domain}` | Certificate Transparency lookup |
+| `GET` | `/caa-check/{domain}` | CAA record lookup |
 | `GET` | `/api/ct/reconciliation?domain=` | CT reconciliation (coverage gaps) |
 | `POST` | `/hosts` | Add host (form) |
 | `POST` | `/hosts/import` | Bulk import CSV |
@@ -267,7 +405,7 @@ src/cert_watch/
   upload.py            Certificate file upload/parse
   templates/           Jinja2 HTML templates
   static/              CSS
-tests/                 pytest suite (652 unit tests)
+tests/                 pytest suite (715 unit tests)
 docs/spec/             Work-item specs (one per FR)
 deploy/
   k8s/                 Kustomize manifests
