@@ -126,7 +126,11 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     expect(page.locator("h1")).to_have_text("Certificates")
     # Assert the host appears in the table
     expect(page.locator("body")).to_contain_text(hostname)
-    # Navigate to scan-history and assert a failure entry exists
+    # Navigate to scan-history and assert a failure entry exists. Scan results are
+    # grouped into collapsible batches (collapsed by default); expand them to reveal
+    # the per-host rows before asserting.
     page.goto(f"{cert_watch_server}/scan-history")
-    expect(page.get_by_text("nonexistent.invalid:443", exact=True)).to_be_visible()
-    expect(page.get_by_role("table").get_by_text("failure")).to_be_visible()
+    for toggle in page.locator("button[data-action='toggle-batch']").all():
+        toggle.click()
+    expect(page.get_by_text("nonexistent.invalid:443", exact=True).first).to_be_visible()
+    expect(page.get_by_role("table").get_by_text("failure").first).to_be_visible()
