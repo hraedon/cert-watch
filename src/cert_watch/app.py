@@ -116,9 +116,9 @@ def _provision_initial_admin(s: Settings) -> None:
 
     Called for a network-exposed instance with no auth configured, so the app
     comes up authenticated instead of serving open. The one-time password is
-    written to ``data_dir/initial-admin-password`` (mode 0600) and logged; the
-    admin is persisted to ``kv_store`` (same keys the /setup wizard writes), so
-    subsequent restarts resolve a ``LocalAdminProvider`` and skip this.
+    written to ``data_dir/initial-admin-password`` (mode 0600) — never logged.
+    The admin is persisted to ``kv_store`` (same keys the /setup wizard writes),
+    so subsequent restarts resolve a ``LocalAdminProvider`` and skip this.
     """
     import secrets as _secrets
 

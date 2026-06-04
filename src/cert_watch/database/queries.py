@@ -21,6 +21,11 @@ _logger = logging.getLogger("cert_watch.database.queries")
 _ENCRYPTED_PREFIX = "enc:v1:"
 
 
+def _escape_like(s: str) -> str:
+    """Escape ``%``, ``_`` and ``\\`` so they are treated as literals in a LIKE pattern."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 def derive_encryption_key(signing_key: str) -> str:
     """Derive a Fernet-compatible key from the app signing key."""
     raw = hashlib.sha256(signing_key.encode()).digest()
@@ -34,8 +39,12 @@ def fernet_encrypt(plaintext: str, key: str) -> str:
     return _ENCRYPTED_PREFIX + Fernet(key.encode()).encrypt(plaintext.encode()).decode()
 
 
-def fernet_decrypt(value: str, key: str) -> str:
-    """Decrypt an ``enc:v1:`` value; pass through plaintext unchanged."""
+def fernet_decrypt(value: str, key: str) -> str | None:
+    """Decrypt an ``enc:v1:`` value; pass through plaintext unchanged.
+
+    Returns ``None`` when decryption fails (wrong key or corrupted data)
+    instead of silently returning the raw ciphertext.
+    """
     if not value.startswith(_ENCRYPTED_PREFIX):
         return value
     from cryptography.fernet import Fernet, InvalidToken
@@ -43,8 +52,8 @@ def fernet_decrypt(value: str, key: str) -> str:
     try:
         return Fernet(key.encode()).decrypt(value[len(_ENCRYPTED_PREFIX) :].encode()).decode()
     except (InvalidToken, Exception):
-        _logger.warning("kv: failed to decrypt value (wrong key or corrupted); returning raw")
-        return value
+        _logger.warning("kv: failed to decrypt value (wrong key or corrupted)")
+        return None
 
 
 def check_encrypted_values(db_path: str | Path, encryption_key: str) -> list[str]:
@@ -85,7 +94,7 @@ def re_encrypt_kv_store(db_path: str | Path, old_key: str, new_key: str) -> int:
         if not val or not val.startswith(_ENCRYPTED_PREFIX):
             continue
         plaintext = fernet_decrypt(val, old_key)
-        if plaintext.startswith(_ENCRYPTED_PREFIX):
+        if plaintext is None or plaintext.startswith(_ENCRYPTED_PREFIX):
             _logger.warning("re_encrypt: skipping key %s — cannot decrypt with old key", row["key"])
             continue
         new_val = fernet_encrypt(plaintext, new_key)
@@ -747,8 +756,11 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
 
     Each entry has a ``kind`` of ``scanned``, ``uploaded``, or ``pending``.
     Pending hosts carry cert fields set to ``None`` and urgency ``gray``.
+
+    Uses SQL-level filtering via :func:`_load_unified_filtered` so the full
+    inventory is not materialised in Python (BC-073).
     """
-    return _list_unified_entries_raw(db_path)
+    return _load_unified_filtered(db_path, include_uploaded=True)
 
 
 def _matches_q(e: dict, ql: str) -> bool:
@@ -922,7 +934,7 @@ def list_dashboard_page(
 
     # q is pushed to SQL for leaf/host candidates; grouped cross-host search
     # never applies to the ungrouped path, so per-field LIKE is faithful.
-    like = f"%{q.lower()}%" if q else None
+    like = f"%{_escape_like(q.lower())}%" if q else None
 
     with _connect(db_path) as conn:
         host_rows = conn.execute(
@@ -965,8 +977,9 @@ def list_dashboard_page(
             scanned_params: list = []
             if like:
                 scanned_sql += (
-                    " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?"
-                    " OR LOWER(c.hostname || ':' || c.port) LIKE ?)"
+                    " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
                 )
                 scanned_params += [like, like, like]
             select_parts.append(scanned_sql)
@@ -992,7 +1005,7 @@ def list_dashboard_page(
             pending_params: list = []
             if like:
                 pending_sql += (
-                    " AND LOWER(h.hostname || ':' || h.port) LIKE ?"
+                    " AND LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
                 )
                 pending_params += [like]
             select_parts.append(pending_sql)
@@ -1011,7 +1024,8 @@ def list_dashboard_page(
             uploaded_params: list = []
             if like:
                 uploaded_sql += (
-                    " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?)"
+                    " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.issuer) LIKE ? ESCAPE '\\')"
                 )
                 uploaded_params += [like, like]
             select_parts.append(uploaded_sql)
@@ -1180,7 +1194,7 @@ def list_dashboard_grouped_page(
     sort_col = _SORT_COLS.get(sort_by, _SORT_COLS["days"])
     sql_dir = "DESC" if sort_order == "desc" else "ASC"
 
-    like = f"%{q.lower()}%" if q else None
+    like = f"%{_escape_like(q.lower())}%" if q else None
 
     with _connect(db_path) as conn:
         # Step 1: SQL GROUP BY fingerprint for scanned entries.
@@ -1207,8 +1221,9 @@ def list_dashboard_grouped_page(
 
         if like:
             grouped_sql += (
-                " AND (LOWER(c.subject) LIKE ? OR LOWER(c.issuer) LIKE ?"
-                " OR LOWER(c.hostname || ':' || c.port) LIKE ?)"
+                " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
+                " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
+                " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
             )
             params.extend([like, like, like])
 
@@ -1498,47 +1513,71 @@ def _build_unified_from_dash(
     return entries
 
 
-def _list_unified_entries_raw(db_path: str | Path) -> list[dict]:
-    init_schema(db_path)
-    with _connect(db_path) as conn:
-        cert_rows = conn.execute(
-            "SELECT * FROM certificates ORDER BY created_at"
-        ).fetchall()
-        anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
-        host_rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
-        # Only fetch the latest scan per host directly in SQL (BC-028)
-        scan_rows = conn.execute(
-            """
-            SELECT hostname, port, status, scanned_at, error_message
-            FROM scan_history sh1
-            WHERE scanned_at = (
-                SELECT MAX(scanned_at)
-                FROM scan_history sh2
-                WHERE sh2.hostname = sh1.hostname AND sh2.port = sh1.port
-            )
-            """
-        ).fetchall()
 
-    dash = _build_dashboard_rows(cert_rows, anchor_rows)
-    return _build_unified_from_dash(dash, host_rows, scan_rows)
+def _build_host_filter(
+    col: str,
+    values: list[str] | tuple[str, ...],
+    *,
+    include_null: bool = False,
+) -> tuple[str, tuple]:
+    """Build a parameterised SQL WHERE clause for host filtering.
+
+    *col* must be a bare column name (e.g. ``"owner_name"``) validated
+    against a whitelist — never derived from user input.  The returned
+    fragment is safe to interpolate into SQL via f-string because only the
+    whitelisted column name and ``?`` placeholders are inserted.
+
+    Returns ``(clause, params)`` ready for ``conn.execute(sql, params)``.
+    """
+    _ALLOWED = {"owner_name", "renewal_method"}
+    if col not in _ALLOWED:
+        raise ValueError(f"disallowed filter column: {col}")
+    prefixed = f"h.{col}"
+    if not values:
+        if include_null:
+            return f"{prefixed} IS NULL", ()
+        return "1=0", ()
+    if len(values) == 1:
+        eq = f"{prefixed} = ?"
+        if include_null:
+            return f"COALESCE({prefixed}, '') = ? OR {prefixed} IS NULL", (values[0],)
+        return eq, (values[0],)
+    ph = ",".join("?" * len(values))
+    clause = f"{prefixed} IN ({ph})"
+    if include_null:
+        clause = f"COALESCE({prefixed}, '') IN ({ph}) OR {prefixed} IS NULL"
+    return clause, tuple(values)
 
 
 def _load_unified_filtered(
     db_path: str | Path,
     *,
-    host_where: str | None = None,
-    host_params: tuple = (),
+    filter_col: str | None = None,
+    filter_values: list[str] | tuple[str, ...] | None = None,
+    filter_include_null: bool = False,
+    include_uploaded: bool = False,
 ) -> list[dict]:
     """Load unified entries for scanned/pending hosts, optionally filtered.
 
     Uses SQL-level filtering via an EXISTS subquery on the *hosts* table so
-    only matching rows are materialised.  Uploaded certificates are excluded.
+    only matching rows are materialised.
 
-    SECURITY: ``host_where`` is interpolated into SQL via f-string.  It MUST
-    be a hardcoded string from internal call sites only — never derived from
-    user input.  The callers in ``get_pivot_group_entries()`` construct it
-    from whitelisted column names.
+    Filtering is column-based: *filter_col* is validated against a whitelist,
+    and *filter_values* are passed as parameterised ``?`` placeholders — no
+    user input reaches the SQL text.
+
+    When *include_uploaded* is True (and no *filter_col* is set), uploaded
+    certificates (those without a matching host) are included in the result.
+    This is the mode used by :func:`list_unified_entries`.  When False (the
+    default), only certificates linked to a host row are returned.
     """
+    if filter_col and filter_values is not None:
+        host_where, host_params = _build_host_filter(
+            filter_col, filter_values, include_null=filter_include_null,
+        )
+    else:
+        host_where, host_params = None, ()
+
     init_schema(db_path)
     with _connect(db_path) as conn:
         if host_where:
@@ -1554,6 +1593,8 @@ def _load_unified_filtered(
                 f"EXISTS (SELECT 1 FROM hosts h WHERE h.hostname = c.hostname "
                 f"AND h.port = c.port AND {host_where})"
             )
+        elif include_uploaded:
+            exists_clause = "1=1"
         else:
             exists_clause = "c.hostname IS NOT NULL"
 
@@ -1596,7 +1637,7 @@ def _load_unified_filtered(
         ).fetchall()
 
     dash = _build_dashboard_rows(list(cert_rows) + list(chain_rows), anchor_rows)
-    return _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
+    return _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=include_uploaded)
 
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
@@ -1750,27 +1791,29 @@ def get_pivot_group_entries(
         entries = _load_unified_filtered(db_path)
     elif pivot == "owner":
         if group_key == "Unassigned":
-            host_where = "COALESCE(h.owner_name, '') = ? OR h.owner_name IS NULL"
-            host_params = ("",)
+            entries = _load_unified_filtered(
+                db_path, filter_col="owner_name", filter_values=[""], filter_include_null=True,
+            )
         else:
-            host_where = "h.owner_name = ?"
-            host_params = (group_key,)
-        entries = _load_unified_filtered(db_path, host_where=host_where, host_params=host_params)
+            entries = _load_unified_filtered(
+                db_path, filter_col="owner_name", filter_values=[group_key],
+            )
     elif pivot == "renewal_method":
         if group_key == "Unknown":
-            host_where = "COALESCE(h.renewal_method, '') = ? OR h.renewal_method IS NULL"
-            host_params = ("",)
+            entries = _load_unified_filtered(
+                db_path, filter_col="renewal_method", filter_values=[""], filter_include_null=True,
+            )
         else:
             # Reverse-label lookup: accept any raw value that maps to the friendly label
             raw_methods = [k for k, v in _METHOD_LABELS.items() if v == group_key]
             if raw_methods:
-                ph = ",".join("?" * len(raw_methods))
-                host_where = f"h.renewal_method IN ({ph})"
-                host_params = tuple(raw_methods)
+                entries = _load_unified_filtered(
+                    db_path, filter_col="renewal_method", filter_values=raw_methods,
+                )
             else:
-                host_where = "h.renewal_method = ?"
-                host_params = (group_key,)
-        entries = _load_unified_filtered(db_path, host_where=host_where, host_params=host_params)
+                entries = _load_unified_filtered(
+                    db_path, filter_col="renewal_method", filter_values=[group_key],
+                )
     else:
         entries = _load_unified_filtered(db_path)
 
