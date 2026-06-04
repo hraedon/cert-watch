@@ -122,22 +122,35 @@ Set-ItemProperty IIS:\AppPools\$pool -Name startMode -Value "AlwaysRunning"
 Set-ItemProperty IIS:\AppPools\$pool -Name recycling.periodicRestart.time -Value "00:00:00"
 ```
 
-### 2a.5 — Grant the app-pool identity access to data and secrets
+### 2a.5 — Grant the app-pool identity access to data, secrets, and Python
 
 Now that the app pool exists, re-run the install script with `-AppPool` to set
-the ACLs (or set them manually):
+the ACLs on the data dir and secrets (or set them manually). You also need to
+grant access to the Python installation itself — the venv's `python.exe` is a
+symlink to the real interpreter, which lives in the user profile by default.
 
 ```powershell
 # Option A: re-run the install script (idempotent — keeps existing secrets)
 powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -AppPool cert-watch
 
 # Option B: set ACLs manually
-$dataDir = "C:\ProgramData\cert-watch"
-$secrets = "$dataDir\secrets"
+$dataDir  = "C:\ProgramData\cert-watch"
+$secrets  = "$dataDir\secrets"
 $identity = "IIS AppPool\cert-watch"
 icacls $dataDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
 icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
+
+# Both A and B: grant access to the Python installation the venv points to.
+# Find the real path from the venv's python.exe:
+$pyReal = (Get-Item "C:\ProgramData\cert-watch\venv\Scripts\python.exe").Target
+if (-not $pyReal) { $pyReal = "C:\ProgramData\cert-watch\venv\Scripts\python.exe" }
+$pyDir = Split-Path $pyReal
+icacls $pyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
 ```
+
+Without the Python-directory ACL, the HttpPlatformHandler logs
+`did not find executable at '...python.exe': Access is denied` and IIS hangs
+on every request.
 
 ### 2a.6 — Browse
 
