@@ -149,6 +149,11 @@ Windows service. Bootstrap with:
 .\scripts\install-windows.ps1   # venv + data dir + persistent signing keys
 ```
 
+> **Execution policy:** The script is unsigned. If your execution policy blocks it,
+> either bypass it per-invocation
+> (`powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1`)
+> or sign the script with your organisation's code-signing certificate after review.
+
 Then configure the IIS site — see [`deploy/iis/README.md`](deploy/iis/README.md).
 Set `CERT_WATCH_TRUST_PROXY=1` so the client IP (for rate limiting and the audit
 log) is read from IIS's forwarded headers rather than the loopback connection.

@@ -34,7 +34,8 @@ third-party service wrapper and IIS manages the process lifecycle for you.
 From an **elevated** PowerShell, in the repo root:
 
 ```powershell
-.\scripts\install-windows.ps1
+# The script is unsigned; bypass the execution policy for this invocation:
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
 ```
 
 This creates `C:\ProgramData\cert-watch` (data dir), a virtualenv at
