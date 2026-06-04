@@ -12,7 +12,9 @@ jobs:
       - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.13"
-      - run: uv pip install -e ".[dev]"
+      # Include the auth extras so the LDAP/OAuth providers are exercised (and
+      # counted toward coverage) in CI, not just skipped for want of authlib/ldap3.
+      - run: uv pip install -e ".[dev,auth]"
       - name: pip-audit
         run: |
           # Audit the third-party dependency closure. Snapshot it before
