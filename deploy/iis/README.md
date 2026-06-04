@@ -25,7 +25,18 @@ third-party service wrapper and IIS manages the process lifecycle for you.
    - Reverse proxy: install **URL Rewrite** and **Application Request Routing
      (ARR)**, then enable proxying (IIS Manager → server node → *Application
      Request Routing Cache* → *Server Proxy Settings* → check *Enable proxy*).
-3. A **TLS certificate** bound to the IIS site (your internal CA or public).
+3. **Unlock the `handlers` config section.** IIS locks `<system.webServer/handlers>`
+   by default on some configurations, which blocks the site's `web.config` from
+   registering the HttpPlatformHandler module. Unlock it once at the server level:
+
+   ```powershell
+   & "$env:windir\system32\inetsrv\appcmd.exe" unlock config -section:system.webServer/handlers
+   ```
+
+   Without this, IIS returns error 0x80070021 ("section is locked at a parent
+   level"). The reverse-proxy model needs `system.webServer/rewrite/rules`
+   unlocked the same way if it's locked.
+4. A **TLS certificate** bound to the IIS site (your internal CA or public).
 
 ---
 
