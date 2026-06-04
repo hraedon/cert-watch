@@ -134,6 +134,10 @@ def _extract_client_ip(request: Request) -> str:
             return parts[-1] if parts else (request.client.host if request.client else "unknown")
     real_ip = request.headers.get("x-real-ip", "")
     if real_ip:
+        logger.warning(
+            "TRUST_PROXY=1: using X-Real-IP (%s) — ensure your reverse proxy "
+            "strips or overwrites this header from clients", real_ip,
+        )
         return real_ip
     return request.client.host if request.client else "unknown"
 
@@ -350,7 +354,7 @@ def is_public_path(path: str) -> bool:
         return True
     if path.startswith("/static/"):
         return True
-    return path.startswith("/metrics")
+    return path == "/metrics" or path.startswith("/metrics/")
 
 
 def check_metrics_token(request: Request) -> bool:

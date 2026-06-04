@@ -2442,27 +2442,21 @@ def bump_session_version(db_path: str | Path, username: str) -> int:
 
     Creates the row (starting at version 1) if it doesn't exist. Returns the
     new version, so callers can use it directly.
+
+    Uses INSERT … ON CONFLICT … DO UPDATE … RETURNING (SQLite 3.35+) to
+    eliminate the TOCTOU window between UPDATE and SELECT.
     """
     init_schema(db_path)
     now = _iso(datetime.now(UTC))
     with _connect(db_path) as conn:
-        # Try to increment first
-        cur = conn.execute(
-            "UPDATE session_versions SET version = version + 1, updated_at = ?"
-            " WHERE username = ?",
-            (now, username),
-        )
-        if cur.rowcount == 0:
-            conn.execute(
-                "INSERT INTO session_versions (username, version, updated_at)"
-                " VALUES (?, 1, ?)",
-                (username, now),
-            )
-            version = 1
-        else:
-            row = conn.execute(
-                "SELECT version FROM session_versions WHERE username = ?", (username,)
-            ).fetchone()
-            version = row["version"]
+        row = conn.execute(
+            "INSERT INTO session_versions (username, version, updated_at)"
+            " VALUES (?, 1, ?)"
+            " ON CONFLICT(username) DO UPDATE SET"
+            " version = version + 1, updated_at = excluded.updated_at"
+            " RETURNING version",
+            (username, now),
+        ).fetchone()
+        version = row["version"] if row else 1
         conn.commit()
     return version

@@ -39,6 +39,11 @@ class AuthProvider(ABC):
     def supports_form_login(self) -> bool:
         """Whether this provider supports username/password form login."""
 
+    @property
+    def is_break_glass_enabled(self) -> bool:
+        """Whether a local break-glass admin is configured."""
+        return False
+
 
 class NoAuthProvider(AuthProvider):
     """Default: no authentication required. All requests pass through."""

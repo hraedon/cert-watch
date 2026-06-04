@@ -25,6 +25,8 @@ def record_audit(
 ) -> None:
     """Insert one audit row. Best-effort; logs WARNING on failure but never raises."""
     try:
+        actor = actor[:256] if actor else actor
+        target_id = target_id[:256] if target_id else target_id
         row_id = uuid.uuid4().hex
         ts = datetime.now(UTC).isoformat()
         detail_json = json.dumps(detail, default=str) if detail else None
