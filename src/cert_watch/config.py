@@ -432,7 +432,8 @@ class Settings:
 
         def _decrypt(key: str, val: str) -> str:
             if encryption_key and key in _SENSITIVE:
-                return fernet_decrypt(val, encryption_key)
+                result = fernet_decrypt(val, encryption_key)
+                return result if result is not None else ""
             return val
 
         def _kv(env_val: str, kv_key: str, default: str = "") -> str:

@@ -96,86 +96,75 @@ def test_start_scheduler_idempotent():
     stop_scheduler()
 
 
-def test_scheduler_handles_scan_fn_exception():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
+# The exception tests below drive the cycle directly via `_run_cycle` rather than
+# starting the thread at hour=23:59 (where the timer never fires in-test). What the
+# scheduler promises is *failure isolation*: one stage raising must not stop the
+# others or escape the cycle. We assert that by tracking which stages ran.
 
-    stop_scheduler()
-    start_scheduler(
-        lambda: (_ for _ in ()).throw(RuntimeError("scan failed")), lambda: {}, hour=23, minute=59
+
+def _boom(msg):
+    def _f():
+        raise RuntimeError(msg)
+
+    return _f
+
+
+def test_scheduler_scan_fn_exception_does_not_block_alerts():
+    from cert_watch.scheduler import _run_cycle
+
+    ran = []
+    # scan_fn raises; alert_fn must still run and the cycle must not propagate.
+    _run_cycle(_boom("scan failed"), lambda: ran.append("alert") or {})
+    assert ran == ["alert"]
+
+
+def test_scheduler_alert_fn_exception_is_swallowed():
+    from cert_watch.scheduler import _run_cycle
+
+    ran = []
+    # alert_fn raises after scan ran; the cycle must complete without raising.
+    _run_cycle(lambda: ran.append("scan") or {}, _boom("alert failed"))
+    assert ran == ["scan"]
+
+
+def test_scheduler_runs_all_stages_in_order():
+    from cert_watch.scheduler import _run_cycle
+
+    ran = []
+    _run_cycle(
+        lambda: ran.append("scan") or {},
+        lambda: ran.append("alert") or {},
+        ct_fn=lambda: ran.append("ct") or {},
+        maintenance_fn=lambda: ran.append("maint"),
     )
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
+    assert ran == ["scan", "ct", "alert", "maint"]
 
 
-def test_scheduler_handles_alert_fn_exception():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
+def test_scheduler_ct_fn_exception_does_not_block_alerts():
+    from cert_watch.scheduler import _run_cycle
 
-    stop_scheduler()
-    start_scheduler(
-        lambda: {}, lambda: (_ for _ in ()).throw(RuntimeError("alert failed")), hour=23, minute=59
+    ran = []
+    # ct_fn raises between scan and alert; alert + maintenance must still run.
+    _run_cycle(
+        lambda: ran.append("scan") or {},
+        lambda: ran.append("alert") or {},
+        ct_fn=_boom("ct failed"),
+        maintenance_fn=lambda: ran.append("maint"),
     )
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
+    assert ran == ["scan", "alert", "maint"]
 
 
-def test_scheduler_with_ct_fn():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
+def test_scheduler_maintenance_fn_exception_is_swallowed():
+    from cert_watch.scheduler import _run_cycle
 
-    stop_scheduler()
-    start_scheduler(lambda: {}, lambda: {}, ct_fn=lambda: {}, hour=23, minute=59)
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
-
-
-def test_scheduler_ct_fn_exception():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
-
-    stop_scheduler()
-    start_scheduler(
-        lambda: {},
-        lambda: {},
-        ct_fn=lambda: (_ for _ in ()).throw(RuntimeError("ct failed")),
-        hour=23,
-        minute=59,
+    ran = []
+    # maintenance_fn is the last stage; its failure must not escape the cycle.
+    _run_cycle(
+        lambda: ran.append("scan") or {},
+        lambda: ran.append("alert") or {},
+        maintenance_fn=_boom("maint failed"),
     )
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
-
-
-def test_scheduler_with_maintenance_fn():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
-
-    stop_scheduler()
-    start_scheduler(lambda: {}, lambda: {}, maintenance_fn=lambda: None, hour=23, minute=59)
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
-
-
-def test_scheduler_maintenance_fn_exception():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
-
-    stop_scheduler()
-    start_scheduler(
-        lambda: {},
-        lambda: {},
-        maintenance_fn=lambda: (_ for _ in ()).throw(RuntimeError("maint failed")),
-        hour=23,
-        minute=59,
-    )
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
+    assert ran == ["scan", "alert"]
 
 
 def test_stop_scheduler_when_not_started():

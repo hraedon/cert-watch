@@ -21,6 +21,9 @@ from cert_watch.migrations.m0011_session_versions import (
 from cert_watch.migrations.m0012_scan_degraded import (
     upgrade as scan_degraded_upgrade,
 )
+from cert_watch.migrations.m0013_verify_requested import (
+    upgrade as verify_requested_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -45,4 +48,8 @@ runner.register(
 runner.register(
     "0012", "add chain_incomplete column to scan_posture (BC-108)",
     scan_degraded_upgrade,
+)
+runner.register(
+    "0013", "rename tls_verified to verify_requested in scan_posture (BC-125)",
+    verify_requested_upgrade,
 )

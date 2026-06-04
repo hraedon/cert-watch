@@ -2,6 +2,25 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.5.2] — 2026-06-04
+
+Maintenance release: no user-facing behaviour change. Hardens the test suite and
+speeds up CI.
+
+### Changed
+- **Test suite ~3× faster** (≈273s → ≈95s): parallel by default via pytest-xdist
+  (`-n auto --dist loadscope`), `COVERAGE_CORE=sysmon` in CI, retry-backoff sleeps
+  neutralized in unit tests, and the CT-reconciliation test mocked at the network
+  boundary (was a real crt.sh call). E2E runs serial (`-n0`).
+- **Test quality**: ~13 "test theater" cases that passed even with the feature
+  broken now assert real behaviour. Coverage 88.9% → 90.1% (`certificates.py`
+  70→85%, `routes/settings.py` 75→85%, `scheduler.py` 81→97%), with new
+  SMTP-send / LDAP-connect tests.
+- **Internal**: `scheduler` per-day work extracted to a module-level `_run_cycle`
+  so its failure-isolation contract is unit-testable (no behaviour change).
+- Docs: backlog now generated from the agent-notes DB (`OPEN_BREADCRUMBS.txt`)
+  rather than hand-maintained.
+
 ## [0.5.0] — 2026-06-03
 
 Hardens the integration edges (LDAP, outbound HTTP) and leans into the

@@ -52,6 +52,9 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
     Returns True if HSTS header found, False if not found, None on error.
     When pinned_ip is provided, connects to that IP with SNI=hostname
     (prevents DNS rebinding).
+
+    Precondition: *pinned_ip* must already be validated against
+    :func:`_is_blocked_ip` by the caller (typically :func:`_resolve_host`).
     """
     if port != 443:
         return None
@@ -143,7 +146,7 @@ class ScannedEntry:
     scanned_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     protocol_version: str = ""
     hsts: bool | None = None
-    tls_verified: bool | None = None
+    verify_requested: bool | None = None
     chain_incomplete: bool = False
 
 
@@ -337,6 +340,8 @@ def _scan_via_openssl(
             )
             host = sockaddr[0]
     except OSError:
+        return [], ""
+    if hostname.startswith("-"):
         return [], ""
     try:
         proc = subprocess.run(
@@ -541,7 +546,7 @@ def _scan_host_once(
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version,
         hsts=hsts,
-        tls_verified=verify,
+        verify_requested=verify,
     )
 
 
@@ -585,7 +590,7 @@ def _scan_host_via_openssl(
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
                 hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
-                tls_verified=False,
+                verify_requested=False,
             )
 
     # Fallback: try Python TLS connection for leaf-only scan
@@ -633,7 +638,7 @@ def _scan_host_via_openssl(
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
         hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
-        tls_verified=False,
+        verify_requested=False,
         chain_incomplete=True,
     )
 
@@ -818,7 +823,7 @@ def _evaluate_and_store_posture(
         ocsp_stapling=result.ocsp_stapling,
         hsts=result.hsts,
         must_staple=result.must_staple,
-        tls_verified=entry.tls_verified,
+        verify_requested=entry.verify_requested,
         chain_incomplete=entry.chain_incomplete,
     )
     return result.grade
