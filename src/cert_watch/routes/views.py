@@ -156,7 +156,7 @@ def api_health(request: Request) -> JSONResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     checks["auth_provider"] = auth.provider_name if auth else "none"
     checks["break_glass_enabled"] = (
-        hasattr(auth, "local_admin_user") and bool(auth.local_admin_user)
+        getattr(auth, "is_break_glass_enabled", False)
     ) if auth else False
 
     # Overall color

@@ -133,6 +133,10 @@ class LocalAdminProvider(AuthProvider):
     def supports_form_login(self) -> bool:
         return True
 
+    @property
+    def is_break_glass_enabled(self) -> bool:
+        return True
+
 
 class _CompositeProvider(AuthProvider):
     def __init__(self, local: LocalAdminProvider, primary: AuthProvider) -> None:
@@ -146,6 +150,12 @@ class _CompositeProvider(AuthProvider):
         # Always attempt the primary provider — skipping it when local fails
         # would leak timing: fast return = local username mismatch (dummy only),
         # slow return = local matched + password wrong + primary tried.
+        #
+        # Note: this means every wrong-username attempt produces a real
+        # primary-provider round-trip (e.g. LDAP search+bind ~50-500ms) that
+        # lands in the primary's access log. The local timing oracle is closed;
+        # the remote one (LDAP log shows each attempted username) is inherent
+        # to any composite-provider design that tries primary as a fallback.
         primary_result = self._primary.authenticate(username, password)
         return primary_result if primary_result.success else result
 
@@ -161,4 +171,8 @@ class _CompositeProvider(AuthProvider):
 
     @property
     def supports_form_login(self) -> bool:
+        return True
+
+    @property
+    def is_break_glass_enabled(self) -> bool:
         return True

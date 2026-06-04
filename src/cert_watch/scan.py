@@ -52,6 +52,9 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
     Returns True if HSTS header found, False if not found, None on error.
     When pinned_ip is provided, connects to that IP with SNI=hostname
     (prevents DNS rebinding).
+
+    Precondition: *pinned_ip* must already be validated against
+    :func:`_is_blocked_ip` by the caller (typically :func:`_resolve_host`).
     """
     if port != 443:
         return None
