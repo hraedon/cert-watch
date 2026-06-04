@@ -156,6 +156,28 @@ def test_eventlog_reports_event_when_available(monkeypatch):
     assert "login" in calls[0][3][0]
 
 
+def test_record_audit_fans_out_to_siem(monkeypatch, tmp_path):
+    # record_audit should write the row AND export to the configured sink,
+    # fail-open. Exercises the audit -> SIEM hook + instance stamping.
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_PORT", "9999")  # nothing listening
+    from cert_watch import siem
+    from cert_watch.audit import list_audit, record_audit
+    from cert_watch.database import init_schema
+
+    siem.reset_exporter()
+    assert siem.siem_enabled() is True
+
+    db = str(tmp_path / "audit.sqlite3")
+    init_schema(db)
+    record_audit(
+        db, actor="admin", action="host.delete",
+        target_type="host", target_id="h1",
+    )
+    rows = list_audit(db)
+    assert any(r["action"] == "host.delete" for r in rows)  # row persisted
+
+
 def test_hec_failure_is_swallowed(monkeypatch):
     monkeypatch.setenv("CERT_WATCH_HEC_URL", "https://hec.example:8088/services/collector")
     monkeypatch.setenv("CERT_WATCH_HEC_TOKEN", "tok123")
