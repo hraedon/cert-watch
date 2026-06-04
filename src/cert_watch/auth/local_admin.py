@@ -143,7 +143,11 @@ class _CompositeProvider(AuthProvider):
         result = self._local.authenticate(username, password)
         if result.success:
             return result
-        return self._primary.authenticate(username, password)
+        # Always attempt the primary provider — skipping it when local fails
+        # would leak timing: fast return = local username mismatch (dummy only),
+        # slow return = local matched + password wrong + primary tried.
+        primary_result = self._primary.authenticate(username, password)
+        return primary_result if primary_result.success else result
 
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:
         return self._primary.start_oauth_flow(redirect_uri)

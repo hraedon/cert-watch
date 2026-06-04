@@ -338,6 +338,8 @@ def _scan_via_openssl(
             host = sockaddr[0]
     except OSError:
         return [], ""
+    if hostname.startswith("-"):
+        return [], ""
     try:
         proc = subprocess.run(
             [
