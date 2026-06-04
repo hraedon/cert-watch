@@ -120,6 +120,43 @@ _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
 
 
+def _run_cycle(
+    scan_fn: Callable[[], dict],
+    alert_fn: Callable[[], dict],
+    *,
+    ct_fn: Callable[[], dict] | None = None,
+    maintenance_fn: Callable[[], None] | None = None,
+) -> None:
+    """Run one scan → CT → alert → maintenance cycle.
+
+    Each stage is isolated: a failure in any one is logged and swallowed so the
+    remaining stages still run and the scheduler thread survives to the next day.
+    Module-level (not a closure) so the failure-isolation behaviour is directly
+    testable without waiting for the daily timer to fire.
+    """
+    try:
+        scan_fn()
+        logger.info("scheduled scan completed")
+    except Exception:  # noqa: BLE001
+        logger.exception("scheduler scan_fn failed")
+    if ct_fn is not None:
+        try:
+            ct_fn()
+            logger.info("scheduled CT check completed")
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler ct_fn failed")
+    try:
+        alert_fn()
+        logger.info("scheduled alerts completed")
+    except Exception:  # noqa: BLE001
+        logger.exception("scheduler alert_fn failed")
+    if maintenance_fn is not None:
+        try:
+            maintenance_fn()
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler maintenance_fn failed")
+
+
 def start_scheduler(
     scan_fn: Callable[[], dict],
     alert_fn: Callable[[], dict],
@@ -144,29 +181,6 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
-        def _run_cycle() -> None:
-            try:
-                scan_fn()
-                logger.info("scheduled scan completed")
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduler scan_fn failed")
-            if ct_fn is not None:
-                try:
-                    ct_fn()
-                    logger.info("scheduled CT check completed")
-                except Exception:  # noqa: BLE001
-                    logger.exception("scheduler ct_fn failed")
-            try:
-                alert_fn()
-                logger.info("scheduled alerts completed")
-            except Exception:  # noqa: BLE001
-                logger.exception("scheduler alert_fn failed")
-            if maintenance_fn is not None:
-                try:
-                    maintenance_fn()
-                except Exception:  # noqa: BLE001
-                    logger.exception("scheduler maintenance_fn failed")
-
         def _loop() -> None:
             while not _scheduler_stop.is_set():
                 wait = _seconds_until(hour, minute)
@@ -178,7 +192,9 @@ def start_scheduler(
                 else:
                     if _scheduler_stop.wait(timeout=wait):
                         return
-                _run_cycle()
+                _run_cycle(
+                    scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn
+                )
 
         _scheduler_stop.clear()
         _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")

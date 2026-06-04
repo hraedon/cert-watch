@@ -200,14 +200,32 @@ def test_chain_status_incomplete(chain_triplet):
     assert cs in ("incomplete", "self-signed", "unknown")
 
 
-def test_validate_is_ca_certificate_valid(chain_triplet):
+def test_validate_is_ca_certificate_valid():
+    """A cert with BasicConstraints(ca=True) passes the trust-anchor check."""
+    from datetime import UTC, datetime, timedelta
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import NameOID
+
     from cert_watch.cert_chain import validate_is_ca_certificate
 
-    # Root cert should be a valid CA
-    err = validate_is_ca_certificate(chain_triplet["root"].der)
-    # The root may or may not have BasicConstraints depending on how it was generated
-    # Just test it doesn't crash
-    assert err is None or err is not None
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Real Root CA")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    assert validate_is_ca_certificate(cert.public_bytes(Encoding.DER)) is None
 
 
 def test_validate_is_ca_certificate_not_ca(self_signed_leaf):

@@ -255,14 +255,12 @@ def test_upload_p7c(tmp_path, monkeypatch, p7c_pem_file):
 # ---------- routes/settings.py additional paths ----------
 
 
-def test_settings_change_password_env_hash_override(monkeypatch, tmp_path):
-    """When CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH is set, UI rotation is blocked."""
-    import os
-
-    monkeypatch.setenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", "$scrypt$env-hash")
-    # Directly call the logic that checks env hash
-    env_hash = os.environ.get("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", "").strip()
-    assert env_hash  # env var is set
+# The env-hash-override path (CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH blocking in-UI
+# rotation) is exercised end-to-end through the route in
+# test_settings.py::test_settings_env_hash_override_shows_warning, which asserts the
+# redirect carries the override notice. A duplicate tautological stub that only
+# re-read the env var it had just set lived here and was removed in the 2026-06-04
+# test-quality pass.
 
 
 def test_settings_save_auth(reload_app, tmp_path):
