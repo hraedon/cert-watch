@@ -15,12 +15,12 @@ def test_query_ct_log_success():
             "serial_number": "abc123",
         },
     ]
-    with patch("cert_watch.ct_lookup.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.ct_lookup.ssrf_safe_urlopen") as mock_open:
         mock_resp = MagicMock()
         mock_resp.read.return_value = __import__("json").dumps(fake_json).encode()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
+        mock_open.return_value = mock_resp
         result = query_ct_log("example.com")
     assert isinstance(result, list)
     assert len(result) == 1
@@ -40,12 +40,12 @@ def test_query_ct_log_expired_filtered():
             "serial_number": "xyz",
         },
     ]
-    with patch("cert_watch.ct_lookup.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.ct_lookup.ssrf_safe_urlopen") as mock_open:
         mock_resp = MagicMock()
         mock_resp.read.return_value = __import__("json").dumps(fake_json).encode()
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
+        mock_open.return_value = mock_resp
         result = query_ct_log("old.example.com")
     assert isinstance(result, list)
     assert len(result) == 0
@@ -53,7 +53,7 @@ def test_query_ct_log_expired_filtered():
 
 def test_query_ct_log_network_error():
     with patch(
-        "cert_watch.ct_lookup.urllib.request.urlopen",
+        "cert_watch.ct_lookup.ssrf_safe_urlopen",
         side_effect=Exception("timeout"),
     ):
         result = query_ct_log("down.example.com")
@@ -62,12 +62,12 @@ def test_query_ct_log_network_error():
 
 
 def test_query_ct_log_invalid_json():
-    with patch("cert_watch.ct_lookup.urllib.request.urlopen") as mock_urlopen:
+    with patch("cert_watch.ct_lookup.ssrf_safe_urlopen") as mock_open:
         mock_resp = MagicMock()
         mock_resp.read.return_value = b"not json"
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
+        mock_open.return_value = mock_resp
         result = query_ct_log("bad.example.com")
     assert isinstance(result, str)
     assert "invalid JSON" in result

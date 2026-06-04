@@ -152,7 +152,7 @@ def _effective_config(
         elif kv_key in kv and kv[kv_key]:
             val = kv[kv_key]
             if encryption_key and kv_key in _SENSITIVE_KEYS:
-                val = fernet_decrypt(val, encryption_key)
+                val = fernet_decrypt(val, encryption_key) or ""
             result[kv_key] = val
         else:
             result[kv_key] = ""
