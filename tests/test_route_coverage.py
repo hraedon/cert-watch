@@ -323,13 +323,19 @@ def test_alerts_view_pagination(tmp_path, reload_app):
 def test_scan_history_pagination(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
     from cert_watch.database import init_schema
     from cert_watch.scheduler import ScanHistory, record_scan_history
 
     init_schema(db)
-    for i in range(60):
+    base = datetime.now(UTC)
+    for i in range(90):
+        # Create records in 6-minute-separated batches so batch pagination
+        # produces multiple pages.
+        ts = base - timedelta(minutes=(i // 3) * 6)
         record_scan_history(
-            db, ScanHistory(hostname=f"h{i}.example.com", port=443, status="success")
+            db, ScanHistory(hostname=f"h{i}.example.com", port=443, status="success", scanned_at=ts)
         )
     with TestClient(app_mod.app) as client:
         r = client.get("/scan-history?page=2")
@@ -883,6 +889,142 @@ def test_update_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
         )
     assert r.status_code == 303
     assert "too+long" in r.headers["location"] or "too%20long" in r.headers["location"]
+
+
+# ---------- certificate owner ----------
+
+
+def test_update_owner_via_certificate(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    cert = Certificate(
+        subject="owner.example.com",
+        issuer="Test CA",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=datetime.now(UTC) + timedelta(days=90),
+        fingerprint_sha256="e" * 64,
+    )
+    replace_scanned(db, "owner.example.com", 443, cert, [], True)
+    host_repo = SqliteHostRepository(db)
+    host_repo.add("owner.example.com", 443)
+    cert_id = _stored_cert_id(db, "owner.example.com")
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            f"/certificates/{cert_id}/owner",
+            data={
+                "owner_name": "Alice",
+                "owner_email": "alice@example.com",
+                "owner_slack": "#ops",
+                "renewal_method": "acme",
+                "runbook_url": "https://wiki.example.com/renewal",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert f"/certificates/{cert_id}" in r.headers["location"]
+    # Verify the update persisted
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert "Alice" in r.text
+    assert "alice@example.com" in r.text
+    assert "#ops" in r.text
+    assert "ACME" in r.text
+    assert "https://wiki.example.com/renewal" in r.text
+
+
+def test_update_owner_via_certificate_not_found(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/certificates/nonexistent/owner",
+            data={"owner_name": "Alice"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
+
+
+def test_update_owner_via_certificate_no_host(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            f"/certificates/{cert_id}/owner",
+            data={"owner_name": "Alice"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "no+host" in loc or "no%20host" in loc or "associated" in loc
+
+
+def test_update_owner_via_certificate_invalid_email(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    cert = Certificate(
+        subject="badmail.example.com",
+        issuer="Test CA",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=datetime.now(UTC) + timedelta(days=90),
+        fingerprint_sha256="f" * 64,
+    )
+    replace_scanned(db, "badmail.example.com", 443, cert, [], True)
+    host_repo = SqliteHostRepository(db)
+    host_repo.add("badmail.example.com", 443)
+    cert_id = _stored_cert_id(db, "badmail.example.com")
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            f"/certificates/{cert_id}/owner",
+            data={"owner_email": "not-an-email"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "invalid+email" in r.headers["location"] or "invalid%20email" in r.headers["location"]
+
+
+def test_update_owner_via_certificate_invalid_method(tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    cert = Certificate(
+        subject="badmethod.example.com",
+        issuer="Test CA",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=datetime.now(UTC) + timedelta(days=90),
+        fingerprint_sha256="g" * 64,
+    )
+    replace_scanned(db, "badmethod.example.com", 443, cert, [], True)
+    host_repo = SqliteHostRepository(db)
+    host_repo.add("badmethod.example.com", 443)
+    cert_id = _stored_cert_id(db, "badmethod.example.com")
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            f"/certificates/{cert_id}/owner",
+            data={"renewal_method": "invalid"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "invalid+renewal" in loc or "invalid%20renewal" in loc
 
 
 # ---------- upload ----------

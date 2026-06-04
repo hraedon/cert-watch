@@ -2,4 +2,4 @@
 # The Dockerfile overwrites this file at build time from GIT_TAG and GIT_COMMIT.
 # When running from source without a Docker build, this value may drift from the
 # actual git tag. For release builds, the image build process is the source of truth.
-0.5.1
+0.5.2

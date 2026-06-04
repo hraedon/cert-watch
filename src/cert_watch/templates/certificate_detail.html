@@ -67,49 +67,97 @@
       {# Operational Summary #}
       {% if host_info %}
       <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
-        <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Operational summary</div>
-        <div class="cw-grid-2-16-22">
-          <div>
-            <div class="cw-detail-label">Owner</div>
-            <div class="mono cw-fz-12-5 cw-text-text">{{ host_info.owner_name or '—' }}</div>
-          </div>
-          <div>
-            <div class="cw-detail-label">Renewal</div>
-            <div class="mono cw-fz-12-5 cw-text-text">
-              {{ renewal_method_label }}
-              {% if renewal_method_indicator %}
-                <span class="cw-chip cw-chip-{{ 'renewed' if renewal_method_indicator == 'auto-renews' else 'incomplete' }}">{{ renewal_method_indicator }}</span>
-              {% endif %}
-            </div>
-          </div>
-          {% if host_info.runbook_url %}
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">Runbook</div>
-            <div class="mono cw-fz-12-5">
-              <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
-            </div>
-          </div>
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-14">
+          <span class="cw-fz-13-5 cw-fw-600">Operational summary</span>
+          <div class="cw-spacer"></div>
+          {% if may_write and host_id %}
+          <button class="cw-btn ghost sm" type="button" data-action="toggle-owner">
+            {{ icons.svg_icon('key', 13) }}<span id="owner-btn-label">Edit</span>
+          </button>
           {% endif %}
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">Chain status</div>
-            <div class="mono cw-fz-12-5 cw-text-text">
-              {% if chain_status == 'public' or chain_status == 'private' %}
-                <span class="cw-chip cw-chip-public">Verified to trusted root</span>
-              {% elif chain_status == 'incomplete' %}
-                <span class="cw-chip cw-chip-incomplete">⚠ Incomplete — server missing intermediate(s)</span>
-              {% elif chain_status == 'self-signed' %}
-                <span class="cw-chip">Self-signed</span>
-              {% elif chain_status == 'invalid' %}
-                <span class="cw-chip cw-chip-incomplete">✗ Chain validation failed</span>
-              {% else %}
-                <span class="cw-chip cw-chip-muted">Unknown</span>
-              {% endif %}
-              {% if posture and posture.get('chain_incomplete') %}
-                <span class="cw-chip tone-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
-              {% endif %}
+        </div>
+        <div id="owner-view">
+          <div class="cw-grid-2-16-22">
+            <div>
+              <div class="cw-detail-label">Owner</div>
+              <div class="mono cw-fz-12-5 cw-text-text">{{ host_info.owner_name or '—' }}</div>
+            </div>
+            <div>
+              <div class="cw-detail-label">Renewal</div>
+              <div class="mono cw-fz-12-5 cw-text-text">
+                {{ renewal_method_label }}
+                {% if renewal_method_indicator %}
+                  <span class="cw-chip cw-chip-{{ 'renewed' if renewal_method_indicator == 'auto-renews' else 'incomplete' }}">{{ renewal_method_indicator }}</span>
+                {% endif %}
+              </div>
+            </div>
+            {% if host_info.runbook_url %}
+            <div class="cw-col-span-2">
+              <div class="cw-detail-label">Runbook</div>
+              <div class="mono cw-fz-12-5">
+                <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
+              </div>
+            </div>
+            {% endif %}
+            <div class="cw-col-span-2">
+              <div class="cw-detail-label">Chain status</div>
+              <div class="mono cw-fz-12-5 cw-text-text">
+                {% if chain_status == 'public' or chain_status == 'private' %}
+                  <span class="cw-chip cw-chip-public">Verified to trusted root</span>
+                {% elif chain_status == 'incomplete' %}
+                  <span class="cw-chip cw-chip-incomplete">⚠ Incomplete — server missing intermediate(s)</span>
+                {% elif chain_status == 'self-signed' %}
+                  <span class="cw-chip">Self-signed</span>
+                {% elif chain_status == 'invalid' %}
+                  <span class="cw-chip cw-chip-incomplete">✗ Chain validation failed</span>
+                {% else %}
+                  <span class="cw-chip cw-chip-muted">Unknown</span>
+                {% endif %}
+                {% if posture and posture.get('chain_incomplete') %}
+                  <span class="cw-chip tone-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
+                {% endif %}
+              </div>
             </div>
           </div>
         </div>
+        {% if may_write and host_id %}
+        <form method="post" action="/certificates/{{ cert_id }}/owner" class="cw-inline">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        </form>
+        <div id="owner-edit" class="cw-hidden">
+          <div class="cw-grid-2-16-22">
+            <div>
+              <label class="cw-detail-label">Owner name</label>
+              <input type="text" id="owner-name" name="owner_name" class="cw-input cw-fz-12-5" value="{{ host_info.owner_name or '' }}" placeholder="Team or individual">
+            </div>
+            <div>
+              <label class="cw-detail-label">Owner email</label>
+              <input type="text" id="owner-email" name="owner_email" class="cw-input cw-fz-12-5" value="{{ host_info.owner_email or '' }}" placeholder="ops@example.com">
+            </div>
+            <div>
+              <label class="cw-detail-label">Slack channel</label>
+              <input type="text" id="owner-slack" name="owner_slack" class="cw-input cw-fz-12-5" value="{{ host_info.owner_slack or '' }}" placeholder="#alerts">
+            </div>
+            <div>
+              <label class="cw-detail-label">Renewal method</label>
+              <select id="renewal-method" name="renewal_method" class="cw-input cw-fz-12-5">
+                <option value="" {% if not host_info.renewal_method %}selected{% endif %}>—</option>
+                <option value="acme" {% if host_info.renewal_method == 'acme' %}selected{% endif %}>ACME</option>
+                <option value="cert-manager" {% if host_info.renewal_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
+                <option value="manual" {% if host_info.renewal_method == 'manual' %}selected{% endif %}>Manual</option>
+              </select>
+            </div>
+            <div class="cw-col-span-2">
+              <label class="cw-detail-label">Runbook URL</label>
+              <input type="text" id="runbook-url" name="runbook_url" class="cw-input cw-fz-12-5" value="{{ host_info.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
+            </div>
+          </div>
+          <div class="cw-flex cw-gap-8 cw-mt-10">
+            <button class="cw-btn sm" type="button" data-action="toggle-owner">Cancel</button>
+            <button class="cw-btn primary sm" type="button" data-action="save-owner">Save</button>
+          </div>
+        </div>
+        {% endif %}
       </div>
       {% endif %}
 
@@ -245,6 +293,10 @@
       <div class="cw-panel cw-panel--p-16-18">
         <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Certificate details</div>
         <div class="cw-grid-2-16-22">
+          <div class="cw-col-span-2">
+            <div class="cw-detail-label">SUBJECT</div>
+            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.subject }}</div>
+          </div>
           <div class="cw-col-span-2">
             <div class="cw-detail-label">ISSUER</div>
             <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.issuer }}</div>
@@ -430,6 +482,35 @@ function saveNotes() {
   var notes = document.getElementById('notes-textarea').value;
   document.getElementById('notes-hidden').value = notes;
   document.querySelector('#notes-hidden').closest('form').submit();
+}
+function toggleOwner() {
+  var view = document.getElementById('owner-view');
+  var edit = document.getElementById('owner-edit');
+  var label = document.getElementById('owner-btn-label');
+  if (edit.style.display === 'none') {
+    view.style.display = 'none';
+    edit.style.display = 'block';
+    label.textContent = 'Cancel';
+  } else {
+    view.style.display = 'block';
+    edit.style.display = 'none';
+    label.textContent = 'Edit';
+  }
+}
+function saveOwner() {
+  var form = document.querySelector('form[action="/certificates/{{ cert_id }}/owner"]');
+  var fields = ['owner_name', 'owner_email', 'owner_slack', 'renewal_method', 'runbook_url'];
+  fields.forEach(function(id) {
+    var el = document.getElementById(id.replace('_', '-'));
+    if (el) {
+      var input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = id;
+      input.value = el.value;
+      form.appendChild(input);
+    }
+  });
+  form.submit();
 }
 document.addEventListener('submit', function(e) {
   var form = e.target;

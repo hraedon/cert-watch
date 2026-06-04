@@ -104,9 +104,11 @@ from cert_watch.database.kv_store import (
 
 # Pagination
 from cert_watch.database.pagination import (
+    _count_alerts_by_filter,
     _total_alerts,
     _total_scan_history,
     list_alerts_with_subject,
+    list_scan_batches,
     list_scan_history,
     purge_old_alerts,
 )
@@ -195,9 +197,11 @@ __all__ = [
     "bump_session_version",
     "get_session_version",
     # pagination
+    "_count_alerts_by_filter",
     "_total_alerts",
     "_total_scan_history",
     "list_alerts_with_subject",
+    "list_scan_batches",
     "list_scan_history",
     "purge_old_alerts",
     # fleet

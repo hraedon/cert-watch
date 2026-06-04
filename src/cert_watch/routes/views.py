@@ -15,14 +15,13 @@ from cert_watch import __commit__, __version__, ct_lookup
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
-    _total_alerts,
-    _total_scan_history,
+    _count_alerts_by_filter,
     get_posture_grades_for_certs,
     list_alerts_with_subject,
     list_dashboard_grouped_page,
     list_dashboard_page,
     list_fleet_pivot,
-    list_scan_history,
+    list_scan_batches,
 )
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import register_filters
@@ -31,6 +30,7 @@ from cert_watch.middleware import (
     get_auth_context,
     get_csrf_context,
     rate_limit,
+    require_write,
 )
 
 logger = logging.getLogger("cert_watch.routes.views")
@@ -307,13 +307,28 @@ def dashboard(
 
 
 @router.get("/alerts", response_class=HTMLResponse)
-def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
+def alerts_view(
+    request: Request,
+    page: int = 1,
+    filter_type: str = "all",
+) -> HTMLResponse:
     db = _db_path(request)
     per_page = 50
-    total = _total_alerts(db)
+    counts = _count_alerts_by_filter(db)
+    unread_only = filter_type == "unread"
+    critical_only = filter_type == "critical"
+    warning_only = filter_type == "warning"
+    rows = list_alerts_with_subject(
+        db,
+        page=page,
+        limit=per_page,
+        unread_only=unread_only,
+        critical_only=critical_only,
+        warning_only=warning_only,
+    )
+    total = counts.get(filter_type, counts["all"])
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
-    rows = list_alerts_with_subject(db, page=page, limit=per_page)
 
     # Resolve alert-group routing names for each alert's cert
     from cert_watch.database import SqliteAlertGroupRepository, SqliteCertificateRepository
@@ -347,11 +362,14 @@ def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
             "alerts": rows,
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
+            **get_csrf_context(request),
             "active_page": "alerts",
             "page": page,
             "total_pages": total_pages,
             "has_prev": page > 1,
             "has_next": page < total_pages,
+            "filter_type": filter_type,
+            "alert_counts": counts,
         },
     )
 
@@ -359,16 +377,15 @@ def alerts_view(request: Request, page: int = 1) -> HTMLResponse:
 @router.get("/scan-history", response_class=HTMLResponse)
 def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     db = _db_path(request)
-    per_page = 50
-    total = _total_scan_history(db)
+    per_page = 20
+    rows, total = list_scan_batches(db, page=page, per_page=per_page)
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
-    rows = list_scan_history(db, page=page, limit=per_page)
     return templates.TemplateResponse(
         request=request,
         name="scan_history.html",
         context={
-            "history": rows,
+            "batches": rows,
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
@@ -428,6 +445,24 @@ def caa_check_view(request: Request, domain: str) -> dict:
     }
 
 
+@router.post("/api/alerts/{alert_id}/read")
+async def mark_alert_read(
+    request: Request,
+    alert_id: str,
+    _auth: str = Depends(require_write),
+) -> dict:
+    """Mark an alert as read."""
+    db = _db_path(request)
+    from cert_watch.database import _connect
+    with _connect(db) as conn:
+        cur = conn.execute(
+            "UPDATE alerts SET read = 1 WHERE id = ?",
+            (alert_id,),
+        )
+        conn.commit()
+    return {"ok": True, "id": alert_id, "updated": cur.rowcount > 0}
+
+
 def _pivot_tls_monthly(rows: list[dict]) -> tuple[list[dict], int]:
     """Aggregate daily TLS version rows into monthly stacked-bar data.
 
@@ -437,6 +472,8 @@ def _pivot_tls_monthly(rows: list[dict]) -> tuple[list[dict], int]:
 
     months: OrderedDict[str, dict] = OrderedDict()
     for r in rows:
+        if not r.get("date"):
+            continue
         month = r["date"][:7]
         if month not in months:
             months[month] = {"month": month, "tls_1_3": 0, "tls_1_2": 0, "tls_1_0": 0}
@@ -464,6 +501,8 @@ def _pivot_grade_monthly(rows: list[dict]) -> tuple[list[dict], int]:
 
     months: OrderedDict[str, dict] = OrderedDict()
     for r in rows:
+        if not r.get("date"):
+            continue
         month = r["date"][:7]
         if month not in months:
             months[month] = {"month": month, "grade_a": 0, "grade_b": 0, "grade_c": 0, "grade_f": 0}
@@ -492,9 +531,24 @@ def insights_view(
     db = _db_path(request)
     from cert_watch.database import list_calendar, list_grade_trends, list_tls_version_trends
 
-    calendar_data = list_calendar(db, bucket="week")
-    tls_trends, tls_max = _pivot_tls_monthly(list_tls_version_trends(db, days=180))
-    grade_trends, grade_max = _pivot_grade_monthly(list_grade_trends(db, days=180))
+    calendar_data: list[dict] = []
+    tls_trends: list[dict] = []
+    tls_max: int = 1
+    grade_trends: list[dict] = []
+    grade_max: int = 1
+
+    try:
+        calendar_data = list_calendar(db, bucket="week")
+    except Exception:
+        logger.exception("insights: calendar query failed")
+    try:
+        tls_trends, tls_max = _pivot_tls_monthly(list_tls_version_trends(db, days=180))
+    except Exception:
+        logger.exception("insights: TLS trends query failed")
+    try:
+        grade_trends, grade_max = _pivot_grade_monthly(list_grade_trends(db, days=180))
+    except Exception:
+        logger.exception("insights: grade trends query failed")
 
     return templates.TemplateResponse(
         request=request,
