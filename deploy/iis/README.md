@@ -41,8 +41,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1
 This creates `C:\ProgramData\cert-watch` (data dir), a virtualenv at
 `C:\ProgramData\cert-watch\venv`, installs cert-watch into it, and generates
 persistent signing keys at `C:\ProgramData\cert-watch\secrets\` (locked down to
-Administrators + the IIS app-pool identity). See the script for parameters
-(`-InstallDir`, `-WithAuthExtras`, etc.).
+Administrators). See the script for parameters (`-InstallDir`, `-WithAuthExtras`,
+etc.).
 
 > **Why generated key files?** cert-watch reads `CERT_WATCH_AUTH_SECRET` /
 > `CERT_WATCH_CSRF_SECRET` (or their `*_FILE` variants). Persisting them means
@@ -53,36 +53,85 @@ Administrators + the IIS app-pool identity). See the script for parameters
 
 ## Step 2a — Host with HttpPlatformHandler (recommended)
 
-1. Create a site physical path, e.g. `C:\inetpub\cert-watch`, and copy
-   [`web.config`](web.config) into it.
-2. Edit the copied `web.config` if your install dir differs from the defaults
-   (`processPath`, the `*_FILE` paths, `CERT_WATCH_DATA_DIR`).
-3. Create the IIS site (PowerShell `WebAdministration`):
+### 2a.1 — Create the site physical path and web.config
 
-   ```powershell
-   Import-Module WebAdministration
-   New-Item IIS:\Sites\cert-watch -bindings @{protocol="https";bindingInformation="*:443:certs.example.com"} -physicalPath "C:\inetpub\cert-watch"
-   # Bind your TLS cert to the 443 binding via IIS Manager, or:
-   # (Get-Item IIS:\Sites\cert-watch).Bindings ... New-WebBinding / netsh http add sslcert
-   ```
+```powershell
+New-Item -ItemType Directory -Force -Path "C:\inetpub\cert-watch"
+Copy-Item deploy\iis\web.config "C:\inetpub\cert-watch\web.config"
+```
 
-4. **Make scans reliable.** The daily scan scheduler runs as a thread *inside*
-   the worker process, so an idle/auto-recycled app pool would stop scanning.
-   Disable idle shutdown and set the pool to always-running:
+Edit the copied `web.config` if your install dir differs from the defaults
+(`processPath`, the `*_FILE` paths, `CERT_WATCH_DATA_DIR`).
 
-   ```powershell
-   $pool = "cert-watch"   # the pool IIS created for the site
-   Set-ItemProperty IIS:\AppPools\$pool -Name processModel.idleTimeout -Value "00:00:00"
-   Set-ItemProperty IIS:\AppPools\$pool -Name startMode -Value "AlwaysRunning"
-   Set-ItemProperty IIS:\AppPools\$pool -Name recycling.periodicRestart.time -Value "00:00:00"
-   ```
+### 2a.2 — Install HttpPlatformHandler (if not already present)
 
-   Also grant the app-pool identity (`IIS AppPool\cert-watch`) read/write on the
-   data dir and read on the secrets dir — `install-windows.ps1 -AppPool cert-watch`
-   does this for you.
+Download from <https://www.iis.net/downloads/microsoft/httpplatformhandler>
+(or via the Web Platform Installer / offline MSI your change process allows).
+The module is Microsoft-signed and requires no third-party service wrapper.
 
-5. Browse `https://certs.example.com/`. Logs land in
-   `C:\ProgramData\cert-watch\logs\stdout*.log`; `/healthz` should return 200.
+### 2a.3 — Create the app pool and IIS site
+
+```powershell
+Import-Module WebAdministration
+
+# Create a dedicated app pool (IIS does not auto-create one per site)
+New-Item IIS:\AppPools\cert-watch
+Set-ItemProperty IIS:\AppPools\cert-watch -Name managedRuntimeVersion -Value ""
+
+# Create the site and assign the pool
+New-Item IIS:\Sites\cert-watch `
+    -bindings @{protocol="https"; bindingInformation="*:443:certs.example.com"} `
+    -physicalPath "C:\inetpub\cert-watch"
+Set-ItemProperty IIS:\Sites\cert-watch -Name applicationPool -Value "cert-watch"
+```
+
+The `managedRuntimeVersion=""` sets "No Managed Code" — cert-watch is a Python
+process, not a .NET app; loading the CLR is unnecessary overhead.
+
+Then bind your TLS certificate to the 443 binding — either via IIS Manager
+(*Site Bindings → Edit → SSL certificate*) or:
+
+```powershell
+# List available certs and bind one:
+netsh http add sslcert hostnameport=certs.example.com:443 `
+    certhash=<THUMBPRINT> `
+    appid="{GUID}"
+```
+
+### 2a.4 — Configure the app pool
+
+The daily scan scheduler runs as a thread *inside* the worker process, so an
+idle or auto-recycled pool would stop scanning. Disable idle shutdown and set
+the pool to always-running:
+
+```powershell
+$pool = "cert-watch"
+Set-ItemProperty IIS:\AppPools\$pool -Name processModel.idleTimeout -Value "00:00:00"
+Set-ItemProperty IIS:\AppPools\$pool -Name startMode -Value "AlwaysRunning"
+Set-ItemProperty IIS:\AppPools\$pool -Name recycling.periodicRestart.time -Value "00:00:00"
+```
+
+### 2a.5 — Grant the app-pool identity access to data and secrets
+
+Now that the app pool exists, re-run the install script with `-AppPool` to set
+the ACLs (or set them manually):
+
+```powershell
+# Option A: re-run the install script (idempotent — keeps existing secrets)
+powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -AppPool cert-watch
+
+# Option B: set ACLs manually
+$dataDir = "C:\ProgramData\cert-watch"
+$secrets = "$dataDir\secrets"
+$identity = "IIS AppPool\cert-watch"
+icacls $dataDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
+icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
+```
+
+### 2a.6 — Browse
+
+Browse `https://certs.example.com/`. Logs land in
+`C:\ProgramData\cert-watch\logs\stdout*.log`; `/healthz` should return 200.
 
 ## Step 2b — Host as reverse proxy + Windows service (Option A)
 
