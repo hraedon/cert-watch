@@ -69,6 +69,21 @@ def read_secret(name: str) -> str | None:
     return None
 
 
+# Setting keys (kv_store column names) whose values are secrets: encrypted at
+# rest when written via the GUI, decrypted on read, and masked in the UI. Single
+# source of truth — `routes/settings.py` imports this so the encrypt/decrypt/mask
+# sides cannot drift. (They previously diverged: `pagerduty_routing_key` was on
+# the decrypt side here but missing from the settings-side set, so a future
+# GUI-managed routing key would have been written in cleartext.)
+SENSITIVE_SETTING_KEYS = frozenset({
+    "ldap_bind_password",
+    "ldap_ca_cert",
+    "oauth_client_secret",
+    "smtp_password",
+    "pagerduty_routing_key",
+})
+
+
 def _default_data_dir_str(os_name: str, programdata: str | None) -> str:
     """Compute the default data-dir path string for *os_name*.
 
@@ -424,14 +439,8 @@ class Settings:
         if not kv:
             return base
 
-        _SENSITIVE = frozenset({
-            "ldap_bind_password", "ldap_ca_cert",
-            "oauth_client_secret", "smtp_password",
-            "pagerduty_routing_key",
-        })
-
         def _decrypt(key: str, val: str) -> str:
-            if encryption_key and key in _SENSITIVE:
+            if encryption_key and key in SENSITIVE_SETTING_KEYS:
                 result = fernet_decrypt(val, encryption_key)
                 return result if result is not None else ""
             return val
