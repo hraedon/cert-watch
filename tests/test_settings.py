@@ -159,7 +159,136 @@ def test_test_smtp_missing_recipients(reload_app):
     assert "recipients" in data["error"].lower()
 
 
+def test_test_smtp_send_success(reload_app, monkeypatch):
+    """A successful SMTP test does STARTTLS, logs in, and sends the probe message."""
+    import smtplib
+
+    calls = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=10):
+            calls["target"] = (host, port)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self):
+            calls["starttls"] = True
+
+        def login(self, user, password):
+            calls["login"] = (user, password)
+
+        def send_message(self, msg):
+            calls["sent_to"] = msg["To"]
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "587",
+                "smtp_user": "svc",
+                "smtp_password": "pw",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert calls["target"] == ("smtp.example.com", 587)
+    assert calls.get("starttls") is True
+    assert calls.get("login") == ("svc", "pw")
+    assert calls.get("sent_to") == "ops@example.com"
+
+
+def test_test_smtp_send_failure_reports_error(reload_app, monkeypatch):
+    """A connection failure is surfaced as ok=False with the underlying message."""
+    import smtplib
+
+    class FakeSMTP:
+        def __init__(self, *a, **k):
+            raise OSError("connection refused")
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "587",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "connection refused" in data["error"]
+
+
 # ---------- Test LDAP endpoint ----------
+
+
+def test_test_ldap_connect_success(reload_app, monkeypatch):
+    """A successful LDAP test binds read-only and unbinds cleanly."""
+    import ldap3
+
+    calls = {}
+
+    class FakeConn:
+        def __init__(self, *a, **k):
+            calls["read_only"] = k.get("read_only")
+            calls["bound"] = True
+
+        def unbind(self):
+            calls["unbound"] = True
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc1.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_bind_dn": "CN=svc,DC=example,DC=com",
+                "ldap_bind_password": "pw",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert calls.get("bound") and calls.get("unbound")
+    assert calls.get("read_only") is True  # the probe never mutates the directory
+
+
+def test_test_ldap_connect_failure_reports_error(reload_app, monkeypatch):
+    """A bind failure is surfaced as ok=False with the underlying message."""
+    import ldap3
+
+    class FakeConn:
+        def __init__(self, *a, **k):
+            raise ldap3.core.exceptions.LDAPBindError("invalid credentials")
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc1.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "invalid credentials" in data["error"]
 
 
 def test_test_ldap_missing_server(reload_app):
