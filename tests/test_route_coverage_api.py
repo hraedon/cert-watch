@@ -726,17 +726,50 @@ def test_api_ct_reconciliation_missing_domain(reload_app):
     assert "required" in r.json()["error"]
 
 
-def test_api_ct_reconciliation_with_domain(reload_app, tmp_path):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.database import init_schema
+def test_api_ct_reconciliation_with_domain(reload_app, tmp_path, monkeypatch):
+    """Reconciliation surfaces CT hostnames we don't track and computes coverage.
 
+    The CT log is mocked at the ``ct_monitor.query_ct_log`` boundary (no crt.sh
+    network call): one tracked host (``www.example.com``) and a CT result that
+    also contains an untracked ``shadow.example.com`` — so the endpoint must
+    report the shadow host as a coverage gap and 50% coverage.
+    """
+    from datetime import UTC, datetime
+
+    from cert_watch.ct_lookup import CTEntry
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
+    SqliteHostRepository(db).add("www.example.com", 443)
+
+    def _entry(cn: str) -> CTEntry:
+        return CTEntry(
+            issuer_ca_id=1,
+            issuer_name="Test CA",
+            common_name=cn,
+            name_value=cn,
+            not_before=datetime(2026, 1, 1, tzinfo=UTC),
+            not_after=datetime(2027, 1, 1, tzinfo=UTC),
+            serial_number="00",
+        )
+
+    monkeypatch.setattr(
+        "cert_watch.ct_monitor.query_ct_log",
+        lambda domain: [_entry("www.example.com"), _entry("shadow.example.com")],
+    )
+
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/ct/reconciliation?domain=example.com")
+
     assert r.status_code == 200
     data = r.json()
     assert data["domain"] == "example.com"
+    assert "www.example.com" in data["tracked_hostnames"]
+    assert "shadow.example.com" in data["ct_only_hostnames"]
+    assert "shadow.example.com" not in data["tracked_hostnames"]
+    assert data["coverage_pct"] == 50.0
 
 
 # ---------- Pivot API ----------

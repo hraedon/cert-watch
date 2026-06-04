@@ -28,4 +28,8 @@ jobs:
       - name: ruff
         run: .venv/bin/ruff check .
       - name: pytest
+        # COVERAGE_CORE=sysmon uses the faster sys.monitoring coverage core
+        # (Python 3.12+). Parallelism (`-n auto`) comes from addopts in pyproject.
+        env:
+          COVERAGE_CORE: sysmon
         run: .venv/bin/pytest -q --ignore=tests/e2e
