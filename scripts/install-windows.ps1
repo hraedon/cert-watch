@@ -180,6 +180,17 @@ if ($AppPool) {
     Write-Host "Granting $identity access (data: modify, secrets: read) ..."
     icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
     icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
+
+    # The venv's python.exe is a symlink to the real Python installation.
+    # Grant read+execute so the IIS app pool can launch it.
+    $venvPy = Join-Path $venv "Scripts\python.exe"
+    $pyReal = $venvPy
+    try { $resolved = (Get-Item $venvPy).Target; if ($resolved) { $pyReal = $resolved } } catch { }
+    $pyDir = Split-Path $pyReal
+    if ($pyDir -and (Test-Path $pyDir)) {
+        Write-Host "Granting $identity access to Python at $pyDir ..."
+        icacls $pyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+    }
 }
 
 Write-Host ""
