@@ -11,3 +11,7 @@ build/
 *.sqlite3
 htmlcov/
 plans/design/
+# Generated from the agent-notes DB (breadcrumb export-index). Ignored while it is
+# refreshed manually — a committed-but-stale index lies. Commit it (remove this
+# line) only once a hook regenerates it on every commit.
+OPEN_BREADCRUMBS.txt

@@ -146,6 +146,7 @@ def test_dashboard_pivot_owner(tmp_path, monkeypatch, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=owner")
     assert r.status_code == 200
+    assert "own.example.com" in r.text  # cert appears in the owner pivot
 
 
 def test_dashboard_pivot_renewal_method(tmp_path, monkeypatch, reload_app):
@@ -168,6 +169,7 @@ def test_dashboard_pivot_renewal_method(tmp_path, monkeypatch, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=renewal_method")
     assert r.status_code == 200
+    assert "rm.example.com" in r.text  # cert appears in the renewal-method pivot
 
 
 # ---------- dashboard fleet grade ----------
@@ -241,6 +243,10 @@ def test_dashboard_sort_by_subject(tmp_path, monkeypatch, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/?sort_by=subject&sort_order=desc")
     assert r.status_code == 200
+    # The sorted view renders both certs (uploaded certs group by fingerprint, so
+    # their relative order isn't asserted — only that the sort path includes them).
+    assert "aaa.example.com" in r.text
+    assert "zzz.example.com" in r.text
 
 
 # ---------- alerts view with group routing ----------
@@ -652,6 +658,23 @@ def test_certificate_detail_with_trust_anchor(tmp_path, monkeypatch, chain_pem_f
     assert r.status_code == 200
 
 
+def _stored_cert_id(db, hostname, port=443):
+    """The UUID primary key of a stored cert. The detail route resolves certs by
+    this id (``get_by_id`` matches ``certificates.id`` only, not the fingerprint),
+    so navigating by ``cert.fingerprint_sha256`` 303-redirects to the dashboard —
+    which TestClient silently follows to a 200, defeating the test. These tests
+    must therefore use the real id."""
+    from cert_watch.database import _connect
+
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+            (hostname, port),
+        ).fetchone()
+    assert row is not None, f"no stored cert for {hostname}:{port}"
+    return row["id"]
+
+
 def test_certificate_detail_host_info_acme(tmp_path, monkeypatch, leaf_pem_file):
     app_mod = _reload(monkeypatch, tmp_path)
     db = tmp_path / "cert-watch.sqlite3"
@@ -678,8 +701,14 @@ def test_certificate_detail_host_info_acme(tmp_path, monkeypatch, leaf_pem_file)
 
     record_scan_history(db, ScanHistory(hostname="acme.example.com", port=443, status="success"))
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{cert.fingerprint_sha256}")
+        r = client.get(f"/certificates/{_stored_cert_id(db, 'acme.example.com')}",
+                        follow_redirects=False)
     assert r.status_code == 200
+    assert "acme.example.com" in r.text  # the detail page, not a redirect
+    # ACME hosts render the "ACME" label and the "auto-renews" indicator chip.
+    assert "ACME" in r.text
+    assert "auto-renews" in r.text
+    assert "Ops Team" in r.text
 
 
 def test_certificate_detail_host_info_cert_manager(tmp_path, monkeypatch):
@@ -704,8 +733,12 @@ def test_certificate_detail_host_info_cert_manager(tmp_path, monkeypatch):
     )
     replace_scanned(db, "cm.example.com", 443, cert, [], True)
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{cert.fingerprint_sha256}")
+        r = client.get(f"/certificates/{_stored_cert_id(db, 'cm.example.com')}",
+                        follow_redirects=False)
     assert r.status_code == 200
+    # cert-manager is also an automated renewer → "auto-renews" indicator.
+    assert "cert-manager" in r.text
+    assert "auto-renews" in r.text
 
 
 def test_certificate_detail_host_info_manual(tmp_path, monkeypatch):
@@ -730,8 +763,13 @@ def test_certificate_detail_host_info_manual(tmp_path, monkeypatch):
     )
     replace_scanned(db, "man.example.com", 443, cert, [], True)
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{cert.fingerprint_sha256}")
+        r = client.get(f"/certificates/{_stored_cert_id(db, 'man.example.com')}",
+                        follow_redirects=False)
     assert r.status_code == 200
+    # Manual renewal must be flagged distinctly from the auto-renewers.
+    assert "Manual" in r.text
+    assert "requires manual action" in r.text
+    assert "auto-renews" not in r.text
 
 
 def test_certificate_detail_host_info_custom_method(tmp_path, monkeypatch):
@@ -756,8 +794,13 @@ def test_certificate_detail_host_info_custom_method(tmp_path, monkeypatch):
     )
     replace_scanned(db, "cust.example.com", 443, cert, [], True)
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{cert.fingerprint_sha256}")
+        r = client.get(f"/certificates/{_stored_cert_id(db, 'cust.example.com')}",
+                        follow_redirects=False)
     assert r.status_code == 200
+    # An unknown method is title-cased as-is with no auto/manual indicator.
+    assert "Terraform" in r.text
+    assert "auto-renews" not in r.text
+    assert "requires manual action" not in r.text
 
 
 def test_certificate_detail_with_drift_events(tmp_path, monkeypatch):
@@ -788,9 +831,21 @@ def test_certificate_detail_with_drift_events(tmp_path, monkeypatch):
     )
     replace_scanned(db, "drift.example.com", 443, cert1, [], True)
     replace_scanned(db, "drift.example.com", 443, cert2, [], True)
+    # The detail page computes drift from cert_history (per-scan snapshots), which
+    # replace_scanned does not write — seed two snapshots with the issuer change so
+    # the comparison fires. Explicit timestamps keep the DESC ordering deterministic.
+    from cert_watch.database import record_cert_history
+
+    record_cert_history(db, "drift.example.com", 443, cert1, scanned_at="2026-01-01T00:00:00+00:00")
+    record_cert_history(db, "drift.example.com", 443, cert2, scanned_at="2026-02-01T00:00:00+00:00")
     with TestClient(app_mod.app) as client:
-        r = client.get(f"/certificates/{cert2.fingerprint_sha256}")
+        r = client.get(f"/certificates/{_stored_cert_id(db, 'drift.example.com')}",
+                        follow_redirects=False)
     assert r.status_code == 200
+    # The issuer change across the two scans must surface as a drift event.
+    assert "Configuration drift" in r.text
+    assert "Issuer changed" in r.text
+    assert "Old CA → New CA" in r.text
 
 
 # ---------- certificate delete ----------

@@ -75,6 +75,12 @@ def build_auth_provider(
     """Build an auth provider from config values. Returns NoAuthProvider if provider is empty."""
     provider = provider.lower().strip()
 
+    if local_admin_user and ":" in local_admin_user:
+        raise ValueError(
+            "Local admin username must not contain colons — colons are used as "
+            "field delimiters in session tokens and would cause parsing ambiguity."
+        )
+
     local_admin: LocalAdminProvider | None = None
     if local_admin_user and local_admin_password_hash:
         local_admin = LocalAdminProvider(local_admin_user, local_admin_password_hash)

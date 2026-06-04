@@ -318,10 +318,13 @@ class TestComplianceRoutes:
         assert "Content SHA-256" in r.text
 
     def test_compliance_json_auth_gated(self, reload_app):
+        # No auth provider + ALLOW_UNAUTH=0 → secure-by-default auto-provisions an
+        # admin and the report API rejects the unauthenticated request with 401.
+        # (Asserting `in (200, 401)` previously let an ungated 200 pass silently.)
         app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
         with TestClient(app_mod.app) as client:
             r = client.get("/api/reports/compliance.json")
-        assert r.status_code in (200, 401)
+        assert r.status_code == 401
 
     def test_compliance_json_content_disposition(self, reload_app):
         app_mod = reload_app()

@@ -31,7 +31,8 @@ _csrf_secret_val = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
 if not _csrf_secret_val:
     _csrf_secret_val = secrets.token_hex(32)
 _CSRF_SECRET = _csrf_secret_val
-_CSRF_TOKEN_TTL = 3600 * 8  # 8 hours
+_CSRF_TOKEN_TTL = 3600 * 2  # 2 hours
+_SID_COOKIE_TTL = 3600 * 8  # 8 hours — matches session cookie TTL
 
 
 def set_csrf_secret(value: str) -> None:
@@ -133,6 +134,10 @@ def _extract_client_ip(request: Request) -> str:
             return parts[-1] if parts else (request.client.host if request.client else "unknown")
     real_ip = request.headers.get("x-real-ip", "")
     if real_ip:
+        logger.warning(
+            "TRUST_PROXY=1: using X-Real-IP (%s) — ensure your reverse proxy "
+            "strips or overwrites this header from clients", real_ip,
+        )
         return real_ip
     return request.client.host if request.client else "unknown"
 
@@ -349,7 +354,7 @@ def is_public_path(path: str) -> bool:
         return True
     if path.startswith("/static/"):
         return True
-    return path.startswith("/metrics")
+    return path == "/metrics" or path.startswith("/metrics/")
 
 
 def check_metrics_token(request: Request) -> bool:
@@ -399,7 +404,7 @@ async def csrf_session_middleware(request: Request, call_next):
         # rendered into forms server-side, so no client JS ever reads cw_sid.
         # Keeping it HttpOnly denies an XSS one more primitive at zero cost.
         response.set_cookie(
-            "cw_sid", sid, httponly=True, samesite="strict", max_age=_CSRF_TOKEN_TTL,
+            "cw_sid", sid, httponly=True, samesite="strict", max_age=_SID_COOKIE_TTL,
             secure=_COOKIE_SECURE, path="/",
         )
         return response

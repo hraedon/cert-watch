@@ -62,11 +62,12 @@ class OAuthProvider(AuthProvider):
     relies on the IdP returning a signed ``id_token`` (OIDC-compliant). The
     ``id_token`` carries the audience/nonce binding that proves the credential
     was minted for *this* relying party and flow. The userinfo-endpoint
-    fallback (used only when no ``id_token`` is present) authenticates with the
-    access token via bearer auth and therefore cannot, on its own, prove the
-    token belongs to the current session. OIDC-compliant IdPs MUST return an
-    ``id_token``; deployments that depend on the userinfo fallback run a weaker
-    security path that is logged at WARNING level whenever it is taken.
+    fallback (used only when no ``id_token`` is present) checks for a ``nonce``
+    claim in the userinfo response (OIDC Core §5.3.2) and verifies it against
+    the nonce from the authorization request — restoring binding when the IdP
+    cooperates. When the userinfo response omits the nonce, the path degrades
+    to trusting the access token on the code exchange alone; this is logged at
+    WARNING level. OIDC-compliant IdPs SHOULD return an ``id_token``.
     """
 
     def __init__(self, config: OAuthConfig) -> None:
@@ -340,22 +341,6 @@ class OAuthProvider(AuthProvider):
             if not username:
                 userinfo_endpoint = endpoints.get("userinfo_endpoint", "")
                 if userinfo_endpoint:
-                    # BC-071: weaker security path. We only reach here when the
-                    # IdP returned no id_token, so we have no signed audience/
-                    # nonce binding proving the access token belongs to *this*
-                    # login flow — only that the code exchange succeeded. There
-                    # is no nonce available in this flow to verify against (the
-                    # nonce would have to be persisted across the redirect, which
-                    # requires route-layer changes). Surface the degraded path so
-                    # operators notice. OIDC-compliant IdPs return an id_token and
-                    # take the verified path above.
-                    logger.warning(
-                        "OAuth: no id_token returned by IdP — falling back to the "
-                        "userinfo endpoint. This path has no nonce/audience binding "
-                        "(BC-071); the access token is trusted on the strength of the "
-                        "code exchange alone. Configure an OIDC-compliant IdP that "
-                        "returns an id_token for full session binding."
-                    )
                     # SSRF guard: validate userinfo endpoint before calling it
                     # (authlib uses requests, so we can't route through ssrf_safe_urlopen)
                     try:
@@ -373,6 +358,36 @@ class OAuthProvider(AuthProvider):
                     resp = client.get(userinfo_endpoint)
                     if resp.status_code == 200:
                         info = resp.json()
+                        # BC-071: verify nonce claim if the userinfo response
+                        # includes one (OIDC Core §5.3.2 — userinfo MAY include
+                        # the nonce). This restores the audience/nonce binding
+                        # that the id_token path provides. When the IdP omits
+                        # the nonce, log a warning so operators know the path is
+                        # degraded.
+                        if nonce:
+                            userinfo_nonce = info.get("nonce")
+                            if userinfo_nonce and userinfo_nonce == nonce:
+                                logger.info(
+                                    "OAuth: userinfo response includes verified nonce claim; "
+                                    "nonce binding intact."
+                                )
+                            elif userinfo_nonce:
+                                logger.warning(
+                                    "OAuth: userinfo nonce claim mismatch "
+                                    "(expected %s, got %s); rejecting.",
+                                    nonce, userinfo_nonce,
+                                )
+                                return AuthResult(
+                                    success=False,
+                                    error="OAuth userinfo nonce mismatch",
+                                )
+                            else:
+                                logger.warning(
+                                    "OAuth: no id_token and userinfo response lacks nonce "
+                                    "claim — access token trusted on code exchange alone "
+                                    "(BC-071). Configure an OIDC-compliant IdP that returns "
+                                    "an id_token for full session binding."
+                                )
                         username = (
                             info.get("preferred_username")
                             or info.get("email")

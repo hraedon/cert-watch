@@ -97,7 +97,7 @@ CREATE TABLE IF NOT EXISTS scan_posture (
     ocsp_stapling INTEGER,
     hsts INTEGER,
     must_staple INTEGER DEFAULT 0,
-    tls_verified INTEGER,
+    verify_requested INTEGER,
     findings TEXT NOT NULL,
     scanned_at TEXT NOT NULL,
     FOREIGN KEY (cert_id) REFERENCES certificates(id)

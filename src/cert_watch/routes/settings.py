@@ -152,7 +152,7 @@ def _effective_config(
         elif kv_key in kv and kv[kv_key]:
             val = kv[kv_key]
             if encryption_key and kv_key in _SENSITIVE_KEYS:
-                val = fernet_decrypt(val, encryption_key)
+                val = fernet_decrypt(val, encryption_key) or ""
             result[kv_key] = val
         else:
             result[kv_key] = ""
@@ -438,6 +438,21 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
     if not server or not base_dn:
         return JSONResponse({"ok": False, "error": "LDAP server and base DN are required"})
 
+    # SSRF guard: block connections to loopback/link-local/metadata addresses.
+    from cert_watch.scan import _is_blocked_ip
+
+    for s in [s.strip() for s in server.split(",") if s.strip()]:
+        host_part = s.split("://", 1)[-1].split(":")[0].split("/")[0]
+        try:
+            import ipaddress as _ip
+            ip = _ip.ip_address(host_part)
+            if _is_blocked_ip(ip):
+                return JSONResponse(
+                    {"ok": False, "error": f"LDAP server IP blocked: {ip}"},
+                )
+        except ValueError:
+            pass  # hostname — DNS-resolved at connect time
+
     try:
         import ssl
 
@@ -513,6 +528,20 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
 
     if not host:
         return JSONResponse({"ok": False, "error": "SMTP host is required"})
+
+    # SSRF guard: block connections to loopback/link-local/metadata addresses.
+    from cert_watch.scan import _is_blocked_ip
+
+    try:
+        import ipaddress as _ip
+        ip = _ip.ip_address(host)
+        if _is_blocked_ip(ip):
+            return JSONResponse(
+                {"ok": False, "error": f"SMTP host IP blocked: {ip}"},
+            )
+    except ValueError:
+        pass  # hostname — DNS-resolved at connect time
+
     if not from_addr or not recipients:
         return JSONResponse({
             "ok": False,
