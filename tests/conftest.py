@@ -230,6 +230,24 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_backoff_sleep(monkeypatch):
+    """Neutralize the real ``time.sleep`` in retry backoff for the unit suite.
+
+    ``cert_watch.retry.backoff_range`` sleeps ``base_delay * 2**attempt`` between
+    attempts (real wall-clock). The connection-failure / timeout scan tests and
+    the alert-delivery retry tests therefore each paid ~3s of pure waiting — ~12s
+    of the suite spent asleep, verifying nothing. No unit test asserts on the
+    backoff *timing* (only on the retried result), so a no-op sleep preserves the
+    behaviour under test while removing the wait. (The only real sleeps in the
+    repo are in the opt-in e2e suite, which is excluded by default.)
+    """
+    import cert_watch.retry as _retry
+
+    monkeypatch.setattr(_retry.time, "sleep", lambda *_a, **_k: None)
+    yield
+
+
 @pytest.fixture
 def login_csrf():
     """Return a helper that GETs /login and extracts its CSRF token.
