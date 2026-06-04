@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
-from cert_watch.config import Settings
+from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
 from cert_watch.middleware import get_auth_context, get_csrf_context
 
@@ -110,11 +110,10 @@ _ALERT_KEYS = {
     "alert_digest_only": "ALERT_DIGEST_ONLY",
 }
 
-_SENSITIVE_KEYS = frozenset({
-    "ldap_bind_password", "ldap_ca_cert",
-    "oauth_client_secret",
-    "smtp_password",
-})
+# Single source of truth lives in config (SENSITIVE_SETTING_KEYS) so the
+# encrypt-side (this module) and the decrypt-side (config.from_env_with_kv)
+# cannot diverge. Don't re-inline this as a literal.
+_SENSITIVE_KEYS = SENSITIVE_SETTING_KEYS
 
 
 def _env_overrides(keys: dict[str, str], db_path: Path) -> dict[str, bool]:
