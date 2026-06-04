@@ -21,8 +21,8 @@
     {# ---- Expiry calendar ---- #}
     {% set ns = namespace(storms=0, within=0, later=0, leaf_total=0) %}
     {% for b in calendar_data %}
-      {% if b.cert_count >= 3 %}{% set ns.storms = ns.storms + 1 %}{% endif %}
-      {% set ns.within = ns.within + b.cert_count %}
+      {% if b.count >= 3 %}{% set ns.storms = ns.storms + 1 %}{% endif %}
+      {% set ns.within = ns.within + b.count %}
     {% endfor %}
 
     <div class="cw-stats cw-mb-18">
@@ -85,20 +85,20 @@
 
       <div class="cw-mt-14">
         {% for b in calendar_data %}
-          {% set empty = b.cert_count == 0 %}
+          {% set empty = b.count == 0 %}
           <div class="cw-flex cw-items-center cw-gap-14" style="padding:{% if empty %}5px 0{% else %}9px 0{% endif %};{% if not loop.first %}border-top:1px solid var(--border){% endif %}">
             <div style="min-width:136px">
-              <span class="mono cw-fz-12 {% if empty %}cw-text-text-3{% else %}cw-text-text cw-fw-500{% endif %}">{{ b.label }}</span>
+              <span class="mono cw-fz-12 {% if empty %}cw-text-text-3{% else %}cw-text-text cw-fw-500{% endif %}">{{ b.bucket_start }}</span>
               {% if loop.first %}<div class="cw-fz-10 cw-fw-700 cw-text-accent cw-ls-04em" style="letter-spacing:.04em">THIS PERIOD</div>{% endif %}
             </div>
             {% if empty %}
               <div style="height:1px;flex:1"></div>
             {% else %}
               <div class="cw-flex cw-items-center cw-gap-8 cw-wrap cw-flex-1">
-                {% if b.cert_count >= 3 %}
+                {% if b.count >= 3 %}
                   <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>
                 {% endif %}
-                <span class="cw-chip">{{ b.cert_count }} cert{{ 's' if b.cert_count != 1 }}</span>
+                <span class="cw-chip">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
               </div>
             {% endif %}
           </div>

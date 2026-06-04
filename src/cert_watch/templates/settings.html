@@ -1,434 +1,424 @@
-<!doctype html>
-<html lang="en" data-theme="dark">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>cert-watch — settings</title>
-  <script nonce="{{ request.state.csp_nonce }}">
-    try {
-      var t = localStorage.getItem('cw-theme') || 'dark';
-      document.documentElement.setAttribute('data-theme', t);
-    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
-  </script>
-  <link rel="stylesheet" href="/static/css/tokens.css">
-  <style>
-    .cw-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border, #333); margin-bottom: 1.5rem; }
-    .cw-tab { padding: 0.6rem 1.2rem; cursor: pointer; border-bottom: 2px solid transparent;
-              color: var(--text-muted, #888); text-decoration: none; font-size: 0.9rem; }
-    .cw-tab:hover { color: var(--text, #eee); }
-    .cw-tab.active { color: var(--text, #eee); border-bottom-color: var(--accent, #4a9eff); }
-    .cw-tab-panel { display: none; }
-    .cw-tab-panel.active { display: block; }
-    .cw-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .cw-field-row .cw-field { margin-bottom: 0; }
-    .cw-override-badge { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.4rem;
-                         border-radius: 3px; background: var(--warning-bg, #4a3800);
-                         color: var(--warning-text, #fbbf24); margin-left: 0.5rem; }
-    .cw-test-result { margin-top: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 4px;
-                      font-size: 0.85rem; display: none; }
-    .cw-test-result.ok { display: block; background: var(--success-bg, #0a3a1a); color: var(--success-text, #4ade80); }
-    .cw-test-result.err { display: block; background: var(--error-bg, #3a0a0a); color: var(--error-text, #f87171); }
-    .cw-provider-section { display: none; }
-    .cw-provider-section.active { display: block; }
-  </style>
-</head>
-<body>
-  <div class="cw-app">
-    <div class="cw-page">
-      <div class="cw-header">
-        <div class="cw-header-left">
-          <a href="/" class="cw-logo-link">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
-            <span>cert-watch</span>
-          </a>
-          <span class="cw-header-sep">/</span>
-          <span>Settings</span>
-        </div>
-        <div class="cw-header-right">
-          <span class="cw-version">v{{ version }}</span>
-          <a href="/" class="cw-btn cw-btn--sm">Dashboard</a>
-        </div>
-      </div>
+{% extends "base.html" %}
+{% block title %}cert-watch — settings{% endblock %}
 
-      <div class="cw-panel" style="max-width: 52rem; margin: 2rem auto;">
-        {% if saved %}
-          <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Settings saved successfully.</div>
-        {% endif %}
-        {% if error %}
-          <div class="cw-alert cw-alert--error" style="margin-bottom: 1rem;">{{ error }}</div>
-        {% endif %}
-        {% if password_changed %}
-          <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Password rotated successfully. All previous sessions have been invalidated.</div>
-        {% endif %}
+{% block head %}
+<style>
+  .cw-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border, #333); margin-bottom: 1.5rem; }
+  .cw-tab { padding: 0.6rem 1.2rem; cursor: pointer; border-bottom: 2px solid transparent;
+            color: var(--text-muted, #888); text-decoration: none; font-size: 0.9rem; }
+  .cw-tab:hover { color: var(--text, #eee); }
+  .cw-tab.active { color: var(--text, #eee); border-bottom-color: var(--accent, #4a9eff); }
+  .cw-tab-panel { display: none; }
+  .cw-tab-panel.active { display: block; }
+  .cw-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .cw-field-row .cw-field { margin-bottom: 0; }
+  .cw-override-badge { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.4rem;
+                       border-radius: 3px; background: var(--warning-bg, #4a3800);
+                       color: var(--warning-text, #fbbf24); margin-left: 0.5rem; }
+  .cw-test-result { margin-top: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 4px;
+                    font-size: 0.85rem; display: none; }
+  .cw-test-result.ok { display: block; background: var(--success-bg, #0a3a1a); color: var(--success-text, #4ade80); }
+  .cw-test-result.err { display: block; background: var(--error-bg, #3a0a0a); color: var(--error-text, #f87171); }
+  .cw-provider-section { display: none; }
+  .cw-provider-section.active { display: block; }
+</style>
+{% endblock %}
 
-        <div class="cw-tabs">
-          <a href="/settings?tab=auth" class="cw-tab {% if tab == 'auth' %}active{% endif %}">Authentication</a>
-          <a href="/settings?tab=smtp" class="cw-tab {% if tab == 'smtp' %}active{% endif %}">SMTP</a>
-          <a href="/settings?tab=alerts" class="cw-tab {% if tab == 'alerts' %}active{% endif %}">Alerts</a>
-        </div>
-
-        <!-- Auth tab -->
-        <div class="cw-tab-panel {% if tab == 'auth' %}active{% endif %}" id="tab-auth">
-          <form method="post" action="/settings/auth">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-
-            <div class="cw-field cw-mb-16">
-              <label class="cw-label" for="auth_provider">Authentication provider</label>
-              <select class="cw-input" id="auth_provider" name="auth_provider" data-action="toggle-provider">
-                <option value="" {% if not auth.auth_provider %}selected{% endif %}>None (open access)</option>
-                <option value="ldap" {% if auth.auth_provider == 'ldap' %}selected{% endif %}>LDAP / Active Directory</option>
-                <option value="oauth" {% if auth.auth_provider in ('oauth', 'entra', 'oidc') %}selected{% endif %}>OAuth / OIDC (Entra, Google)</option>
-              </select>
-              {% if env_overrides.auth_provider %}
-                <span class="cw-override-badge">set via env var</span>
-              {% endif %}
-            </div>
-
-            <!-- LDAP section -->
-            <div id="ldap-section" class="cw-provider-section">
-              <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">LDAP / Active Directory</h3>
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="ldap_server">Server URL(s)</label>
-                <input class="cw-input" type="text" id="ldap_server" name="ldap_server"
-                       value="{{ auth.ldap_server }}" placeholder="ldap://dc1.example.com,ldap://dc2.example.com">
-                {% if env_overrides.ldap_server %}<span class="cw-override-badge">env</span>{% endif %}
-              </div>
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="ldap_base_dn">Base DN</label>
-                <input class="cw-input" type="text" id="ldap_base_dn" name="ldap_base_dn"
-                       value="{{ auth.ldap_base_dn }}" placeholder="DC=example,DC=com">
-                {% if env_overrides.ldap_base_dn %}<span class="cw-override-badge">env</span>{% endif %}
-              </div>
-
-              <div class="cw-field-row cw-mb-12">
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_bind_dn">Bind DN (service account)</label>
-                  <input class="cw-input" type="text" id="ldap_bind_dn" name="ldap_bind_dn"
-                         value="{{ auth.ldap_bind_dn }}" placeholder="CN=svc,OU=ServiceAccounts,DC=example,DC=com">
-                  {% if env_overrides.ldap_bind_dn %}<span class="cw-override-badge">env</span>{% endif %}
-                </div>
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_bind_password">Bind password</label>
-                  <input class="cw-input" type="password" id="ldap_bind_password" name="ldap_bind_password"
-                         value="" placeholder="{% if auth.ldap_bind_password %}••••••••{% else %}password{% endif %}"
-                         autocomplete="new-password">
-                  {% if env_overrides.ldap_bind_password %}<span class="cw-override-badge">env</span>{% endif %}
-                </div>
-              </div>
-
-              <div class="cw-field-row cw-mb-12">
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_user_filter">User search filter</label>
-                  <input class="cw-input" type="text" id="ldap_user_filter" name="ldap_user_filter"
-                         value="{{ auth.ldap_user_filter }}" placeholder="(sAMAccountName={username})">
-                </div>
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_connect_timeout">Connect timeout (seconds)</label>
-                  <input class="cw-input" type="number" id="ldap_connect_timeout" name="ldap_connect_timeout"
-                         value="{{ auth.ldap_connect_timeout }}" min="1" max="30">
-                </div>
-              </div>
-
-              <div class="cw-field-row cw-mb-12">
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_required_groups">Required groups (comma-separated DNs)</label>
-                  <input class="cw-input" type="text" id="ldap_required_groups" name="ldap_required_groups"
-                         value="{{ auth.ldap_required_groups }}" placeholder="CN=CertWatchOps,OU=Groups,DC=example,DC=com">
-                </div>
-                <div class="cw-field">
-                  <label class="cw-label" for="ldap_start_tls">StartTLS</label>
-                  <select class="cw-input" id="ldap_start_tls" name="ldap_start_tls">
-                    <option value="0" {% if auth.ldap_start_tls != '1' %}selected{% endif %}>Disabled</option>
-                    <option value="1" {% if auth.ldap_start_tls == '1' %}selected{% endif %}>Enabled</option>
-                  </select>
-                </div>
-              </div>
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="ldap_ca_cert">CA certificate (PEM, for LDAPS/StartTLS)</label>
-                <textarea class="cw-input" id="ldap_ca_cert" name="ldap_ca_cert" rows="3"
-                          placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
-                {% if env_overrides.ldap_ca_cert %}<span class="cw-override-badge">env</span>{% endif %}
-              </div>
-
-              <div style="margin-top: 1rem;">
-                <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
-                <div id="ldap-test-result" class="cw-test-result"></div>
-              </div>
-            </div>
-
-            <!-- OAuth section -->
-            <div id="oauth-section" class="cw-provider-section">
-              <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">OAuth / OIDC</h3>
-
-              <div class="cw-field-row cw-mb-12">
-                <div class="cw-field">
-                  <label class="cw-label" for="oauth_client_id">Client ID</label>
-                  <input class="cw-input" type="text" id="oauth_client_id" name="oauth_client_id"
-                         value="{{ auth.oauth_client_id }}" placeholder="00000000-0000-0000-0000-000000000000">
-                  {% if env_overrides.oauth_client_id %}<span class="cw-override-badge">env</span>{% endif %}
-                </div>
-                <div class="cw-field">
-                  <label class="cw-label" for="oauth_client_secret">Client secret</label>
-                  <input class="cw-input" type="password" id="oauth_client_secret" name="oauth_client_secret"
-                         value="" placeholder="{% if auth.oauth_client_secret %}••••••••{% else %}secret{% endif %}"
-                         autocomplete="new-password">
-                  {% if env_overrides.oauth_client_secret %}<span class="cw-override-badge">env</span>{% endif %}
-                </div>
-              </div>
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="oauth_issuer_url">Issuer URL</label>
-                <input class="cw-input" type="text" id="oauth_issuer_url" name="oauth_issuer_url"
-                       value="{{ auth.oauth_issuer_url }}" placeholder="https://login.microsoftonline.com/{tenant}/v2.0">
-                {% if env_overrides.oauth_issuer_url %}<span class="cw-override-badge">env</span>{% endif %}
-                <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
-                  Endpoints are auto-discovered from this URL via OIDC.
-                </div>
-              </div>
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="oauth_scope">Scopes</label>
-                <input class="cw-input" type="text" id="oauth_scope" name="oauth_scope"
-                       value="{{ auth.oauth_scope }}" placeholder="openid profile email">
-              </div>
-
-              <details style="margin: 1rem 0;">
-                <summary style="cursor: pointer; color: var(--text-muted, #888); font-size: 0.85rem;">
-                  Advanced: override endpoints (skip OIDC discovery)
-                </summary>
-                <div class="cw-field cw-mb-12" style="margin-top: 0.75rem;">
-                  <label class="cw-label" for="oauth_authorization_endpoint">Authorization endpoint</label>
-                  <input class="cw-input" type="text" id="oauth_authorization_endpoint"
-                         name="oauth_authorization_endpoint"
-                         value="{{ auth.oauth_authorization_endpoint }}" placeholder="(auto-discovered)">
-                </div>
-                <div class="cw-field cw-mb-12">
-                  <label class="cw-label" for="oauth_token_endpoint">Token endpoint</label>
-                  <input class="cw-input" type="text" id="oauth_token_endpoint" name="oauth_token_endpoint"
-                         value="{{ auth.oauth_token_endpoint }}" placeholder="(auto-discovered)">
-                </div>
-                <div class="cw-field cw-mb-12">
-                  <label class="cw-label" for="oauth_userinfo_endpoint">UserInfo endpoint</label>
-                  <input class="cw-input" type="text" id="oauth_userinfo_endpoint" name="oauth_userinfo_endpoint"
-                         value="{{ auth.oauth_userinfo_endpoint }}" placeholder="(auto-discovered)">
-                </div>
-              </details>
-            </div>
-
-            <div style="margin-top: 2rem; display: flex; gap: 0.75rem;">
-              <button type="submit" class="cw-btn primary">Save authentication settings</button>
-            </div>
-          </form>
-
-          {% if local_admin_configured %}
-          <hr style="margin: 2.5rem 0 1.5rem; border: none; border-top: 1px solid var(--border, #333);">
-          <h3 style="margin: 0 0 0.5rem; font-size: 1rem;">Local admin password</h3>
-
-          {% if env_hash_override %}
-            <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
-              <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code> is set — the environment variable always wins over the stored password. Rotate the env var and restart to change the password.
-            </div>
-          {% else %}
-            {% if local_admin_autogenerated %}
-              <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
-                The local admin password was auto-generated on first run. Rotate it now.
-              </div>
-            {% endif %}
-            <form method="post" action="/settings/change-password">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-
-              <div class="cw-field cw-mb-12">
-                <label class="cw-label" for="current_password">Current password</label>
-                <input class="cw-input" type="password" id="current_password" name="current_password"
-                       autocomplete="current-password" required>
-              </div>
-
-              <div class="cw-field-row cw-mb-12">
-                <div class="cw-field">
-                  <label class="cw-label" for="new_password">New password</label>
-                  <input class="cw-input" type="password" id="new_password" name="new_password"
-                         autocomplete="new-password" minlength="8" required>
-                </div>
-                <div class="cw-field">
-                  <label class="cw-label" for="confirm_password">Confirm new password</label>
-                  <input class="cw-input" type="password" id="confirm_password" name="confirm_password"
-                         autocomplete="new-password" minlength="8" required>
-                </div>
-              </div>
-
-              <button type="submit" class="cw-btn primary">Rotate password</button>
-            </form>
-          {% endif %}
-          {% endif %}
-        </div>
-
-        <!-- SMTP tab -->
-        <div class="cw-tab-panel {% if tab == 'smtp' %}active{% endif %}" id="tab-smtp">
-          <form method="post" action="/settings/smtp">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-
-            <div class="cw-field-row cw-mb-12">
-              <div class="cw-field">
-                <label class="cw-label" for="smtp_host">SMTP host</label>
-                <input class="cw-input" type="text" id="smtp_host" name="smtp_host"
-                       value="{{ smtp.smtp_host }}" placeholder="smtp.example.com">
-                {% if env_overrides.smtp_host is defined %}<span class="cw-override-badge">env</span>{% endif %}
-              </div>
-              <div class="cw-field">
-                <label class="cw-label" for="smtp_port">Port</label>
-                <input class="cw-input" type="number" id="smtp_port" name="smtp_port"
-                       value="{{ smtp.smtp_port }}" placeholder="587">
-              </div>
-            </div>
-
-            <div class="cw-field-row cw-mb-12">
-              <div class="cw-field">
-                <label class="cw-label" for="smtp_user">Username (optional)</label>
-                <input class="cw-input" type="text" id="smtp_user" name="smtp_user"
-                       value="{{ smtp.smtp_user }}" placeholder="user@example.com">
-              </div>
-              <div class="cw-field">
-                <label class="cw-label" for="smtp_password">Password (optional)</label>
-                <input class="cw-input" type="password" id="smtp_password" name="smtp_password"
-                       value="" placeholder="{% if smtp.smtp_password %}••••••••{% else %}password{% endif %}"
-                       autocomplete="new-password">
-              </div>
-            </div>
-
-            <div class="cw-field-row cw-mb-12">
-              <div class="cw-field">
-                <label class="cw-label" for="alert_from">From address</label>
-                <input class="cw-input" type="email" id="alert_from" name="alert_from"
-                       value="{{ smtp.alert_from }}" placeholder="cert-watch@example.com">
-              </div>
-              <div class="cw-field">
-                <label class="cw-label" for="alert_recipients">Recipients (comma-separated)</label>
-                <input class="cw-input" type="text" id="alert_recipients" name="alert_recipients"
-                       value="{{ smtp.alert_recipients }}" placeholder="ops@example.com, security@example.com">
-              </div>
-            </div>
-
-            <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; align-items: center;">
-              <button type="submit" class="cw-btn primary">Save SMTP settings</button>
-              <button type="button" class="cw-btn" data-action="test-smtp">Send test email</button>
-              <span id="smtp-test-result" class="cw-test-result" style="margin: 0;"></span>
-            </div>
-          </form>
-        </div>
-
-        <!-- Alerts tab -->
-        <div class="cw-tab-panel {% if tab == 'alerts' %}active{% endif %}" id="tab-alerts">
-          <form method="post" action="/settings/alerts">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-
-            <div class="cw-field cw-mb-12">
-              <label class="cw-label" for="webhook_url">Webhook URL (optional)</label>
-              <input class="cw-input" type="text" id="webhook_url" name="webhook_url"
-                     value="{{ alert.webhook_url }}" placeholder="https://hooks.slack.com/services/...">
-            </div>
-
-            <div class="cw-field cw-mb-12">
-              <label class="cw-label" for="webhook_template">Webhook template (optional)</label>
-              <textarea class="cw-input" id="webhook_template" name="webhook_template" rows="3"
-                        placeholder="Leave empty for default JSON payload"></textarea>
-            </div>
-
-            <div class="cw-field cw-mb-16">
-              <label class="cw-label" for="alert_digest_only">Digest mode</label>
-              <select class="cw-input" id="alert_digest_only" name="alert_digest_only">
-                <option value="0" {% if alert.alert_digest_only != '1' %}selected{% endif %}>Per-certificate alerts</option>
-                <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Daily digest (one email per day)</option>
-              </select>
-              <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
-                Digest mode sends one summary email instead of individual alerts per certificate.
-              </div>
-            </div>
-
-            <button type="submit" class="cw-btn primary">Save alert settings</button>
-          </form>
-        </div>
-      </div>
+{% block content %}
+<div class="cw-page--constrained">
+  <div class="cw-page-head">
+    <div>
+      <h1>Settings</h1>
+      <div class="cw-page-head-sub">Authentication, SMTP, and alert configuration.</div>
     </div>
   </div>
 
-  <script nonce="{{ request.state.csp_nonce }}">
-    function toggleProvider() {
-      var provider = document.getElementById('auth_provider').value;
-      document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');
-      document.getElementById('oauth-section').classList.toggle('active', provider === 'oauth');
-    }
-    // Run on load
-    toggleProvider();
+  <div class="cw-panel" style="max-width: 52rem; margin: 0 auto;">
+    {% if saved %}
+      <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Settings saved successfully.</div>
+    {% endif %}
+    {% if error %}
+      <div class="cw-alert cw-alert--error" style="margin-bottom: 1rem;">{{ error }}</div>
+    {% endif %}
+    {% if password_changed %}
+      <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Password rotated successfully. All previous sessions have been invalidated.</div>
+    {% endif %}
 
-    function testLdap() {
-      var btn = event.target;
-      var result = document.getElementById('ldap-test-result');
-      btn.disabled = true;
-      btn.textContent = 'Testing...';
-      result.className = 'cw-test-result';
-      result.textContent = '';
+    <div class="cw-tabs">
+      <a href="/settings?tab=auth" class="cw-tab {% if tab == 'auth' %}active{% endif %}">Authentication</a>
+      <a href="/settings?tab=smtp" class="cw-tab {% if tab == 'smtp' %}active{% endif %}">SMTP</a>
+      <a href="/settings?tab=alerts" class="cw-tab {% if tab == 'alerts' %}active{% endif %}">Alerts</a>
+    </div>
 
-      var form = new FormData();
-      form.append('_csrf_token', {{ csrf_token | tojson }});
-      form.append('ldap_server', document.getElementById('ldap_server').value);
-      form.append('ldap_base_dn', document.getElementById('ldap_base_dn').value);
-      form.append('ldap_bind_dn', document.getElementById('ldap_bind_dn').value);
-      form.append('ldap_bind_password', document.getElementById('ldap_bind_password').value);
-      form.append('ldap_start_tls', document.getElementById('ldap_start_tls').value);
-      form.append('ldap_ca_cert', document.getElementById('ldap_ca_cert').value);
-      form.append('ldap_connect_timeout', document.getElementById('ldap_connect_timeout').value);
+    <!-- Auth tab -->
+    <div class="cw-tab-panel {% if tab == 'auth' %}active{% endif %}" id="tab-auth">
+      <form method="post" action="/settings/auth">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
 
-      fetch('/settings/test-ldap', {method: 'POST', body: form})
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
-          result.textContent = data.ok ? data.message : 'Error: ' + data.error;
-        })
-        .catch(function(e) {
-          result.className = 'cw-test-result err';
-          result.textContent = 'Request failed: ' + e;
-        })
-        .finally(function() {
-          btn.disabled = false;
-          btn.textContent = 'Test Connection';
-        });
-    }
+        <div class="cw-field cw-mb-16">
+          <label class="cw-label" for="auth_provider">Authentication provider</label>
+          <select class="cw-input" id="auth_provider" name="auth_provider" data-action="toggle-provider">
+            <option value="" {% if not auth.auth_provider %}selected{% endif %}>None (open access)</option>
+            <option value="ldap" {% if auth.auth_provider == 'ldap' %}selected{% endif %}>LDAP / Active Directory</option>
+            <option value="oauth" {% if auth.auth_provider in ('oauth', 'entra', 'oidc') %}selected{% endif %}>OAuth / OIDC (Entra, Google)</option>
+          </select>
+          {% if env_overrides.auth_provider %}
+            <span class="cw-override-badge">set via env var</span>
+          {% endif %}
+        </div>
 
-    function testSmtp() {
-      var btn = event.target;
-      var result = document.getElementById('smtp-test-result');
-      btn.disabled = true;
-      btn.textContent = 'Sending...';
-      result.className = 'cw-test-result';
-      result.textContent = '';
+        <!-- LDAP section -->
+        <div id="ldap-section" class="cw-provider-section">
+          <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">LDAP / Active Directory</h3>
 
-      var form = new FormData();
-      form.append('_csrf_token', {{ csrf_token | tojson }});
-      form.append('smtp_host', document.getElementById('smtp_host').value);
-      form.append('smtp_port', document.getElementById('smtp_port').value);
-      form.append('smtp_user', document.getElementById('smtp_user').value);
-      form.append('smtp_password', document.getElementById('smtp_password').value);
-      form.append('alert_from', document.getElementById('alert_from').value);
-      form.append('alert_recipients', document.getElementById('alert_recipients').value);
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="ldap_server">Server URL(s)</label>
+            <input class="cw-input" type="text" id="ldap_server" name="ldap_server"
+                   value="{{ auth.ldap_server }}" placeholder="ldap://dc1.example.com,ldap://dc2.example.com">
+            {% if env_overrides.ldap_server %}<span class="cw-override-badge">env</span>{% endif %}
+          </div>
 
-      fetch('/settings/test-smtp', {method: 'POST', body: form})
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-          result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
-          result.textContent = data.ok ? data.message : 'Error: ' + data.error;
-        })
-        .catch(function(e) {
-          result.className = 'cw-test-result err';
-          result.textContent = 'Request failed: ' + e;
-        })
-        .finally(function() {
-          btn.disabled = false;
-          btn.textContent = 'Send test email';
-        });
-    }
-  </script>
-</body>
-</html>
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="ldap_base_dn">Base DN</label>
+            <input class="cw-input" type="text" id="ldap_base_dn" name="ldap_base_dn"
+                   value="{{ auth.ldap_base_dn }}" placeholder="DC=example,DC=com">
+            {% if env_overrides.ldap_base_dn %}<span class="cw-override-badge">env</span>{% endif %}
+          </div>
+
+          <div class="cw-field-row cw-mb-12">
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_dn">Bind DN (service account)</label>
+              <input class="cw-input" type="text" id="ldap_bind_dn" name="ldap_bind_dn"
+                     value="{{ auth.ldap_bind_dn }}" placeholder="CN=svc,OU=ServiceAccounts,DC=example,DC=com">
+              {% if env_overrides.ldap_bind_dn %}<span class="cw-override-badge">env</span>{% endif %}
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_password">Bind password</label>
+              <input class="cw-input" type="password" id="ldap_bind_password" name="ldap_bind_password"
+                     value="" placeholder="{% if auth.ldap_bind_password %}••••••••{% else %}password{% endif %}"
+                     autocomplete="new-password">
+              {% if env_overrides.ldap_bind_password %}<span class="cw-override-badge">env</span>{% endif %}
+            </div>
+          </div>
+
+          <div class="cw-field-row cw-mb-12">
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_user_filter">User search filter</label>
+              <input class="cw-input" type="text" id="ldap_user_filter" name="ldap_user_filter"
+                     value="{{ auth.ldap_user_filter }}" placeholder="(sAMAccountName={username})">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_connect_timeout">Connect timeout (seconds)</label>
+              <input class="cw-input" type="number" id="ldap_connect_timeout" name="ldap_connect_timeout"
+                     value="{{ auth.ldap_connect_timeout }}" min="1" max="30">
+            </div>
+          </div>
+
+          <div class="cw-field-row cw-mb-12">
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_required_groups">Required groups (comma-separated DNs)</label>
+              <input class="cw-input" type="text" id="ldap_required_groups" name="ldap_required_groups"
+                     value="{{ auth.ldap_required_groups }}" placeholder="CN=CertWatchOps,OU=Groups,DC=example,DC=com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_start_tls">StartTLS</label>
+              <select class="cw-input" id="ldap_start_tls" name="ldap_start_tls">
+                <option value="0" {% if auth.ldap_start_tls != '1' %}selected{% endif %}>Disabled</option>
+                <option value="1" {% if auth.ldap_start_tls == '1' %}selected{% endif %}>Enabled</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="ldap_ca_cert">CA certificate (PEM, for LDAPS/StartTLS)</label>
+            <textarea class="cw-input" id="ldap_ca_cert" name="ldap_ca_cert" rows="3"
+                      placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+            {% if env_overrides.ldap_ca_cert %}<span class="cw-override-badge">env</span>{% endif %}
+          </div>
+
+          <div style="margin-top: 1rem;">
+            <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
+            <div id="ldap-test-result" class="cw-test-result"></div>
+          </div>
+        </div>
+
+        <!-- OAuth section -->
+        <div id="oauth-section" class="cw-provider-section">
+          <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">OAuth / OIDC</h3>
+
+          <div class="cw-field-row cw-mb-12">
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_id">Client ID</label>
+              <input class="cw-input" type="text" id="oauth_client_id" name="oauth_client_id"
+                     value="{{ auth.oauth_client_id }}" placeholder="00000000-0000-0000-0000-000000000000">
+              {% if env_overrides.oauth_client_id %}<span class="cw-override-badge">env</span>{% endif %}
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_secret">Client secret</label>
+              <input class="cw-input" type="password" id="oauth_client_secret" name="oauth_client_secret"
+                     value="" placeholder="{% if auth.oauth_client_secret %}••••••••{% else %}secret{% endif %}"
+                     autocomplete="new-password">
+              {% if env_overrides.oauth_client_secret %}<span class="cw-override-badge">env</span>{% endif %}
+            </div>
+          </div>
+
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="oauth_issuer_url">Issuer URL</label>
+            <input class="cw-input" type="text" id="oauth_issuer_url" name="oauth_issuer_url"
+                   value="{{ auth.oauth_issuer_url }}" placeholder="https://login.microsoftonline.com/{tenant}/v2.0">
+            {% if env_overrides.oauth_issuer_url %}<span class="cw-override-badge">env</span>{% endif %}
+            <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+              Endpoints are auto-discovered from this URL via OIDC.
+            </div>
+          </div>
+
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="oauth_scope">Scopes</label>
+            <input class="cw-input" type="text" id="oauth_scope" name="oauth_scope"
+                   value="{{ auth.oauth_scope }}" placeholder="openid profile email">
+          </div>
+
+          <details style="margin: 1rem 0;">
+            <summary style="cursor: pointer; color: var(--text-muted, #888); font-size: 0.85rem;">
+              Advanced: override endpoints (skip OIDC discovery)
+            </summary>
+            <div class="cw-field cw-mb-12" style="margin-top: 0.75rem;">
+              <label class="cw-label" for="oauth_authorization_endpoint">Authorization endpoint</label>
+              <input class="cw-input" type="text" id="oauth_authorization_endpoint"
+                     name="oauth_authorization_endpoint"
+                     value="{{ auth.oauth_authorization_endpoint }}" placeholder="(auto-discovered)">
+            </div>
+            <div class="cw-field cw-mb-12">
+              <label class="cw-label" for="oauth_token_endpoint">Token endpoint</label>
+              <input class="cw-input" type="text" id="oauth_token_endpoint" name="oauth_token_endpoint"
+                     value="{{ auth.oauth_token_endpoint }}" placeholder="(auto-discovered)">
+            </div>
+            <div class="cw-field cw-mb-12">
+              <label class="cw-label" for="oauth_userinfo_endpoint">UserInfo endpoint</label>
+              <input class="cw-input" type="text" id="oauth_userinfo_endpoint" name="oauth_userinfo_endpoint"
+                     value="{{ auth.oauth_userinfo_endpoint }}" placeholder="(auto-discovered)">
+            </div>
+          </details>
+        </div>
+
+        <div style="margin-top: 2rem; display: flex; gap: 0.75rem;">
+          <button type="submit" class="cw-btn primary">Save authentication settings</button>
+        </div>
+      </form>
+
+      {% if local_admin_configured %}
+      <hr style="margin: 2.5rem 0 1.5rem; border: none; border-top: 1px solid var(--border, #333);">
+      <h3 style="margin: 0 0 0.5rem; font-size: 1rem;">Local admin password</h3>
+
+      {% if env_hash_override %}
+        <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
+          <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code> is set — the environment variable always wins over the stored password. Rotate the env var and restart to change the password.
+        </div>
+      {% else %}
+        {% if local_admin_autogenerated %}
+          <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
+            The local admin password was auto-generated on first run. Rotate it now.
+          </div>
+        {% endif %}
+        <form method="post" action="/settings/change-password">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+          <div class="cw-field cw-mb-12">
+            <label class="cw-label" for="current_password">Current password</label>
+            <input class="cw-input" type="password" id="current_password" name="current_password"
+                   autocomplete="current-password" required>
+          </div>
+
+          <div class="cw-field-row cw-mb-12">
+            <div class="cw-field">
+              <label class="cw-label" for="new_password">New password</label>
+              <input class="cw-input" type="password" id="new_password" name="new_password"
+                     autocomplete="new-password" minlength="8" required>
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="confirm_password">Confirm new password</label>
+              <input class="cw-input" type="password" id="confirm_password" name="confirm_password"
+                     autocomplete="new-password" minlength="8" required>
+            </div>
+          </div>
+
+          <button type="submit" class="cw-btn primary">Rotate password</button>
+        </form>
+      {% endif %}
+      {% endif %}
+    </div>
+
+    <!-- SMTP tab -->
+    <div class="cw-tab-panel {% if tab == 'smtp' %}active{% endif %}" id="tab-smtp">
+      <form method="post" action="/settings/smtp">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+        <div class="cw-field-row cw-mb-12">
+          <div class="cw-field">
+            <label class="cw-label" for="smtp_host">SMTP host</label>
+            <input class="cw-input" type="text" id="smtp_host" name="smtp_host"
+                   value="{{ smtp.smtp_host }}" placeholder="smtp.example.com">
+            {% if env_overrides.smtp_host is defined %}<span class="cw-override-badge">env</span>{% endif %}
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="smtp_port">Port</label>
+            <input class="cw-input" type="number" id="smtp_port" name="smtp_port"
+                   value="{{ smtp.smtp_port }}" placeholder="587">
+          </div>
+        </div>
+
+        <div class="cw-field-row cw-mb-12">
+          <div class="cw-field">
+            <label class="cw-label" for="smtp_user">Username (optional)</label>
+            <input class="cw-input" type="text" id="smtp_user" name="smtp_user"
+                   value="{{ smtp.smtp_user }}" placeholder="user@example.com">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="smtp_password">Password (optional)</label>
+            <input class="cw-input" type="password" id="smtp_password" name="smtp_password"
+                   value="" placeholder="{% if smtp.smtp_password %}••••••••{% else %}password{% endif %}"
+                   autocomplete="new-password">
+          </div>
+        </div>
+
+        <div class="cw-field-row cw-mb-12">
+          <div class="cw-field">
+            <label class="cw-label" for="alert_from">From address</label>
+            <input class="cw-input" type="email" id="alert_from" name="alert_from"
+                   value="{{ smtp.alert_from }}" placeholder="cert-watch@example.com">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="alert_recipients">Recipients (comma-separated)</label>
+            <input class="cw-input" type="text" id="alert_recipients" name="alert_recipients"
+                   value="{{ smtp.alert_recipients }}" placeholder="ops@example.com, security@example.com">
+          </div>
+        </div>
+
+        <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; align-items: center;">
+          <button type="submit" class="cw-btn primary">Save SMTP settings</button>
+          <button type="button" class="cw-btn" data-action="test-smtp">Send test email</button>
+          <span id="smtp-test-result" class="cw-test-result" style="margin: 0;"></span>
+        </div>
+      </form>
+    </div>
+
+    <!-- Alerts tab -->
+    <div class="cw-tab-panel {% if tab == 'alerts' %}active{% endif %}" id="tab-alerts">
+      <form method="post" action="/settings/alerts">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="webhook_url">Webhook URL (optional)</label>
+          <input class="cw-input" type="text" id="webhook_url" name="webhook_url"
+                 value="{{ alert.webhook_url }}" placeholder="https://hooks.slack.com/services/...">
+        </div>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="webhook_template">Webhook template (optional)</label>
+          <textarea class="cw-input" id="webhook_template" name="webhook_template" rows="3"
+                    placeholder="Leave empty for default JSON payload"></textarea>
+        </div>
+
+        <div class="cw-field cw-mb-16">
+          <label class="cw-label" for="alert_digest_only">Digest mode</label>
+          <select class="cw-input" id="alert_digest_only" name="alert_digest_only">
+            <option value="0" {% if alert.alert_digest_only != '1' %}selected{% endif %}>Per-certificate alerts</option>
+            <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Daily digest (one email per day)</option>
+          </select>
+          <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+            Digest mode sends one summary email instead of individual alerts per certificate.
+          </div>
+        </div>
+
+        <button type="submit" class="cw-btn primary">Save alert settings</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+  function toggleProvider() {
+    var provider = document.getElementById('auth_provider').value;
+    document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');
+    document.getElementById('oauth-section').classList.toggle('active', provider === 'oauth');
+  }
+  toggleProvider();
+  document.getElementById('auth_provider').addEventListener('change', toggleProvider);
+
+  function testLdap(btn) {
+    var result = document.getElementById('ldap-test-result');
+    btn.disabled = true;
+    btn.textContent = 'Testing...';
+    result.className = 'cw-test-result';
+    result.textContent = '';
+
+    var form = new FormData();
+    form.append('_csrf_token', {{ csrf_token | tojson }});
+    form.append('ldap_server', document.getElementById('ldap_server').value);
+    form.append('ldap_base_dn', document.getElementById('ldap_base_dn').value);
+    form.append('ldap_bind_dn', document.getElementById('ldap_bind_dn').value);
+    form.append('ldap_bind_password', document.getElementById('ldap_bind_password').value);
+    form.append('ldap_start_tls', document.getElementById('ldap_start_tls').value);
+    form.append('ldap_ca_cert', document.getElementById('ldap_ca_cert').value);
+    form.append('ldap_connect_timeout', document.getElementById('ldap_connect_timeout').value);
+
+    fetch('/settings/test-ldap', {method: 'POST', body: form})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
+        result.textContent = data.ok ? data.message : 'Error: ' + data.error;
+      })
+      .catch(function(e) {
+        result.className = 'cw-test-result err';
+        result.textContent = 'Request failed: ' + e;
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Test Connection';
+      });
+  }
+
+  function testSmtp(btn) {
+    var result = document.getElementById('smtp-test-result');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    result.className = 'cw-test-result';
+    result.textContent = '';
+
+    var form = new FormData();
+    form.append('_csrf_token', {{ csrf_token | tojson }});
+    form.append('smtp_host', document.getElementById('smtp_host').value);
+    form.append('smtp_port', document.getElementById('smtp_port').value);
+    form.append('smtp_user', document.getElementById('smtp_user').value);
+    form.append('smtp_password', document.getElementById('smtp_password').value);
+    form.append('alert_from', document.getElementById('alert_from').value);
+    form.append('alert_recipients', document.getElementById('alert_recipients').value);
+
+    fetch('/settings/test-smtp', {method: 'POST', body: form})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
+        result.textContent = data.ok ? data.message : 'Error: ' + data.error;
+      })
+      .catch(function(e) {
+        result.className = 'cw-test-result err';
+        result.textContent = 'Request failed: ' + e;
+      })
+      .finally(function() {
+        btn.disabled = false;
+        btn.textContent = 'Send test email';
+      });
+  }
+
+  document.querySelector('[data-action="test-ldap"]').addEventListener('click', function(e) {
+    e.preventDefault();
+    testLdap(e.currentTarget);
+  });
+  document.querySelector('[data-action="test-smtp"]').addEventListener('click', function(e) {
+    e.preventDefault();
+    testSmtp(e.currentTarget);
+  });
+</script>
+{% endblock %}

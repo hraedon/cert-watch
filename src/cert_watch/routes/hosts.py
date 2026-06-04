@@ -422,6 +422,68 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
 
 
+@router.post("/hosts/all/scan")
+async def scan_all_hosts(request: Request) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    if not check_rate_limit(f"scan_all:{_extract_client_ip(request)}", 3, 300):
+        return RedirectResponse(
+            url=f"/scan-history?error={quote('rate limited: too many scan-all requests')}",
+            status_code=303,
+        )
+    db = _db_path(request)
+    s = _get_settings(request)
+    hosts = SqliteHostRepository(db).list_all()
+    if not hosts:
+        return RedirectResponse(url="/scan-history", status_code=303)
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.scan_all",
+        target_type="host",
+        target_id="all",
+        source_ip=resolve_source_ip(request),
+    )
+    scanned = 0
+    failures = 0
+    for h in hosts:
+        try:
+            result = await scan_host_async(
+                h.hostname,
+                h.port,
+                allow_private=s.allow_private,
+                allowed_subnets=s.allowed_subnets,
+                dns_servers=s.dns_servers,
+            )
+            if isinstance(result, ScanError):
+                record_scan_history(
+                    db,
+                    ScanHistory(
+                        hostname=h.hostname, port=h.port,
+                        status="failure", error_message=result.error_message,
+                    ),
+                )
+                failures += 1
+            else:
+                await store_scanned_async(
+                    result, db,
+                    check_revocation=s.check_revocation,
+                    allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    webhook_config=s.build_webhook_config(),
+                )
+                record_scan_history(
+                    db, ScanHistory(hostname=h.hostname, port=h.port, status="success")
+                )
+                scanned += 1
+        except Exception:
+            logger.exception("scan_all: failed for %s:%d", h.hostname, h.port)
+            failures += 1
+    logger.info("scan_all: %d scanned, %d failures", scanned, failures)
+    return RedirectResponse(url="/scan-history", status_code=303)
+
+
 @router.get("/api/export/hosts.csv")
 def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -> PlainTextResponse:
     """Export all tracked hosts as CSV."""

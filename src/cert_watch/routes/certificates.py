@@ -17,6 +17,7 @@ from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteCertificateRepository,
+    SqliteHostRepository,
     SqliteTrustAnchorRepository,
     _connect,
     _row_to_cert,
@@ -183,6 +184,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
 
     # Get host info for operation summary
     host_info = None
+    host_id = ""
     renewal_method_label = ""
     renewal_method_indicator = ""
     if hostname:
@@ -193,6 +195,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             ).fetchone()
         if host_row:
             h = dict(host_row)
+            host_id = h.get("id", "")
             host_info = {
                 "owner_name": h.get("owner_name") or None,
                 "owner_email": h.get("owner_email") or None,
@@ -336,6 +339,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "issuer_cn": issuer_cn(cert.issuer),
             "hostname": hostname,
             "port": port,
+            "host_id": host_id,
             "last_scan": last_scan,
             "source": cert.san_dns_names,
             "host_info": host_info,
@@ -419,6 +423,101 @@ async def update_certificate_notes(
     )
     logger.info("updated notes for certificate %s", cert_id)
     return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/certificates/{cert_id}/owner")
+async def update_certificate_owner(
+    request: Request,
+    cert_id: str,
+    owner_name: str = Form(""),
+    owner_email: str = Form(""),
+    owner_slack: str = Form(""),
+    renewal_method: str = Form(""),
+    runbook_url: str = Form(""),
+) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    db = _db_path(request)
+
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+
+    # Find host by certificate hostname/port
+    hostname = ""
+    port = 443
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        if row:
+            hostname = row["hostname"] or ""
+            port = row["port"] or 443
+
+    if not hostname:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('no host associated')}",
+            status_code=303,
+        )
+
+    host_repo = SqliteHostRepository(db)
+    with _connect(db) as conn:
+        host_row = conn.execute(
+            "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
+        ).fetchone()
+    if not host_row:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
+        )
+
+    host_id = host_row["id"]
+    valid_methods = {"", "acme", "cert-manager", "manual"}
+    if renewal_method not in valid_methods:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('invalid renewal method')}", status_code=303,
+        )
+    if owner_email and "@" not in owner_email:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('invalid email')}", status_code=303,
+        )
+    if runbook_url:
+        from cert_watch.routes.api import _runbook_url_error
+        err = _runbook_url_error(runbook_url)
+        if err:
+            return RedirectResponse(
+                url=f"/certificates/{cert_id}?error={quote(err)}", status_code=303,
+            )
+
+    host_repo.update_owner(
+        host_id,
+        owner_name=owner_name,
+        owner_email=owner_email,
+        owner_slack=owner_slack,
+    )
+    host_repo.update_renewal(
+        host_id,
+        renewal_method=renewal_method,
+        runbook_url=runbook_url,
+    )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="owner.update",
+        target_type="host",
+        target_id=host_id,
+        detail={
+            "owner_name": owner_name,
+            "owner_email": owner_email,
+            "owner_slack": owner_slack,
+            "renewal_method": renewal_method,
+            "runbook_url": runbook_url,
+        },
+        source_ip=resolve_source_ip(request),
+    )
+    logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
+    return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
 
 @router.post("/upload")

@@ -674,6 +674,15 @@ body {
 .cw-alert-body { flex: 1; min-width: 0; }
 .cw-alert-meta { text-align: right; min-width: 110px; }
 
+/* ---- FLASH ALERTS (settings, banners) ---- */
+.cw-alert {
+  padding: 0.6rem 0.85rem; border-radius: var(--radius);
+  font-size: 0.85rem; line-height: 1.5;
+}
+.cw-alert--success { background: var(--success-bg, #0a3a1a); color: var(--success-text, #4ade80); }
+.cw-alert--error   { background: var(--error-bg, #3a0a0a);   color: var(--error-text, #f87171); }
+.cw-alert--warning { background: var(--warning-bg, #4a3800);  color: var(--warning-text, #fbbf24); }
+
 /* ---- CHAIN BANNERS ---- */
 .cw-chain-banner {
   display: flex; align-items: center; gap: 7px;
@@ -1014,4 +1023,38 @@ body {
 .cw-testres.ok { color: var(--ok); }
 .cw-testres.run { color: var(--text-3); }
 .cw-testres.err { color: var(--crit); }
+
+/* ---------- Segmented control (alerts filter) ---------- */
+.cw-segmented { display: flex; gap: 0; border: 1px solid var(--border-2); border-radius: var(--radius); overflow: hidden; }
+.cw-segment { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--text-2); text-decoration: none; background: var(--panel); border-right: 1px solid var(--border-2); transition: background .12s, color .12s; }
+.cw-segment:last-child { border-right: none; }
+.cw-segment:hover { background: var(--panel-2); color: var(--text); }
+.cw-segment.active { background: var(--accent-soft); color: var(--accent); }
+.cw-segment-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--border-2); color: var(--text-3); font-size: 11px; font-weight: 600; }
+.cw-segment.active .cw-segment-count { background: var(--accent); color: #fff; }
+
+/* ---------- NEW badge ---------- */
+.cw-badge-new { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+
+/* ---------- Responsive layout ---------- */
+@media (max-width: 960px) {
+  .cw-layout-16-1 { grid-template-columns: 1fr; }
+  .cw-stats-3 { grid-template-columns: 1fr; }
+  .cw-field-row { grid-template-columns: 1fr; }
+  .cw-grid-2-16-22 { grid-template-columns: 1fr; }
+  .cw-col-span-2 { grid-column: span 1; }
+  .cw-settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .cw-topbar { flex-wrap: wrap; gap: 8px; padding: 0 12px; }
+  .cw-nav { order: 3; width: 100%; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .cw-nav a { padding: 6px 8px; font-size: 12px; }
+  .cw-page { padding: 16px 12px; }
+  .cw-page--constrained { padding: 16px 12px; }
+  .cw-table-wrap { overflow-x: auto; }
+  .cw-table { min-width: 640px; }
+  .cw-page-head { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .cw-segmented { flex-wrap: wrap; }
+  .cw-segment { border-right: none; border-bottom: 1px solid var(--border-2); }
+}
 

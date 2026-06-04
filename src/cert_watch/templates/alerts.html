@@ -12,38 +12,28 @@
       <div class="cw-page-head-sub">Expiry &amp; scan notifications sent via email and webhook.</div>
     </div>
     <div class="cw-flex cw-gap-8">
-      <span class="cw-chip cw-p-chip">{{ icons.svg_icon('bell', 12) }}Email</span>
-      <span class="cw-chip cw-p-chip">{{ icons.svg_icon('link', 12) }}Webhook</span>
+      <a href="/settings?tab=alerts" class="cw-btn ghost sm">{{ icons.svg_icon('cog', 12) }}Alert settings</a>
     </div>
   </div>
 
-  {# ---- Severity stats ---- #}
-  {% set ns = namespace(all_count=0, critical_count=0, warning_count=0) %}
-  {% for a in alerts %}
-    {% set ns.all_count = ns.all_count + 1 %}
-    {% if a.alert_type == 'expired' or a.alert_type == 'scan_failure' %}
-      {% set ns.critical_count = ns.critical_count + 1 %}
-    {% elif a.alert_type == 'expiry_warning' or a.alert_type == 'drift' %}
-      {% set ns.warning_count = ns.warning_count + 1 %}
-    {% endif %}
-  {% endfor %}
-
-  <div class="cw-stats cw-stats-3 cw-mb-18">
-    <div class="cw-stat">
-      <div class="cw-stat-rail cw-stat-rail-accent"></div>
-      <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('bell', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total alerts</span></div>
-      <div class="cw-stat-val cw-stat-val-default">{{ ns.all_count }}</div>
-    </div>
-    <div class="cw-stat">
-      <div class="cw-stat-rail cw-stat-rail-crit"></div>
-      <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Critical</span></div>
-      <div class="cw-stat-val cw-stat-val-crit">{{ ns.critical_count }}</div>
-    </div>
-    <div class="cw-stat">
-      <div class="cw-stat-rail cw-stat-rail-warn"></div>
-      <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Warnings</span></div>
-      <div class="cw-stat-val cw-stat-val-warn">{{ ns.warning_count }}</div>
-    </div>
+  {# ---- Segmented filter ---- #}
+  <div class="cw-segmented cw-mb-18">
+    <a href="/alerts?filter_type=all" class="cw-segment {% if filter_type == 'all' %}active{% endif %}">
+      All
+      <span class="cw-segment-count">{{ alert_counts.all }}</span>
+    </a>
+    <a href="/alerts?filter_type=unread" class="cw-segment {% if filter_type == 'unread' %}active{% endif %}">
+      Unread
+      <span class="cw-segment-count">{{ alert_counts.unread }}</span>
+    </a>
+    <a href="/alerts?filter_type=critical" class="cw-segment {% if filter_type == 'critical' %}active{% endif %}">
+      Critical
+      <span class="cw-segment-count">{{ alert_counts.critical }}</span>
+    </a>
+    <a href="/alerts?filter_type=warning" class="cw-segment {% if filter_type == 'warning' %}active{% endif %}">
+      Warnings
+      <span class="cw-segment-count">{{ alert_counts.warning }}</span>
+    </a>
   </div>
 
   {# ---- Alert list ---- #}
@@ -53,13 +43,16 @@
         {% set sev_color = 'var(--crit)' if (a.alert_type in ('expired', 'scan_failure')) else 'var(--warn)' if (a.alert_type in ('expiry_warning', 'drift')) else 'var(--accent)' if a.alert_type == 'mis_issuance' else 'var(--accent)' %}
         {% set sev_bg = 'var(--crit-soft)' if (a.alert_type in ('expired', 'scan_failure')) else 'var(--warn-soft)' if (a.alert_type in ('expiry_warning', 'drift')) else 'var(--accent-soft)' if a.alert_type == 'mis_issuance' else 'var(--accent-soft)' %}
         {% set icon_name = 'server' if a.alert_type == 'scan_failure' else 'swap' if a.alert_type == 'drift' else 'globe' if a.alert_type == 'mis_issuance' else 'alert' if a.alert_type == 'expired' else 'clock' %}
-        <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}">
+        <div class="cw-panel cw-alert-item cw-sev-border cw-p-14-16" style="--sev-color:{{ sev_color }}" data-alert-id="{{ a.id }}">
           <div class="cw-alert-icon cw-sev-icon" style="--sev-color:{{ sev_color }};--sev-bg:{{ sev_bg }}">
             {{ icons.svg_icon(icon_name, 17) }}
           </div>
           <div class="cw-alert-body">
             <div class="cw-flex cw-items-center cw-gap-8 cw-wrap">
               <span class="cw-host">{{ a.subject or "(deleted)" }}</span>
+              {% if not a.read %}
+                <span class="cw-badge cw-badge-new">NEW</span>
+              {% endif %}
               {% if a.alert_type == 'drift' %}
                 <span class="cw-chip tone-crit">{{ icons.svg_icon('swap', 10, 1.7) }}drift</span>
               {% elif a.alert_type == 'mis_issuance' %}
@@ -70,6 +63,10 @@
               {% endif %}
             </div>
             <div class="cw-fz-12-5 cw-text-text-2 cw-mt-3">{{ a.message }}</div>
+            <div class="cw-flex cw-gap-6 cw-mt-6 cw-fz-11">
+              <span class="cw-chip cw-p-chip">{{ icons.svg_icon('bell', 10) }}Email</span>
+              <span class="cw-chip cw-p-chip">{{ icons.svg_icon('link', 10) }}Webhook</span>
+            </div>
           </div>
           <div class="cw-alert-meta">
             {% set dot_color = 'var(--ok)' if a.status == 'sent' else 'var(--warn)' if a.status == 'pending' else 'var(--crit)' %}
@@ -77,6 +74,11 @@
               <span class="cw-status-dot__mark"></span>{{ a.status }}
             </div>
             <div class="mono cw-fz-11 cw-text-text-3 cw-mt-4">{{ a.created_at[:16] if a.created_at else '' }}</div>
+            {% if not a.read %}
+            <button class="cw-btn ghost sm cw-mt-6" data-action="mark-read" data-alert-id="{{ a.id }}">
+              {{ icons.svg_icon('check', 10) }}Mark read
+            </button>
+            {% endif %}
           </div>
         </div>
       {% endfor %}
@@ -93,13 +95,38 @@
   {% if total_pages > 1 %}
     <div class="cw-pagination cw-mt-18">
       {% if has_prev %}
-        <a href="/alerts?page={{ page - 1 }}" class="cw-btn sm">&laquo; Prev</a>
+        <a href="/alerts?filter_type={{ filter_type }}&page={{ page - 1 }}" class="cw-btn sm">&laquo; Prev</a>
       {% endif %}
       <span class="cw-muted">Page {{ page }} of {{ total_pages }}</span>
       {% if has_next %}
-        <a href="/alerts?page={{ page + 1 }}" class="cw-btn sm">Next &raquo;</a>
+        <a href="/alerts?filter_type={{ filter_type }}&page={{ page + 1 }}" class="cw-btn sm">Next &raquo;</a>
       {% endif %}
     </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+  document.addEventListener('click', function(e) {
+    var el = e.target.closest('[data-action="mark-read"]');
+    if (!el) return;
+    var alertId = el.getAttribute('data-alert-id');
+    if (!alertId) return;
+    e.preventDefault();
+    fetch('/api/alerts/' + alertId + '/read', {method: 'POST', headers: {'x-csrf-token': {{ csrf_token | tojson }}})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          var item = document.querySelector('[data-alert-id="' + alertId + '"]');
+          if (item) {
+            var badge = item.querySelector('.cw-badge-new');
+            if (badge) badge.remove();
+            el.remove();
+          }
+        }
+      })
+      .catch(function() {});
+  });
+</script>
 {% endblock %}

@@ -300,9 +300,8 @@
                   <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
                 {% endif %}
               </div>
-            </td>
               {% if e.san_dns_names %}
-                <div class="cw-san-list">
+                <div class="cw-san-list cw-mt-7">
                   {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
                   {% for san in (san_list[:2] if san_list else []) %}
                     <span class="cw-chip san">{{ san }}</span>
