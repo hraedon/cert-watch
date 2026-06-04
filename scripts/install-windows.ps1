@@ -18,14 +18,19 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
     It does NOT configure IIS itself -- see deploy\iis\README.md for the site,
     binding, and app-pool steps. Re-running is safe: existing secrets are kept.
 
+    When the detected Python is user-scoped (the default with the Python Install
+    Manager), the script copies it to a shared location under InstallDir so the
+    IIS app pool identity can access it without depending on a user profile. See
+    deploy\iis\README.md "Why a shared Python install" for the full rationale.
+
 .PARAMETER InstallDir
-    Base directory for data, venv, secrets, and logs.
+    Base directory for data, venv, secrets, logs, and the shared Python install.
     Default: C:\ProgramData\cert-watch
 
 .PARAMETER AppPool
     Optional IIS application pool name (e.g. "cert-watch"). When given, the pool
-    identity ("IIS AppPool\<name>") is granted modify on the data dir and read
-    on the secrets dir.
+    identity ("IIS AppPool\<name>") is granted modify on the data dir, read on
+    the secrets dir, and execute on the shared Python install.
 
 .PARAMETER WithAuthExtras
     Also install the LDAP + OAuth optional dependencies.
@@ -131,6 +136,50 @@ if (-not $python) {
     throw "Python 3.12+ not found. Install it (winget install Python.Python.3.14) and re-run."
 }
 
+# --- Ensure Python is in a shared (non-user-profile) location ---
+# The Python Install Manager installs runtimes per-user only (under
+# %LocalAppData%\Python).  The IIS app pool identity cannot access user
+# profiles, so we copy the runtime to a shared directory under InstallDir.
+# See deploy\iis\README.md "Why a shared Python install" for the rationale.
+$sharedPyDir = Join-Path $InstallDir "python"
+$sharedPyExe = Join-Path $sharedPyDir "python.exe"
+$needsShared = $false
+if ($python.Exe -like "*\AppData\*" -or $python.Exe -like "*\WindowsApps\*") {
+    $needsShared = $true
+}
+if ($needsShared) {
+    if (Test-Path $sharedPyExe) {
+        Write-Host "Using existing shared Python at $sharedPyDir"
+    } else {
+        Write-Host "Python is user-scoped ($($python.Exe)); copying to shared location ..."
+        Write-Host "  Installing to $sharedPyDir via py install --target ..."
+        $tag = "$major.$minor"
+        $r = Invoke-PyProbe -Exe "py" -Arguments @("install", "--target=$sharedPyDir", $tag)
+        if ($r.ExitCode -ne 0) {
+            # Fallback: manually copy the installation
+            Write-Host "  py install --target failed (exit $($r.ExitCode)); copying manually ..."
+            $pySrc = Split-Path $python.Exe
+            # Copy the entire Python prefix (not just the exe -- we need stdlib)
+            if (Test-Path $pySrc) {
+                Copy-Item -Path $pySrc -Destination $sharedPyDir -Recurse -Force
+            }
+        }
+        if (-not (Test-Path $sharedPyExe)) {
+            # py install --target may extract to a subdirectory
+            $nested = Get-ChildItem -Path $sharedPyDir -Filter "python.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($nested) {
+                $sharedPyDir = Split-Path $nested.FullName
+                $sharedPyExe = $nested.FullName
+            }
+        }
+        if (-not (Test-Path $sharedPyExe)) {
+            throw "Failed to create shared Python at $sharedPyDir. Copy $($python.Exe) manually."
+        }
+        Write-Host "  Shared Python ready at $sharedPyExe"
+    }
+    $python = @{ Exe = $sharedPyExe; Args = @() }
+}
+
 Write-Host "Creating directories under $InstallDir ..."
 foreach ($d in @($InstallDir, $secrets, $logs)) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
@@ -177,19 +226,14 @@ icacls $secrets /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI
 
 if ($AppPool) {
     $identity = "IIS AppPool\$AppPool"
-    Write-Host "Granting $identity access (data: modify, secrets: read) ..."
+    Write-Host "Granting $identity access (data: modify, secrets: read, python: read+execute) ..."
     icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
     icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
-
-    # The venv's python.exe is a symlink to the real Python installation.
-    # Grant read+execute so the IIS app pool can launch it.
-    $venvPy = Join-Path $venv "Scripts\python.exe"
-    $pyReal = $venvPy
-    try { $resolved = (Get-Item $venvPy).Target; if ($resolved) { $pyReal = $resolved } } catch { }
-    $pyDir = Split-Path $pyReal
-    if ($pyDir -and (Test-Path $pyDir)) {
-        Write-Host "Granting $identity access to Python at $pyDir ..."
-        icacls $pyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+    # The shared Python install lives under InstallDir, which already has
+    # modify access.  Explicitly set RX on the python subdir to ensure
+    # execute is inherited even if the parent's modify ACE is tightened later.
+    if (Test-Path $sharedPyDir) {
+        icacls $sharedPyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
     }
 }
 

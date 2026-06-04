@@ -40,6 +40,37 @@ third-party service wrapper and IIS manages the process lifecycle for you.
 
 ---
 
+## Why a shared Python install
+
+The **Python Install Manager** (the new default for Python 3.14+ on Windows)
+installs runtimes **per-user only** — under `%LocalAppData%\Python\`.  The IIS
+app pool identity (`IIS AppPool\cert-watch`) is a virtual account with no user
+profile, so it cannot traverse the installing user's profile directory tree.
+Even granting ACLs on the user-profile path is fragile: the installing user's
+profile may be cleaned up, the path changes if the user is different, and
+corporate roaming profiles can relocate it.
+
+`install-windows.ps1` detects this and automatically copies the runtime to
+`C:\ProgramData\cert-watch\python\` (shared, under the install dir).  The venv
+is then built from that shared interpreter.  The IIS app pool only needs access
+to `C:\ProgramData\cert-watch\`, which is already granted.
+
+### Alternatives considered (and why they were dismissed)
+
+| Approach | Why not |
+|----------|---------|
+| **Grant ACLs on the user-profile Python dir** | Fragile: depends on the installing user's profile path surviving. Breaks if a different admin runs the script, if the profile is cleaned up, or under roaming profiles. We tried this first and hit "Access is denied" on the IIS app pool. |
+| **`py install --target` to a shared location** | The Python team's recommended approach for per-machine installs. However, `py install --target` does not register the install with the `py` launcher — it's a raw extraction. We use it as a fallback if the `py` launcher is available, but a manual copy works too. |
+| **The deprecated full installer (`python-3.14.x-amd64.exe /InstallAllUsers=1`)** | Installs to `C:\Program Files\Python314` (true system-wide). Still works for 3.14 but marked deprecated; 3.15+ may drop it. Ties us to a specific installer format. |
+| **NuGet packages** | Minimal, no pip, no venv module. Designed for CI/build, not for running a production app. |
+| **Embeddable package** | Stripped-down: no pip, no Tcl/Tk, `._pth` file restricts imports. Suitable for embedding, not for a full web app with dependencies. |
+| **winget system-wide install** | `winget install Python.Python.3.14 --scope machine` uses the same deprecated full installer under the hood. Same long-term risk. |
+
+The `--target` copy approach (option 2) is the Python team's own documented
+workaround for per-machine installs and has no deprecation risk.
+
+---
+
 ## Step 1 — Bootstrap the app (both models)
 
 From an **elevated** PowerShell, in the repo root:
