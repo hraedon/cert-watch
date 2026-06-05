@@ -15,6 +15,7 @@ from cryptography.hazmat.primitives.serialization import (
     pkcs12,
 )
 from cryptography.x509.oid import NameOID
+
 pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect
 

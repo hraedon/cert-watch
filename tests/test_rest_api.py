@@ -83,6 +83,48 @@ def test_api_certificate_not_found(reload_app):
     assert r.status_code == 404
 
 
+def test_api_revocation_check(tmp_path, reload_app, leaf_pem_file, monkeypatch):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
+
+    entry = upload_certificate(leaf_pem_file)
+    assert isinstance(entry, UploadedEntry)
+    leaf_id = store_uploaded(entry, db)
+
+    def _mock_check(cert_der, **kwargs):
+        from cert_watch.posture import Finding
+        return [
+            Finding(check="ocsp_endpoint", status="pass", message="OCSP responder reachable"),
+            Finding(
+                check="crl_endpoint",
+                status="info",
+                message="No CRL distribution points in certificate",
+            ),
+        ]
+
+    import importlib
+    api_mod = importlib.import_module("cert_watch.routes.api")
+    monkeypatch.setattr(api_mod, "check_revocation_endpoints", _mock_check)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/api/certificates/{leaf_id}/revocation")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["cert_id"] == leaf_id
+    assert len(data["findings"]) == 2
+    assert data["findings"][0]["check"] == "ocsp_endpoint"
+    assert data["findings"][0]["status"] == "pass"
+
+
+def test_api_revocation_check_not_found(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/certificates/nonexistent/revocation")
+    assert r.status_code == 404
+    assert r.json()["error"] == "not found"
+
+
 def test_api_hosts_empty(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
