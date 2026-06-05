@@ -247,6 +247,27 @@ Browse `https://certs.example.com/`. Logs land in
   generated secrets live there. Back it up like any other app data dir
   (`cert-watch backup <path>` produces a WAL-safe copy).
 
+## Verify the install
+
+After either hosting model, run the verifier from an **elevated** PowerShell to
+check the end state — prerequisites, persisted secrets, ACLs, the IIS pool/site
+config, and live HTTP health — in one pass:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\Verify-Install.ps1 `
+    -AppPool cert-watch -BaseUrl https://certs.example.com -SkipCertCheck
+```
+
+It is **read-only** (it never modifies the install). It writes a structured JSON
+report to `C:\ProgramData\cert-watch\logs\verify-report.json` and **exits
+non-zero if any check fails**, so a change-control or CI gate can branch on it.
+The JSON bundles each failing check with an explicit remediation plus a
+diagnostics dump (stdout-log tail, IIS config, ACLs, recent Application events)
+so a failure can be triaged from the report alone, without RDP-ing in to dig.
+Add `-Markdown` for a readable report, or `-Json` to stream it to stdout (handy
+for feeding the result to an automated triage step). Each remediation string
+points back to the relevant step in this document.
+
 ## Troubleshooting
 
 - **502.5 / process failed to start:** check `logs\stdout*.log`. Usually a wrong
