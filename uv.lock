@@ -92,7 +92,7 @@ wheels = [
 
 [[package]]
 name = "cert-watch"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
@@ -152,7 +152,7 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "python-multipart", specifier = ">=0.0.12" },
     { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'windows'", specifier = ">=306" },
-    { name = "requests", marker = "extra == 'auth-oauth'", specifier = ">=2.31" },
+    { name = "requests", marker = "extra == 'auth-oauth'", specifier = ">=2.32" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.7" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]

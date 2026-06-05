@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import secrets
 import time
 from dataclasses import dataclass
 
-from cert_watch.http_client import SSRFBlockedError, _validate_url, ssrf_safe_urlopen
+from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
 from .protocol import AuthProvider, AuthResult
 from .session import _sign_state, _verify_state
@@ -53,6 +52,10 @@ class OAuthConfig:
     # SSRF policy (must match the scanner's allowlist so private IdPs work)
     allow_private: bool = False
     allowed_subnets: tuple[str, ...] = ()
+    jwks_cache_ttl: int = 86400
+
+
+_JWKS_MAX_BYTES = 256 * 1024  # 256 KiB — a JWKS response should be a few KB
 
 
 class OAuthProvider(AuthProvider):
@@ -75,7 +78,7 @@ class OAuthProvider(AuthProvider):
         self._discovered: dict[str, str] = {}
         self._jwks: dict | None = None
         self._jwks_fetched_at: float = 0.0
-        self._jwks_ttl: int = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
+        self._jwks_ttl: int = config.jwks_cache_ttl
         self._allow_private = config.allow_private
         self._allowed_subnets = config.allowed_subnets
         try:
@@ -108,7 +111,7 @@ class OAuthProvider(AuthProvider):
                 allow_private=self._allow_private,
                 allowed_subnets=self._allowed_subnets,
             )
-            data = json.loads(resp.read())
+            data = json.loads(resp.read(_JWKS_MAX_BYTES))
             resp.close()
             self._discovered = {
                 "authorization_endpoint": data["authorization_endpoint"],
@@ -150,7 +153,7 @@ class OAuthProvider(AuthProvider):
                 allow_private=self._allow_private,
                 allowed_subnets=self._allowed_subnets,
             )
-            self._jwks = json.loads(resp.read())
+            self._jwks = json.loads(resp.read(_JWKS_MAX_BYTES))
             self._jwks_fetched_at = time.monotonic()
             resp.close()
         except Exception as exc:
@@ -341,58 +344,68 @@ class OAuthProvider(AuthProvider):
             if not username:
                 userinfo_endpoint = endpoints.get("userinfo_endpoint", "")
                 if userinfo_endpoint:
-                    # SSRF guard: validate userinfo endpoint before calling it
-                    # (authlib uses requests, so we can't route through ssrf_safe_urlopen)
                     try:
-                        _validate_url(
+                        userinfo_resp = ssrf_safe_urlopen(
                             userinfo_endpoint,
+                            headers={
+                                "Authorization": f"Bearer {token.get('access_token', '')}",
+                                "User-Agent": "cert-watch",
+                                "Accept": "application/json",
+                            },
+                            timeout=10,
                             allow_private=self._allow_private,
                             allowed_subnets=self._allowed_subnets,
                         )
+                        with userinfo_resp:
+                            if 200 <= userinfo_resp.status < 300:
+                                info = json.loads(userinfo_resp.read())
+                            else:
+                                logger.warning(
+                                    "OAuth userinfo endpoint returned %s",
+                                    userinfo_resp.status,
+                                )
+                                info = {}
                     except SSRFBlockedError as exc:
                         logger.warning("OAuth userinfo endpoint blocked by SSRF policy: %s", exc)
                         return AuthResult(
                             success=False,
                             error="OAuth userinfo endpoint blocked by SSRF policy",
                         )
-                    resp = client.get(userinfo_endpoint)
-                    if resp.status_code == 200:
-                        info = resp.json()
-                        # BC-071: verify nonce claim if the userinfo response
-                        # includes one (OIDC Core §5.3.2 — userinfo MAY include
-                        # the nonce). This restores the audience/nonce binding
-                        # that the id_token path provides. When the IdP omits
-                        # the nonce, log a warning so operators know the path is
-                        # degraded.
-                        if nonce:
-                            userinfo_nonce = info.get("nonce")
-                            if userinfo_nonce and userinfo_nonce == nonce:
-                                logger.info(
-                                    "OAuth: userinfo response includes verified nonce claim; "
-                                    "nonce binding intact."
-                                )
-                            elif userinfo_nonce:
-                                logger.warning(
-                                    "OAuth: userinfo nonce claim mismatch "
-                                    "(expected %s, got %s); rejecting.",
-                                    nonce, userinfo_nonce,
-                                )
-                                return AuthResult(
-                                    success=False,
-                                    error="OAuth userinfo nonce mismatch",
-                                )
-                            else:
-                                logger.warning(
-                                    "OAuth: no id_token and userinfo response lacks nonce "
-                                    "claim — access token trusted on code exchange alone "
-                                    "(BC-071). Configure an OIDC-compliant IdP that returns "
-                                    "an id_token for full session binding."
-                                )
-                        username = (
-                            info.get("preferred_username")
-                            or info.get("email")
-                            or info.get("sub", "")
-                        )
+                    # BC-071: verify nonce claim if the userinfo response
+                    # includes one (OIDC Core §5.3.2 — userinfo MAY include
+                    # the nonce). This restores the audience/nonce binding
+                    # that the id_token path provides. When the IdP omits
+                    # the nonce, log a warning so operators know the path is
+                    # degraded.
+                    if nonce:
+                        userinfo_nonce = info.get("nonce")
+                        if userinfo_nonce and userinfo_nonce == nonce:
+                            logger.info(
+                                "OAuth: userinfo response includes verified nonce claim; "
+                                "nonce binding intact."
+                            )
+                        elif userinfo_nonce:
+                            logger.warning(
+                                "OAuth: userinfo nonce claim mismatch "
+                                "(expected %s, got %s); rejecting.",
+                                nonce, userinfo_nonce,
+                            )
+                            return AuthResult(
+                                success=False,
+                                error="OAuth userinfo nonce mismatch",
+                            )
+                        else:
+                            logger.warning(
+                                "OAuth: no id_token and userinfo response lacks nonce "
+                                "claim — access token trusted on code exchange alone "
+                                "(BC-071). Configure an OIDC-compliant IdP that returns "
+                                "an id_token for full session binding."
+                            )
+                    username = (
+                        info.get("preferred_username")
+                        or info.get("email")
+                        or info.get("sub", "")
+                    )
             if not username:
                 return AuthResult(success=False, error="could not determine username from token")
             return AuthResult(success=True, username=username)

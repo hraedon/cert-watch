@@ -30,6 +30,7 @@ from cert_watch.middleware import (
     get_auth_context,
     get_csrf_context,
     rate_limit,
+    require_auth,
     require_write,
 )
 
@@ -89,6 +90,7 @@ def readyz(request: Request) -> dict:
         checks["scheduler"] = "running"
     else:
         checks["scheduler"] = "not running"
+        ok = False
     # Certificate counts
     try:
         with _connect(db) as conn:
@@ -111,7 +113,7 @@ def readyz(request: Request) -> dict:
     }
 
 
-@router.get("/api/health")
+@router.get("/api/health", dependencies=[Depends(require_auth)])
 def api_health(request: Request) -> JSONResponse:
     """Structured health data for the dashboard banner."""
     db = _db_path(request)
@@ -398,7 +400,10 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     )
 
 
-@router.get("/ct-lookup/{domain}", dependencies=[Depends(rate_limit("ct", 10, 60))])
+@router.get(
+    "/ct-lookup/{domain}",
+    dependencies=[Depends(require_auth), Depends(rate_limit("ct", 10, 60))],
+)
 def ct_lookup_view(request: Request, domain: str) -> dict:
     result = ct_lookup.query_ct_log(domain)
     if isinstance(result, str):
@@ -420,7 +425,10 @@ def ct_lookup_view(request: Request, domain: str) -> dict:
     }
 
 
-@router.get("/caa-check/{domain}", dependencies=[Depends(rate_limit("caa", 10, 60))])
+@router.get(
+    "/caa-check/{domain}",
+    dependencies=[Depends(require_auth), Depends(rate_limit("caa", 10, 60))],
+)
 def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
     import re as _re

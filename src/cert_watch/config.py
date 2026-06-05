@@ -175,6 +175,7 @@ class Settings:
     # Security
     base_url: str = ""  # Override for OAuth redirect URI detection
     allow_unauth: bool = False  # Suppress unauthenticated warning (CERT_WATCH_ALLOW_UNAUTH=1)
+    jwks_cache_ttl: int = 86400  # JWKS cache TTL in seconds (CERT_WATCH_JWKS_CACHE_TTL)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -340,6 +341,7 @@ class Settings:
             # Security
             base_url=os.environ.get("CERT_WATCH_BASE_URL", "").rstrip("/"),
             allow_unauth=os.environ.get("CERT_WATCH_ALLOW_UNAUTH", "0") == "1",
+            jwks_cache_ttl=int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400")),
         )
 
     def build_alert_config(self):
@@ -414,6 +416,7 @@ class Settings:
             oauth_userinfo_endpoint=self.oauth_userinfo_endpoint,
             allow_private=self.allow_private,
             allowed_subnets=self.allowed_subnets,
+            jwks_cache_ttl=self.jwks_cache_ttl,
             allowed_groups=list(self.allowed_groups),
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,

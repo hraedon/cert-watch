@@ -47,7 +47,7 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
         p = int(parts[3])
         salt = base64.b64decode(parts[4])
         expected_dk = base64.b64decode(parts[5])
-    except (ValueError, Exception):
+    except Exception:
         return False
     if n < 2 or r < 1 or p < 1 or len(expected_dk) != 32:
         logger.warning(

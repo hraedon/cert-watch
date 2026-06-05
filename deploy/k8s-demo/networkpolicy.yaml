@@ -12,7 +12,9 @@ spec:
     - Egress
   ingress:
     - from:
-        - namespaceSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cert-watch-demo
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik

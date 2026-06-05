@@ -26,6 +26,10 @@ from cert_watch.scheduler import ScanHistory, record_scan_history
 
 logger = logging.getLogger("cert_watch.routes.hosts")
 
+# Serialize concurrent store_scanned_async calls — SQLite WAL handles writers
+# but concurrent writes beyond busy_timeout raise OperationalError.
+_store_sem = asyncio.Semaphore(1)
+
 _CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
 
 
@@ -119,6 +123,9 @@ async def add_host(
     scan_interval_hours: int | None = Form(None),
     common_ports: bool = Form(False),
 ) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
     if not common_ports and not (1 <= port <= 65535):
         return RedirectResponse(
             url=f"/?error={quote('port must be between 1 and 65535')}", status_code=303
@@ -127,9 +134,6 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
         )
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     if not check_rate_limit(f"add_host:{_extract_client_ip(request)}", 20, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -176,13 +180,18 @@ async def add_host(
             pinned_ip=pinned_ip,
         )
         if not isinstance(result, ScanError):
-            await store_scanned_async(
-                result, db,
-                check_revocation=s.check_revocation,
-                allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                webhook_config=s.build_webhook_config(),
-            )
+            async with _store_sem:
+                try:
+                    await store_scanned_async(
+                        result, db,
+                        check_revocation=s.check_revocation,
+                        allow_private=s.allow_private,
+                        allowed_subnets=s.allowed_subnets,
+                        webhook_config=s.build_webhook_config(),
+                    )
+                except Exception:
+                    logger.exception("store_scanned_async failed for %s:%d", hostname, p)
+                    return False
             record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))
             logger.info("added and scanned host %s:%d", hostname, p)
             return True
@@ -313,13 +322,26 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     imported = 0
     for hostname, port, result in await asyncio.gather(*[_scan_one(j) for j in scan_jobs]):
         if not isinstance(result, ScanError):
-            await store_scanned_async(
-                result, db,
-                check_revocation=s.check_revocation,
-                allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                webhook_config=s.build_webhook_config(),
-            )
+            async with _store_sem:
+                try:
+                    await store_scanned_async(
+                        result, db,
+                        check_revocation=s.check_revocation,
+                        allow_private=s.allow_private,
+                        allowed_subnets=s.allowed_subnets,
+                        webhook_config=s.build_webhook_config(),
+                    )
+                except Exception:
+                    logger.exception("store_scanned_async failed for %s:%d", hostname, port)
+                    record_scan_history(
+                        db,
+                        ScanHistory(
+                            hostname=hostname, port=port,
+                            status="failure", error_message="store failed",
+                        ),
+                    )
+                    imported += 1
+                    continue
             record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
         else:
             record_scan_history(
@@ -394,13 +416,28 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
         dns_servers=s.dns_servers,
     )
     if not isinstance(result, ScanError):
-        await store_scanned_async(
-            result, db,
-            check_revocation=s.check_revocation,
-            allow_private=s.allow_private,
-            allowed_subnets=s.allowed_subnets,
-            webhook_config=s.build_webhook_config(),
-        )
+        async with _store_sem:
+            try:
+                await store_scanned_async(
+                    result, db,
+                    check_revocation=s.check_revocation,
+                    allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    webhook_config=s.build_webhook_config(),
+                )
+            except Exception:
+                logger.exception("store_scanned_async failed for %s:%d", host.hostname, host.port)
+                record_scan_history(
+                    db,
+                    ScanHistory(
+                        hostname=host.hostname, port=host.port,
+                        status="failure", error_message="store failed",
+                    ),
+                )
+                logger.error("manual scan store failed for %s:%d", host.hostname, host.port)
+                return RedirectResponse(
+                    url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
+                )
         record_scan_history(
             db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
         )
@@ -466,13 +503,26 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                 )
                 failures += 1
             else:
-                await store_scanned_async(
-                    result, db,
-                    check_revocation=s.check_revocation,
-                    allow_private=s.allow_private,
-                    allowed_subnets=s.allowed_subnets,
-                    webhook_config=s.build_webhook_config(),
-                )
+                async with _store_sem:
+                    try:
+                        await store_scanned_async(
+                            result, db,
+                            check_revocation=s.check_revocation,
+                            allow_private=s.allow_private,
+                            allowed_subnets=s.allowed_subnets,
+                            webhook_config=s.build_webhook_config(),
+                        )
+                    except Exception:
+                        logger.exception("store_scanned_async failed for %s:%d", h.hostname, h.port)
+                        record_scan_history(
+                            db,
+                            ScanHistory(
+                                hostname=h.hostname, port=h.port,
+                                status="failure", error_message="store failed",
+                            ),
+                        )
+                        failures += 1
+                        continue
                 record_scan_history(
                     db, ScanHistory(hostname=h.hostname, port=h.port, status="success")
                 )

@@ -232,13 +232,7 @@ def test_validate_chain_signatures_genuine(chain_triplet):
 
 def test_validate_chain_signatures_forged():
     """Names line up but a forged intermediate's signature does not verify."""
-    # Real root.
-    root_cert, root_key = _issue(
-        "Forge Root CA",
-        x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")]),
-        rsa.generate_private_key(public_exponent=65537, key_size=2048),
-    )
-    # Re-sign the root with its own key so it self-signs cleanly.
+    # Self-signed root.
     root_self_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")])
     root_cert, root_key = _issue("Forge Root CA", root_name, root_self_key, root_self_key)
