@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+
 pytest.importorskip("playwright")
 from playwright.sync_api import Page, expect
 

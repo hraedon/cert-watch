@@ -209,6 +209,13 @@
           <span class="cw-chip">{{ posture.protocol_version }}</span>
         </div>
         {% endif %}
+        {% if may_write %}
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mt-10">
+          <button class="cw-btn ghost sm" type="button" data-action="check-revocation" data-cert-id="{{ cert_id }}">{{ icons.svg_icon('refresh', 13) }}Check revocation</button>
+          <span id="revocation-status" class="cw-fz-11 cw-text-text-3"></span>
+        </div>
+        <div id="revocation-results" class="cw-flex cw-flex-col cw-gap-6 cw-mt-10 cw-hidden"></div>
+        {% endif %}
       </div>
       {% endif %}
 
@@ -509,6 +516,38 @@ function saveOwner() {
     }
   });
   form.submit();
+}
+function checkRevocation(el) {
+  var certId = el.getAttribute('data-cert-id');
+  var status = document.getElementById('revocation-status');
+  var results = document.getElementById('revocation-results');
+  if (!certId || !status || !results) return;
+  status.textContent = 'Checking…';
+  fetch('/api/certificates/' + encodeURIComponent(certId) + '/revocation')
+    .then(function(r) {
+      if (!r.ok) throw new Error('status ' + r.status);
+      return r.json();
+    })
+    .then(function(data) {
+      status.textContent = '';
+      results.innerHTML = '';
+      results.style.display = 'block';
+      data.findings.forEach(function(f) {
+        var icon = f.status === 'pass' ? '{{ icons.svg_icon('check', 13) }}' :
+          (f.status === 'warn' ? '{{ icons.svg_icon('alert', 13, 1.7) }}' :
+          '{{ icons.svg_icon('swap', 13, 1.7) }}');
+        var tone = f.status === 'pass' ? 'cw-text-text-ok' :
+          (f.status === 'warn' ? 'cw-text-text-warn' : 'cw-text-text-3');
+        var div = document.createElement('div');
+        div.className = 'cw-flex cw-items-start cw-gap-8';
+        div.innerHTML = '<span class="cw-fz-12 ' + tone + ' cw-min-w-16">' + icon + '</span><div><span class="cw-fz-12-5 cw-text-text">' + (f.message || '') + '</span></div>';
+        results.appendChild(div);
+      });
+    })
+    .catch(function(e) {
+      status.textContent = 'Failed to check revocation';
+      results.style.display = 'none';
+    });
 }
 document.addEventListener('submit', function(e) {
   var form = e.target;

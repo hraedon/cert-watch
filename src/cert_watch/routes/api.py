@@ -29,6 +29,7 @@ from cert_watch.database import (
     list_tls_version_trends,
 )
 from cert_watch.middleware import rate_limit, require_auth, require_write
+from cert_watch.posture import check_revocation_endpoints
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
@@ -236,6 +237,35 @@ def api_cert_history(
         return JSONResponse(content={"error": "not found"}, status_code=404)
     history = list_cert_history(db, row["hostname"], row["port"], limit=min(max(limit, 1), 1000))
     return JSONResponse(content={"cert_id": cert_id, "history": history})
+
+
+@router.get("/api/certificates/{cert_id}/revocation")
+def api_check_revocation(
+    request: Request, cert_id: str, _auth: str = Depends(require_auth)
+) -> JSONResponse:
+    """Check OCSP/CRL endpoint reachability for a certificate on demand."""
+    db = _db_path(request)
+    s = _get_settings(request)
+    repo = SqliteCertificateRepository(db)
+    cert = repo.get_by_id(cert_id)
+    if cert is None:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    if not cert.raw_der:
+        return JSONResponse(content={"error": "certificate has no raw data"}, status_code=400)
+    findings = check_revocation_endpoints(
+        cert.raw_der,
+        allow_private=s.allow_private,
+        allowed_subnets=s.allowed_subnets,
+    )
+    return JSONResponse(
+        content={
+            "cert_id": cert_id,
+            "findings": [
+                {"check": f.check, "status": f.status, "message": f.message}
+                for f in findings
+            ],
+        }
+    )
 
 
 # ---------- Tags (plan 013) ----------

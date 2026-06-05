@@ -288,7 +288,9 @@ def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app,
 # ---------- Semaphore failure-isolation branches (BC-134) ----------
 
 
-def test_add_host_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+def test_add_host_store_scanned_async_failure_isolated(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
     """When store_scanned_async raises inside the semaphore, the exception is
     caught and the route still redirects (failure isolation per-task)."""
     app_mod = reload_app()
@@ -322,7 +324,9 @@ def test_add_host_store_scanned_async_failure_isolated(tmp_path, monkeypatch, re
     assert host_repo.count_all() == 1
 
 
-def test_import_hosts_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+def test_import_hosts_store_scanned_async_failure_isolated(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
     """Import batch: one store failure must not abort the others and must be
     recorded in scan_history."""
     app_mod = reload_app()
@@ -374,7 +378,9 @@ def test_import_hosts_store_scanned_async_failure_isolated(tmp_path, monkeypatch
     assert rows[1][1] == "success"
 
 
-def test_scan_now_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+def test_scan_now_store_scanned_async_failure_isolated(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
     """Manual scan: store_scanned_async failure must redirect with warning and
     record scan_history."""
     app_mod = reload_app()
@@ -415,7 +421,9 @@ def test_scan_now_store_scanned_async_failure_isolated(tmp_path, monkeypatch, re
     assert rows[0][1] == "store failed"
 
 
-def test_scan_all_hosts_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+def test_scan_all_hosts_store_scanned_async_failure_isolated(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
     """Scan-all: store_scanned_async failure on one host must not stop the loop
     and must be recorded in scan_history."""
     app_mod = reload_app()

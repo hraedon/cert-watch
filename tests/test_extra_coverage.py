@@ -189,6 +189,30 @@ def test_certificate_detail_with_posture(tmp_path, monkeypatch, leaf_pem_file):
     assert "TLS" in r.text
 
 
+def test_certificate_detail_revocation_button(tmp_path, monkeypatch, leaf_pem_file):
+    """The detail page shows a Check revocation button when posture is present."""
+    app_mod = _reload(monkeypatch, tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema, store_scan_posture
+
+    init_schema(db)
+    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
+    store_scan_posture(
+        str(db),
+        cert_id,
+        "leaf.example.com",
+        443,
+        "A",
+        [{"check": "tls_version", "status": "ok", "message": "TLS 1.3"}],
+        protocol_version="TLSv1.3",
+    )
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert "Check revocation" in r.text
+    assert "data-action=\"check-revocation\"" in r.text
+
+
 def test_certificate_detail_ecdsa_key(tmp_path, monkeypatch):
     """Test detail page with ECDSA key type."""
 
