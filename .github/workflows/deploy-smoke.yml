@@ -341,3 +341,81 @@ jobs:
         run: |
           kubectl delete namespace cert-watch-deploy-test --ignore-not-found=true --wait=false || true
           kind delete cluster --name cert-watch-deploy-test || true
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      # Parse both PS scripts on Windows PowerShell 5.1 (the production shell, not
+      # pwsh 7) to catch the 5.1-only syntax / quoting-codepage class of bug
+      # before anything runs.
+      - name: Parse PowerShell scripts on Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($f in @('scripts\install-windows.ps1', 'scripts\Verify-Install.ps1')) {
+            $errs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$null, [ref]$errs)
+            if ($errs -and $errs.Count -gt 0) {
+              $errs | ForEach-Object { Write-Host ('PARSE ERROR line ' + $_.Extent.StartLineNumber + ': ' + $_.Message) }
+              exit 1
+            }
+            Write-Host ('parsed OK: ' + $f)
+          }
+
+      # Service model (no IIS -- IIS is not enabled on hosted runners; the
+      # verifier skips the IIS/ACL checks). This exercises the real install
+      # script end to end via Windows PowerShell 5.1.
+      - name: Install cert-watch via install-windows.ps1
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $py312 = Get-ChildItem 'C:\hostedtoolcache\windows\Python\3.12.*' -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if ($py312) { $env:PATH = (Join-Path $py312.FullName 'x64') + ';' + $env:PATH }
+          python --version
+          .\scripts\install-windows.ps1 -InstallDir C:\cert-watch-ci
+
+      - name: Start app on loopback and wait for health
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CERT_WATCH_DATA_DIR = 'C:\cert-watch-ci'
+          $env:CERT_WATCH_HOST = '127.0.0.1'
+          $env:CERT_WATCH_PORT = '18890'
+          $env:CERT_WATCH_ALLOW_UNAUTH = '1'
+          $env:CERT_WATCH_AUTH_SECRET_FILE = 'C:\cert-watch-ci\secrets\auth_secret'
+          $env:CERT_WATCH_CSRF_SECRET_FILE = 'C:\cert-watch-ci\secrets\csrf_secret'
+          $exe = 'C:\cert-watch-ci\venv\Scripts\cert-watch.exe'
+          $p = Start-Process -FilePath $exe -PassThru -WindowStyle Hidden
+          $p.Id | Set-Content cw.pid
+          $ok = $false
+          for ($i = 0; $i -lt 30; $i++) {
+            try {
+              $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 http://127.0.0.1:18890/healthz
+              if ($r.StatusCode -eq 200) { $ok = $true; break }
+            } catch { }
+            Start-Sleep -Seconds 2
+          }
+          if (-not $ok) {
+            Write-Host '--- app log tail ---'
+            Get-ChildItem C:\cert-watch-ci\logs -ErrorAction SilentlyContinue |
+              ForEach-Object { Get-Content $_.FullName -Tail 50 }
+            throw 'cert-watch did not become healthy on 127.0.0.1:18890'
+          }
+
+      # Gate of record: the same verifier operators run by hand. Exits non-zero
+      # on any failed check and prints verify-report.json via -Json.
+      - name: Verify deployment (structured report)
+        shell: powershell
+        run: |
+          .\scripts\Verify-Install.ps1 -InstallDir C:\cert-watch-ci -BaseUrl http://127.0.0.1:18890 -Json
+
+      - name: Stop app
+        if: always()
+        shell: powershell
+        run: |
+          if (Test-Path cw.pid) {
+            Stop-Process -Id (Get-Content cw.pid) -Force -ErrorAction SilentlyContinue
+          }
