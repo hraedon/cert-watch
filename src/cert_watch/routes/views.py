@@ -537,6 +537,15 @@ def insights_view(
     grade_trends: list[dict] = []
     grade_max: int = 1
 
+    total_certs = 0
+    try:
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+            ).fetchone()
+            total_certs = row[0] if row else 0
+    except Exception:
+        logger.exception("insights: total certs query failed")
     try:
         calendar_data = list_calendar(db, bucket="week")
     except Exception:
@@ -559,6 +568,7 @@ def insights_view(
             "active_page": "insights",
             "tab": tab,
             "calendar_data": calendar_data,
+            "total_certs": total_certs,
             "tls_trends": tls_trends,
             "tls_max": tls_max,
             "grade_trends": grade_trends,

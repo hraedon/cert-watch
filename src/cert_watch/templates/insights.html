@@ -19,10 +19,11 @@
 
   {% if tab == 'calendar' %}
     {# ---- Expiry calendar ---- #}
-    {% set ns = namespace(storms=0, within=0, later=0, leaf_total=0) %}
+    {% set ns = namespace(storms=0, within=0, later=0, leaf_total=0, soon=0) %}
     {% for b in calendar_data %}
       {% if b.count >= 3 %}{% set ns.storms = ns.storms + 1 %}{% endif %}
       {% set ns.within = ns.within + b.count %}
+      {% if loop.index <= 4 %}{% set ns.soon = ns.soon + b.count %}{% endif %}
     {% endfor %}
 
     <div class="cw-stats cw-mb-18">
@@ -35,33 +36,33 @@
         <div class="cw-stat-val {% if ns.storms > 0 %}cw-stat-val-crit{% else %}cw-stat-val-ok{% endif %}">{{ ns.storms }}</div>
         <div class="cw-stat-sub">weeks with 3+ expiries</div>
       </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-warn"></div>
-        <div class="cw-stat-top cw-stat-top-warn">
-          {{ icons.svg_icon('calendar', 15, 1.8) }}
-          <span class="cw-stat-label cw-stat-label-color">Expiring soon</span>
-        </div>
-        <div class="cw-stat-val cw-stat-val-warn">{{ ns.within }}</div>
-        <div class="cw-stat-sub">leaf certificates in view</div>
+    <div class="cw-stat">
+      <div class="cw-stat-rail cw-stat-rail-warn"></div>
+      <div class="cw-stat-top cw-stat-top-warn">
+        {{ icons.svg_icon('calendar', 15, 1.8) }}
+        <span class="cw-stat-label cw-stat-label-color">Expiring soon</span>
       </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-accent"></div>
-        <div class="cw-stat-top cw-stat-top-accent">
-          {{ icons.svg_icon('clock', 15, 1.8) }}
-          <span class="cw-stat-label cw-stat-label-color">Buckets</span>
-        </div>
-        <div class="cw-stat-val cw-stat-val-default">{{ calendar_data | length }}</div>
-        <div class="cw-stat-sub">time periods tracked</div>
+      <div class="cw-stat-val cw-stat-val-warn">{{ ns.soon }}</div>
+      <div class="cw-stat-sub">leaf certificates in next 4 weeks</div>
+    </div>
+    <div class="cw-stat">
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
+      <div class="cw-stat-top cw-stat-top-accent">
+        {{ icons.svg_icon('clock', 15, 1.8) }}
+        <span class="cw-stat-label cw-stat-label-color">Buckets</span>
       </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-accent"></div>
-        <div class="cw-stat-top cw-stat-top-accent">
-          {{ icons.svg_icon('shield', 15, 1.8) }}
-          <span class="cw-stat-label cw-stat-label-color">Fleet</span>
-        </div>
-        <div class="cw-stat-val cw-stat-val-default">{{ ns.within }}</div>
-        <div class="cw-stat-sub">total certificates</div>
+      <div class="cw-stat-val cw-stat-val-default">{{ calendar_data | length }}</div>
+      <div class="cw-stat-sub">time periods tracked</div>
+    </div>
+    <div class="cw-stat">
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
+      <div class="cw-stat-top cw-stat-top-accent">
+        {{ icons.svg_icon('shield', 15, 1.8) }}
+        <span class="cw-stat-label cw-stat-label-color">Fleet</span>
       </div>
+      <div class="cw-stat-val cw-stat-val-default">{{ total_certs }}</div>
+      <div class="cw-stat-sub">total certificates</div>
+    </div>
     </div>
 
     <div class="cw-panel cw-p-16-18">

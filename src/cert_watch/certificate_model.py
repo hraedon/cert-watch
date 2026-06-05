@@ -32,6 +32,7 @@ class Certificate:
     raw_der: bytes = b""
     is_leaf: bool = True
     notes: str = ""
+    source: str = "unknown"
     # DER-encoded Name bytes for robust issuer/subject comparison.
     # Populated when parsing from x509.Certificate; empty for DB-loaded certs.
     subject_der: bytes = b""

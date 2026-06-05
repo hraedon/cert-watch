@@ -100,5 +100,6 @@ def _row_to_cert(row: sqlite3.Row) -> Certificate:
         raw_der=bytes(row["raw_der"]),
         is_leaf=bool(row["is_leaf"]),
         notes=dict(row).get("notes", ""),
+        source=dict(row).get("source", "unknown"),
     )
     return cert
