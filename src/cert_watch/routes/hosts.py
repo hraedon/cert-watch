@@ -385,80 +385,6 @@ async def delete_host(request: Request, host_id: str) -> RedirectResponse:
     return RedirectResponse(url="/", status_code=303)
 
 
-@router.post("/hosts/{host_id}/scan")
-async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
-    if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
-        return RedirectResponse(
-            url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
-        )
-    db = _db_path(request)
-    host = SqliteHostRepository(db).get(host_id)
-    if host is None:
-        return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.scan",
-        target_type="host",
-        target_id=host_id,
-        detail={"hostname": host.hostname, "port": host.port},
-        source_ip=resolve_source_ip(request),
-    )
-    s = _get_settings(request)
-    result = await scan_host_async(
-        host.hostname,
-        host.port,
-        allow_private=s.allow_private,
-        allowed_subnets=s.allowed_subnets,
-        dns_servers=s.dns_servers,
-    )
-    if not isinstance(result, ScanError):
-        async with _store_sem:
-            try:
-                await store_scanned_async(
-                    result, db,
-                    check_revocation=s.check_revocation,
-                    allow_private=s.allow_private,
-                    allowed_subnets=s.allowed_subnets,
-                    webhook_config=s.build_webhook_config(),
-                )
-            except Exception:
-                logger.exception("store_scanned_async failed for %s:%d", host.hostname, host.port)
-                record_scan_history(
-                    db,
-                    ScanHistory(
-                        hostname=host.hostname, port=host.port,
-                        status="failure", error_message="store failed",
-                    ),
-                )
-                logger.error("manual scan store failed for %s:%d", host.hostname, host.port)
-                return RedirectResponse(
-                    url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
-                )
-        record_scan_history(
-            db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
-        )
-        logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
-        return RedirectResponse(url="/", status_code=303)
-    record_scan_history(
-        db,
-        ScanHistory(
-            hostname=host.hostname,
-            port=host.port,
-            status="failure",
-            error_message=result.error_message,
-        ),
-    )
-    logger.warning(
-        "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
-    )
-    msg = f"scan failed for {host.hostname}:{host.port}: {result.error_message}"
-    return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
-
-
 @router.post("/hosts/all/scan")
 async def scan_all_hosts(request: Request) -> RedirectResponse:
     write_err = await require_write_form(request)
@@ -532,6 +458,80 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
             failures += 1
     logger.info("scan_all: %d scanned, %d failures", scanned, failures)
     return RedirectResponse(url="/scan-history", status_code=303)
+
+
+@router.post("/hosts/{host_id}/scan")
+async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
+        )
+    db = _db_path(request)
+    host = SqliteHostRepository(db).get(host_id)
+    if host is None:
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.scan",
+        target_type="host",
+        target_id=host_id,
+        detail={"hostname": host.hostname, "port": host.port},
+        source_ip=resolve_source_ip(request),
+    )
+    s = _get_settings(request)
+    result = await scan_host_async(
+        host.hostname,
+        host.port,
+        allow_private=s.allow_private,
+        allowed_subnets=s.allowed_subnets,
+        dns_servers=s.dns_servers,
+    )
+    if not isinstance(result, ScanError):
+        async with _store_sem:
+            try:
+                await store_scanned_async(
+                    result, db,
+                    check_revocation=s.check_revocation,
+                    allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    webhook_config=s.build_webhook_config(),
+                )
+            except Exception:
+                logger.exception("store_scanned_async failed for %s:%d", host.hostname, host.port)
+                record_scan_history(
+                    db,
+                    ScanHistory(
+                        hostname=host.hostname, port=host.port,
+                        status="failure", error_message="store failed",
+                    ),
+                )
+                logger.error("manual scan store failed for %s:%d", host.hostname, host.port)
+                return RedirectResponse(
+                    url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
+                )
+        record_scan_history(
+            db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
+        )
+        logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
+        return RedirectResponse(url="/", status_code=303)
+    record_scan_history(
+        db,
+        ScanHistory(
+            hostname=host.hostname,
+            port=host.port,
+            status="failure",
+            error_message=result.error_message,
+        ),
+    )
+    logger.warning(
+        "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
+    )
+    msg = f"scan failed for {host.hostname}:{host.port}: {result.error_message}"
+    return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
 
 
 @router.get("/api/export/hosts.csv")

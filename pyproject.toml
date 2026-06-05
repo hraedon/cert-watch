@@ -62,7 +62,7 @@ select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not e2e and not integration and not deploy' -n auto --dist loadscope --cov=cert_watch --cov-report=term-missing --cov-fail-under=87"
+addopts = "-ra -m 'not e2e and not integration and not deploy' -n auto --dist loadscope --cov=cert_watch --cov-report=term-missing --cov-fail-under=88"
 # Parallel by default (`-n auto`, pytest-xdist) — the unit suite is process- and
 # tmp_path-isolated, so workers don't collide. For interactive debugging
 # (`-s`, pdb, readable output) override with `-n0`. Set `COVERAGE_CORE=sysmon`

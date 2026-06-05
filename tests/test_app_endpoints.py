@@ -283,3 +283,181 @@ def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app,
     hostnames = [(h.hostname, h.port) for h in hosts]
     assert ("multi.example.com", 443) in hostnames
     assert ("multi.example.com", 8443) in hostnames
+
+
+# ---------- Semaphore failure-isolation branches (BC-134) ----------
+
+
+def test_add_host_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+    """When store_scanned_async raises inside the semaphore, the exception is
+    caught and the route still redirects (failure isolation per-task)."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.scan import ScannedEntry
+
+    init_schema(db)
+    host_repo = SqliteHostRepository(db)
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    async def failing_store(*args, **kwargs):
+        raise RuntimeError("store boom")
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", failing_store)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": "store-fail.example.com", "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    # Host was added even though store failed
+    assert host_repo.count_all() == 1
+
+
+def test_import_hosts_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+    """Import batch: one store failure must not abort the others and must be
+    recorded in scan_history."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.scan import ScannedEntry
+
+    init_schema(db)
+    host_repo = SqliteHostRepository(db)
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    call_count = {"n": 0}
+
+    async def flaky_store(*args, **kwargs):
+        call_count["n"] += 1
+        # Second call (fail.example.com) fails.
+        if call_count["n"] == 2:
+            raise RuntimeError("store boom")
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)
+
+    with TestClient(app_mod.app) as client:
+        csv_content = "hostname,port\nok.example.com,443\nfail.example.com,443\n"
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content.encode(), "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    # Both hosts were added despite one store failure
+    assert host_repo.count_all() == 2
+
+    import sqlite3
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT hostname, status, error_message FROM scan_history ORDER BY hostname"
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0][0] == "fail.example.com"
+    assert rows[0][1] == "failure"
+    assert rows[0][2] == "store failed"
+    assert rows[1][0] == "ok.example.com"
+    assert rows[1][1] == "success"
+
+
+def test_scan_now_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+    """Manual scan: store_scanned_async failure must redirect with warning and
+    record scan_history."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.scan import ScannedEntry
+
+    init_schema(db)
+    hid = SqliteHostRepository(db).add("manual-store-fail.example.com", 443)
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    async def failing_store(*args, **kwargs):
+        raise RuntimeError("store boom")
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", failing_store)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "warning=" in loc
+    assert "store%20failed" in loc or "store+failed" in loc
+
+    import sqlite3
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
+            ("manual-store-fail.example.com", 443),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "failure"
+    assert rows[0][1] == "store failed"
+
+
+def test_scan_all_hosts_store_scanned_async_failure_isolated(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+    """Scan-all: store_scanned_async failure on one host must not stop the loop
+    and must be recorded in scan_history."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.scan import ScannedEntry
+
+    init_schema(db)
+    host_repo = SqliteHostRepository(db)
+    host_repo.add("batch-a.example.com", 443)
+    host_repo.add("batch-b.example.com", 443)
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    call_count = {"n": 0}
+
+    async def flaky_store(*args, **kwargs):
+        call_count["n"] += 1
+        # The first call (batch-a) succeeds, second (batch-b) fails.
+        if call_count["n"] == 2:
+            raise RuntimeError("store boom")
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post("/hosts/all/scan", follow_redirects=False)
+    assert r.status_code == 303
+
+    import sqlite3
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT hostname, status, error_message FROM scan_history ORDER BY hostname"
+        ).fetchall()
+    assert len(rows) == 2
+    assert rows[0][0] == "batch-a.example.com"
+    assert rows[0][1] == "success"
+    assert rows[0][2] is None
+    assert rows[1][0] == "batch-b.example.com"
+    assert rows[1][1] == "failure"
+    assert rows[1][2] == "store failed"
