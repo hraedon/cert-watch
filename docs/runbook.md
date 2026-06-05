@@ -61,6 +61,32 @@ or pin a password via `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`
 
 ---
 
+## Verify the deployment
+
+After deploying with any model, run the verifier to check the end state —
+service/container/pod health, data dir, pinned signing secrets, and live HTTP
+health — in one read-only pass. It auto-detects the target, or pass `--target`:
+
+```bash
+python3 scripts/verify_install.py --target systemd
+python3 scripts/verify_install.py --target docker
+python3 scripts/verify_install.py --target k8s --namespace cert-watch \
+    --base-url http://127.0.0.1:8000   # k8s HTTP needs a reachable URL (port-forward)
+```
+
+It writes a structured JSON report (`verify-report-<target>.json`) and **exits
+non-zero if any check fails**, so a CI or change-control gate can branch on it.
+Each failed check carries an explicit remediation, and on failure the report
+bundles a diagnostics dump (journal / `docker logs` / `kubectl` describe+logs+
+events, plus the data-dir listing) so a failure can be triaged from the report
+alone. `--json` streams it to stdout (for an automated triage step); `--markdown`
+writes a readable report. This is the cross-platform counterpart to
+`scripts/Verify-Install.ps1` (Windows/IIS) and emits the **same JSON schema**.
+
+The Windows/IIS verifier is documented in `deploy/iis/README.md`.
+
+---
+
 ## Upgrade
 
 cert-watch uses forward-only schema migrations. On startup, the app automatically:
