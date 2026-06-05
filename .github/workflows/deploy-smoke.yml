@@ -75,6 +75,17 @@ jobs:
           docker logs cw-smoke
           exit 1
 
+      # Structured, agent-friendly assertion using the same verifier operators
+      # run by hand. The waits above gate on startup timing; this is the gate of
+      # record -- it emits verify-docker.json (printed via --json) and exits
+      # non-zero on any failed check, bundling diagnostics on failure.
+      - name: Verify deployment (structured report)
+        run: |
+          python3 scripts/verify_install.py \
+            --target docker --container cw-smoke \
+            --base-url http://127.0.0.1:18888 \
+            --output verify-docker.json --json
+
       - name: Cleanup
         if: always()
         run: docker rm -f cw-smoke 2>/dev/null || true
@@ -116,6 +127,16 @@ jobs:
           echo "healthz never returned OK"
           docker logs cw-linux
           exit 1
+
+      # HTTP-only target: this container serves on 18891 while the image's baked
+      # HEALTHCHECK probes 8000, so the docker healthcheck check does not apply
+      # here -- assert the served endpoints instead.
+      - name: Verify deployment (structured report)
+        run: |
+          python3 scripts/verify_install.py \
+            --target http \
+            --base-url http://127.0.0.1:18891 \
+            --output verify-linux.json --json
 
       - name: Cleanup
         if: always()
@@ -297,6 +318,23 @@ jobs:
           echo "readyz failed"
           kill $PF_PID 2>/dev/null
           exit 1
+
+      # Structured assertion: the kubectl-side checks (deployment, replicas,
+      # rollout, pod restarts, signing-secret object) need no port-forward; the
+      # HTTP checks do, so we forward for the duration of the run.
+      - name: Verify deployment (structured report)
+        run: |
+          kubectl port-forward service/cert-watch 18889:80 -n cert-watch-deploy-test &
+          PF_PID=$!
+          sleep 5
+          set +e
+          python3 scripts/verify_install.py \
+            --target k8s --namespace cert-watch-deploy-test --deployment cert-watch \
+            --base-url http://127.0.0.1:18889 \
+            --output verify-k8s.json --json
+          rc=$?
+          kill $PF_PID 2>/dev/null || true
+          exit $rc
 
       - name: Cleanup
         if: always()
