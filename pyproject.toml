@@ -1,6 +1,6 @@
 [project]
 name = "cert-watch"
-version = "0.5.2"
+version = "0.5.3"
 description = "All-in-one observability for the certificate lifecycle — live scanning, offline upload, signature-verified chain validation, TLS posture grading, CT reconciliation, and alerting — built for small and mid-sized businesses."
 readme = "README.md"
 requires-python = ">=3.12"
