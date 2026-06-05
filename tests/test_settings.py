@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 # ---------- Settings page rendering ----------
@@ -237,7 +238,7 @@ def test_test_smtp_send_failure_reports_error(reload_app, monkeypatch):
 
 def test_test_ldap_connect_success(reload_app, monkeypatch):
     """A successful LDAP test binds read-only and unbinds cleanly."""
-    import ldap3
+    ldap3 = pytest.importorskip("ldap3")
 
     calls = {}
 
@@ -269,7 +270,7 @@ def test_test_ldap_connect_success(reload_app, monkeypatch):
 
 def test_test_ldap_connect_failure_reports_error(reload_app, monkeypatch):
     """A bind failure is surfaced as ok=False with the underlying message."""
-    import ldap3
+    ldap3 = pytest.importorskip("ldap3")
 
     class FakeConn:
         def __init__(self, *a, **k):

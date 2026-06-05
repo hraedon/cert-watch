@@ -341,7 +341,6 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
             "port": port,
             "host_id": host_id,
             "last_scan": last_scan,
-            "source": cert.san_dns_names,
             "host_info": host_info,
             "chain_issue": chain_issue,
             "renewal_history": renewal_history,
