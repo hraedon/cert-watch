@@ -472,14 +472,20 @@ function toggleNotes() {
   var view = document.getElementById('notes-view');
   var edit = document.getElementById('notes-edit');
   var label = document.getElementById('notes-btn-label');
-  if (edit.style.display === 'none') {
-    view.style.display = 'none';
+  // notes-edit starts hidden via the `cw-hidden` class — see toggleOwner for
+  // why reading edit.style.display alone made the first click a no-op.
+  var hidden = edit.classList.contains('cw-hidden') ||
+               getComputedStyle(edit).display === 'none';
+  if (hidden) {
+    edit.classList.remove('cw-hidden');
     edit.style.display = 'block';
+    view.style.display = 'none';
     label.textContent = 'Cancel';
     document.getElementById('notes-textarea').focus();
   } else {
-    view.style.display = 'block';
+    edit.classList.add('cw-hidden');
     edit.style.display = 'none';
+    view.style.display = 'block';
     label.textContent = 'Edit';
   }
 }
@@ -492,13 +498,21 @@ function toggleOwner() {
   var view = document.getElementById('owner-view');
   var edit = document.getElementById('owner-edit');
   var label = document.getElementById('owner-btn-label');
-  if (edit.style.display === 'none') {
-    view.style.display = 'none';
+  // The edit panel starts hidden via the `cw-hidden` class, not an inline
+  // style, so the first click must read the class/computed display — checking
+  // edit.style.display alone made the first "Edit" click a no-op (it took two
+  // clicks to reveal the form, which read as "no way to set owner").
+  var hidden = edit.classList.contains('cw-hidden') ||
+               getComputedStyle(edit).display === 'none';
+  if (hidden) {
+    edit.classList.remove('cw-hidden');
     edit.style.display = 'block';
+    view.style.display = 'none';
     label.textContent = 'Cancel';
   } else {
-    view.style.display = 'block';
+    edit.classList.add('cw-hidden');
     edit.style.display = 'none';
+    view.style.display = 'block';
     label.textContent = 'Edit';
   }
 }
