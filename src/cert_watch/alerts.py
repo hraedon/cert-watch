@@ -349,6 +349,28 @@ def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
     return msg
 
 
+def negotiate_starttls(s: smtplib.SMTP, port: int, has_credentials: bool) -> bool:
+    """Opportunistically negotiate STARTTLS on a non-465 connection.
+
+    Returns True when it is safe to proceed: either TLS was established, the
+    connection is already wrapped (port 465), or STARTTLS is unavailable but
+    there are no credentials to protect. Returns False only when STARTTLS is
+    unavailable AND credentials are configured — the caller must then abort
+    rather than transmit the password in cleartext.
+
+    The no-credentials case is what makes plain port-25 relays work: such
+    servers commonly don't offer STARTTLS and need no auth, yet the previous
+    code refused them unconditionally with "STARTTLS not supported by server".
+    """
+    if port == 465:
+        return True  # already TLS-wrapped via SMTP_SSL
+    try:
+        s.starttls()
+        return True
+    except smtplib.SMTPNotSupportedError:
+        return not has_credentials
+
+
 def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
     """Strip webhook URL, header values, and routing key from error messages."""
     if config and config.url:
@@ -380,15 +402,12 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
         else:
             s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         with s:
-            if config.smtp_port != 465:
-                try:
-                    s.starttls()
-                except smtplib.SMTPNotSupportedError:
-                    alert.error_message = (
-                        "STARTTLS not supported by SMTP server; "
-                        "refusing to send credentials in cleartext"
-                    )
-                    return False
+            if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
+                alert.error_message = (
+                    "STARTTLS not supported by SMTP server; "
+                    "refusing to send credentials in cleartext"
+                )
+                return False
             if config.smtp_user:
                 s.login(config.smtp_user, config.smtp_password)
             s.send_message(msg)
@@ -667,16 +686,13 @@ def send_expiry_digest(
             else:
                 s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
             with s:
-                if config.smtp_port != 465:
-                    try:
-                        s.starttls()
-                    except smtplib.SMTPNotSupportedError:
-                        logger.warning(
-                            "digest email aborted: STARTTLS not supported by %s:%s; "
-                            "refusing to send credentials in cleartext",
-                            config.smtp_host, config.smtp_port,
-                        )
-                        return False
+                if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
+                    logger.warning(
+                        "digest email aborted: STARTTLS not supported by %s:%s; "
+                        "refusing to send credentials in cleartext",
+                        config.smtp_host, config.smtp_port,
+                    )
+                    return False
                 if config.smtp_user:
                     s.login(config.smtp_user, config.smtp_password)
                 s.send_message(msg)

@@ -316,6 +316,8 @@ class OAuthProvider(AuthProvider):
                 redirect_uri=redirect_uri,
             )
             username = ""
+            roles: list[str] = []
+            groups: list[str] = []
             id_token_str = token.get("id_token")
             if id_token_str:
                 try:
@@ -330,6 +332,11 @@ class OAuthProvider(AuthProvider):
                             or claims.get("email")
                             or claims.get("sub", "")
                         )
+                        # Entra emits app-role values in `roles` and security-group
+                        # object IDs (GUIDs) in `groups`. Surface both so the authz
+                        # gate (check_authz) can act on them (Plan 034 / bug 2b).
+                        roles = [str(r) for r in (claims.get("roles") or [])]
+                        groups = [str(g) for g in (claims.get("groups") or [])]
                     else:
                         return AuthResult(
                             success=False,
@@ -406,9 +413,11 @@ class OAuthProvider(AuthProvider):
                         or info.get("email")
                         or info.get("sub", "")
                     )
+                    roles = [str(r) for r in (info.get("roles") or [])]
+                    groups = [str(g) for g in (info.get("groups") or [])]
             if not username:
                 return AuthResult(success=False, error="could not determine username from token")
-            return AuthResult(success=True, username=username)
+            return AuthResult(success=True, username=username, roles=roles, groups=groups)
         except Exception as exc:
             logger.warning("OAuth token exchange failed: %s", exc)
             return AuthResult(success=False, error="OAuth authentication failed")

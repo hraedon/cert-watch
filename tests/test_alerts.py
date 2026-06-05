@@ -105,6 +105,55 @@ def test_send_alert_none_config_returns_false():
     assert send_alert(alert, None) is False
 
 
+def test_send_alert_port25_no_starttls_no_creds_sends():
+    """Plain port-25 relay (no auth, no STARTTLS) must still deliver."""
+    import smtplib
+
+    config = AlertConfig(
+        smtp_host="relay.internal",
+        smtp_port=25,
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    smtp_mock = MagicMock()
+    smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
+    smtp_mock.__exit__ = MagicMock(return_value=False)
+    smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
+    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+        ok = send_alert(alert, config)
+    assert ok is True
+    smtp_mock.login.assert_not_called()
+    smtp_mock.send_message.assert_called_once()
+
+
+def test_send_alert_no_starttls_with_creds_refuses():
+    """Credentials present but STARTTLS unavailable: refuse, don't leak the password."""
+    import smtplib
+
+    config = AlertConfig(
+        smtp_host="relay.internal",
+        smtp_port=25,
+        smtp_user="svc",
+        smtp_password="secret",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    smtp_mock = MagicMock()
+    smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
+    smtp_mock.__exit__ = MagicMock(return_value=False)
+    smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
+    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+        ok = send_alert(alert, config)
+    assert ok is False
+    smtp_mock.login.assert_not_called()
+    smtp_mock.send_message.assert_not_called()
+    assert alert.error_message and "cleartext" in alert.error_message
+
+
 def test_process_pending_no_config(alert_repo):
     counts = process_pending(alert_repo, None)
     assert counts == {"sent": 0, "failed": 0}
