@@ -207,6 +207,94 @@ def test_test_smtp_send_success(reload_app, monkeypatch):
     assert calls.get("sent_to") == "ops@example.com"
 
 
+def test_test_smtp_port25_no_starttls_no_creds_succeeds(reload_app, monkeypatch):
+    """Port-25 relay without STARTTLS and without auth should send in plaintext.
+
+    Previously this failed unconditionally with "STARTTLS not supported by
+    server" even though there were no credentials to protect.
+    """
+    import smtplib
+
+    calls = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=10):
+            calls["target"] = (host, port)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self):
+            raise smtplib.SMTPNotSupportedError("STARTTLS not supported")
+
+        def send_message(self, msg):
+            calls["sent_to"] = msg["To"]
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "relay.internal",
+                "smtp_port": "25",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert calls.get("sent_to") == "ops@example.com"
+
+
+def test_test_smtp_no_starttls_with_creds_refuses(reload_app, monkeypatch):
+    """When credentials are set but STARTTLS is unavailable, refuse to leak them."""
+    import smtplib
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=10):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self):
+            raise smtplib.SMTPNotSupportedError("STARTTLS not supported")
+
+        def login(self, user, password):  # pragma: no cover - must not be reached
+            raise AssertionError("login must not run without TLS")
+
+        def send_message(self, msg):  # pragma: no cover - must not be reached
+            raise AssertionError("send must not run without TLS")
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "relay.internal",
+                "smtp_port": "25",
+                "smtp_user": "svc",
+                "smtp_password": "pw",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "cleartext" in data["error"].lower()
+
+
 def test_test_smtp_send_failure_reports_error(reload_app, monkeypatch):
     """A connection failure is surfaced as ok=False with the underlying message."""
     import smtplib
@@ -324,6 +412,69 @@ def test_test_ldap_missing_base_dn(reload_app):
     assert "base dn" in data["error"].lower()
 
 
+def test_test_ldap_multi_server_reports_bad_source(reload_app, monkeypatch):
+    """A bad URL anywhere in the list must fail the test, not be skipped.
+
+    The old pooled FIRST-strategy probe short-circuited on the first reachable
+    server, so a broken second source passed silently. Each URL is now probed.
+    """
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        def __init__(self, server, *a, **k):
+            # First DC binds fine; the second is unreachable.
+            if "dc2" in str(server.host):
+                raise ldap3.core.exceptions.LDAPSocketOpenError("connection refused")
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc1.example.com,ldap://dc2.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "dc2.example.com" in data["error"]
+
+
+def test_save_auth_blank_bind_password_preserves_stored(reload_app, tmp_path):
+    """A blank bind-password submit must not wipe the stored secret (BC fix).
+
+    The field renders masked/blank, so a save without re-typing it previously
+    overwrote the saved password with "" — which broke LDAP login after a
+    successful test.
+    """
+    from cert_watch.database import init_schema, kv_get, kv_set
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    kv_set(db, "ldap_bind_password", "existing-secret")
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/auth",
+            data={
+                "auth_provider": "ldap",
+                "ldap_server": "ldap://dc1.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_bind_dn": "CN=svc,DC=example,DC=com",
+                "ldap_bind_password": "",  # left blank — must be preserved
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert kv_get(db, "ldap_bind_password") == "existing-secret"
+
+
 # ---------- kv_store integration ----------
 
 
@@ -388,6 +539,79 @@ def test_from_env_with_kv_env_wins(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("LDAP_SERVER", "ldap://env-server.example.com")
     s = Settings.from_env_with_kv(db)
     assert s.ldap_server == "ldap://env-server.example.com"
+
+
+# ---------- Regression: LDAP_REQUIRED_GROUPS must not split on DN commas ----------
+#
+# Group DNs contain commas, so a comma-delimited list shredded each DN into RDN
+# fragments (CN=..., OU=..., DC=...), the group filter matched nothing, and every
+# LDAP login failed "not in required group(s)". Caught by the live lab E2E. The
+# delimiter is now semicolon/newline. These guard the whole class.
+
+
+def test_split_group_dns_preserves_dn_commas():
+    from cert_watch.config import split_group_dns
+
+    raw = (
+        "CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com;"
+        "CN=cert-watch-users,OU=Groups,DC=ad,DC=hraedon,DC=com"
+    )
+    groups = split_group_dns(raw)
+    assert groups == (
+        "CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com",
+        "CN=cert-watch-users,OU=Groups,DC=ad,DC=hraedon,DC=com",
+    )
+
+
+def test_split_group_dns_single_dn_kept_whole():
+    from cert_watch.config import split_group_dns
+
+    # A single DN (with its commas) must come back as ONE element, not five.
+    dn = "CN=Admins,OU=Groups,DC=example,DC=com"
+    assert split_group_dns(dn) == (dn,)
+
+
+def test_split_group_dns_newline_delimiter_and_blanks():
+    from cert_watch.config import split_group_dns
+
+    raw = "CN=A,DC=x,DC=y\n  \nCN=B,DC=x,DC=y ; "
+    assert split_group_dns(raw) == ("CN=A,DC=x,DC=y", "CN=B,DC=x,DC=y")
+    assert split_group_dns("") == ()
+
+
+def test_from_env_required_groups_keeps_full_dns(reload_app, monkeypatch):
+    """End-to-end env parse: each semicolon-separated DN stays intact."""
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv(
+        "LDAP_REQUIRED_GROUPS",
+        "CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com;"
+        "CN=cert-watch-users,OU=Groups,DC=ad,DC=hraedon,DC=com",
+    )
+    s = Settings.from_env()
+    assert s.ldap_required_groups == (
+        "CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com",
+        "CN=cert-watch-users,OU=Groups,DC=ad,DC=hraedon,DC=com",
+    )
+
+
+def test_from_env_with_kv_required_groups_keeps_full_dns(reload_app, tmp_path):
+    """Persisted (settings-UI) parse must also keep full DNs."""
+    from cert_watch.config import Settings
+    from cert_watch.database import init_schema, kv_set
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    kv_set(
+        db,
+        "ldap_required_groups",
+        "CN=Admins,OU=Groups,DC=example,DC=com;CN=Users,OU=Groups,DC=example,DC=com",
+    )
+    s = Settings.from_env_with_kv(db)
+    assert s.ldap_required_groups == (
+        "CN=Admins,OU=Groups,DC=example,DC=com",
+        "CN=Users,OU=Groups,DC=example,DC=com",
+    )
 
 
 # ---------- BC-102: Change local admin password ----------

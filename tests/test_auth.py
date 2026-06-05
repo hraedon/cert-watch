@@ -983,6 +983,143 @@ def test_ldaps_ca_cert_inline_data(_mock_ldap3):
     assert provider._resolve_ca_cert() is None
 
 
+# ---------- Regression tests for the two private-CA LDAPS bugs ----------
+#
+# Both bugs broke ALL private-CA LDAPS auth and were invisible to the mocked
+# tests above, because the MagicMock `Connection` swallowed any kwarg (so the
+# bogus `use_ssl=` slipped through) and inline PEM was never run through
+# `_resolve_ca_cert`. These tests use a STRICTER fake `Connection` — one that
+# rejects unknown kwargs like real ldap3 does — and exercise the inline-PEM
+# path that triggered OSError(ENAMETOOLONG). They were caught by the live lab
+# E2E; this keeps that class of bug from hiding again.
+
+
+def _strict_connection_factory(calls, user_dn):
+    """A fake ldap3.Connection that rejects kwargs real ldap3 doesn't accept.
+
+    The real ``ldap3.Connection.__init__`` has no ``use_ssl`` parameter (it
+    belongs on ``Server``) and raises ``TypeError`` for unknown kwargs. This
+    factory mirrors that: any kwarg outside the allowed set raises, so passing
+    ``use_ssl=`` (or any future stray kwarg) fails loudly instead of being
+    silently swallowed. ``calls`` records every call's kwargs for assertion.
+    """
+    allowed = {
+        "user", "password", "auto_bind", "version", "authentication",
+        "client_strategy", "read_only", "lazy", "raise_exceptions",
+        "receive_timeout", "auto_referrals", "pool_name",
+    }
+
+    def factory(server, **kwargs):
+        calls.append(kwargs)
+        unexpected = set(kwargs) - allowed
+        if unexpected:
+            raise TypeError(
+                "ldap3.Connection got unexpected keyword argument(s): "
+                f"{sorted(unexpected)}"
+            )
+        conn = MagicMock()
+        conn.bind.return_value = True
+        if kwargs.get("user") == user_dn:
+            # user-bind: just verifies the password (entries unused)
+            conn.entries = []
+        else:
+            # service-bind: search returns the located user
+            entry = MagicMock()
+            entry.distinguishedName = user_dn
+            entry.memberOf.values = []
+            conn.entries = [entry]
+        return conn
+
+    return factory
+
+
+def test_ldap_authenticate_inline_pem_ldaps_succeeds(_mock_ldap3):
+    """Mirrors the live lab E2E: LDAPS + inline PEM CA + strict Connection.
+
+    This single test would have caught BOTH production bugs:
+    - the inline PEM no longer makes _resolve_ca_cert raise ENAMETOOLONG, and
+    - no `use_ssl=` kwarg is passed to Connection (strict factory rejects it).
+    """
+    user_dn = "CN=alice,DC=example,DC=com"
+    pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        + "MIIDdummycontentline\n" * 30
+        + "-----END CERTIFICATE-----\n"
+    )
+    calls: list[dict] = []
+    _mock_ldap3.Connection = _strict_connection_factory(calls, user_dn)
+    _mock_ldap3.Server.return_value = MagicMock()
+
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        bind_dn="CN=svc,DC=example,DC=com",
+        bind_password="svc_pass",
+        ca_cert=pem,
+    )
+    result = provider.authenticate("alice", "correct_password")
+
+    assert result.success is True, f"expected success, got error={result.error!r}"
+    assert result.username == "alice"
+    # Bug #2 regression: no Connection call may carry use_ssl.
+    assert all("use_ssl" not in kw for kw in calls)
+    assert calls, "expected Connection to be constructed at least once"
+
+
+def test_ldap_connection_rejects_use_ssl_kwarg(_mock_ldap3):
+    """The strict fake must actually fail if use_ssl is reintroduced.
+
+    Guards the regression test above from rotting into a no-op: prove the
+    strict factory rejects the exact kwarg the bug passed.
+    """
+    calls: list[dict] = []
+    factory = _strict_connection_factory(calls, "CN=alice,DC=example,DC=com")
+    with pytest.raises(TypeError):
+        factory(MagicMock(), user="x", password="y", auto_bind=False, use_ssl=True)
+
+
+def test_resolve_ca_cert_long_single_component_does_not_raise(_mock_ldap3):
+    """Bug #1: a long single-component string makes Path.is_file() raise
+    OSError(ENAMETOOLONG) instead of returning False. Must be guarded → None."""
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        ca_cert="A" * 300,  # > NAME_MAX (255), no newline, no BEGIN marker
+    )
+    # The assertion is that this returns rather than propagating OSError.
+    assert provider._resolve_ca_cert() is None
+
+
+def test_resolve_ca_cert_oversized_string_returns_none(_mock_ldap3):
+    """Bug #1: anything longer than a plausible path is treated as inline data."""
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        ca_cert="A" * 2000,  # no newline, no BEGIN marker, just very long
+    )
+    assert provider._resolve_ca_cert() is None
+
+
+def test_build_tls_inline_pem_uses_ca_certs_data_not_file(_mock_ldap3):
+    """Bug #1: inline PEM must flow to ca_certs_data, never ca_certs_file."""
+    pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        + "MIIDdummycontentline\n" * 10
+        + "-----END CERTIFICATE-----\n"
+    )
+    provider = LDAPAuthProvider(
+        server_url="ldaps://dc.example.com",
+        base_dn="DC=example,DC=com",
+        ca_cert=pem,
+    )
+    _mock_ldap3.Server.return_value = MagicMock()
+    provider._build_tls()
+    _mock_ldap3.Tls.assert_called_once()
+    tls_kwargs = _mock_ldap3.Tls.call_args[1]
+    assert tls_kwargs.get("ca_certs_data") == pem
+    assert "ca_certs_file" not in tls_kwargs
+
+
 def test_ldap_dc_failover_multiple_servers(_mock_ldap3):
     provider = LDAPAuthProvider(
         server_url="ldap://dc1.example.com,ldap://dc2.example.com",
@@ -1395,6 +1532,48 @@ class TestOAuthJWKSVerification:
             )
             assert result.success is True
             assert result.username == "alice@example.com"
+
+    def test_complete_flow_populates_roles_and_groups(self):
+        """Plan 034 / 2b: app-role and group-GUID claims reach AuthResult so the
+        authz gate can act on them."""
+        key, _, jwks = _generate_rsa_jwk()
+        provider = _make_oauth_provider(jwks=jwks)
+
+        import time
+        admins_guid = "38171415-ded8-4e14-9a44-439bc5223f50"
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "preferred_username": "cw-admin@example.com",
+            "roles": ["admin"],
+            "groups": [admins_guid],
+            "exp": int(time.time()) + 3600,
+            "iat": int(time.time()),
+        }
+        id_token = _sign_jwt(claims, key)
+
+        mock_oauth_session = MagicMock()
+        mock_oauth_session.fetch_token.return_value = {
+            "access_token": "at-123",
+            "token_type": "Bearer",
+            "id_token": id_token,
+        }
+        mock_authlib = MagicMock()
+        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        signed_state = _sign_state("test-state")
+        with _inject_mock_authlib(mock_authlib):
+            result = provider.complete_oauth_flow(
+                "auth-code", "http://localhost/callback", state=signed_state,
+            )
+        assert result.success is True
+        assert result.roles == ["admin"]
+        assert result.groups == [admins_guid]
+        # And the authz gate accepts on either dimension.
+        from cert_watch.auth import check_authz
+        assert check_authz(result, [], ["admin"]).success is True
+        assert check_authz(result, [admins_guid], []).success is True
+        assert check_authz(result, ["other-guid"], ["viewer"]).success is False
 
     def test_complete_flow_forged_token_rejected_not_userinfo(self):
         """When JWKS verification fails, rejects instead of falling back to userinfo (BC-058)."""

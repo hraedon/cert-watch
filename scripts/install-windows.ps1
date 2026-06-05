@@ -175,6 +175,18 @@ if ($needsShared) {
         if (-not (Test-Path $sharedPyExe)) {
             throw "Failed to create shared Python at $sharedPyDir. Copy $($python.Exe) manually."
         }
+        # Python 3.14+ marks venvlauncher.exe as hidden/system. When we copy the
+        # installation to a shared location, those attributes survive. The venv
+        # module then cannot copy the launcher into the new venv, producing a
+        # degraded wrapper instead of a proper launcher.
+        $launcher = Join-Path $sharedPyDir "Lib\venv\scripts\nt\venvlauncher.exe"
+        $wlauncher = Join-Path $sharedPyDir "Lib\venv\scripts\nt\venvwlauncher.exe"
+        if (Test-Path $launcher) {
+            attrib -H -S $launcher 2>$null | Out-Null
+        }
+        if (Test-Path $wlauncher) {
+            attrib -H -S $wlauncher 2>$null | Out-Null
+        }
         Write-Host "  Shared Python ready at $sharedPyExe"
     }
     $python = @{ Exe = $sharedPyExe; Args = @() }
@@ -192,6 +204,14 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $venv "Scripts\python.exe
 }
 
 $venvPy = Join-Path $venv "Scripts\python.exe"
+# Verify the venv is functional (not just that the file exists). In Python 3.14
+# the venvlauncher copy may silently produce a broken wrapper when the source
+# launcher has hidden/system attributes.
+$venvProbe = & $venvPy -c "import sys; print(sys.executable)" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    throw "venv created but python.exe is not functional (exit $LASTEXITCODE): $venvProbe"
+}
+Write-Host "  venv verified: $venvProbe"
 Write-Host "Installing cert-watch ..."
 & $venvPy -m pip install --upgrade pip | Out-Null
 $pkg = if ($WithAuthExtras) { "$repoRoot[auth-ldap,auth-oauth]" } else { $repoRoot }
