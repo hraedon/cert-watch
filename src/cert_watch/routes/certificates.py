@@ -310,6 +310,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
                 "must_staple": result.must_staple,
             }
         except Exception:  # noqa: BLE001
+            logger.exception("posture evaluation failed for cert %s", cert_id)
             pass
 
     csrf_ctx = get_csrf_context(request)

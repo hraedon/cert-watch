@@ -175,8 +175,17 @@ jobs:
 
       - name: Install kind
         run: |
-          curl -sSL -o /usr/local/bin/kind \
-            https://github.com/kubernetes-sigs/kind/releases/download/v0.27.0/kind-linux-amd64
+          KIND_VERSION="v0.27.0"
+          KIND_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
+          CHECKSUMS_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64.sha256sum"
+          curl -sSL -o /usr/local/bin/kind "$KIND_URL"
+          curl -sSL -o /tmp/kind-checksum.txt "$CHECKSUMS_URL"
+          EXPECTED=$(awk '{print $1}' /tmp/kind-checksum.txt)
+          ACTUAL=$(sha256sum /usr/local/bin/kind | awk '{print $1}')
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "kind checksum mismatch: expected $EXPECTED, got $ACTUAL"
+            exit 1
+          fi
           chmod +x /usr/local/bin/kind
 
       - name: Create kind cluster

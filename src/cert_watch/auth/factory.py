@@ -65,6 +65,7 @@ def build_auth_provider(
     # SSRF policy for OAuth IdP fetches
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
+    jwks_cache_ttl: int = 86400,
     # Authorization options
     allowed_groups: list[str] | None = None,
     allowed_roles: list[str] | None = None,
@@ -128,6 +129,7 @@ def build_auth_provider(
                 userinfo_endpoint=oauth_userinfo_endpoint,
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
+                jwks_cache_ttl=jwks_cache_ttl,
             )
         )
         if local_admin:
