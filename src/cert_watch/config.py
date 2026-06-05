@@ -46,6 +46,20 @@ def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> s
     return generated
 
 
+def split_group_dns(raw: str) -> tuple[str, ...]:
+    """Split a list of LDAP group DNs on semicolons or newlines.
+
+    Group DNs contain commas (``CN=admins,OU=Groups,DC=example,DC=com``), so a
+    comma-delimited list is ambiguous: it shreds each DN into its RDN fragments
+    (``CN=admins``, ``OU=Groups``, ``DC=example``, …), and the resulting group
+    filter matches nothing — every LDAP_REQUIRED_GROUPS login fails as "not in
+    required group(s)". Semicolons/newlines do not appear in normal AD DNs, so
+    they are the safe delimiter for a list of DNs.
+    """
+    parts = raw.replace("\n", ";").split(";")
+    return tuple(p.strip() for p in parts if p.strip())
+
+
 def read_secret(name: str) -> str | None:
     """Return the value of env var $name, or the file contents of $name_FILE.
 
@@ -298,10 +312,8 @@ class Settings:
             ldap_user_filter=os.environ.get("LDAP_USER_FILTER", "(sAMAccountName={username})"),
             ldap_start_tls=os.environ.get("LDAP_START_TLS", "0") == "1",
             ldap_ca_cert=read_secret("LDAP_CA_CERT") or "",
-            ldap_required_groups=tuple(
-                g.strip()
-                for g in os.environ.get("LDAP_REQUIRED_GROUPS", "").split(",")
-                if g.strip()
+            ldap_required_groups=split_group_dns(
+                os.environ.get("LDAP_REQUIRED_GROUPS", "")
             ),
             ldap_connect_timeout=ldap_connect_timeout,
             ldap_group_filter=os.environ.get("LDAP_GROUP_FILTER", ""),
@@ -492,7 +504,11 @@ class Settings:
         ldap_start_tls = _kv_bool(base.ldap_start_tls, "ldap_start_tls", "LDAP_START_TLS")
         allowed_subnets = _kv_tuple(base.allowed_subnets, "allowed_subnets")
         ldap_ca_cert = _kv(base.ldap_ca_cert, "ldap_ca_cert")
-        ldap_required_groups = _kv_tuple(base.ldap_required_groups, "ldap_required_groups")
+        # NB: group DNs contain commas, so they use the semicolon/newline-safe
+        # split (split_group_dns), not the comma-based _kv_tuple used for subnets.
+        ldap_required_groups = base.ldap_required_groups or split_group_dns(
+            kv.get("ldap_required_groups", "")
+        )
         ldap_connect_timeout_str = kv.get("ldap_connect_timeout", "")
         if ldap_connect_timeout_str:
             try:

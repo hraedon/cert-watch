@@ -15,3 +15,12 @@ plans/design/
 # refreshed manually — a committed-but-stale index lies. Commit it (remove this
 # line) only once a hook regenerates it on every commit.
 OPEN_BREADCRUMBS.txt
+
+# Never commit plaintext secrets. Real secrets belong in Vault / the CI secret
+# store; these patterns are a backstop against an accidental `git add`.
+credentials.txt
+*.creds
+*.secret
+.env
+.env.*
+secrets/

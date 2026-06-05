@@ -249,8 +249,17 @@ async def save_auth_config(request: Request) -> RedirectResponse:
     # Save each field to kv_store (encrypt sensitive values if key available)
     for kv_key in _AUTH_KEYS:
         val = form.get(kv_key, "").strip()
-        if kv_key in _SENSITIVE_KEYS and val and enc_key:
-            kv_set_secret(db, kv_key, val, enc_key)
+        if kv_key in _SENSITIVE_KEYS:
+            # Sensitive fields render blank/masked in the form, so a blank submit
+            # means "leave unchanged" — overwriting with "" here silently wiped a
+            # previously-saved bind password (or CA cert), which made LDAP login
+            # fail after a successful test even though nothing looked wrong.
+            if not val:
+                continue
+            if enc_key:
+                kv_set_secret(db, kv_key, val, enc_key)
+            else:
+                kv_set(db, kv_key, val)
         else:
             kv_set(db, kv_key, val)
 
@@ -290,8 +299,14 @@ async def save_smtp_config(request: Request) -> RedirectResponse:
 
     for kv_key in _SMTP_KEYS:
         val = form.get(kv_key, "").strip()
-        if kv_key in _SENSITIVE_KEYS and val and enc_key:
-            kv_set_secret(db, kv_key, val, enc_key)
+        if kv_key in _SENSITIVE_KEYS:
+            # Blank submit = leave the stored secret unchanged (see save_auth_config).
+            if not val:
+                continue
+            if enc_key:
+                kv_set_secret(db, kv_key, val, enc_key)
+            else:
+                kv_set(db, kv_key, val)
         else:
             kv_set(db, kv_key, val)
 
@@ -458,48 +473,81 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
             pass  # hostname — DNS-resolved at connect time
 
     try:
+        import contextlib
+        import os
         import ssl
+        import tempfile
 
         import ldap3
 
         server_urls = [s.strip() for s in server.split(",") if s.strip()]
-        is_ldaps = any(s.lower().startswith("ldaps://") for s in server_urls)
 
-        tls_kwargs: dict = {}
+        # Pin the supplied CA (if any) to a single temp file shared by every probe.
         tmp_path: str | None = None
-        if is_ldaps or start_tls:
-            tls_kwargs["validate"] = ssl.CERT_REQUIRED
-            if ca_cert:
-                import contextlib
-                import os
-                import tempfile
-                tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)  # noqa: SIM115
-                tmp.write(ca_cert)
-                tmp.close()
-                tmp_path = tmp.name
-                tls_kwargs["ca_certs_file"] = tmp_path
+        if ca_cert:
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".pem", delete=False)  # noqa: SIM115
+            tmp.write(ca_cert)
+            tmp.close()
+            tmp_path = tmp.name
 
+        def _build_tls(use_tls: bool) -> ldap3.Tls | None:
+            if not use_tls:
+                return None
+            kwargs: dict = {"validate": ssl.CERT_REQUIRED}
+            if tmp_path:
+                kwargs["ca_certs_file"] = tmp_path
+            return ldap3.Tls(**kwargs)
+
+        # Probe each server URL on its own — a ServerPool with FIRST short-circuits
+        # on the first reachable host, so a bad URL later in the list was never
+        # contacted and the test passed despite it. Bind to each one individually
+        # so every source is actually verified.
+        any_tls = False
         try:
-            tls = ldap3.Tls(**tls_kwargs) if tls_kwargs else None
-            servers = [
-                ldap3.Server(url, tls=tls, connect_timeout=connect_timeout)
-                for url in server_urls
-            ]
-            pool = ldap3.ServerPool(servers, ldap3.FIRST)
-
-            conn = ldap3.Connection(
-                pool,
-                user=bind_dn or None,
-                password=bind_password or None,
-                auto_bind=True if not start_tls else ldap3.AUTO_BIND_TLS_BEFORE_BIND,
-                read_only=True,
-            )
-            conn.unbind()
+            for url in server_urls:
+                srv_is_ldaps = url.lower().startswith("ldaps://")
+                use_tls = srv_is_ldaps or start_tls
+                tls = _build_tls(use_tls)
+                try:
+                    srv = ldap3.Server(url, tls=tls, connect_timeout=connect_timeout)
+                    conn = ldap3.Connection(
+                        srv,
+                        user=bind_dn or None,
+                        password=bind_password or None,
+                        auto_bind=(
+                            ldap3.AUTO_BIND_TLS_BEFORE_BIND
+                            if (start_tls and not srv_is_ldaps)
+                            else True
+                        ),
+                        read_only=True,
+                    )
+                except Exception as exc:  # noqa: BLE001 — report which URL failed
+                    return JSONResponse({"ok": False, "error": f"{url}: {exc}"})
+                tls_active = srv_is_ldaps or bool(getattr(conn, "tls_started", False))
+                conn.unbind()
+                if use_tls and not tls_active:
+                    return JSONResponse({
+                        "ok": False,
+                        "error": f"{url}: TLS was requested but not established",
+                    })
+                if use_tls:
+                    any_tls = True
         finally:
             if tmp_path:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
-        return JSONResponse({"ok": True, "message": f"Connected to {server}"})
+
+        n = len(server_urls)
+        msg = f"All {n} server{'' if n == 1 else 's'} reachable; bind succeeded"
+        if any_tls:
+            msg += "; TLS validated against " + (
+                "the pinned CA certificate"
+                if ca_cert
+                else "the system trust store (no CA certificate pinned)"
+            )
+        elif start_tls:
+            msg += " (StartTLS requested but no server negotiated TLS)"
+        return JSONResponse({"ok": True, "message": msg})
     except ImportError:
         return JSONResponse({
             "ok": False,
@@ -569,12 +617,15 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
             s = smtplib.SMTP_SSL(host, port, timeout=10)
         else:
             s = smtplib.SMTP(host, port, timeout=10)
+        from cert_watch.alerts import negotiate_starttls
         with s:
-            if port != 465:
-                try:
-                    s.starttls()
-                except smtplib.SMTPNotSupportedError:
-                    return JSONResponse({"ok": False, "error": "STARTTLS not supported by server"})
+            if not negotiate_starttls(s, port, bool(user)):
+                return JSONResponse({
+                    "ok": False,
+                    "error": "STARTTLS not supported by server; refusing to send "
+                    "credentials in cleartext. Use port 465, clear the username/"
+                    "password, or use a server that supports STARTTLS.",
+                })
             if user:
                 s.login(user, password)
             s.send_message(msg)

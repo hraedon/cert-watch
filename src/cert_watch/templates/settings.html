@@ -1,28 +1,7 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — settings{% endblock %}
 
-{% block head %}
-<style>
-  .cw-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border, #333); margin-bottom: 1.5rem; }
-  .cw-tab { padding: 0.6rem 1.2rem; cursor: pointer; border-bottom: 2px solid transparent;
-            color: var(--text-muted, #888); text-decoration: none; font-size: 0.9rem; }
-  .cw-tab:hover { color: var(--text, #eee); }
-  .cw-tab.active { color: var(--text, #eee); border-bottom-color: var(--accent, #4a9eff); }
-  .cw-tab-panel { display: none; }
-  .cw-tab-panel.active { display: block; }
-  .cw-field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-  .cw-field-row .cw-field { margin-bottom: 0; }
-  .cw-override-badge { display: inline-block; font-size: 0.7rem; padding: 0.15rem 0.4rem;
-                       border-radius: 3px; background: var(--warning-bg, #4a3800);
-                       color: var(--warning-text, #fbbf24); margin-left: 0.5rem; }
-  .cw-test-result { margin-top: 0.75rem; padding: 0.5rem 0.75rem; border-radius: 4px;
-                    font-size: 0.85rem; display: none; }
-  .cw-test-result.ok { display: block; background: var(--success-bg, #0a3a1a); color: var(--success-text, #4ade80); }
-  .cw-test-result.err { display: block; background: var(--error-bg, #3a0a0a); color: var(--error-text, #f87171); }
-  .cw-provider-section { display: none; }
-  .cw-provider-section.active { display: block; }
-</style>
-{% endblock %}
+{% block head %}{% endblock %}
 
 {% block content %}
 <div class="cw-page--constrained">
@@ -35,13 +14,13 @@
 
   <div class="cw-panel" style="max-width: 52rem; margin: 0 auto;">
     {% if saved %}
-      <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Settings saved successfully.</div>
+      <div class="cw-alert cw-alert--success cw-mb-14">Settings saved successfully.</div>
     {% endif %}
     {% if error %}
-      <div class="cw-alert cw-alert--error" style="margin-bottom: 1rem;">{{ error }}</div>
+      <div class="cw-alert cw-alert--error cw-mb-14">{{ error }}</div>
     {% endif %}
     {% if password_changed %}
-      <div class="cw-alert cw-alert--success" style="margin-bottom: 1rem;">Password rotated successfully. All previous sessions have been invalidated.</div>
+      <div class="cw-alert cw-alert--success cw-mb-14">Password rotated successfully. All previous sessions have been invalidated.</div>
     {% endif %}
 
     <div class="cw-tabs">
@@ -69,7 +48,7 @@
 
         <!-- LDAP section -->
         <div id="ldap-section" class="cw-provider-section">
-          <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">LDAP / Active Directory</h3>
+          <h3 class="cw-set-title cw-mt-24 cw-mb-16">LDAP / Active Directory</h3>
 
           <div class="cw-field cw-mb-12">
             <label class="cw-label" for="ldap_server">Server URL(s)</label>
@@ -116,9 +95,9 @@
 
           <div class="cw-field-row cw-mb-12">
             <div class="cw-field">
-              <label class="cw-label" for="ldap_required_groups">Required groups (comma-separated DNs)</label>
+              <label class="cw-label" for="ldap_required_groups">Required groups (semicolon-separated DNs)</label>
               <input class="cw-input" type="text" id="ldap_required_groups" name="ldap_required_groups"
-                     value="{{ auth.ldap_required_groups }}" placeholder="CN=CertWatchOps,OU=Groups,DC=example,DC=com">
+                     value="{{ auth.ldap_required_groups }}" placeholder="CN=Admins,OU=Groups,DC=example,DC=com; CN=Users,OU=Groups,DC=example,DC=com">
             </div>
             <div class="cw-field">
               <label class="cw-label" for="ldap_start_tls">StartTLS</label>
@@ -136,7 +115,7 @@
             {% if env_overrides.ldap_ca_cert %}<span class="cw-override-badge">env</span>{% endif %}
           </div>
 
-          <div style="margin-top: 1rem;">
+          <div class="cw-mt-12">
             <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
             <div id="ldap-test-result" class="cw-test-result"></div>
           </div>
@@ -144,7 +123,7 @@
 
         <!-- OAuth section -->
         <div id="oauth-section" class="cw-provider-section">
-          <h3 style="margin: 1.5rem 0 1rem; font-size: 1rem;">OAuth / OIDC</h3>
+          <h3 class="cw-set-title cw-mt-24 cw-mb-16">OAuth / OIDC</h3>
 
           <div class="cw-field-row cw-mb-12">
             <div class="cw-field">
@@ -167,7 +146,7 @@
             <input class="cw-input" type="text" id="oauth_issuer_url" name="oauth_issuer_url"
                    value="{{ auth.oauth_issuer_url }}" placeholder="https://login.microsoftonline.com/{tenant}/v2.0">
             {% if env_overrides.oauth_issuer_url %}<span class="cw-override-badge">env</span>{% endif %}
-            <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+            <div class="cw-muted cw-fz-11 cw-mt-3">
               Endpoints are auto-discovered from this URL via OIDC.
             </div>
           </div>
@@ -178,11 +157,11 @@
                    value="{{ auth.oauth_scope }}" placeholder="openid profile email">
           </div>
 
-          <details style="margin: 1rem 0;">
-            <summary style="cursor: pointer; color: var(--text-muted, #888); font-size: 0.85rem;">
+          <details class="cw-mt-12 cw-mb-12">
+            <summary class="cw-cursor-pointer cw-text-text-3 cw-fz-11-5">
               Advanced: override endpoints (skip OIDC discovery)
             </summary>
-            <div class="cw-field cw-mb-12" style="margin-top: 0.75rem;">
+            <div class="cw-field cw-mb-12 cw-mt-9">
               <label class="cw-label" for="oauth_authorization_endpoint">Authorization endpoint</label>
               <input class="cw-input" type="text" id="oauth_authorization_endpoint"
                      name="oauth_authorization_endpoint"
@@ -201,22 +180,22 @@
           </details>
         </div>
 
-        <div style="margin-top: 2rem; display: flex; gap: 0.75rem;">
+        <div class="cw-mt-24 cw-flex cw-gap-8">
           <button type="submit" class="cw-btn primary">Save authentication settings</button>
         </div>
       </form>
 
       {% if local_admin_configured %}
       <hr style="margin: 2.5rem 0 1.5rem; border: none; border-top: 1px solid var(--border, #333);">
-      <h3 style="margin: 0 0 0.5rem; font-size: 1rem;">Local admin password</h3>
+      <h3 class="cw-set-title cw-mt-0 cw-mb-12">Local admin password</h3>
 
       {% if env_hash_override %}
-        <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
+        <div class="cw-alert cw-alert--warning cw-mb-14">
           <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code> is set — the environment variable always wins over the stored password. Rotate the env var and restart to change the password.
         </div>
       {% else %}
         {% if local_admin_autogenerated %}
-          <div class="cw-alert cw-alert--warning" style="margin-bottom: 1rem;">
+          <div class="cw-alert cw-alert--warning cw-mb-14">
             The local admin password was auto-generated on first run. Rotate it now.
           </div>
         {% endif %}
@@ -294,7 +273,7 @@
           </div>
         </div>
 
-        <div style="margin-top: 1.5rem; display: flex; gap: 0.75rem; align-items: center;">
+        <div class="cw-mt-24 cw-flex cw-gap-8 cw-items-center">
           <button type="submit" class="cw-btn primary">Save SMTP settings</button>
           <button type="button" class="cw-btn" data-action="test-smtp">Send test email</button>
           <span id="smtp-test-result" class="cw-test-result" style="margin: 0;"></span>
@@ -325,7 +304,7 @@
             <option value="0" {% if alert.alert_digest_only != '1' %}selected{% endif %}>Per-certificate alerts</option>
             <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Daily digest (one email per day)</option>
           </select>
-          <div class="cw-muted" style="font-size: 0.8rem; margin-top: 0.25rem;">
+          <div class="cw-muted cw-fz-11 cw-mt-3">
             Digest mode sends one summary email instead of individual alerts per certificate.
           </div>
         </div>

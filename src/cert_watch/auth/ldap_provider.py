@@ -109,10 +109,25 @@ class LDAPAuthProvider(AuthProvider):
         return tls, servers
 
     def _resolve_ca_cert(self) -> Path | None:
-        """If ca_cert looks like a file path that exists, return it; else None."""
-        p = Path(self.ca_cert)
-        if p.is_file():
-            return p
+        """If ca_cert looks like a file path that exists, return it; else None.
+
+        ``ca_cert`` is usually inline PEM (e.g. ``LDAP_CA_CERT`` or the contents
+        of ``LDAP_CA_CERT_FILE`` read by ``read_secret``). Inline PEM must never
+        be stat-ed as a path: a long string makes ``Path.is_file()`` raise
+        ``OSError(ENAMETOOLONG)`` (not return False), which previously bubbled up
+        as a generic "authentication failed" and broke every private-CA LDAPS
+        login. Treat anything that looks like PEM — or is too long / multi-line to
+        be a path — as inline data, and guard the stat itself.
+        """
+        val = self.ca_cert
+        if not val or "BEGIN CERTIFICATE" in val or "\n" in val or len(val) > 1024:
+            return None
+        try:
+            p = Path(val)
+            if p.is_file():
+                return p
+        except OSError:
+            return None
         return None
 
     def _build_group_filter(self, group_dn: str) -> str:
@@ -148,13 +163,14 @@ class LDAPAuthProvider(AuthProvider):
             else:
                 pool_or_single = servers[0]
 
-            use_ssl = any(getattr(s, 'ssl', False) for s in servers)
+            # SSL/TLS is determined by the Server (ldaps:// scheme), not the
+            # Connection — ldap3.Connection has no `use_ssl` kwarg and current
+            # versions reject it outright.
             conn = ldap3.Connection(
                 pool_or_single,
                 user=self.bind_dn or None,
                 password=self.bind_password or None,
                 auto_bind=False,
-                use_ssl=use_ssl,
             )
             if self.start_tls and tls:
                 conn.start_tls()
@@ -195,7 +211,7 @@ class LDAPAuthProvider(AuthProvider):
 
             user_conn = ldap3.Connection(
                 pool_or_single, user=user_dn, password=password,
-                auto_bind=False, use_ssl=use_ssl,
+                auto_bind=False,
             )
             if self.start_tls and tls:
                 user_conn.start_tls()
