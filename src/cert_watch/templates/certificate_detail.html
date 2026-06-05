@@ -293,10 +293,8 @@
       <div class="cw-panel cw-panel--p-16-18">
         <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Certificate details</div>
         <div class="cw-grid-2-16-22">
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">SUBJECT</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.subject }}</div>
-          </div>
+          {# SUBJECT row intentionally omitted — it duplicates the mono CN in the H1
+             (design handoff 2026-06-02, plan 005 Ph6c). Full identity: H1 + SANs panel. #}
           <div class="cw-col-span-2">
             <div class="cw-detail-label">ISSUER</div>
             <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.issuer }}</div>
