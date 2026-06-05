@@ -11,16 +11,15 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
 
 WORKDIR /build
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
-RUN python -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH" \
-    VIRTUAL_ENV=/opt/venv
 
 COPY pyproject.toml README.md uv.lock ./
 COPY src ./src
 
 RUN printf '%s\n%s\n' "$GIT_TAG" "$GIT_COMMIT" > src/cert_watch/_version.txt
 RUN uv sync --frozen --no-dev --no-install-project
-RUN uv pip install --no-deps .
+RUN uv pip install --no-deps . --python /build/.venv/bin/python
+# Fix shebangs so scripts point to the runtime venv path (/opt/venv)
+RUN sed -i 's|/build/.venv/bin/python|/opt/venv/bin/python|g' /build/.venv/bin/*
 
 # Pinned digest at 2026-06-03 (python:3.13-slim)
 FROM python:3.13-slim@sha256:b04b5d7233d2ad9c379e22ea8927cd1378cd15c60d4ef876c065b25ea8fb3bf3 AS runtime
@@ -33,7 +32,7 @@ ENV PATH="/opt/venv/bin:$PATH" \
 RUN groupadd -r cw && useradd -r -g cw -d /var/lib/cert-watch cw \
     && mkdir -p /var/lib/cert-watch && chown -R cw:cw /var/lib/cert-watch
 
-COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /build/.venv /opt/venv
 
 USER cw
 WORKDIR /var/lib/cert-watch

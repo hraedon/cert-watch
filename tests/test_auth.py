@@ -1451,9 +1451,22 @@ class TestOAuthJWKSVerification:
         mock_authlib = MagicMock()
         mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
         signed_state = _sign_state("test-state")
-        # Bypass SSRF validation in test (DNS resolution won't work for fake host)
+        # Bypass SSRF validation and HTTP open in test (DNS resolution won't work
+        # for fake host)
         monkeypatch.setattr(
-            "cert_watch.auth.oauth_provider._validate_url", lambda *a, **kw: None,
+            "cert_watch.http_client._validate_url", lambda *a, **kw: None,
+        )
+
+        def _mock_urlopen(*a, **kw):
+            resp = MagicMock()
+            resp.status = 200
+            resp.read.return_value = json.dumps({"email": "bob@example.com"}).encode()
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda *a: None
+            return resp
+
+        monkeypatch.setattr(
+            "cert_watch.auth.oauth_provider.ssrf_safe_urlopen", _mock_urlopen,
         )
         with _inject_mock_authlib(mock_authlib):
             result = provider.complete_oauth_flow(
@@ -1653,19 +1666,16 @@ class TestJWKSCacheTTL:
         assert result["preferred_username"] == "alice"
         assert fetch_count == 1
 
-    def test_jwks_ttl_from_env_var(self, monkeypatch):
-        monkeypatch.setenv("CERT_WATCH_JWKS_CACHE_TTL", "3600")
-        import importlib
-
-        import cert_watch.auth as auth_mod
+    def test_jwks_ttl_from_config(self):
+        """OAuthProvider respects the jwks_cache_ttl passed in OAuthConfig."""
         from cert_watch.auth import OAuthConfig
-        importlib.reload(auth_mod)
         config = OAuthConfig(
             client_id="c",
             client_secret="s",
             issuer_url="https://example.com",
+            jwks_cache_ttl=3600,
         )
-        provider = auth_mod.OAuthProvider(config)
+        provider = OAuthProvider(config)
         assert provider._jwks_ttl == 3600
 
     def test_jwks_default_ttl(self):

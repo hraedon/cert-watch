@@ -44,7 +44,6 @@ jobs:
         run: |
           docker run -d --name cw-smoke \
             -p 127.0.0.1:18888:8000 \
-            -e CERT_WATCH_HOST=127.0.0.1 \
             -e CERT_WATCH_ALLOW_UNAUTH=1 \
             cert-watch-deploy-test:smoke
 
@@ -178,21 +177,22 @@ jobs:
           KIND_VERSION="v0.27.0"
           KIND_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64"
           CHECKSUMS_URL="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}/kind-linux-amd64.sha256sum"
-          curl -sSL -o /usr/local/bin/kind "$KIND_URL"
+          curl -sSL -o /tmp/kind "$KIND_URL"
           curl -sSL -o /tmp/kind-checksum.txt "$CHECKSUMS_URL"
           EXPECTED=$(awk '{print $1}' /tmp/kind-checksum.txt)
-          ACTUAL=$(sha256sum /usr/local/bin/kind | awk '{print $1}')
+          ACTUAL=$(sha256sum /tmp/kind | awk '{print $1}')
           if [ "$EXPECTED" != "$ACTUAL" ]; then
             echo "kind checksum mismatch: expected $EXPECTED, got $ACTUAL"
             exit 1
           fi
-          chmod +x /usr/local/bin/kind
+          chmod +x /tmp/kind
+          echo "/tmp" >> "$GITHUB_PATH"
 
       - name: Create kind cluster
-        run: kind create cluster --name cert-watch-deploy-test --wait 120s --retain
+        run: /tmp/kind create cluster --name cert-watch-deploy-test --wait 120s --retain
 
       - name: Load image into kind
-        run: kind load docker-image cert-watch-deploy-test:smoke --name cert-watch-deploy-test
+        run: /tmp/kind load docker-image cert-watch-deploy-test:smoke --name cert-watch-deploy-test
 
       - name: Deploy
         run: |
@@ -368,7 +368,7 @@ jobs:
         if: always()
         run: |
           kubectl delete namespace cert-watch-deploy-test --ignore-not-found=true --wait=false || true
-          kind delete cluster --name cert-watch-deploy-test || true
+          /tmp/kind delete cluster --name cert-watch-deploy-test || true
 
   windows:
     runs-on: windows-latest
