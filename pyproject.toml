@@ -28,6 +28,7 @@ dev = [
 e2e = [
     "playwright>=1.49",
     "pytest-playwright>=0.6",
+    "pytest-playwright-visual-snapshot>=0.5",
 ]
 auth-ldap = [
     "ldap3>=2.9",
@@ -71,10 +72,14 @@ addopts = "-ra -m 'not e2e and not integration and not deploy' -n auto --dist lo
 # E2E workflows must pass --no-cov to override the coverage settings above.
 markers = [
     "e2e: end-to-end tests (Playwright + running app)",
+    "visual: visual-regression screenshot tests (Playwright; -m visual)",
     "integration: integration tests requiring external tools",
     "deploy: platform-level deploy tests",
     "ldap_e2e: LDAP E2E tests (opt-in via CW_LDAP_E2E=1)",
 ]
+# Visual-regression baselines (pytest-playwright-visual-snapshot).
+playwright_visual_snapshots_path = "tests/e2e/__screenshots__"
+playwright_visual_snapshot_threshold = "0.2"
 
 [tool.coverage.run]
 source = ["cert_watch"]

@@ -11,6 +11,11 @@ build/
 *.sqlite3
 htmlcov/
 plans/design/
+
+# Visual-regression diff artifacts (failures only). The baselines under
+# tests/e2e/__screenshots__/ ARE committed — they are the source of truth.
+snapshot_failures/
+snapshot_tests_failures/
 # Generated from the agent-notes DB (breadcrumb export-index). Ignored while it is
 # refreshed manually — a committed-but-stale index lies. Commit it (remove this
 # line) only once a hook regenerates it on every commit.
