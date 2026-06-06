@@ -329,6 +329,42 @@ full access).
 | `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` | — | scrypt hash for the break-glass admin; generate with `cert-watch hash-password` (`*_FILE` supported) |
 | `CERT_WATCH_ROLE_MAP` | — | JSON object mapping cert-watch roles to IdP groups/roles. When set, privilege is derived from directory membership rather than username lists. Example: `{"operator":{"groups":["CN=ops,..."],"roles":["app-operator"]}}`. Unset = all authenticated users get full access (backward compat) |
 
+##### Role-based access control (RBAC)
+
+When `CERT_WATCH_ROLE_MAP` is set, every request resolves the user's IdP
+groups/roles (carried in the signed session token) to one or more cert-watch
+**roles**, and the union of their permissions decides access:
+
+| Role | Permissions |
+|------|-------------|
+| `viewer` | read-only — sees the dashboard but no write controls |
+| `operator` | read + write (add/scan/upload/edit/delete certificates and hosts) |
+| `admin` | everything, including `/settings` |
+
+The map is `{"<role>": {"groups": [...], "roles": [...]}}`; a user gets every role
+whose `groups`/`roles` intersect their directory membership, falling back to
+`viewer` if none match. Gating is enforced **server-side** — viewers don't see
+write buttons, and a viewer's write request is rejected (303 redirect for forms,
+403 for the JSON API), not merely hidden. With no role map set, all authenticated
+users keep full access (backward compat).
+
+#### API keys (machine-to-machine)
+
+For CI pipelines, cert-manager hooks, and monitoring tools that can't carry a
+browser session, create scoped API keys under **Settings → API keys** (admin
+only). A key is shown **once** at creation as a `cwk_…` token (only its hash is
+stored). Send it as a bearer token:
+
+```bash
+curl -H "Authorization: Bearer cwk_…" https://certs.example.com/api/hosts
+```
+
+Scopes map onto the RBAC roles: `read` → viewer, `write` → operator, `admin` →
+full (including key management). Revoke a key from the same page or
+`DELETE /api/api-keys/{id}`. Key use is recorded in the audit log under the key's
+name. API-key requests are exempt from CSRF (CSRF protects the cookie session
+only); they remain subject to the same per-IP rate limits as the rest of `/api/*`.
+
 ### Secrets, sessions & CSRF
 
 | Variable | Default | Description |

@@ -2,6 +2,56 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.6.0] — 2026-06-06
+
+Locks down role-based access control and machine-to-machine automation, proven
+through a full end-to-end UI regression suite.
+
+> **Upgrade note (RBAC is now enforced).** If you set `CERT_WATCH_ROLE_MAP`
+> expecting role-based gating, it now **actually takes effect**: IdP groups/roles
+> travel in the session token and decide write access on every request and
+> form-POST (previously they never reached role resolution, so everyone
+> collapsed to read-only or full-access depending on configuration — BC-145).
+> Review your role map before upgrading. With **no** role map configured,
+> behaviour is unchanged (authenticated users keep full access).
+
+### Added
+- **API-key / service-account authentication (Plan 039, BC-104)** — scoped
+  bearer tokens for machine-to-machine access to `/api/*` without a browser
+  session. Send `Authorization: Bearer cwk_…`. Scopes `read` / `write` / `admin`
+  map onto the RBAC roles (viewer / operator / admin). Tokens are stored only as
+  a SHA-256 hash (the raw `cwk_…` token is shown **once** at creation); keys are
+  created, listed, and revoked from **Settings → API keys** or the admin-scoped
+  `/api/api-keys` endpoints. Key creation/revocation and any state-changing call
+  made with a key are recorded in the audit log under the key's name.
+
+### Changed
+- **RBAC is wired end-to-end (Plan 035 / BC-145).** Groups and roles are now
+  carried in the signed session token and resolved against the role map on every
+  request, so the dashboard and detail pages hide write controls from viewers,
+  form-POST routes reject viewer writes, and the JSON API returns 403 — not just
+  the API layer. A read-only dashboard now shows an explicit notice.
+- **Dashboard performance (BC-139).** The grouped dashboard view no longer loads
+  every certificate into memory; uploaded leaves and pending hosts are queried
+  directly, so memory scales with what's shown rather than the whole table.
+- **Alerts page (BC-130).** Delivery chips now reflect the channels you've
+  actually configured (Email / Webhook) instead of always showing both, with a
+  hint when none are set.
+- **CI quality gates.** `mypy` is now gated in CI (source is at zero errors —
+  BC-093 / BC-146). The Playwright suite is split into a required functional job
+  and a non-blocking visual-regression job.
+
+### Testing
+- **Full E2E UI regression suite.** 35 functional Playwright tests (every page
+  renders; upload/host/delete/settings/API-key flows) plus 8 masked
+  visual-regression baselines, all on stable `data-testid` selectors (BC-132).
+  RBAC admin-vs-viewer gating is asserted through the browser.
+
+## [0.5.3] — 2026-06-05
+
+Maintenance: CI and deploy-smoke fixes; private-CA LDAPS auth fixes found by the
+live AD end-to-end runthrough; TOFU CA auto-provisioning and synthetic-LDAPS CI.
+
 ## [0.5.2] — 2026-06-04
 
 Maintenance release: no user-facing behaviour change. Hardens the test suite and
