@@ -465,3 +465,103 @@ async def test_require_write_rbac_operator_allowed(tmp_path):
     assert username == "alice"
     assert request.state.auth_context.may_write() is True
     assert request.state.auth_context.roles == ["operator"]
+
+
+# ── BC-145: auth_middleware must set auth_context for form-POST routes ───
+
+
+@pytest.mark.anyio
+async def test_auth_middleware_sets_auth_context_for_rbac(tmp_path):
+    """auth_middleware sets request.state.auth_context so that form-POST routes
+    (which use require_write_form, not require_auth) enforce RBAC.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.middleware import auth_middleware
+
+    app, Provider = _app_with_role_map(tmp_path)
+    token = create_session("alice", groups=["g-ops"])
+    request = _make_request(
+        auth_provider=Provider(),
+        cookies={SESSION_COOKIE: token},
+    )
+    request.scope["app"] = app
+    request.scope["path"] = "/hosts"
+
+    async def _call_next(request):
+        return PlainTextResponse("ok")
+
+    response = await auth_middleware(request, _call_next)
+    assert response.status_code == 200
+    assert request.state.auth_context.roles == ["operator"]
+    assert request.state.auth_context.may_write() is True
+
+
+@pytest.mark.anyio
+async def test_auth_middleware_sets_auth_context_viewer(tmp_path):
+    """auth_middleware sets auth_context for a viewer (no matching groups)."""
+    from fastapi.responses import PlainTextResponse
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.middleware import auth_middleware
+
+    app, Provider = _app_with_role_map(tmp_path)
+    token = create_session("bob", groups=["unrelated-group"])
+    request = _make_request(
+        auth_provider=Provider(),
+        cookies={SESSION_COOKIE: token},
+    )
+    request.scope["app"] = app
+    request.scope["path"] = "/hosts"
+
+    async def _call_next(request):
+        return PlainTextResponse("ok")
+
+    response = await auth_middleware(request, _call_next)
+    assert response.status_code == 200
+    assert request.state.auth_context.roles == ["viewer"]
+    assert request.state.auth_context.may_write() is False
+
+
+@pytest.mark.anyio
+async def test_auth_middleware_no_role_map_no_auth_context(tmp_path):
+    """When no role_map is configured, auth_middleware does not need to set
+    auth_context because the legacy _may_write path handles it.
+    """
+    from fastapi.responses import PlainTextResponse
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+    from cert_watch.middleware import auth_middleware
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+    )
+    app = type("App", (), {
+        "state": type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": settings,
+        })(),
+    })()
+    token = create_session("alice")
+    request = _make_request(
+        auth_provider=_Provider(),
+        cookies={SESSION_COOKIE: token},
+    )
+    request.scope["app"] = app
+    request.scope["path"] = "/hosts"
+
+    async def _call_next(request):
+        return PlainTextResponse("ok")
+
+    response = await auth_middleware(request, _call_next)
+    assert response.status_code == 200
+    # Even without a role map, auth_middleware now sets auth_context so that
+    # all downstream code (templates, form helpers) has a single source of truth.
+    assert request.state.auth_context is not None
+    assert request.state.auth_context.may_write() is True

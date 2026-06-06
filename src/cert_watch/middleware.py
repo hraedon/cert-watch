@@ -450,6 +450,15 @@ async def auth_middleware(request: Request, call_next):
     username = validate_session(token, _request_security(request), db_path=db_path)
     if username:
         request.scope["auth_user"] = username
+        # BC-145: propagate IdP groups/roles into the AuthContext so that
+        # form-POST routes (require_write_form) and templates (get_auth_context)
+        # enforce RBAC even when they don't go through the require_auth dependency.
+        settings = getattr(request.app.state, "settings", None)
+        role_map = getattr(settings, "role_map", {}) if settings else {}
+        info = decode_session(token, _request_security(request))
+        if info is not None:
+            auth_ctx = build_auth_context(username, info.groups, info.roles, role_map)
+            request.state.auth_context = auth_ctx
         return await call_next(request)
 
     # Unauthenticated

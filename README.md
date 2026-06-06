@@ -327,6 +327,7 @@ full access).
 | `CERT_WATCH_WRITE_USERS` | — | Usernames allowed to mutate data; when set, everyone else is read-only (admins always write) |
 | `CERT_WATCH_LOCAL_ADMIN_USER` | — | Break-glass local admin username (works even when the directory is down) |
 | `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` | — | scrypt hash for the break-glass admin; generate with `cert-watch hash-password` (`*_FILE` supported) |
+| `CERT_WATCH_ROLE_MAP` | — | JSON object mapping cert-watch roles to IdP groups/roles. When set, privilege is derived from directory membership rather than username lists. Example: `{"operator":{"groups":["CN=ops,..."],"roles":["app-operator"]}}`. Unset = all authenticated users get full access (backward compat) |
 
 ### Secrets, sessions & CSRF
 
