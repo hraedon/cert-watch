@@ -20,6 +20,7 @@ from cert_watch.auth import (
     LocalAdminProvider,
     _CompositeProvider,
     create_session,
+    decode_session,
     set_signing_key,
     validate_session,
 )
@@ -96,6 +97,21 @@ def test_validate_session_5_part_malformed():
     # The signature check will fail, but parsing should not crash
     token = "alice:extra:2:1234567890:abcdef12:fake_sig"
     assert validate_session(token) is None
+
+
+def test_validate_session_6_part_with_groups_and_roles():
+    """BC-145: tokens carrying groups/roles encode and decode correctly."""
+    set_signing_key("test-key-6part")
+    token = create_session(
+        "alice", version=2, groups=["g-ops", "g-admin"], roles=["operator"]
+    )
+    info = decode_session(token)
+    assert info is not None
+    assert info.username == "alice"
+    assert info.version == 2
+    assert info.groups == ["g-ops", "g-admin"]
+    assert info.roles == ["operator"]
+    assert validate_session(token) == "alice"
 
 
 def test_validate_session_3_part_valid_shape():

@@ -34,6 +34,7 @@ from .session import (
     _sign_state,
     _verify_state,
     create_session,
+    decode_session,
     set_signing_key,
     validate_session,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "build_auth_provider",
     "check_authz",
     "create_session",
+    "decode_session",
     "validate_session",
     "set_signing_key",
     "verify_scrypt_hash",
