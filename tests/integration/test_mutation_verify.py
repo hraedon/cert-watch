@@ -140,6 +140,13 @@ class TestMutationVerify:
                 use_ssl=True,
             )
 
+    @pytest.mark.xfail(
+        reason="BC-149: invalid mutation — _resolve_ca_cert early-returns for "
+        "inline/multiline PEM before reaching Path.is_file, so monkeypatching "
+        "is_file no longer breaks auth. Test needs a mutation point on the "
+        "inline-PEM path; rewrite when the Samba container is available locally.",
+        strict=False,
+    )
     def test_bug2_inline_pem_path_is_file_caught(self, samba_ad, monkeypatch):
         """Bug #2: ``Path.is_file()`` raises ``OSError(ENAMETOOLONG)`` on PEM.
 
