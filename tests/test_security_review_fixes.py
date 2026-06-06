@@ -33,14 +33,14 @@ class TestOAuthAlgAllowlist:
 
 class TestRunbookUrlGuard:
     def test_javascript_scheme_rejected(self):
-        from cert_watch.routes.api import _runbook_url_error
+        from cert_watch.routes.api._shared import _runbook_url_error
 
         assert _runbook_url_error("javascript:alert(1)") is not None
         assert _runbook_url_error("data:text/html,<script>") is not None
         assert _runbook_url_error("vbscript:msgbox") is not None
 
     def test_http_and_empty_allowed(self):
-        from cert_watch.routes.api import _runbook_url_error
+        from cert_watch.routes.api._shared import _runbook_url_error
 
         assert _runbook_url_error("https://wiki.example.com/runbook") is None
         assert _runbook_url_error("http://10.0.0.5/wiki") is None
@@ -52,7 +52,7 @@ class TestComplianceFailsClosed:
     def test_missing_security_returns_503_not_empty_signature(self):
         from fastapi import HTTPException
 
-        from cert_watch.routes.api import compliance_signing_key
+        from cert_watch.routes.api._shared import compliance_signing_key
 
         class _State:
             security = None
@@ -70,7 +70,7 @@ class TestComplianceFailsClosed:
     def test_empty_signing_key_returns_503(self):
         from fastapi import HTTPException
 
-        from cert_watch.routes.api import compliance_signing_key
+        from cert_watch.routes.api._shared import compliance_signing_key
 
         class _Security:
             signing_key = ""
