@@ -21,6 +21,7 @@ from cert_watch.routes.api.alerts import router as alerts_router
 from cert_watch.routes.api.certificates import router as certificates_router
 from cert_watch.routes.api.hosts import router as hosts_router
 from cert_watch.routes.api.insights import router as insights_router
+from cert_watch.routes.api.keys import router as keys_router
 from cert_watch.routes.api.reports import router as reports_router
 
 router = APIRouter()
@@ -32,3 +33,4 @@ router.include_router(hosts_router)
 router.include_router(alerts_router)
 router.include_router(reports_router)
 router.include_router(insights_router)
+router.include_router(keys_router)
