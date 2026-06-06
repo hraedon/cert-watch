@@ -68,7 +68,7 @@ class Certificate:
 def _from_x509(cert: x509.Certificate) -> Certificate:
     try:
         san_ext = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME)
-        san_dns = list(san_ext.value.get_values_for_type(x509.DNSName))
+        san_dns = list(san_ext.value.get_values_for_type(x509.DNSName))  # type: ignore[attr-defined]
     except x509.ExtensionNotFound:
         san_dns = []
 

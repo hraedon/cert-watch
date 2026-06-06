@@ -236,7 +236,7 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                 _save_timestamps(conn, key, ts)
                 conn.commit()
                 return True
-        except Exception:
+        except (sqlite3.Error, OSError):
             # WARNING, not DEBUG (BC-078): a silent DB-error fallback degrades
             # rate limiting to per-process counters without anyone noticing.
             logger.warning(
@@ -266,7 +266,7 @@ def get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tupl
 
             with _connect(_rate_db_path) as conn:
                 ts = _load_timestamps(conn, key, cutoff)
-        except Exception:
+        except (sqlite3.Error, OSError):
             ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
     else:
         ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
@@ -295,7 +295,7 @@ async def check_csrf(request: Request) -> str | None:
             form = await request.form()
             raw = form.get("_csrf_token", "")
             token = raw if isinstance(raw, str) else ""
-        except Exception:
+        except (ValueError, RuntimeError):
             pass
     if not token:
         return "missing CSRF token"

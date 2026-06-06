@@ -116,7 +116,7 @@ async def api_update_notes(
         return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
     notes = body.get("notes", "")
     if not isinstance(notes, str):
@@ -202,7 +202,7 @@ async def api_set_cert_tags(
         return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
     tags = _tags_from_body(body)
     if tags is None:

@@ -62,7 +62,7 @@ async def api_update_host_owner(
     """Update owner/contact and renewal status for a host."""
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
 
     valid_statuses = {"pending", "in_progress", "renewed"}
@@ -163,7 +163,7 @@ async def api_set_host_tags(
     repo = SqliteHostRepository(db)
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
     from cert_watch.routes.api._shared import _tags_from_body
 

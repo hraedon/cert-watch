@@ -170,6 +170,7 @@ def _resolve_with_dns(
     an empty list on any resolution failure, letting ``resolve_hostname`` fall
     back to the system resolver.
     """
+    import dns.exception
     import dns.resolver
 
     resolver = dns.resolver.Resolver(configure=False)
@@ -180,7 +181,7 @@ def _resolve_with_dns(
     for qtype, family in (("A", socket.AF_INET), ("AAAA", socket.AF_INET6)):
         try:
             answer = resolver.resolve(hostname, qtype)
-        except Exception:
+        except (dns.exception.DNSException, OSError):
             # NXDOMAIN / NoAnswer / Timeout / NoNameservers — try the next type.
             continue
         for rdata in answer:

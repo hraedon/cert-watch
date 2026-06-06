@@ -86,3 +86,16 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_covered = true
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+module = [
+    "ldap3.*",
+    "authlib.*",
+    "win32evtlog.*",
+    "win32evtlogutil.*",
+]
+ignore_missing_imports = true

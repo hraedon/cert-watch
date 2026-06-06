@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import socket
 
+import dns.exception
+
 
 class _FakeRdata:
     def __init__(self, address: str):
@@ -42,7 +44,7 @@ def _make_fake_resolver(mapping, *, record=None):
                 record.append((hostname, qtype, tuple(self.nameservers)))
             addrs = mapping.get(qtype)
             if not addrs:
-                raise Exception(f"no {qtype} record")
+                raise dns.exception.DNSException(f"no {qtype} record")
             return _FakeAnswer(addrs)
 
     return _FakeResolver

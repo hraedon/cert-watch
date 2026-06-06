@@ -85,7 +85,7 @@ agent-notes breadcrumb sync --from-files breadcrumbs/active --path /projects/cer
 agent-notes breadcrumb sync --path /projects/cert-watch --create-missing-vocab   # default dir covers resolved/
 ```
 
-**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the agent-notes DB into [`OPEN_BREADCRUMBS.txt`](OPEN_BREADCRUMBS.txt) (regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). For the live view query the DB directly (commands above). As of the 2026-06-04 reconciliation there are **16 open** items (15 `new` + BC-031 `deferred` for Postgres/MSSQL); resolved breadcrumbs live in the DB and under `breadcrumbs/resolved/` as history.
+**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the agent-notes DB into [`OPEN_BREADCRUMBS.txt`](OPEN_BREADCRUMBS.txt) (regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). For the live view query the DB directly (commands above). Resolved breadcrumbs live in the DB and under `breadcrumbs/resolved/` as history.
 
 SSRF/scan policy is `CERT_WATCH_ALLOWED_SUBNETS` (BC-080): a CIDR allowlist scoping which **private** ranges are scannable (public always allowed; loopback/link-local/metadata always blocked). The global `allow_private` default was deliberately **not** flipped (breaks internal-monitoring on upgrade for low payoff — the scan reads cert metadata, not bodies/creds).
 

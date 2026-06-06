@@ -68,7 +68,7 @@ async def api_create_alert_group(
     db = _db_path(request)
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
 
     name = body.get("name")
@@ -143,7 +143,7 @@ async def api_update_alert_group(
 
     try:
         body = await request.json()
-    except Exception:
+    except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
 
     name = body.get("name")
