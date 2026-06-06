@@ -18,6 +18,7 @@ from cert_watch.middleware import require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.api._shared import (
+    _normalize_pagination,
     _pagination_links,
     _tags_from_body,
 )
@@ -33,11 +34,9 @@ def api_list_certificates(
     request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
 ) -> JSONResponse:
     db = _db_path(request)
-    limit = min(max(limit, 1), 200)
-    page = max(page, 1)
     total = count_dashboard_leaves(db)
+    page, limit, pages, _offset = _normalize_pagination(page, limit, total)
     rows = list_dashboard_rows(db, page=page, per_page=limit)
-    pages = (total + limit - 1) // limit if limit else 0
     return JSONResponse(
         content={
             "certificates": rows,

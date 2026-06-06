@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-from fastapi.templating import Jinja2Templates
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from cert_watch import __commit__, __version__, ct_lookup
@@ -23,7 +21,6 @@ from cert_watch.database import (
     list_scan_batches,
 )
 from cert_watch.database.connection import _connect, _parse_iso
-from cert_watch.filters import register_filters
 from cert_watch.middleware import (
     check_metrics_token,
     get_auth_context,
@@ -32,15 +29,13 @@ from cert_watch.middleware import (
     require_auth,
     require_write,
 )
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import _db_path, get_templates
 
 logger = logging.getLogger("cert_watch.routes.views")
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-register_filters(templates)
+templates = get_templates()
 
 
 @router.get("/healthz")

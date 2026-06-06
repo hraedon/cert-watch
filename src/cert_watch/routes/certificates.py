@@ -9,7 +9,6 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
@@ -27,7 +26,6 @@ from cert_watch.filters import (
     compute_urgency,
     friendly_issuer,
     issuer_cn,
-    register_filters,
     subject_cn,
 )
 from cert_watch.middleware import (
@@ -38,16 +36,14 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-register_filters(templates)
+templates = get_templates()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 

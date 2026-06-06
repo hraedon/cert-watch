@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.auth import (
@@ -29,13 +27,13 @@ from cert_watch.middleware import (
     check_rate_limit,
     get_csrf_context,
 )
+from cert_watch.routes._deps import get_templates
 
 logger = logging.getLogger("cert_watch.routes.auth")
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates = get_templates()
 
 
 @router.get("/login", response_class=HTMLResponse, response_model=None)

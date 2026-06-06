@@ -6,26 +6,23 @@ import contextlib
 import ipaddress
 import logging
 import ssl
-from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
 from cert_watch.middleware import get_auth_context, get_csrf_context
-from cert_watch.routes._deps import _db_path, _get_settings
+from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 
 logger = logging.getLogger("cert_watch.routes.settings")
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates = get_templates()
 
 
 def _get_encryption_key(request: Request) -> str | None:
@@ -231,30 +228,41 @@ def settings_page(
 # ---------- Save auth config ----------
 
 
-@router.post("/settings/auth")
-async def save_auth_config(request: Request) -> RedirectResponse:
+async def _save_config_section(
+    request: Request,
+    keys: dict[str, str],
+    tab_name: str,
+    *,
+    encrypt: bool = False,
+    rebuild: bool = True,
+) -> RedirectResponse:
+    """Shared logic for saving a settings tab to kv_store.
+
+    *encrypt*  – when True, sensitive keys (members of ``_SENSITIVE_KEYS``)
+                 that are non-blank are stored encrypted (BC-082).
+    *rebuild*  – when True, ``_rebuild_settings`` is called after saving.
+    """
     redirect_resp = _require_admin(request)
     if redirect_resp:
         assert isinstance(redirect_resp, RedirectResponse)
         return redirect_resp
+
     from cert_watch.middleware import check_csrf
+
     csrf_err = await check_csrf(request)
     if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
+        return RedirectResponse(
+            url=f"/settings?tab={tab_name}&error={csrf_err}", status_code=303
+        )
 
     db = _db_path(request)
     form = await request.form()
-    enc_key = _get_encryption_key(request)
+    enc_key = _get_encryption_key(request) if encrypt else None
 
-    # Save each field to kv_store (encrypt sensitive values if key available)
-    for kv_key in _AUTH_KEYS:
+    for kv_key in keys:
         raw = form.get(kv_key, "")
         val = raw.strip() if isinstance(raw, str) else ""
         if kv_key in _SENSITIVE_KEYS:
-            # Sensitive fields render blank/masked in the form, so a blank submit
-            # means "leave unchanged" — overwriting with "" here silently wiped a
-            # previously-saved bind password (or CA cert), which made LDAP login
-            # fail after a successful test even though nothing looked wrong.
             if not val:
                 continue
             if enc_key:
@@ -264,21 +272,31 @@ async def save_auth_config(request: Request) -> RedirectResponse:
         else:
             kv_set(db, kv_key, val)
 
-    # Rebuild auth provider with merged config
-    try:
+    if rebuild:
         _rebuild_settings(request, db)
-        s = _get_settings(request)
-        auth = s.build_auth_provider()
-        request.app.state.auth_provider = auth
-        request.app.state.needs_setup = False
-        logger.info("settings: auth provider updated to '%s'", s.auth_provider)
-    except (ValueError, Exception) as exc:
-        logger.warning("settings: auth provider rebuild failed: %s", exc)
-        return RedirectResponse(
-            url=f"/settings?tab=auth&error={str(exc)[:120].replace(chr(10), ' ')}", status_code=303
-        )
 
-    return RedirectResponse(url="/settings?tab=auth&saved=1", status_code=303)
+    return RedirectResponse(url=f"/settings?tab={tab_name}&saved=1", status_code=303)
+
+
+@router.post("/settings/auth")
+async def save_auth_config(request: Request) -> RedirectResponse:
+    resp = await _save_config_section(request, _AUTH_KEYS, "auth", encrypt=True, rebuild=True)
+    if resp.status_code == 303 and ("saved=1" in str(resp.headers.get("location", ""))):
+        # After saving, rebuild the auth provider so the new config is live immediately
+        try:
+            db = _db_path(request)
+            s = _get_settings(request)
+            auth = s.build_auth_provider()
+            request.app.state.auth_provider = auth
+            request.app.state.needs_setup = False
+            logger.info("settings: auth provider updated to '%s'", s.auth_provider)
+        except (ValueError, Exception) as exc:
+            logger.warning("settings: auth provider rebuild failed: %s", exc)
+            return RedirectResponse(
+                url=f"/settings?tab=auth&error={str(exc)[:120].replace(chr(10), ' ')}",
+                status_code=303,
+            )
+    return resp
 
 
 # ---------- Save SMTP config ----------
@@ -286,62 +304,14 @@ async def save_auth_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/smtp")
 async def save_smtp_config(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        assert isinstance(redirect_resp, RedirectResponse)
-        return redirect_resp
-    from cert_watch.middleware import check_csrf
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=smtp&error={csrf_err}", status_code=303)
-
-    db = _db_path(request)
-    form = await request.form()
-    enc_key = _get_encryption_key(request)
-
-    for kv_key in _SMTP_KEYS:
-        raw = form.get(kv_key, "")
-        val = raw.strip() if isinstance(raw, str) else ""
-        if kv_key in _SENSITIVE_KEYS:
-            # Blank submit = leave the stored secret unchanged (see save_auth_config).
-            if not val:
-                continue
-            if enc_key:
-                kv_set_secret(db, kv_key, val, enc_key)
-            else:
-                kv_set(db, kv_key, val)
-        else:
-            kv_set(db, kv_key, val)
-
-    # Rebuild settings with new SMTP values
-    _rebuild_settings(request, db)
-    return RedirectResponse(url="/settings?tab=smtp&saved=1", status_code=303)
-
-
-# ---------- Save alert config ----------
+    resp = await _save_config_section(request, _SMTP_KEYS, "smtp", encrypt=True, rebuild=True)
+    return resp
 
 
 @router.post("/settings/alerts")
 async def save_alert_config(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        assert isinstance(redirect_resp, RedirectResponse)
-        return redirect_resp
-    from cert_watch.middleware import check_csrf
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=alerts&error={csrf_err}", status_code=303)
-
-    db = _db_path(request)
-    form = await request.form()
-
-    for kv_key in _ALERT_KEYS:
-        raw = form.get(kv_key, "")
-        val = raw.strip() if isinstance(raw, str) else ""
-        kv_set(db, kv_key, val)
-
-    _rebuild_settings(request, db)
-    return RedirectResponse(url="/settings?tab=alerts&saved=1", status_code=303)
+    resp = await _save_config_section(request, _ALERT_KEYS, "alerts", encrypt=False, rebuild=True)
+    return resp
 
 
 # ---------- Change local admin password (BC-102) ----------

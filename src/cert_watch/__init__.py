@@ -1,4 +1,4 @@
-__version__ = "0.5.0"
+__version__ = "0.5.3"
 __commit__ = ""
 
 
@@ -13,7 +13,7 @@ def _load_runtime_version() -> tuple[str, str]:
             ver = parts[0].lstrip("v") if parts else ""
             commit = parts[1] if len(parts) > 1 else ""
             return ver or __version__, commit
-    except Exception:
+    except OSError:
         pass
     return __version__, __commit__
 
