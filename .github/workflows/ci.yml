@@ -41,7 +41,7 @@ jobs:
       - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
         with:
           python-version: "3.13"
-      - run: uv pip install -e ".[dev,auth,integration]"
+      - run: uv pip install -e ".[dev,auth]"
       - name: pytest (integration)
         # Container-bound tests: no coverage, single-threaded, --no-cov mirrors
         # the e2e job convention.

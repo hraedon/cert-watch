@@ -29,9 +29,6 @@ e2e = [
     "playwright>=1.49",
     "pytest-playwright>=0.6",
 ]
-integration = [
-    "testcontainers>=4.0",
-]
 auth-ldap = [
     "ldap3>=2.9",
 ]
@@ -73,9 +70,10 @@ addopts = "-ra -m 'not e2e and not integration and not deploy' -n auto --dist lo
 # E2E tests opt-in via `pytest -m e2e` (requires Playwright + browsers).
 # E2E workflows must pass --no-cov to override the coverage settings above.
 markers = [
-    "e2e: end-to-end tests requiring Playwright + a running app",
-    "integration: integration tests requiring external tools (e.g. openssl)",
-    "deploy: platform-level deploy smoke tests (Docker, k8s, Linux)",
+    "e2e: end-to-end tests (Playwright + running app)",
+    "integration: integration tests requiring external tools",
+    "deploy: platform-level deploy tests",
+    "ldap_e2e: LDAP E2E tests (opt-in via CW_LDAP_E2E=1)",
 ]
 
 [tool.coverage.run]

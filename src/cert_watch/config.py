@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 
 logger = logging.getLogger("cert_watch.config")
@@ -44,6 +44,18 @@ def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> s
             filename, secret_file,
         )
     return generated
+
+
+def _parse_role_map(raw: str) -> dict:
+    """Parse CERT_WATCH_ROLE_MAP JSON.  Returns {} on empty / invalid input."""
+    if not raw:
+        return {}
+    try:
+        import json
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def split_group_dns(raw: str) -> tuple[str, ...]:
@@ -179,10 +191,12 @@ class Settings:
     allowed_roles: tuple[str, ...] = ()
     # Admin users (comma-separated usernames allowed to access /settings)
     admin_users: tuple[str, ...] = ()
-    # Write users (comma-separated usernames allowed to modify data).
-    # When empty, all authenticated users can write. When set, only listed
-    # users (and admins) can perform mutations — others are read-only.
+    # Write users (comma-separated usernames allowed to write). When empty,
+    # all authenticated users can write.
     write_users: tuple[str, ...] = ()
+    # Role map (JSON) for Plan 035 (RBAC).  When empty, no role-gating
+    # is active and all authenticated users get full access (backward compat).
+    role_map: dict = field(default_factory=dict)
     # Local break-glass admin
     local_admin_user: str = ""
     local_admin_password_hash: str = ""
@@ -346,6 +360,10 @@ class Settings:
                 u.strip()
                 for u in os.environ.get("CERT_WATCH_WRITE_USERS", "").split(",")
                 if u.strip()
+            ),
+            # RBAC role map (Plan 035)
+            role_map=_parse_role_map(
+                os.environ.get("CERT_WATCH_ROLE_MAP", "")
             ),
             # Local break-glass admin
             local_admin_user=os.environ.get("CERT_WATCH_LOCAL_ADMIN_USER", ""),

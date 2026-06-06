@@ -47,33 +47,37 @@ def _create_samba_container(image: str, realm: str, domain: str, adminpass: str)
     via samba-tool, configures 'ldap server require strong auth = no', then
     starts Samba in the foreground.
     """
-    setup_script = f"""#!/bin/bash
+    setup_script = """#!/bin/bash
 set -e
 if [ ! -f /var/lib/samba/private/sam.ldb ]; then
     echo "Provisioning domain..."
     samba-tool domain provision \
       --use-rfc2307 \
-      --realm={realm} \
-      --domain={domain} \
-      --adminpass={adminpass} \
+      --realm=REALM_PH \
+      --domain=DOMAIN_PH \
+      --adminpass=ADMINPASS_PH \
       --server-role=dc \
       --dns-backend=SAMBA_INTERNAL
     samba-tool domain passwordsettings set \\
       --complexity=off --min-pwd-age=0 --max-pwd-age=0 \\
       --min-pwd-length=6 --store-plaintext=on
     SMB_CONF="/etc/samba/smb.conf"
-    sed -i '/^\\[global\\]/a\\        ldap server require strong auth = no' "$SMB_CONF" || true
+    sed -i '/^\\[global\\]/a\\        ldap server require strong auth = no' "$SMB_CONF"
+    if ! grep -q 'ldap server require strong auth = no' "$SMB_CONF"; then
+        echo "FATAL: failed to inject strong-auth override into smb.conf" >&2
+        exit 1
+    fi
 fi
 # Seed users/groups every start (idempotent -- samba-tool create fails if exists)
-samba-tool user create cw-admin {adminpass} 2>/dev/null || true
-samba-tool user create cw-user {adminpass} 2>/dev/null || true
-samba-tool user create cw-outcast {adminpass} 2>/dev/null || true
+samba-tool user create cw-admin ADMINPASS_PH 2>/dev/null || true
+samba-tool user create cw-user ADMINPASS_PH 2>/dev/null || true
+samba-tool user create cw-outcast ADMINPASS_PH 2>/dev/null || true
 samba-tool group add cert-watch-admins 2>/dev/null || true
 samba-tool group add cert-watch-users 2>/dev/null || true
 samba-tool group addmembers cert-watch-admins cw-admin 2>/dev/null || true
 samba-tool group addmembers cert-watch-users cw-user 2>/dev/null || true
 exec samba -i -M single
-"""
+""".replace("REALM_PH", realm).replace("DOMAIN_PH", domain).replace("ADMINPASS_PH", adminpass)
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".sh", delete=False) as f:
         f.write(setup_script)
@@ -276,7 +280,12 @@ class Test_LDAPAuthProvider_Integration:
         assert result.success, f"Expected success, got: {result.error}"
 
     def test_user_not_in_required_group_fails(self, samba_ad):
-        """cw-user is not in cert-watch-admins → denied."""
+        """cw-user is not in cert-watch-admins → denied.
+
+        Uses the *default* group_filter (empty), which must fall back to the AD
+        transitive matching-rule OID ``1.2.840.113556.1.4.1941``.  A successful
+        deny proves Samba-AD implements that OID and the provider uses it.
+        """
         provider = LDAPAuthProvider(
             server_url=samba_ad.ldap_uri,
             base_dn=samba_ad.base_dn,
@@ -289,12 +298,28 @@ class Test_LDAPAuthProvider_Integration:
                 f"CN=cert-watch-admins,CN=Users,{samba_ad.base_dn}",
             ],
         )
+        # Verify the default filter shape uses the AD transitive OID.
+        group_dn = f"CN=cert-watch-admins,CN=Users,{samba_ad.base_dn}"
+        built_filter = provider._build_group_filter(group_dn)
+        assert "1.2.840.113556.1.4.1941" in built_filter, (
+            f"Default group filter should use AD transitive OID, got: {built_filter}"
+        )
+
         result = provider.authenticate("cw-user", "Test1234!")
         assert not result.success
         assert "group" in result.error.lower() or "not found" in result.error.lower()
 
-    def test_wrong_ca_rejected(self, samba_ad):
-        """A mismatched CA must fail TLS validation under STARTTLS."""
+    def test_wrong_ca_rejected_over_ldaps(self, samba_ad):
+        """A mismatched CA must fail TLS validation over ldaps://.
+
+        Uses ``ldaps://`` so TLS is negotiated at the socket level (not via
+        STARTTLS).  ``CERT_REQUIRED`` + a wrong CA forces the handshake to
+        fail — verifying that the provider is *actually* validating the server
+        cert, not just passing the CA through to the library.
+        """
+        if not samba_ad.ldaps_port:
+            pytest.skip("LDAPS port not mapped")
+
         import datetime
 
         from cryptography import x509
@@ -317,17 +342,19 @@ class Test_LDAPAuthProvider_Integration:
             .decode()
         )
         provider = LDAPAuthProvider(
-            server_url=samba_ad.ldap_uri,
+            server_url=samba_ad.ldaps_uri,
             base_dn=samba_ad.base_dn,
             bind_dn=samba_ad.bind_dn,
             bind_password=samba_ad.admin_password,
             user_search_filter="(sAMAccountName={username})",
-            start_tls=True,
+            start_tls=False,
             ca_cert=wrong_ca,
             required_groups=[],
         )
         result = provider.authenticate("cw-admin", "Test1234!")
         assert not result.success
+        err = result.error.lower()
+        assert "failed" in err or "tls" in err or "auth" in err
 
 
 class Test_LdapLoginViaSettings:
