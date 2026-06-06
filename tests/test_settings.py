@@ -910,3 +910,147 @@ def test_sensitive_setting_keys_single_source():
 
     assert _SENSITIVE_KEYS == SENSITIVE_SETTING_KEYS
     assert "pagerduty_routing_key" in SENSITIVE_SETTING_KEYS
+
+
+# ---------- TOFU CA capture (Plan 037) ----------
+
+
+def test_is_cert_verify_error_detects_ssl_phrases():
+    from cert_watch.routes.settings import _is_cert_verify_error
+
+    class FakeExc(Exception):
+        pass
+
+    assert _is_cert_verify_error(FakeExc("CERTIFICATE_VERIFY_FAILED")) is True
+    assert _is_cert_verify_error(FakeExc("certificate verify failed")) is True
+    assert _is_cert_verify_error(FakeExc("unable to get local issuer certificate")) is True
+    assert _is_cert_verify_error(FakeExc("self signed certificate")) is True
+    assert _is_cert_verify_error(FakeExc("connection refused")) is False
+    assert _is_cert_verify_error(FakeExc("invalid credentials")) is False
+
+
+def test_capture_ldaps_chain_skips_non_ldaps():
+    from cert_watch.routes.settings import _capture_ldaps_chain
+
+    assert _capture_ldaps_chain("ldap://dc.example.com") is None
+
+
+def test_capture_ldaps_chain_blocks_ssrf():
+    from cert_watch.routes.settings import _capture_ldaps_chain
+
+    assert _capture_ldaps_chain("ldaps://127.0.0.1") is None
+
+
+def test_capture_ldaps_chain_returns_ca_excluding_leaf(monkeypatch, chain_triplet):
+    from cert_watch.routes.settings import _capture_ldaps_chain
+
+    leaf = chain_triplet["leaf"]
+    intermediate = chain_triplet["intermediate"]
+    root = chain_triplet["root"]
+    der_chain = [leaf.der, intermediate.der, root.der]
+
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **k: (der_chain, "TLSv1.3"),
+    )
+    result = _capture_ldaps_chain("ldaps://dc.example.com")
+    assert result is not None
+    assert len(result) == 2  # intermediate + root
+    assert result[0]["subject"] == "CN=Test Intermediate CA"
+    assert result[1]["subject"] == "CN=Test Root CA"
+    assert "BEGIN CERTIFICATE" in result[0]["pem"]
+    assert "BEGIN CERTIFICATE" in result[1]["pem"]
+
+
+def test_capture_ldaps_chain_single_cert_returns_none(monkeypatch, self_signed_leaf):
+    """A self-signed-only chain has no CA after dropping the leaf."""
+    from cert_watch.routes.settings import _capture_ldaps_chain
+
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **k: ([self_signed_leaf.der], "TLSv1.3"),
+    )
+    assert _capture_ldaps_chain("ldaps://dc.example.com") is None
+
+
+def test_test_ldap_tofu_on_cert_verify_failure(reload_app, monkeypatch, chain_triplet):
+    """When the LDAPS connection fails with a cert error, the handler returns a tofu block."""
+    from cryptography.hazmat.primitives import hashes
+
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        def __init__(self, *a, **k):
+            raise ldap3.core.exceptions.LDAPSocketOpenError(
+                "SSL: CERTIFICATE_VERIFY_FAILED"
+            )
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+
+    root = chain_triplet["root"]
+
+    def fake_capture(url, *a, **k):
+        return [
+            {
+                "subject": "CN=Test Root CA",
+                "issuer": "CN=Test Root CA",
+                "not_after": root.cert.not_valid_after_utc.isoformat(),
+                "sha256": root.cert.fingerprint(hashes.SHA256()).hex(),
+                "pem": root.pem.decode(),
+            }
+        ]
+
+    monkeypatch.setattr(
+        "cert_watch.routes.settings._capture_ldaps_chain", fake_capture
+    )
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldaps://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "tofu" in data
+    assert data["tofu"]["pem"] == root.pem.decode()
+    assert len(data["tofu"]["chain"]) == 1
+    assert data["tofu"]["chain"][0]["subject"] == "CN=Test Root CA"
+
+
+def test_pin_ldap_ca_success(reload_app, tmp_path, chain_triplet):
+    """Pinning a CA writes the cert to kv_store and creates an audit row."""
+    from cert_watch.audit import list_audit
+    from cert_watch.database import derive_encryption_key, fernet_decrypt, kv_get
+
+    app_mod = reload_app()
+    root = chain_triplet["root"]
+    pem = root.pem.decode()
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/pin-ldap-ca",
+            data={"ldap_ca_cert": pem},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    stored = kv_get(tmp_path / "cert-watch.sqlite3", "ldap_ca_cert")
+    enc_key = derive_encryption_key("test-auth-secret-for-tests")
+    decrypted = fernet_decrypt(stored, enc_key)
+    assert "BEGIN CERTIFICATE" in decrypted
+    audit = list_audit(tmp_path / "cert-watch.sqlite3", target_type="ldap_ca")
+    assert any(a["action"] == "ca_pinned" for a in audit)
+
+
+def test_pin_ldap_ca_missing_pem(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post("/settings/pin-ldap-ca", data={"ldap_ca_cert": ""})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert "No CA certificate" in r.json()["error"]

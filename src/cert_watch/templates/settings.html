@@ -119,6 +119,18 @@
             <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
             <div id="ldap-test-result" class="cw-test-result"></div>
           </div>
+
+          <div id="ldap-tofu-panel" class="cw-panel cw-mt-16 cw-hidden">
+            <h4 class="cw-set-title cw-mb-12">Could not validate TLS — server presented this CA</h4>
+            <p class="cw-muted cw-fz-11 cw-mb-12">
+              Trust on first use — verify the fingerprint against a known good source if your network may be hostile.
+            </p>
+            <div id="ldap-tofu-chain"></div>
+            <div class="cw-flex cw-gap-8 cw-mt-12">
+              <button type="button" class="cw-btn primary" data-action="pin-ldap-ca">Trust & pin</button>
+              <button type="button" class="cw-btn" data-action="copy-ldap-ca">Copy PEM</button>
+            </div>
+          </div>
         </div>
 
         <!-- OAuth section -->
@@ -318,6 +330,12 @@
 
 {% block scripts %}
 <script nonce="{{ request.state.csp_nonce }}">
+  function escHtml(s) {
+    var div = document.createElement('div');
+    div.textContent = s;
+    return div.innerHTML;
+  }
+
   function toggleProvider() {
     var provider = document.getElementById('auth_provider').value;
     document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');
@@ -326,12 +344,19 @@
   toggleProvider();
   document.getElementById('auth_provider').addEventListener('change', toggleProvider);
 
+  var capturedLdapCaPem = '';
+
   function testLdap(btn) {
     var result = document.getElementById('ldap-test-result');
+    var tofuPanel = document.getElementById('ldap-tofu-panel');
+    var tofuChain = document.getElementById('ldap-tofu-chain');
     btn.disabled = true;
     btn.textContent = 'Testing...';
     result.className = 'cw-test-result';
     result.textContent = '';
+    tofuPanel.classList.add('cw-hidden');
+    tofuChain.innerHTML = '';
+    capturedLdapCaPem = '';
 
     var form = new FormData();
     form.append('_csrf_token', {{ csrf_token | tojson }});
@@ -346,8 +371,24 @@
     fetch('/settings/test-ldap', {method: 'POST', body: form})
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
-        result.textContent = data.ok ? data.message : 'Error: ' + data.error;
+        if (data.tofu) {
+          capturedLdapCaPem = data.tofu.pem;
+          var html = '';
+          data.tofu.chain.forEach(function(cert) {
+            html += '<div class="cw-panel cw-mb-8 cw-panel--p-11-13">' +
+              '<div class="cw-text-text-1 cw-fz-12 cw-fw-600">' + escHtml(cert.subject) + '</div>' +
+              '<div class="cw-muted cw-fz-11 cw-mt-2">Issuer: ' + escHtml(cert.issuer) + '</div>' +
+              '<div class="cw-muted cw-fz-11 cw-mt-2">SHA-256: <code class="cw-fz-10">' + escHtml(cert.sha256) + '</code></div>' +
+              '</div>';
+          });
+          tofuChain.innerHTML = html;
+          tofuPanel.classList.remove('cw-hidden');
+          result.className = 'cw-test-result err';
+          result.textContent = 'Error: ' + data.error;
+        } else {
+          result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
+          result.textContent = data.ok ? data.message : 'Error: ' + data.error;
+        }
       })
       .catch(function(e) {
         result.className = 'cw-test-result err';
@@ -357,6 +398,53 @@
         btn.disabled = false;
         btn.textContent = 'Test Connection';
       });
+  }
+
+  function pinLdapCa(btn) {
+    if (!capturedLdapCaPem) return;
+    var result = document.getElementById('ldap-test-result');
+    btn.disabled = true;
+    var form = new FormData();
+    form.append('_csrf_token', {{ csrf_token | tojson }});
+    form.append('ldap_ca_cert', capturedLdapCaPem);
+    fetch('/settings/pin-ldap-ca', {method: 'POST', body: form})
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok) {
+          document.getElementById('ldap_ca_cert').value = capturedLdapCaPem;
+          document.getElementById('ldap-tofu-panel').classList.add('cw-hidden');
+        }
+        result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
+        result.textContent = data.ok ? data.message : 'Error: ' + data.error;
+      })
+      .catch(function(e) {
+        result.className = 'cw-test-result err';
+        result.textContent = 'Request failed: ' + e;
+      })
+      .finally(function() {
+        btn.disabled = false;
+      });
+  }
+
+  function copyLdapCa() {
+    if (!capturedLdapCaPem) return;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(capturedLdapCaPem).then(function() {
+        var result = document.getElementById('ldap-test-result');
+        result.className = 'cw-test-result ok';
+        result.textContent = 'PEM copied to clipboard';
+      });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = capturedLdapCaPem;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      var result = document.getElementById('ldap-test-result');
+      result.className = 'cw-test-result ok';
+      result.textContent = 'PEM copied to clipboard';
+    }
   }
 
   function testSmtp(btn) {
@@ -398,6 +486,14 @@
   document.querySelector('[data-action="test-smtp"]').addEventListener('click', function(e) {
     e.preventDefault();
     testSmtp(e.currentTarget);
+  });
+  document.querySelector('[data-action="pin-ldap-ca"]').addEventListener('click', function(e) {
+    e.preventDefault();
+    pinLdapCa(e.currentTarget);
+  });
+  document.querySelector('[data-action="copy-ldap-ca"]').addEventListener('click', function(e) {
+    e.preventDefault();
+    copyLdapCa();
   });
 </script>
 {% endblock %}

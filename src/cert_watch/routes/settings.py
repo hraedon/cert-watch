@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import contextlib
+import ipaddress
 import logging
+import ssl
 from pathlib import Path
 
+from cryptography import x509
+from cryptography.hazmat.primitives.serialization import Encoding
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -432,6 +437,146 @@ def _rebuild_settings(request: Request, db_path: Path) -> None:
     request.app.state.settings = s
 
 
+# ---------- TOFU CA capture for LDAPS test ----------
+
+
+def _capture_ldaps_chain(
+    url: str,
+    timeout: int = 5,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> list[dict] | None:
+    """Capture the certificate chain presented by an LDAPS server using a non-validating probe.
+
+    Returns a list of dicts (one per CA cert, leaf excluded) with:
+    - subject, issuer, not_after, sha256, pem
+
+    Returns None when the URL is not LDAPS, the host is blocked by the SSRF
+    guard, or no chain can be read.
+    """
+    import socket
+
+    from cert_watch.certificate_model import Certificate, parse_certificate
+    from cert_watch.scan import _is_blocked_ip, _scan_via_openssl
+
+    lowered = url.lower()
+    if not lowered.startswith("ldaps://"):
+        return None
+    rest = url[8:]
+    host = rest.split(":")[0].split("/")[0]
+    port = 636
+    if ":" in rest:
+        with contextlib.suppress(ValueError):
+            port = int(rest.split(":")[1].split("/")[0])
+
+    # SSRF guard
+    try:
+        ip = ipaddress.ip_address(host)
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return None
+    except ValueError:
+        pass
+
+    der_chain: list[bytes] = []
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        with (
+            socket.create_connection((host, port), timeout=timeout) as sock,
+            ctx.wrap_socket(sock, server_hostname=host) as ssl_sock,
+        ):
+            # Try native chain API (CPython 3.13+)
+            for method in ("get_unverified_chain", "get_verified_chain"):
+                getter = getattr(ssl_sock, method, None)
+                if getter:
+                    try:
+                        items = getter()
+                        der_chain = []
+                        for c in items:
+                            try:
+                                der = c.public_bytes(Encoding.DER)
+                            except AttributeError:
+                                der = bytes(c)
+                            der_chain.append(der)
+                        break
+                    except Exception:
+                        continue
+            else:
+                # Fallback: leaf via getpeercert, then openssl for full chain
+                leaf = ssl_sock.getpeercert(binary_form=True)
+                if leaf:
+                    der_chain.append(leaf)
+    except Exception:
+        pass
+
+    # If we only have the leaf (or nothing), try openssl for the full chain
+    if len(der_chain) <= 1:
+        try:
+            openssl_chain, _ = _scan_via_openssl(
+                host, port, timeout,
+                allow_private=allow_private, allowed_subnets=allowed_subnets,
+            )
+            if openssl_chain:
+                der_chain = openssl_chain
+        except Exception:
+            pass
+
+    if not der_chain:
+        return None
+
+    certs: list[Certificate] = []
+    for der in der_chain:
+        parsed = parse_certificate(der)
+        if isinstance(parsed, Certificate):
+            certs.append(parsed)
+
+    if not certs:
+        return None
+
+    # Drop the leaf (first cert); keep issuing CAs and root
+    ca_certs = certs[1:]
+    if not ca_certs:
+        return None
+
+    result: list[dict] = []
+    for cert in ca_certs:
+        pem = (
+            x509.load_der_x509_certificate(cert.raw_der)
+            .public_bytes(Encoding.PEM)
+            .decode("utf-8")
+        )
+        result.append(
+            {
+                "subject": cert.subject,
+                "issuer": cert.issuer,
+                "not_after": cert.not_after.isoformat() if cert.not_after else "",
+                "sha256": cert.fingerprint_sha256,
+                "pem": pem,
+            }
+        )
+    return result
+
+
+def _is_cert_verify_error(exc: Exception) -> bool:
+    """Return True when *exc* is a TLS certificate verification failure."""
+    msg = str(exc).lower()
+    return any(
+        phrase in msg
+        for phrase in (
+            "certificate_verify_failed",
+            "certificate verify failed",
+            "unable to get local issuer certificate",
+            "self signed certificate",
+            "self-signed certificate",
+            "unable to verify leaf signature",
+            "certificate chain too long",
+            "invalid ca certificate",
+        )
+    )
+
+
 # ---------- Test LDAP connection ----------
 
 
@@ -473,9 +618,7 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
             pass  # hostname — DNS-resolved at connect time
 
     try:
-        import contextlib
         import os
-        import ssl
         import tempfile
 
         import ldap3
@@ -522,6 +665,31 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
                         read_only=True,
                     )
                 except Exception as exc:  # noqa: BLE001 — report which URL failed
+                    if use_tls and _is_cert_verify_error(exc):
+                        settings = getattr(request.app.state, "settings", None)
+                        tofu_chain = _capture_ldaps_chain(
+                            url,
+                            timeout=connect_timeout,
+                            allow_private=settings.allow_private if settings else True,
+                            allowed_subnets=settings.allowed_subnets if settings else (),
+                        )
+                        if tofu_chain:
+                            return JSONResponse({
+                                "ok": False,
+                                "error": f"{url}: {exc}",
+                                "tofu": {
+                                    "chain": [
+                                        {
+                                            "subject": c["subject"],
+                                            "issuer": c["issuer"],
+                                            "not_after": c["not_after"],
+                                            "sha256": c["sha256"],
+                                        }
+                                        for c in tofu_chain
+                                    ],
+                                    "pem": "".join(c["pem"] for c in tofu_chain),
+                                },
+                            })
                     return JSONResponse({"ok": False, "error": f"{url}: {exc}"})
                 tls_active = srv_is_ldaps or bool(getattr(conn, "tls_started", False))
                 conn.unbind()
@@ -555,6 +723,56 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
         })
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)})
+
+
+# ---------- Pin LDAP CA (TOFU trust) ----------
+
+
+@router.post("/settings/pin-ldap-ca")
+async def pin_ldap_ca(request: Request) -> JSONResponse:
+    redirect = _require_admin(request)
+    if redirect:
+        return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
+    from cert_watch.middleware import check_csrf
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
+
+    form = await request.form()
+    pem = form.get("ldap_ca_cert", "").strip()
+    if not pem:
+        return JSONResponse({"ok": False, "error": "No CA certificate provided"})
+
+    db = _db_path(request)
+    enc_key = _get_encryption_key(request)
+
+    if enc_key:
+        kv_set_secret(db, "ldap_ca_cert", pem, enc_key)
+    else:
+        kv_set(db, "ldap_ca_cert", pem)
+
+    from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+    from cert_watch.certificate_model import extract_chain_from_pem
+
+    chain = extract_chain_from_pem(pem)
+    fps = [c.fingerprint_sha256 for c in chain]
+    subjects = [c.subject for c in chain]
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="ca_pinned",
+        target_type="ldap_ca",
+        target_id=fps[0] if fps else "unknown",
+        detail={
+            "subjects": subjects,
+            "sha256s": fps,
+            "count": len(chain),
+            "source": "tofu",
+        },
+        source_ip=resolve_source_ip(request),
+    )
+
+    return JSONResponse({"ok": True, "message": "CA certificate pinned successfully"})
 
 
 # ---------- Test SMTP connection ----------
