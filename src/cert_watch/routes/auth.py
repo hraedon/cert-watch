@@ -11,7 +11,6 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth import (
     SESSION_COOKIE,
-    SESSION_TTL,
     LocalAdminProvider,
     NoAuthProvider,
     _CompositeProvider,
@@ -279,6 +278,9 @@ def oauth_callback(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
         max_age=settings.session_ttl,
         secure=_COOKIE_SECURE, path="/",
+    )
+    response.delete_cookie(
+        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response

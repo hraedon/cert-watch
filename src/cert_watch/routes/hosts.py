@@ -21,9 +21,9 @@ from cert_watch.middleware import (
 )
 from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
 from cert_watch.scan import ScanError, ScannedEntry, scan_host_async, store_scanned_async
+from cert_watch.scheduler import ScanHistory, record_scan_history
 
 ScanResult = ScannedEntry | ScanError
-from cert_watch.scheduler import ScanHistory, record_scan_history
 
 logger = logging.getLogger("cert_watch.routes.hosts")
 
@@ -293,7 +293,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         source_ip=source_ip,
     )
 
-    async def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, ScanResult]:
+    async def _scan_one(
+        job: tuple[str, int, int | None, str | None],
+    ) -> tuple[str, int, ScanResult]:
         hostname, port, _, pinned = job
         result = await scan_host_async(
             hostname,

@@ -398,7 +398,9 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     msg.set_content(alert.message)
     try:
         if config.smtp_port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
+                config.smtp_host, config.smtp_port, timeout=15,
+            )
         else:
             s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         with s:
@@ -682,7 +684,9 @@ def send_expiry_digest(
             msg["To"] = ", ".join(config.recipients)
             msg.set_content(message)
             if config.smtp_port == 465:
-                s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+                s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
+                    config.smtp_host, config.smtp_port, timeout=15,
+                )
             else:
                 s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
             with s:

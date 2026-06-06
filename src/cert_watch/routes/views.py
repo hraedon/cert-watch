@@ -152,7 +152,9 @@ def api_health(request: Request) -> JSONResponse:
     overall = "ok"
     if not checks["scheduler_running"]:
         overall = "critical"
-    elif ((checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0) or checks.get("last_scan_status") == "failure":
+    elif (
+        (checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0
+    ) or checks.get("last_scan_status") == "failure":
         overall = "warning"
 
     checks["overall"] = overall

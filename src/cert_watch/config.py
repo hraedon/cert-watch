@@ -381,12 +381,27 @@ class Settings:
                 if u.strip()
             ),
             # Scan timeouts
-            scan_timeout=_parse_float(os.environ.get("CERT_WATCH_SCAN_TIMEOUT", "10.0"), 10.0, "CERT_WATCH_SCAN_TIMEOUT"),
-            scan_retries=_parse_int(os.environ.get("CERT_WATCH_SCAN_RETRIES", "2"), 2, "CERT_WATCH_SCAN_RETRIES"),
-            scan_retry_backoff=_parse_float(os.environ.get("CERT_WATCH_SCAN_RETRY_BACKOFF", "1.0"), 1.0, "CERT_WATCH_SCAN_RETRY_BACKOFF"),
-            hsts_timeout=_parse_float(os.environ.get("CERT_WATCH_HSTS_TIMEOUT", "5.0"), 5.0, "CERT_WATCH_HSTS_TIMEOUT"),
+            scan_timeout=_parse_float(
+                os.environ.get("CERT_WATCH_SCAN_TIMEOUT", "10.0"), 10.0,
+                "CERT_WATCH_SCAN_TIMEOUT",
+            ),
+            scan_retries=_parse_int(
+                os.environ.get("CERT_WATCH_SCAN_RETRIES", "2"), 2,
+                "CERT_WATCH_SCAN_RETRIES",
+            ),
+            scan_retry_backoff=_parse_float(
+                os.environ.get("CERT_WATCH_SCAN_RETRY_BACKOFF", "1.0"), 1.0,
+                "CERT_WATCH_SCAN_RETRY_BACKOFF",
+            ),
+            hsts_timeout=_parse_float(
+                os.environ.get("CERT_WATCH_HSTS_TIMEOUT", "5.0"), 5.0,
+                "CERT_WATCH_HSTS_TIMEOUT",
+            ),
             # Session TTL
-            session_ttl=_parse_int(os.environ.get("CERT_WATCH_SESSION_TTL", "28800"), 28800, "CERT_WATCH_SESSION_TTL"),
+            session_ttl=_parse_int(
+                os.environ.get("CERT_WATCH_SESSION_TTL", "28800"), 28800,
+                "CERT_WATCH_SESSION_TTL",
+            ),
             # Write users
             write_users=tuple(
                 u.strip()

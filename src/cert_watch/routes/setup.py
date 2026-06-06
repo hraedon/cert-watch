@@ -23,7 +23,11 @@ templates = get_templates()
 
 
 @router.get("/setup", response_class=HTMLResponse, response_model=None)
-def setup_page(request: Request, step: int = 1, error: str | None = None) -> HTMLResponse | RedirectResponse:
+def setup_page(
+    request: Request,
+    step: int = 1,
+    error: str | None = None,
+) -> HTMLResponse | RedirectResponse:
     needs_setup = getattr(request.app.state, "needs_setup", False)
     if not needs_setup:
         return RedirectResponse(url="/", status_code=303)
