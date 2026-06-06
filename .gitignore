@@ -24,3 +24,8 @@ credentials.txt
 .env
 .env.*
 secrets/
+
+# Lab / environment-specific CA and certificate material — keep out of VCS.
+# The Hraedon lab root CA is supplied at deploy time, not committed.
+hraedon_root.cer
+*.cer
