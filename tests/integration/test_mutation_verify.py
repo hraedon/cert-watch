@@ -38,7 +38,10 @@ def samba_ad():
     pytest.importorskip("cryptography")
     pytest.importorskip("ldap3")
 
-    from tests.integration.test_samba_ad_real import (
+    # pytest's prepend import mode puts tests/integration on sys.path (no
+    # __init__.py), so the sibling module is imported top-level — `tests` is not
+    # an importable package here.
+    from test_samba_ad_real import (
         _create_samba_container,
         _get_container_ports,
         _make_ca_cert,
