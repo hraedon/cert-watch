@@ -123,7 +123,13 @@ async def login_submit(
     if version == 0:
         bump_session_version(settings.db_path, result.username)
         version = get_session_version(_db_path, result.username)
-    token = create_session(result.username, _request_security(request), version=version)
+    token = create_session(
+        result.username,
+        _request_security(request),
+        version=version,
+        groups=result.groups,
+        roles=result.roles,
+    )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
@@ -272,7 +278,13 @@ def oauth_callback(
     if version == 0:
         bump_session_version(settings.db_path, result.username)
         version = get_session_version(_db_path, result.username)
-    token = create_session(result.username, _request_security(request), version=version)
+    token = create_session(
+        result.username,
+        _request_security(request),
+        version=version,
+        groups=result.groups,
+        roles=result.roles,
+    )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",

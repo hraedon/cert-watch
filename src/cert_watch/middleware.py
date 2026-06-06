@@ -18,7 +18,7 @@ from fastapi import Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, validate_session
+from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, decode_session, validate_session
 from cert_watch.auth.rbac import AuthContext, build_auth_context
 from cert_watch.security import SecurityContext  # noqa: F401  (re-exported)
 
@@ -535,13 +535,19 @@ async def require_auth(request: Request) -> str:
         return ""
     token = request.cookies.get(SESSION_COOKIE, "")
     db_path = _request_db_path(request)
+    # decode_session gives us the signed claims (groups/roles) without the
+    # TTL / version DB check — we run the full validate_session next.
+    info = decode_session(token, _request_security(request))
+    if info is None:
+        raise HTTPException(status_code=401, detail="unauthenticated")
     username = validate_session(token, _request_security(request), db_path=db_path)
     if not username:
         raise HTTPException(status_code=401, detail="unauthenticated")
-    # Build AuthContext from role map
+    # Build AuthContext from role map, using the IdP groups/roles that were
+    # encoded into the session token at login time (BC-145).
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
-    auth_ctx = build_auth_context(username, [], [], role_map)
+    auth_ctx = build_auth_context(username, info.groups, info.roles, role_map)
     request.state.auth_context = auth_ctx
     request.scope["auth_user"] = username
     return username

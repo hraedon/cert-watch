@@ -137,7 +137,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
 
     # Compute urgency from the cert and chain
     leaf_days = cert.days_until_expiry()
-    all_chain_days = [c["days_remaining"] for c in chain_certs]
+    all_chain_days = [ch["days_remaining"] for ch in chain_certs]
     worst_days = min([leaf_days] + all_chain_days) if all_chain_days else leaf_days
     urgency = compute_urgency(worst_days)
 
@@ -266,9 +266,9 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
                         ),
                         "sev": "high",
                     })
-            for c in changes:
-                c["when"] = curr.get("scanned_at", "")[:10]
-                drift_events.append(c)
+            for change in changes:
+                change["when"] = curr.get("scanned_at", "")[:10]
+                drift_events.append(change)
 
     # Get posture evaluation
     from cert_watch.database import get_posture_for_cert

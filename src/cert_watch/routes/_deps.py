@@ -28,8 +28,8 @@ def _get_settings(request: Request) -> Settings:
     return request.app.state.settings  # type: ignore[no-any-return]
 
 
-def _db_path(request: Request) -> str:
-    return str(_get_settings(request).db_path)
+def _db_path(request: Request) -> Path:
+    return _get_settings(request).db_path
 
 
 def _csv_safe(value: object) -> str:

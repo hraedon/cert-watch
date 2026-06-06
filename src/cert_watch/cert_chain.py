@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
@@ -11,6 +13,17 @@ from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
 from cert_watch.certificate_model import Certificate, parse_certificate
 
 logger = logging.getLogger("cert_watch.cert_chain")
+
+
+class _AnchorLike(Protocol):
+    """Minimal protocol for chain-status anchors.
+
+    Both :class:`~cert_watch.certificate_model.Certificate` and
+    :class:`~cert_watch.database.repo.TrustAnchorEntry` satisfy this.
+    """
+
+    fingerprint_sha256: str
+    raw_der: bytes
 
 
 def extract_chain(der_bytes: bytes) -> list[Certificate]:
@@ -165,7 +178,7 @@ def _is_anchored_by_system_root(chain: list[Certificate]) -> bool:
     return False
 
 
-def _load_x509(cert: Certificate) -> x509.Certificate | None:
+def _load_x509(cert: Certificate | _AnchorLike) -> x509.Certificate | None:
     """Parse a Certificate's DER bytes into an x509.Certificate, or None.
 
     Signature verification requires the raw DER (a public key parsed from it).
@@ -180,7 +193,7 @@ def _load_x509(cert: Certificate) -> x509.Certificate | None:
         return None
 
 
-def _is_signed_by(child: Certificate, issuer: Certificate) -> bool:
+def _is_signed_by(child: Certificate, issuer: Certificate | _AnchorLike) -> bool:
     """Return True iff `child` is cryptographically signed by `issuer`'s key.
 
     Verifies the actual signature, not just that names line up. Uses
@@ -215,7 +228,7 @@ def validate_chain_signatures(chain: list[Certificate]) -> bool | None:
 
 
 def _is_signature_anchored_by_user(
-    chain: list[Certificate], anchors: list[Certificate]
+    chain: list[Certificate], anchors: Sequence[_AnchorLike]
 ) -> bool:
     """Return True if the chain's top is signature-verified against an anchor.
 
@@ -321,7 +334,7 @@ def is_anchored_by_user(chain: list[Certificate], anchors: list[Certificate]) ->
 
 
 def chain_status(
-    leaf: Certificate, chain: list[Certificate], anchors: list[Certificate]
+    leaf: Certificate, chain: list[Certificate], anchors: Sequence[_AnchorLike]
 ) -> str:
     """Return a human-readable chain trust status.
 

@@ -433,7 +433,7 @@ async def test_require_write_rbac_viewer_denied(tmp_path):
 
     app, Provider = _app_with_role_map(tmp_path)
     # require_auth rebuilds the AuthContext from the role map; with no groups
-    # plumbed through the session today, the user resolves to viewer.
+    # plumbed through the session, the user resolves to viewer.
     request = _make_request(
         auth_provider=Provider(),
         cookies={SESSION_COOKIE: create_session("viewer")},
@@ -443,3 +443,25 @@ async def test_require_write_rbac_viewer_denied(tmp_path):
         await require_write(request)
     assert exc_info.value.status_code == 403
     assert "read-only user" in exc_info.value.detail
+
+
+@pytest.mark.anyio
+async def test_require_write_rbac_operator_allowed(tmp_path):
+    """BC-145: when the session token carries IdP groups that match the role map,
+    the user is resolved to operator and write is allowed."""
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.middleware import make_csrf_token
+
+    app, Provider = _app_with_role_map(tmp_path)
+    sid = "sid-ops"
+    request = _make_request(
+        auth_provider=Provider(),
+        cookies={SESSION_COOKIE: create_session("alice", groups=["g-ops"]), "cw_sid": sid},
+        headers={"x-csrf-token": make_csrf_token(sid)},
+    )
+    request.scope["app"] = app
+    # require_auth + require_write should succeed without raising
+    username = await require_write(request)
+    assert username == "alice"
+    assert request.state.auth_context.may_write() is True
+    assert request.state.auth_context.roles == ["operator"]
