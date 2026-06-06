@@ -15,7 +15,32 @@ jobs:
       - run: uv pip install -e ".[dev,e2e]"
       - name: Install Playwright browsers + OS deps
         run: .venv/bin/playwright install --with-deps chromium
-      - name: Run E2E tests
+      - name: Run functional E2E tests
         # `-n0` overrides the addopts default (`-n auto`): the E2E suite drives a
-        # single app instance on a fixed port and is not parallel-safe.
-        run: .venv/bin/pytest -m e2e tests/e2e -q --no-cov -n0
+        # single app instance on a fixed port and is not parallel-safe. Visual
+        # tests run in their own (non-blocking) job below.
+        run: .venv/bin/pytest -m "e2e and not visual" tests/e2e -q --no-cov -n0
+
+  visual:
+    runs-on: ubuntu-latest
+    # Non-blocking: headless font rendering can drift slightly across runner
+    # images, so a visual diff should flag a review (artifact below), not break
+    # the merge gate. Promote to required once the baselines prove stable in CI.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.13"
+      - run: uv pip install -e ".[dev,e2e]"
+      - name: Install Playwright browsers + OS deps
+        run: .venv/bin/playwright install --with-deps chromium
+      - name: Run visual-regression tests
+        run: .venv/bin/pytest -m visual tests/e2e -q --no-cov -n0
+      - name: Upload visual diffs on mismatch
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: visual-snapshot-diffs
+          path: snapshot_failures/**
+          if-no-files-found: ignore

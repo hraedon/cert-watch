@@ -27,6 +27,10 @@ jobs:
           .venv/bin/pip-audit --strict --requirement /tmp/audit-reqs.txt
       - name: ruff
         run: .venv/bin/ruff check .
+      - name: mypy
+        # Gated now that the tree is at zero errors (BC-093 / BC-146). Config
+        # lives in [tool.mypy] in pyproject.toml.
+        run: .venv/bin/mypy src/cert_watch
       - name: pytest
         # COVERAGE_CORE=sysmon uses the faster sys.monitoring coverage core
         # (Python 3.12+). Parallelism (`-n auto`) comes from addopts in pyproject.
