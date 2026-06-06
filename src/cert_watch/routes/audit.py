@@ -3,25 +3,20 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
-from cert_watch.filters import register_filters
 from cert_watch.middleware import get_auth_context, require_auth
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import _db_path, get_templates
 
 logger = logging.getLogger("cert_watch.routes.audit")
 
 router = APIRouter()
 
-BASE_DIR = Path(__file__).parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-register_filters(templates)
+templates = get_templates()
 
 
 @router.get("/audit", response_class=HTMLResponse)

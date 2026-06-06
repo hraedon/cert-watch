@@ -18,6 +18,7 @@ from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes.api._shared import (
     _alert_group_json,
+    _normalize_pagination,
     _pagination_links,
     _validate_webhook_url,
 )
@@ -32,9 +33,8 @@ def api_list_alerts(
     request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
 ) -> JSONResponse:
     db = _db_path(request)
-    limit = min(max(limit, 1), 200)
-    page = max(page, 1)
     total = _total_alerts(db)
+    page, limit, pages, _offset = _normalize_pagination(page, limit, total)
     rows = list_alerts_with_subject(db, page=page, limit=limit)
     return JSONResponse(
         content={
@@ -43,7 +43,7 @@ def api_list_alerts(
                 "page": page,
                 "limit": limit,
                 "total": total,
-                "pages": (total + limit - 1) // limit if limit else 0,
+                "pages": pages,
                 **_pagination_links(request, "/api/alerts", page, limit, total),
             },
         }

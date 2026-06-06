@@ -13,7 +13,19 @@ from cert_watch.tags import format_tags, parse_tags
 logger = logging.getLogger("cert_watch.routes.api")
 
 
-def _tags_from_body(body: object) -> str | None:
+def _normalize_pagination(page: int, limit: int, total: int) -> tuple[int, int, int, int]:
+    """Return validated (page, limit, pages, offset).
+
+    Ensures *limit* is in [1, 200] and *page* is at least 1.
+    """
+    limit = min(max(limit, 1), 200)
+    page = max(page, 1)
+    pages = (total + limit - 1) // limit if limit else 0
+    offset = (page - 1) * limit
+    return page, limit, pages, offset
+
+
+def _tags_from_body(body: dict[str, Any] | None) -> str | None:
     """Extract tags from a request body as a normalized csv string.
 
     Accepts ``{"tags": ["a", "b"]}`` or ``{"tags": "a,b"}``. Returns None when

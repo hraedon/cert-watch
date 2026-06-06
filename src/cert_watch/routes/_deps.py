@@ -2,11 +2,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import Request
+from fastapi.templating import Jinja2Templates
 
 from cert_watch.config import Settings
+from cert_watch.filters import register_filters
 
 _CSV_DANGEROUS_PREFIXES = frozenset({"=", "+", "-", "@", "\t", "\r", "\n"})
+
+# Single shared templates instance avoids repeated setup across route modules.
+_BASE_DIR = Path(__file__).parent.parent
+_templates = Jinja2Templates(directory=str(_BASE_DIR / "templates"))
+register_filters(_templates)
+
+
+def get_templates() -> Jinja2Templates:
+    """Return the shared Jinja2Templates instance."""
+    return _templates
 
 
 def _get_settings(request: Request) -> Settings:

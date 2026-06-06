@@ -11,7 +11,7 @@ from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path
-from cert_watch.routes.api._shared import _pagination_links
+from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
@@ -24,10 +24,8 @@ def api_list_hosts(
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteHostRepository(db)
-    limit = min(max(limit, 1), 200)
-    page = max(page, 1)
     total = repo.count_all()
-    offset = (page - 1) * limit
+    page, limit, pages, offset = _normalize_pagination(page, limit, total)
     page_hosts = repo.list_page(offset=offset, limit=limit)
     return JSONResponse(
         content={
@@ -50,7 +48,7 @@ def api_list_hosts(
                 "page": page,
                 "limit": limit,
                 "total": total,
-                "pages": (total + limit - 1) // limit if limit else 0,
+                "pages": pages,
                 **_pagination_links(request, "/api/hosts", page, limit, total),
             },
         }
