@@ -474,7 +474,7 @@ async def update_certificate_owner(
             url=f"/certificates/{cert_id}?error={quote('invalid email')}", status_code=303,
         )
     if runbook_url:
-        from cert_watch.routes.api import _runbook_url_error
+        from cert_watch.routes.api._shared import _runbook_url_error
         err = _runbook_url_error(runbook_url)
         if err:
             return RedirectResponse(

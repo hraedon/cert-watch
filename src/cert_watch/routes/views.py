@@ -751,7 +751,7 @@ def compliance_report_view(
     tag: str = "",
 ) -> HTMLResponse:
     from cert_watch.compliance import build_compliance_report, report_to_dict
-    from cert_watch.routes.api import compliance_signing_key
+    from cert_watch.routes.api._shared import compliance_signing_key
 
     db = _db_path(request)
     signing_key = compliance_signing_key(request)

@@ -104,7 +104,7 @@ def test_api_revocation_check(tmp_path, reload_app, leaf_pem_file, monkeypatch):
         ]
 
     import importlib
-    api_mod = importlib.import_module("cert_watch.routes.api")
+    api_mod = importlib.import_module("cert_watch.routes.api.certificates")
     monkeypatch.setattr(api_mod, "check_revocation_endpoints", _mock_check)
 
     with TestClient(app_mod.app) as client:
