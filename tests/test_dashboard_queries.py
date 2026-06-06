@@ -247,6 +247,29 @@ def test_grouped_page_pagination_and_filter(tmp_path, self_signed_leaf):
     assert crit[0]["host"] == "beta.example.com:443"
 
 
+def test_grouped_page_kinds_coexist(tmp_path, self_signed_leaf):
+    """Grouped, uploaded, and pending entries all coexist on one grouped page.
+
+    Guards the BC-139 rewrite: uploaded leaves and pending hosts are now sourced
+    by separate queries (not the old materialise-everything path), so assert the
+    kinds — not just the count — survive the merge. ``_seed`` has no shared
+    fingerprints, so each scanned host is a group-of-one (kind ``grouped``).
+    """
+    db = tmp_path / "grp_kinds.sqlite3"
+    _seed(db, self_signed_leaf)
+    rows, total = list_dashboard_grouped_page(db, per_page=0)
+    assert total == 5
+    kinds = sorted(r["kind"] for r in rows)
+    assert kinds == ["grouped", "grouped", "grouped", "pending", "uploaded"]
+    # The uploaded entry is present by name and carries no scan metadata.
+    uploaded = next(r for r in rows if r["kind"] == "uploaded")
+    assert "uploaded.example.com" in uploaded["name"]
+    assert uploaded["last_scanned_at"] is None
+    # The pending host is present and surfaces as a host:port name.
+    pending = next(r for r in rows if r["kind"] == "pending")
+    assert pending["name"] == "pending.example.com:8443"
+
+
 def test_grouped_page_matches_legacy_path(tmp_path, self_signed_leaf):
     """Grouped SQL path equals group_entries_by_fingerprint over the raw list."""
     db = tmp_path / "grp_equiv.sqlite3"

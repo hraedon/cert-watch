@@ -770,18 +770,41 @@ def list_dashboard_grouped_page(
         })
 
     # Step 4: Load ungrouped entries (uploaded + pending) and merge.
+    # Only fetch uploaded leaf certs (scanned entries are already grouped above).
     with _connect(db_path) as conn2:
-        all_certs = conn2.execute("SELECT * FROM certificates ORDER BY created_at").fetchall()
-    full_dash = _build_dashboard_rows(list(all_certs), anchor_rows)
-    all_unified = _build_unified_from_dash(full_dash, host_rows, scan_rows)
-    grouped_fps = {r["fingerprint_sha256"] for r in rows}
+        uploaded_leaves = conn2.execute(
+            "SELECT * FROM certificates WHERE is_leaf = 1 AND source != 'scanned' "
+            "ORDER BY created_at"
+        ).fetchall()
+        uploaded_leaf_ids = [r["id"] for r in uploaded_leaves]
+        if uploaded_leaf_ids:
+            uph = ",".join("?" * len(uploaded_leaf_ids))
+            uploaded_chain = conn2.execute(
+                f"SELECT * FROM certificates WHERE parent_cert_id IN ({uph})",
+                uploaded_leaf_ids,
+            ).fetchall()
+        else:
+            uploaded_chain = []
+    uploaded_dash = _build_dashboard_rows(
+        list(uploaded_leaves) + list(uploaded_chain), anchor_rows
+    )
+    # Mark uploaded entries directly
+    for u in uploaded_dash:
+        u["kind"] = "uploaded"
+        u["name"] = u.get("subject", "")
+        u["last_scanned_at"] = None
+        u["scan_status"] = None
+        u["scan_error"] = None
+        u["added_at"] = None
+    ungrouped = list(uploaded_dash)
 
-    ungrouped: list[dict] = []
-    for e in all_unified:
-        fp = e.get("fingerprint_sha256") if e.get("kind") == "scanned" else None
-        if fp and fp in grouped_fps:
-            continue
-        ungrouped.append(e)
+    # Pending hosts: hosts with no scanned leaf cert at all
+    scanned_host_keys = {(r["hostname"], r["port"]) for r in cert_rows}
+    pending_hosts = [
+        h for h in host_rows
+        if (h["hostname"], h["port"]) not in scanned_host_keys
+    ]
+    ungrouped.extend(_build_pending_entries(pending_hosts, scan_rows))
 
     all_entries = grouped_entries + ungrouped
     all_entries = _filter_unified(all_entries, q=q, urgency=urgency, source=source)
