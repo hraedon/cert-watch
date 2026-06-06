@@ -120,6 +120,16 @@ CREATE TABLE IF NOT EXISTS kv_store (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    key_hash TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT,
+    revoked INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS alert_groups (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,

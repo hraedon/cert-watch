@@ -14,6 +14,13 @@ All public names are re-exported so external imports
 # __future__ must stay at the top of the physical file
 from __future__ import annotations
 
+# API keys (Plan 039)
+from cert_watch.database.api_keys import (
+    ApiKeyAuth,
+    ApiKeyEntry,
+    SqliteApiKeyRepository,
+)
+
 # Calendar
 from cert_watch.database.calendar import list_calendar
 
@@ -161,6 +168,10 @@ __all__ = [
     "SqliteHostRepository",
     "SqliteTrustAnchorRepository",
     "TrustAnchorEntry",
+    # api keys
+    "ApiKeyAuth",
+    "ApiKeyEntry",
+    "SqliteApiKeyRepository",
     # encryption
     "_ENCRYPTED_PREFIX",
     "derive_encryption_key",

@@ -19,7 +19,13 @@ from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, decode_session, validate_session
-from cert_watch.auth.rbac import AuthContext, build_auth_context
+from cert_watch.auth.rbac import (
+    ROLE_ADMIN,
+    ROLE_OPERATOR,
+    ROLE_VIEWER,
+    AuthContext,
+    build_auth_context,
+)
 from cert_watch.security import SecurityContext  # noqa: F401  (re-exported)
 
 logger = logging.getLogger("cert_watch.middleware")
@@ -430,6 +436,46 @@ async def setup_redirect_middleware(request: Request, call_next):
     return RedirectResponse(url="/setup", status_code=303)
 
 
+# ---------- API-key (bearer) authentication (Plan 039 / BC-104) ----------
+
+# API-key scope → cert-watch RBAC role. read=viewer, write=operator, admin=admin.
+_API_KEY_SCOPE_ROLE = {
+    "read": ROLE_VIEWER,
+    "write": ROLE_OPERATOR,
+    "admin": ROLE_ADMIN,
+}
+
+
+def authenticate_api_key(
+    request: Request, db_path: str | Path | None
+) -> AuthContext | None:
+    """Authenticate an ``Authorization: Bearer cwk_…`` API key.
+
+    On success, sets ``request.scope['auth_user']`` to the key name, stores the
+    derived ``AuthContext`` on ``request.state.auth_context``, flags
+    ``request.state.api_key_auth = True`` (so CSRF is skipped for the token
+    path), and returns the context. Returns ``None`` when no valid key is
+    presented — leaving cookie-session auth and metrics-token auth untouched.
+    """
+    header = request.headers.get("authorization", "")
+    if not header.startswith("Bearer "):
+        return None
+    token = header[7:].strip()
+    if not token.startswith("cwk_") or not db_path:
+        return None
+    from cert_watch.database.api_keys import SqliteApiKeyRepository
+
+    result = SqliteApiKeyRepository(db_path).verify_key(token)
+    if result is None:
+        return None
+    role = _API_KEY_SCOPE_ROLE.get(result.scope, ROLE_VIEWER)
+    ctx = AuthContext.from_roles(result.name, [role])
+    request.scope["auth_user"] = result.name
+    request.state.auth_context = ctx
+    request.state.api_key_auth = True
+    return ctx
+
+
 async def auth_middleware(request: Request, call_next):
     """Enforce authentication when AUTH_PROVIDER is configured.
 
@@ -459,6 +505,11 @@ async def auth_middleware(request: Request, call_next):
         if info is not None:
             auth_ctx = build_auth_context(username, info.groups, info.roles, role_map)
             request.state.auth_context = auth_ctx
+        return await call_next(request)
+
+    # API-key bearer auth (Plan 039): cron jobs / CI / monitoring tools with no
+    # session cookie. Only valid on top of a configured auth provider.
+    if authenticate_api_key(request, db_path) is not None:
         return await call_next(request)
 
     # Unauthenticated
@@ -547,10 +598,17 @@ async def require_auth(request: Request) -> str:
     # decode_session gives us the signed claims (groups/roles) without the
     # TTL / version DB check — we run the full validate_session next.
     info = decode_session(token, _request_security(request))
-    if info is None:
-        raise HTTPException(status_code=401, detail="unauthenticated")
-    username = validate_session(token, _request_security(request), db_path=db_path)
-    if not username:
+    username = (
+        validate_session(token, _request_security(request), db_path=db_path)
+        if info is not None
+        else ""
+    )
+    if info is None or not username:
+        # No valid session cookie — fall back to an API-key bearer token
+        # (Plan 039). This is what lets cron jobs / CI authenticate.
+        api_ctx = authenticate_api_key(request, db_path)
+        if api_ctx is not None:
+            return api_ctx.username
         raise HTTPException(status_code=401, detail="unauthenticated")
     # Build AuthContext from role map, using the IdP groups/roles that were
     # encoded into the session token at login time (BC-145).
@@ -576,10 +634,43 @@ async def require_write(request: Request) -> str:
     if _write_denied(request, username):
         raise HTTPException(status_code=403, detail='read-only user')
 
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        raise HTTPException(status_code=403, detail=csrf_err)
+    # API-key (bearer) requests are not subject to CSRF — CSRF protects the
+    # ambient cookie-session path only (Plan 039).
+    if not getattr(request.state, "api_key_auth", False):
+        csrf_err = await check_csrf(request)
+        if csrf_err:
+            raise HTTPException(status_code=403, detail=csrf_err)
     return username
+
+
+async def require_admin(request: Request) -> str:
+    """Auth + admin-permission check (no CSRF). Use for admin-scoped GETs.
+
+    Returns the username/key-name or raises 401/403. With no auth provider
+    configured, grants access (backward compat, mirrors require_auth).
+    """
+    username = await require_auth(request)
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return username
+    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+    if ctx is None or not ctx.is_admin:
+        raise HTTPException(status_code=403, detail="admin required")
+    return username
+
+
+async def require_admin_write(request: Request) -> str:
+    """``require_admin`` + CSRF (skipped for API-key auth). Use for admin mutations."""
+    username = await require_admin(request)
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return username
+    if not getattr(request.state, "api_key_auth", False):
+        csrf_err = await check_csrf(request)
+        if csrf_err:
+            raise HTTPException(status_code=403, detail=csrf_err)
+    return username
+
 
 def _may_write(request: Request, username: str) -> bool:
     """Return True if *username* is allowed to perform mutations.
@@ -609,6 +700,12 @@ def _write_denied(request: Request, username: str) -> bool:
     the request's AuthContext permissions decide; otherwise the legacy
     write_users/admin_users lists apply.
     """
+    # API-key auth (Plan 039) always carries an explicit scope-derived
+    # AuthContext, so its scope governs regardless of whether a role map is set
+    # — otherwise a read-scoped key could write when no role map is configured.
+    if getattr(request.state, "api_key_auth", False):
+        api_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+        return api_ctx is not None and not api_ctx.may_write()
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     if role_map:
