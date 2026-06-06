@@ -16,7 +16,7 @@
   <div class="cw-page-head cw-page-head--start cw-mb-20">
     <div>
       <div class="cw-flex cw-items-center cw-gap-12">
-        <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0">{{ subject_cn }}</h1>
+        <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="cert-detail-heading">{{ subject_cn }}</h1>
         <span class="cw-pill {{ urgency }}">
           <span class="dot"></span>
           {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
@@ -47,14 +47,14 @@
       {% if may_write and hostname %}
         <form method="post" action="/hosts/{{ cert_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-          <button type="submit" class="cw-btn primary">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
+          <button type="submit" class="cw-btn primary" data-testid="cert-scan-btn">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
-      <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn">{{ icons.svg_icon('download', 14) }}Download PEM</a>
+      <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn" data-testid="cert-download-pem">{{ icons.svg_icon('download', 14) }}Download PEM</a>
       {% if may_write %}
       <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="cw-iconbtn" title="Delete">{{ icons.svg_icon('trash', 15) }}</button>
+        <button type="submit" class="cw-iconbtn" title="Delete" data-testid="cert-delete-btn">{{ icons.svg_icon('trash', 15) }}</button>
       </form>
       {% endif %}
     </div>

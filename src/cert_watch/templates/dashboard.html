@@ -58,7 +58,7 @@
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>
-      <h1>Certificates</h1>
+      <h1 data-testid="dashboard-heading">Certificates</h1>
       <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
     </div>
     <div class="cw-flex cw-items-center cw-gap-10">
@@ -93,7 +93,7 @@
   <form method="get" action="/" class="cw-toolbar cw-mb-14">
     <div class="cw-search">
       {{ icons.svg_icon('search', 15) }}
-      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…">
+      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…" data-testid="dashboard-search">
     </div>
     <div class="cw-seg">
       <button type="submit" name="urgency" value="" class="{% if not filter_urgency %}on{% endif %}">All<span class="cnt">{{ total_entries }}</span></button>
@@ -284,7 +284,7 @@
           {% else %}
           {# ---- Normal (non-grouped) entry ---- #}
           {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}">
+          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
@@ -462,9 +462,9 @@
   </div>
   <div class="cw-p-slide-top">
     <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs">
-      <button type="button" class="on" data-tab="scan" data-action="switch-tab">{{ icons.svg_icon('server', 13) }}Scan host</button>
-      <button type="button" data-tab="upload" data-action="switch-tab">{{ icons.svg_icon('file', 13) }}Upload file</button>
-      <button type="button" data-tab="bulk" data-action="switch-tab">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
+      <button type="button" class="on" data-tab="scan" data-action="switch-tab" data-testid="tab-scan-btn">{{ icons.svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab="upload" data-action="switch-tab" data-testid="tab-upload-btn">{{ icons.svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab="bulk" data-action="switch-tab" data-testid="tab-bulk-btn">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
   <div class="cw-p-slide-body">
@@ -475,7 +475,7 @@
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-field">
           <label class="cw-label">Hostname</label>
-          <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com">
+          <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com" data-testid="scan-hostname-input">
         </div>
         <div class="cw-grid-2eq">
           <div class="cw-field">
@@ -493,7 +493,7 @@
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
           <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="scan-submit-btn">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
         </div>
       </form>
     </div>
@@ -505,7 +505,7 @@
           <div class="cw-drop-icon">{{ icons.svg_icon('upload', 18) }}</div>
           <div class="cw-fz-13-5 cw-fw-600">Drop a certificate, or <span class="cw-link">browse</span></div>
           <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
-          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden">
+          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden" data-testid="upload-file-input">
         </div>
         <div class="cw-field">
           <label class="cw-label">Password <span class="cw-text-text-3">(PKCS#12 only, optional)</span></label>
@@ -514,7 +514,7 @@
         <div class="cw-flex-1"></div>
         <div class="cw-form-footer">
           <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('upload', 14) }}Upload</button>
+          <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="upload-submit-btn">{{ icons.svg_icon('upload', 14) }}Upload</button>
         </div>
       </form>
     </div>
@@ -540,7 +540,7 @@
       </form>
     </div>
     {% else %}
-    <div class="cw-empty">
+    <div class="cw-empty" data-testid="readonly-notice">
       <p>Read-only access — contact an administrator to make changes.</p>
     </div>
     {% endif %}
@@ -550,7 +550,7 @@
 
 {% block topbar_actions %}
   {% if may_write %}
-  <button class="cw-btn primary" data-action="open-slide">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+  <button class="cw-btn primary" data-action="open-slide" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
   {% endif %}
 {% endblock %}
 
