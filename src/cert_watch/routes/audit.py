@@ -11,9 +11,9 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
-from cert_watch.config import Settings
 from cert_watch.filters import register_filters
 from cert_watch.middleware import get_auth_context, require_auth
+from cert_watch.routes._deps import _db_path
 
 logger = logging.getLogger("cert_watch.routes.audit")
 
@@ -22,14 +22,6 @@ router = APIRouter()
 BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 register_filters(templates)
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
 
 
 @router.get("/audit", response_class=HTMLResponse)

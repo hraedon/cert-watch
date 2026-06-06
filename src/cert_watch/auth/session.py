@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import time
 
@@ -26,7 +27,9 @@ logger = logging.getLogger("cert_watch.auth")
 def _key(security: SecurityContext | None) -> str:
     """Resolve the signing key: the injected SecurityContext, else the
     module-level import-time fallback (Plan 018 B1)."""
-    return security.signing_key if security is not None else _signing_key
+    val = security.signing_key if security is not None else _signing_key
+    assert val is not None
+    return val
 
 # Session cookie config
 SESSION_COOKIE = "cw_auth"
@@ -162,9 +165,11 @@ def validate_session(
 
     # Read SESSION_TTL from the cert_watch.auth package namespace so tests that
     # monkeypatch the re-exported `cert_watch.auth.SESSION_TTL` take effect here.
+    # Env var CERT_WATCH_SESSION_TTL wins (project convention).
     import cert_watch.auth as _auth_pkg
 
-    ttl = getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
+    env_ttl = int(os.environ.get("CERT_WATCH_SESSION_TTL", "0"))
+    ttl = env_ttl or getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
     if (time.time() - ts) > ttl:
         return None
 

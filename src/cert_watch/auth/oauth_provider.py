@@ -6,6 +6,7 @@ import json
 import logging
 import secrets
 import time
+import typing
 from dataclasses import dataclass
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
@@ -168,12 +169,14 @@ class OAuthProvider(AuthProvider):
         nonce: str | None = None,
     ) -> dict | None:
         """Verify an OIDC ID token using JWKS. Returns validated claims or None."""
+        _jwt: typing.Any = None
+        KeySet: typing.Any = None
         try:
-            from joserfc import jwt as _jwt
-            from joserfc.jwk import KeySet
+            import joserfc.jwt as _jwt  # type: ignore[no-redef]
+            from joserfc.jwk import KeySet  # type: ignore[no-redef]
         except ImportError:
             try:
-                from authlib.jose import jwt as _jwt
+                import authlib.jose.jwt as _jwt  # type: ignore[no-redef]
                 KeySet = None
             except ImportError:
                 logger.warning("Neither joserfc nor authlib.jose available for JWT verification")

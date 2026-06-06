@@ -293,7 +293,8 @@ async def check_csrf(request: Request) -> str | None:
     if not token:
         try:
             form = await request.form()
-            token = form.get("_csrf_token", "")
+            raw = form.get("_csrf_token", "")
+            token = raw if isinstance(raw, str) else ""
         except Exception:
             pass
     if not token:

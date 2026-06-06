@@ -11,6 +11,7 @@ import re
 import socket
 import ssl
 import subprocess
+import typing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -22,6 +23,7 @@ from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.scan")
 
+# Default scan timeout settings (overridden by Settings/scanner arguments)
 DEFAULT_TIMEOUT = 10.0
 SCAN_RETRIES = 2
 SCAN_RETRY_BACKOFF = 1.0
@@ -452,6 +454,7 @@ def scan_host(
         if isinstance(result, ScannedEntry):
             return result
         last_error = result
+    assert last_error is not None
     return last_error
 
 
@@ -680,7 +683,8 @@ def store_scanned(
         )
         if replaced_cert_id and webhook_config is not None:
             try:
-                from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
+                from cert_watch.alerts import resolve_pagerduty_for_renewed_cert, WebhookConfig
+                assert isinstance(webhook_config, WebhookConfig)
                 resolved = resolve_pagerduty_for_renewed_cert(
                     repo_path_or_repo, replaced_cert_id, webhook_config,
                 )
@@ -818,7 +822,7 @@ def _evaluate_and_store_posture(
         hostname=entry.host,
         port=entry.port,
         grade=result.grade,
-        findings=result.findings,
+        findings=typing.cast("list[dict]", result.findings),
         protocol_version=result.protocol_version,
         ocsp_stapling=result.ocsp_stapling,
         hsts=result.hsts,

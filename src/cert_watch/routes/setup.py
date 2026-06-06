@@ -12,10 +12,10 @@ from fastapi.templating import Jinja2Templates
 
 from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
-from cert_watch.config import Settings
 from cert_watch.database import kv_set
 from cert_watch.database.queries import bump_session_version
 from cert_watch.middleware import get_csrf_context
+from cert_watch.routes._deps import _db_path, _get_settings
 
 logger = logging.getLogger("cert_watch.routes.setup")
 
@@ -25,16 +25,8 @@ BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
-
-
-@router.get("/setup", response_class=HTMLResponse)
-def setup_page(request: Request, step: int = 1, error: str | None = None) -> HTMLResponse:
+@router.get("/setup", response_class=HTMLResponse, response_model=None)
+def setup_page(request: Request, step: int = 1, error: str | None = None) -> HTMLResponse | RedirectResponse:
     needs_setup = getattr(request.app.state, "needs_setup", False)
     if not needs_setup:
         return RedirectResponse(url="/", status_code=303)

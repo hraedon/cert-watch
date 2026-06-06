@@ -18,6 +18,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
 from cert_watch.middleware import get_auth_context, get_csrf_context
+from cert_watch.routes._deps import _db_path, _get_settings
 
 logger = logging.getLogger("cert_watch.routes.settings")
 
@@ -25,14 +26,6 @@ router = APIRouter()
 
 BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
 
 
 def _get_encryption_key(request: Request) -> str | None:
@@ -53,7 +46,7 @@ def _local_admin_configured(request: Request) -> bool:
     return bool(kv_get(db, "local_admin_user"))
 
 
-def _require_admin(request: Request) -> RedirectResponse | None:
+def _require_admin(request: Request) -> RedirectResponse | JSONResponse | None:
     """Return redirect to /login if not authenticated, 403 if not admin, or None if OK."""
     from cert_watch.auth import LocalAdminProvider, NoAuthProvider, _CompositeProvider
     auth = getattr(request.app.state, "auth_provider", None)
@@ -173,17 +166,18 @@ def _effective_config(
 # ---------- Settings page ----------
 
 
-@router.get("/settings", response_class=HTMLResponse)
+@router.get("/settings", response_class=HTMLResponse, response_model=None)
 def settings_page(
     request: Request,
     tab: str = "auth",
     saved: str | None = None,
     error: str | None = None,
     password_changed: str | None = None,
-) -> HTMLResponse:
-    redirect = _require_admin(request)
-    if redirect:
-        return redirect
+) -> HTMLResponse | RedirectResponse:
+    redirect_resp = _require_admin(request)
+    if redirect_resp:
+        assert isinstance(redirect_resp, RedirectResponse)
+        return redirect_resp
     db = _db_path(request)
     enc_key = _get_encryption_key(request)
     auth_config = _effective_config(_AUTH_KEYS, db, enc_key)
@@ -239,9 +233,10 @@ def settings_page(
 
 @router.post("/settings/auth")
 async def save_auth_config(request: Request) -> RedirectResponse:
-    redirect = _require_admin(request)
-    if redirect:
-        return redirect
+    redirect_resp = _require_admin(request)
+    if redirect_resp:
+        assert isinstance(redirect_resp, RedirectResponse)
+        return redirect_resp
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -253,7 +248,8 @@ async def save_auth_config(request: Request) -> RedirectResponse:
 
     # Save each field to kv_store (encrypt sensitive values if key available)
     for kv_key in _AUTH_KEYS:
-        val = form.get(kv_key, "").strip()
+        raw = form.get(kv_key, "")
+        val = raw.strip() if isinstance(raw, str) else ""
         if kv_key in _SENSITIVE_KEYS:
             # Sensitive fields render blank/masked in the form, so a blank submit
             # means "leave unchanged" — overwriting with "" here silently wiped a
@@ -290,9 +286,10 @@ async def save_auth_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/smtp")
 async def save_smtp_config(request: Request) -> RedirectResponse:
-    redirect = _require_admin(request)
-    if redirect:
-        return redirect
+    redirect_resp = _require_admin(request)
+    if redirect_resp:
+        assert isinstance(redirect_resp, RedirectResponse)
+        return redirect_resp
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -303,7 +300,8 @@ async def save_smtp_config(request: Request) -> RedirectResponse:
     enc_key = _get_encryption_key(request)
 
     for kv_key in _SMTP_KEYS:
-        val = form.get(kv_key, "").strip()
+        raw = form.get(kv_key, "")
+        val = raw.strip() if isinstance(raw, str) else ""
         if kv_key in _SENSITIVE_KEYS:
             # Blank submit = leave the stored secret unchanged (see save_auth_config).
             if not val:
@@ -325,9 +323,10 @@ async def save_smtp_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/alerts")
 async def save_alert_config(request: Request) -> RedirectResponse:
-    redirect = _require_admin(request)
-    if redirect:
-        return redirect
+    redirect_resp = _require_admin(request)
+    if redirect_resp:
+        assert isinstance(redirect_resp, RedirectResponse)
+        return redirect_resp
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -337,7 +336,8 @@ async def save_alert_config(request: Request) -> RedirectResponse:
     form = await request.form()
 
     for kv_key in _ALERT_KEYS:
-        val = form.get(kv_key, "").strip()
+        raw = form.get(kv_key, "")
+        val = raw.strip() if isinstance(raw, str) else ""
         kv_set(db, kv_key, val)
 
     _rebuild_settings(request, db)
@@ -349,9 +349,10 @@ async def save_alert_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/change-password")
 async def change_local_admin_password(request: Request) -> RedirectResponse:
-    redirect = _require_admin(request)
-    if redirect:
-        return redirect
+    redirect_resp = _require_admin(request)
+    if redirect_resp:
+        assert isinstance(redirect_resp, RedirectResponse)
+        return redirect_resp
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -367,9 +368,12 @@ async def change_local_admin_password(request: Request) -> RedirectResponse:
     s = _get_settings(request)
     form = await request.form()
 
-    current_password = (form.get("current_password") or "").strip()
-    new_password = (form.get("new_password") or "").strip()
-    confirm_password = (form.get("confirm_password") or "").strip()
+    _cur = form.get("current_password") or ""
+    _new = form.get("new_password") or ""
+    _conf = form.get("confirm_password") or ""
+    current_password = _cur.strip() if isinstance(_cur, str) else ""
+    new_password = _new.strip() if isinstance(_new, str) else ""
+    confirm_password = _conf.strip() if isinstance(_conf, str) else ""
 
     if not current_password or not new_password:
         return RedirectResponse(
@@ -582,8 +586,8 @@ def _is_cert_verify_error(exc: Exception) -> bool:
 
 @router.post("/settings/test-ldap")
 async def test_ldap_connection(request: Request) -> JSONResponse:
-    redirect = _require_admin(request)
-    if redirect:
+    _redirect = _require_admin(request)
+    if _redirect:
         return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
@@ -591,13 +595,19 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
 
     form = await request.form()
-    server = form.get("ldap_server", "").strip()
-    base_dn = form.get("ldap_base_dn", "").strip()
-    bind_dn = form.get("ldap_bind_dn", "").strip()
-    bind_password = form.get("ldap_bind_password", "").strip()
+    _server = form.get("ldap_server", "")
+    _base = form.get("ldap_base_dn", "")
+    _bind = form.get("ldap_bind_dn", "")
+    _pw = form.get("ldap_bind_password", "")
+    _ca = form.get("ldap_ca_cert", "")
+    _timeout = form.get("ldap_connect_timeout", "5")
+    server = _server.strip() if isinstance(_server, str) else ""
+    base_dn = _base.strip() if isinstance(_base, str) else ""
+    bind_dn = _bind.strip() if isinstance(_bind, str) else ""
+    bind_password = _pw.strip() if isinstance(_pw, str) else ""
     start_tls = form.get("ldap_start_tls", "0") == "1"
-    ca_cert = form.get("ldap_ca_cert", "").strip()
-    connect_timeout = int(form.get("ldap_connect_timeout", "5") or "5")
+    ca_cert = _ca.strip() if isinstance(_ca, str) else ""
+    connect_timeout = int(_timeout.strip() if isinstance(_timeout, str) else "5")
 
     if not server or not base_dn:
         return JSONResponse({"ok": False, "error": "LDAP server and base DN are required"})
@@ -730,8 +740,8 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
 
 @router.post("/settings/pin-ldap-ca")
 async def pin_ldap_ca(request: Request) -> JSONResponse:
-    redirect = _require_admin(request)
-    if redirect:
+    _redirect = _require_admin(request)
+    if _redirect:
         return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
@@ -739,7 +749,8 @@ async def pin_ldap_ca(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
 
     form = await request.form()
-    pem = form.get("ldap_ca_cert", "").strip()
+    _pem = form.get("ldap_ca_cert", "")
+    pem = _pem.strip() if isinstance(_pem, str) else ""
     if not pem:
         return JSONResponse({"ok": False, "error": "No CA certificate provided"})
 
@@ -780,8 +791,8 @@ async def pin_ldap_ca(request: Request) -> JSONResponse:
 
 @router.post("/settings/test-smtp")
 async def test_smtp_connection(request: Request) -> JSONResponse:
-    redirect = _require_admin(request)
-    if redirect:
+    _redirect = _require_admin(request)
+    if _redirect:
         return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
@@ -789,12 +800,18 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
 
     form = await request.form()
-    host = form.get("smtp_host", "").strip()
-    port = int(form.get("smtp_port", "587") or "587")
-    user = form.get("smtp_user", "").strip()
-    password = form.get("smtp_password", "").strip()
-    from_addr = form.get("alert_from", "").strip()
-    recipients = form.get("alert_recipients", "").strip()
+    _host = form.get("smtp_host", "")
+    _port = form.get("smtp_port", "587")
+    _user = form.get("smtp_user", "")
+    _pw = form.get("smtp_password", "")
+    _from = form.get("alert_from", "")
+    _recip = form.get("alert_recipients", "")
+    host = _host.strip() if isinstance(_host, str) else ""
+    port = int(_port.strip() if isinstance(_port, str) else "587")
+    user = _user.strip() if isinstance(_user, str) else ""
+    password = _pw.strip() if isinstance(_pw, str) else ""
+    from_addr = _from.strip() if isinstance(_from, str) else ""
+    recipients = _recip.strip() if isinstance(_recip, str) else ""
 
     if not host:
         return JSONResponse({"ok": False, "error": "SMTP host is required"})
@@ -832,7 +849,7 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
 
     try:
         if port == 465:
-            s = smtplib.SMTP_SSL(host, port, timeout=10)
+            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=10)
         else:
             s = smtplib.SMTP(host, port, timeout=10)
         from cert_watch.alerts import negotiate_starttls

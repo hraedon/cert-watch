@@ -38,8 +38,8 @@ BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
-@router.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, error: str | None = None) -> HTMLResponse:
+@router.get("/login", response_class=HTMLResponse, response_model=None)
+def login_page(request: Request, error: str | None = None) -> HTMLResponse | RedirectResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
@@ -119,16 +119,18 @@ async def login_submit(
             )
     # BC-081: embed current session version in the token
     settings = getattr(request.app.state, "settings", None)
-    db_path = str(settings.db_path) if settings else None
-    version = get_session_version(db_path, result.username) if db_path else 0
+    assert settings is not None
+    _db_path = str(settings.db_path)
+    version = get_session_version(_db_path, result.username)
     # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out
-    if version == 0 and db_path:
+    if version == 0:
         bump_session_version(settings.db_path, result.username)
-        version = get_session_version(db_path, result.username)
+        version = get_session_version(_db_path, result.username)
     token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
+        SESSION_COOKIE, token, httponly=True, samesite="strict",
+        max_age=settings.session_ttl,
         secure=_COOKIE_SECURE, path="/",
     )
     logger.info(
@@ -266,19 +268,18 @@ def oauth_callback(
         return response
     # BC-081: embed current session version in the token
     settings = getattr(request.app.state, "settings", None)
-    db_path = str(settings.db_path) if settings else None
-    version = get_session_version(db_path, result.username) if db_path else 0
+    assert settings is not None
+    _db_path = str(settings.db_path)
+    version = get_session_version(_db_path, result.username)
     # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out
-    if version == 0 and db_path:
+    if version == 0:
         bump_session_version(settings.db_path, result.username)
-        version = get_session_version(db_path, result.username)
+        version = get_session_version(_db_path, result.username)
     token = create_session(result.username, _request_security(request), version=version)
     response = RedirectResponse(url="/", status_code=303)
-    response.delete_cookie(
-        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
-    )
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="strict", max_age=SESSION_TTL,
+        SESSION_COOKIE, token, httponly=True, samesite="strict",
+        max_age=settings.session_ttl,
         secure=_COOKIE_SECURE, path="/",
     )
     logger.info("user logged in via OAuth: %s", result.username)

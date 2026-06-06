@@ -6,14 +6,12 @@ import asyncio
 import csv
 import io
 import logging
-from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import (
     _extract_client_ip,
@@ -21,7 +19,10 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.scan import ScanError, scan_host_async, store_scanned_async
+from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
+from cert_watch.scan import ScanError, ScannedEntry, scan_host_async, store_scanned_async
+
+ScanResult = ScannedEntry | ScanError
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
 logger = logging.getLogger("cert_watch.routes.hosts")
@@ -30,28 +31,11 @@ logger = logging.getLogger("cert_watch.routes.hosts")
 # but concurrent writes beyond busy_timeout raise OperationalError.
 _store_sem = asyncio.Semaphore(1)
 
-_CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
-
-
-def _csv_safe(value) -> str:
-    s = str(value) if value is not None else ""
-    if s and s[0] in _CSV_DANGEROUS_PREFIXES:
-        return "'" + s
-    return s
-
 
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
 
 
 def _is_blocked_host_check(
@@ -174,6 +158,8 @@ async def add_host(
         result = await scan_host_async(
             hostname,
             p,
+            timeout=s.scan_timeout,
+            retries=s.scan_retries,
             allow_private=s.allow_private,
             allowed_subnets=s.allowed_subnets,
             dns_servers=s.dns_servers,
@@ -307,11 +293,13 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         source_ip=source_ip,
     )
 
-    async def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, object]:
+    async def _scan_one(job: tuple[str, int, int | None, str | None]) -> tuple[str, int, ScanResult]:
         hostname, port, _, pinned = job
         result = await scan_host_async(
             hostname,
             port,
+            timeout=s.scan_timeout,
+            retries=s.scan_retries,
             allow_private=allow_priv,
             allowed_subnets=allowed_nets,
             dns_servers=dns_srv,
@@ -415,6 +403,8 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
             result = await scan_host_async(
                 h.hostname,
                 h.port,
+                timeout=s.scan_timeout,
+                retries=s.scan_retries,
                 allow_private=s.allow_private,
                 allowed_subnets=s.allowed_subnets,
                 dns_servers=s.dns_servers,
@@ -486,6 +476,8 @@ async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
     result = await scan_host_async(
         host.hostname,
         host.port,
+        timeout=s.scan_timeout,
+        retries=s.scan_retries,
         allow_private=s.allow_private,
         allowed_subnets=s.allowed_subnets,
         dns_servers=s.dns_servers,
