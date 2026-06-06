@@ -32,4 +32,17 @@ jobs:
         # (Python 3.12+). Parallelism (`-n auto`) comes from addopts in pyproject.
         env:
           COVERAGE_CORE: sysmon
-        run: .venv/bin/pytest -q --ignore=tests/e2e
+        run: .venv/bin/pytest -q --ignore=tests/e2e --ignore=tests/integration
+
+  ldap-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          python-version: "3.13"
+      - run: uv pip install -e ".[dev,auth,integration]"
+      - name: pytest (integration)
+        # Container-bound tests: no coverage, single-threaded, --no-cov mirrors
+        # the e2e job convention.
+        run: .venv/bin/pytest -m integration tests/integration -q --no-cov -n0

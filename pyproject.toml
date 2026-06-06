@@ -29,6 +29,9 @@ e2e = [
     "playwright>=1.49",
     "pytest-playwright>=0.6",
 ]
+integration = [
+    "testcontainers>=4.0",
+]
 auth-ldap = [
     "ldap3>=2.9",
 ]
