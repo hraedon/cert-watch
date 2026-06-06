@@ -8,13 +8,13 @@
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>
-      <h1>Scan history</h1>
+      <h1 data-testid="scans-heading">Scan history</h1>
       <div class="cw-page-head-sub">TLS handshakes performed on tracked hosts, scheduled and on-demand.</div>
     </div>
     {% if may_write %}
     <form method="post" action="/hosts/all/scan" class="cw-inline">
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-      <button type="submit" class="cw-btn primary">{{ icons.svg_icon('refresh', 14) }}Run scan now</button>
+      <button type="submit" class="cw-btn primary" data-testid="scan-all-btn">{{ icons.svg_icon('refresh', 14) }}Run scan now</button>
     </form>
     {% endif %}
   </div>

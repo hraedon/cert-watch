@@ -12,7 +12,7 @@ from playwright.sync_api import Page, expect
 
 def test_settings_page_loads_with_tabs(page: Page, cert_watch_server: str) -> None:
     page.goto(f"{cert_watch_server}/settings")
-    expect(page.get_by_role("heading", name="Settings")).to_be_visible()
+    expect(page.get_by_test_id("settings-heading")).to_be_visible()
     expect(page.locator("body")).to_contain_text("Authentication")
     expect(page.locator("body")).to_contain_text("SMTP")
     expect(page.locator("body")).to_contain_text("Alerts")

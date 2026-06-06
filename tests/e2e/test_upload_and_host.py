@@ -77,13 +77,13 @@ def pfx_path(tmp_path: Path) -> Path:
 
 def _open_slide(page: Page) -> None:
     """Open the Add-host slide-over panel."""
-    page.locator("button:has-text('Add host')").click()
+    page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-slide.on").wait_for()
 
 
 def _switch_tab(page: Page, tab: str) -> None:
     """Switch to a tab in the slide-over (scan, upload, bulk)."""
-    page.locator(f"#add-tabs button[data-tab='{tab}']").click()
+    page.get_by_test_id(f"tab-{tab}-btn").click()
     page.locator(f"#tab-{tab}").wait_for()
 
 
@@ -93,8 +93,8 @@ def test_upload_pem_appears_on_dashboard(
     page.goto(cert_watch_server)
     _open_slide(page)
     _switch_tab(page, "upload")
-    page.locator("#tab-upload input[name='file']").set_input_files(str(pem_path))
-    page.locator("#tab-upload button[type=submit]").click()
+    page.get_by_test_id("upload-file-input").set_input_files(str(pem_path))
+    page.get_by_test_id("upload-submit-btn").click()
     expect(page.locator("body")).to_contain_text("e2e-pem.example.com")
 
 
@@ -104,12 +104,12 @@ def test_upload_pfx_shows_leaf_and_chain(
     page.goto(cert_watch_server)
     _open_slide(page)
     _switch_tab(page, "upload")
-    page.locator("#tab-upload input[name='file']").set_input_files(str(pfx_path))
-    page.locator("#tab-upload button[type=submit]").click()
+    page.get_by_test_id("upload-file-input").set_input_files(str(pfx_path))
+    page.get_by_test_id("upload-submit-btn").click()
     body = page.locator("body")
     expect(body).to_contain_text("e2e-pfx.example.com")
     # Chain info is on the detail page; click through to verify
-    page.locator("tr.cw-row-link", has_text="e2e-pfx.example.com").click()
+    page.get_by_test_id("cert-row").filter(has_text="e2e-pfx.example.com").click()
     page.wait_for_url("**/certificates/*")
     expect(body).to_contain_text("E2E Intermediate")
     expect(body).to_contain_text("E2E Root")
@@ -120,12 +120,12 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     page.goto(cert_watch_server)
     _open_slide(page)
     # Scan host tab is active by default
-    page.locator("#tab-scan input[name='hostname']").fill(hostname)
+    page.get_by_test_id("scan-hostname-input").fill(hostname)
     page.locator("#tab-scan input[name='port']").fill("443")
-    page.locator("#tab-scan button[type=submit]").click()
+    page.get_by_test_id("scan-submit-btn").click()
     # The scan will fail (host doesn't exist) — the dashboard should still load
     # without 500. The host is stored even though no cert is captured.
-    expect(page.locator("h1")).to_have_text("Certificates")
+    expect(page.get_by_test_id("dashboard-heading")).to_have_text("Certificates")
     # Assert the host appears in the table
     expect(page.locator("body")).to_contain_text(hostname)
     # Navigate to scan-history and assert a failure entry exists. Scan results are

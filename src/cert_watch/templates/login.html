@@ -20,7 +20,7 @@
           <div class="cw-mark cw-login-mark">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
           </div>
-          <h2 class="cw-login-title">Sign in to cert-watch</h2>
+          <h2 class="cw-login-title" data-testid="login-heading">Sign in to cert-watch</h2>
         </div>
 
         {% if error %}
@@ -34,26 +34,26 @@
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
-              <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
+              <input class="cw-input" type="text" name="username" required autofocus placeholder="username" data-testid="login-username">
             </div>
             <div class="cw-field cw-mb-16">
               <label class="cw-label">Password</label>
-              <input class="cw-input" type="password" name="password" required placeholder="password">
+              <input class="cw-input" type="password" name="password" required placeholder="password" data-testid="login-password">
             </div>
-            <button type="submit" class="cw-btn primary cw-btn--expand">Sign in</button>
+            <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="login-submit-btn">Sign in</button>
           </form>
         {% elif local_admin_configured %}
           <form method="post" action="/login">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <div class="cw-field cw-mb-12">
               <label class="cw-label">Username</label>
-              <input class="cw-input" type="text" name="username" required autofocus placeholder="username">
+              <input class="cw-input" type="text" name="username" required autofocus placeholder="username" data-testid="login-username">
             </div>
             <div class="cw-field cw-mb-16">
               <label class="cw-label">Password</label>
-              <input class="cw-input" type="password" name="password" required placeholder="password">
+              <input class="cw-input" type="password" name="password" required placeholder="password" data-testid="login-password">
             </div>
-            <button type="submit" class="cw-btn primary cw-btn--expand">Sign in</button>
+            <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="login-submit-btn">Sign in</button>
           </form>
         {% endif %}
 

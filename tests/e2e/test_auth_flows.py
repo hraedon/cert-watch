@@ -106,7 +106,7 @@ class TestSetupWizard:
         page.locator('input[name="username"]').fill("setupadmin")
         page.locator('input[name="password"]').fill("setupPass123")
         page.locator('input[name="password_confirm"]').fill("setupPass123")
-        page.locator('form[action="/setup"] button[type="submit"]').click()
+        page.get_by_test_id("setup-submit-btn").click()
         page.wait_for_url("**/*", timeout=5000)
 
 
@@ -118,9 +118,9 @@ class TestLoginAndSession:
         page.goto(f"{auth_server}/login")
         expect(page.locator("body")).to_contain_text("Sign in")
 
-        page.locator('input[name="username"]').fill("e2eadmin")
-        page.locator('input[name="password"]').fill("e2eTestPass1")
-        page.locator("form[action='/login'] button[type='submit']").click()
+        page.get_by_test_id("login-username").fill("e2eadmin")
+        page.get_by_test_id("login-password").fill("e2eTestPass1")
+        page.get_by_test_id("login-submit-btn").click()
 
         page.wait_for_url("**/*", timeout=5000)
         cookies = page.context.cookies()
@@ -133,9 +133,9 @@ class TestLoginAndSession:
     ) -> None:
         """Login with incorrect password, verify error message."""
         page.goto(f"{auth_server}/login")
-        page.locator('input[name="username"]').fill("e2eadmin")
-        page.locator('input[name="password"]').fill("wrongpassword")
-        page.locator("form[action='/login'] button[type='submit']").click()
+        page.get_by_test_id("login-username").fill("e2eadmin")
+        page.get_by_test_id("login-password").fill("wrongpassword")
+        page.get_by_test_id("login-submit-btn").click()
         expect(page.locator("body")).to_contain_text("invalid credentials")
 
     def test_logout_clears_session_and_redirects_to_login(
@@ -143,14 +143,14 @@ class TestLoginAndSession:
     ) -> None:
         """Login, then logout, verify session is invalidated."""
         page.goto(f"{auth_server}/login")
-        page.locator('input[name="username"]').fill("e2eadmin")
-        page.locator('input[name="password"]').fill("e2eTestPass1")
-        page.locator("form[action='/login'] button[type='submit']").click()
+        page.get_by_test_id("login-username").fill("e2eadmin")
+        page.get_by_test_id("login-password").fill("e2eTestPass1")
+        page.get_by_test_id("login-submit-btn").click()
         page.wait_for_url("**/*", timeout=5000)
         expect(page.locator("body")).to_contain_text("Certificates")
 
         page.goto(f"{auth_server}/")
-        page.locator("form[action='/auth/logout'] button").click()
+        page.get_by_test_id("logout-btn").click()
 
         page.wait_for_url("**/login**", timeout=5000)
         expect(page.locator("body")).to_contain_text("Sign in")
@@ -170,9 +170,9 @@ class TestLoginAndSession:
     ) -> None:
         """After login, API routes should be accessible."""
         page.goto(f"{auth_server}/login")
-        page.locator('input[name="username"]').fill("e2eadmin")
-        page.locator('input[name="password"]').fill("e2eTestPass1")
-        page.locator("form[action='/login'] button[type='submit']").click()
+        page.get_by_test_id("login-username").fill("e2eadmin")
+        page.get_by_test_id("login-password").fill("e2eTestPass1")
+        page.get_by_test_id("login-submit-btn").click()
         page.wait_for_url("**/*", timeout=5000)
 
         # page.request shares the browser context's cookie jar, but httpOnly

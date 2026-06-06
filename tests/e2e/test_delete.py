@@ -43,13 +43,13 @@ def delete_pem_path(tmp_path: Path) -> Path:
 
 def _open_slide(page: Page) -> None:
     """Open the Add-host slide-over panel."""
-    page.locator("button:has-text('Add host')").click()
+    page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-slide.on").wait_for()
 
 
 def _switch_tab(page: Page, tab: str) -> None:
     """Switch to a tab in the slide-over."""
-    page.locator(f"#add-tabs button[data-tab='{tab}']").click()
+    page.get_by_test_id(f"tab-{tab}-btn").click()
     page.locator(f"#tab-{tab}").wait_for()
 
 
@@ -59,20 +59,20 @@ def test_upload_then_delete_removes_cert(
     page.goto(cert_watch_server)
     _open_slide(page)
     _switch_tab(page, "upload")
-    page.locator("#tab-upload input[name='file']").set_input_files(
+    page.get_by_test_id("upload-file-input").set_input_files(
         str(delete_pem_path),
     )
-    page.locator("#tab-upload button[type=submit]").click()
+    page.get_by_test_id("upload-submit-btn").click()
     body = page.locator("body")
     expect(body).to_contain_text("e2e-delete.example.com")
 
     # Click the cert row to go to detail page
-    page.locator("tr.cw-row-link", has_text="e2e-delete.example.com").click()
+    page.get_by_test_id("cert-row").filter(has_text="e2e-delete.example.com").click()
     page.wait_for_url("**/certificates/*")
 
     # Click the delete button on the detail page
     page.on("dialog", lambda dialog: dialog.accept())
-    page.locator("button[title='Delete']").click()
+    page.get_by_test_id("cert-delete-btn").click()
 
     # After delete, should redirect to dashboard and cert should be gone
     expect(page.locator("body")).not_to_contain_text("e2e-delete.example.com")

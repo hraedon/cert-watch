@@ -5,7 +5,7 @@
 <div class="cw-page--constrained">
   <div class="cw-page-head">
     <div>
-      <h1>Audit log</h1>
+      <h1 data-testid="audit-heading">Audit log</h1>
       <div class="cw-page-head-sub">Append-only record of state-changing actions. No edit or delete path.</div>
     </div>
   </div>
@@ -24,7 +24,7 @@
     <label class="cw-fz-13 cw-text-text-2">Actor
       <input type="text" name="actor" value="{{ filter_actor }}" class="cw-input cw-w-140" placeholder="username">
     </label>
-    <button type="submit" class="cw-btn primary sm">Filter</button>
+    <button type="submit" class="cw-btn primary sm" data-testid="audit-filter-btn">Filter</button>
     {% if filter_target_type or filter_actor %}
       <a href="/audit" class="cw-btn ghost sm">Clear</a>
     {% endif %}

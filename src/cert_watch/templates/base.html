@@ -26,24 +26,24 @@
         <span class="cw-ver">v{{ version }}{% if commit %} <span class="cw-muted">({{ commit }})</span>{% endif %}</span>
       </a>
       <nav class="cw-nav">
-        <a href="/" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
-        <a href="/alerts" {% if active_page == 'alerts' %}class="active"{% endif %}>Alerts</a>
-        <a href="/scan-history" {% if active_page == 'scans' %}class="active"{% endif %}>Scan history</a>
-        <a href="/insights" {% if active_page == 'insights' %}class="active"{% endif %}>Insights</a>
-        <a href="/discover" {% if active_page == 'discover' %}class="active"{% endif %}>Discover</a>
-        <a href="/audit" {% if active_page == 'audit' %}class="active"{% endif %}>Audit log</a>
+        <a href="/" data-testid="nav-dashboard" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="/alerts" data-testid="nav-alerts" {% if active_page == 'alerts' %}class="active"{% endif %}>Alerts</a>
+        <a href="/scan-history" data-testid="nav-scans" {% if active_page == 'scans' %}class="active"{% endif %}>Scan history</a>
+        <a href="/insights" data-testid="nav-insights" {% if active_page == 'insights' %}class="active"{% endif %}>Insights</a>
+        <a href="/discover" data-testid="nav-discover" {% if active_page == 'discover' %}class="active"{% endif %}>Discover</a>
+        <a href="/audit" data-testid="nav-audit" {% if active_page == 'audit' %}class="active"{% endif %}>Audit log</a>
         {% if auth_user %}
-        <a href="/settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+        <a href="/settings" data-testid="nav-settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
         {% endif %}
       </nav>
       <div class="cw-spacer"></div>
       {% block topbar_right %}{% endblock %}
       {% if auth_user %}
-        <div class="cw-user-info">
-          <span>{{ auth_user }}</span>
+        <div class="cw-user-info" data-testid="user-info">
+          <span data-testid="auth-user">{{ auth_user }}</span>
           <form method="post" action="/auth/logout" style="display:inline">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <button type="submit" class="cw-btn ghost sm">Logout</button>
+            <button type="submit" class="cw-btn ghost sm" data-testid="logout-btn">Logout</button>
           </form>
         </div>
       {% endif %}
