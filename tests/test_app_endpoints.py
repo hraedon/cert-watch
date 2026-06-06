@@ -157,6 +157,41 @@ def test_alerts_view_lists_existing(tmp_path, reload_app):
     assert "m" in r.text  # alert message is displayed
 
 
+def _seed_alert(db):
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    init_schema(db)
+    SqliteAlertRepository(db).create(
+        Alert(cert_id="fp1", alert_type="expiry_warning", status="pending",
+              message="m", threshold_days=7)
+    )
+
+
+def test_alerts_channels_reflect_config(tmp_path, reload_app):
+    """BC-130: delivery chips reflect configured channels, not hardcoded."""
+    db = tmp_path / "cert-watch.sqlite3"
+    # No channels configured → muted "No channels configured", no Email/Webhook.
+    app_mod = reload_app()
+    _seed_alert(db)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/alerts")
+    assert "No channels configured" in r.text
+    assert "Email" not in r.text and "Webhook" not in r.text
+
+
+def test_alerts_channels_show_email_when_smtp_configured(tmp_path, reload_app):
+    db = tmp_path / "cert-watch.sqlite3"
+    app_mod = reload_app(
+        SMTP_HOST="mail.example.com",
+        ALERT_FROM="certs@example.com",
+        ALERT_RECIPIENTS="ops@example.com",
+    )
+    _seed_alert(db)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/alerts")
+    assert "Email" in r.text
+    assert "No channels configured" not in r.text
+
+
 def test_scan_history_empty(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:

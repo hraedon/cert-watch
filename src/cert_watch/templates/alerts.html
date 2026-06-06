@@ -63,9 +63,16 @@
               {% endif %}
             </div>
             <div class="cw-fz-12-5 cw-text-text-2 cw-mt-3">{{ a.message }}</div>
-            <div class="cw-flex cw-gap-6 cw-mt-6 cw-fz-11">
+            <div class="cw-flex cw-gap-6 cw-mt-6 cw-fz-11" data-testid="alert-channels">
+              {% if 'email' in alert_channels %}
               <span class="cw-chip cw-p-chip">{{ icons.svg_icon('bell', 10) }}Email</span>
+              {% endif %}
+              {% if 'webhook' in alert_channels %}
               <span class="cw-chip cw-p-chip">{{ icons.svg_icon('link', 10) }}Webhook</span>
+              {% endif %}
+              {% if not alert_channels %}
+              <span class="cw-chip cw-p-chip cw-chip-muted" title="Configure delivery channels in Settings → Alerts">{{ icons.svg_icon('alert', 10) }}No channels configured</span>
+              {% endif %}
             </div>
           </div>
           <div class="cw-alert-meta">

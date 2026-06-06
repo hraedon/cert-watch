@@ -346,11 +346,22 @@ def alerts_view(
             _group_cache[cert_id] = matched
         a["group_name"] = _group_cache.get(cert_id)
 
+    # BC-130: reflect the channels that are actually configured rather than
+    # hardcoding Email + Webhook chips on every alert.
+    settings = getattr(request.app.state, "settings", None)
+    alert_channels: list[str] = []
+    if settings is not None:
+        if settings.smtp_host and settings.alert_from and settings.alert_recipients:
+            alert_channels.append("email")
+        if settings.webhook_url:
+            alert_channels.append("webhook")
+
     return templates.TemplateResponse(
         request=request,
         name="alerts.html",
         context={
             "alerts": rows,
+            "alert_channels": alert_channels,
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
