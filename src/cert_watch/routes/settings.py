@@ -6,6 +6,7 @@ import contextlib
 import ipaddress
 import logging
 import ssl
+from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -284,7 +285,6 @@ async def save_auth_config(request: Request) -> RedirectResponse:
     if resp.status_code == 303 and ("saved=1" in str(resp.headers.get("location", ""))):
         # After saving, rebuild the auth provider so the new config is live immediately
         try:
-            db = _db_path(request)
             s = _get_settings(request)
             auth = s.build_auth_provider()
             request.app.state.auth_provider = auth

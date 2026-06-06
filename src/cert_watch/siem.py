@@ -19,6 +19,7 @@ the sink disables itself gracefully. It runs inline (local + fast), like syslog.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
@@ -83,12 +84,28 @@ class SiemExporter:
             lg = logging.getLogger("cert_watch.siem.syslog")
             lg.setLevel(logging.INFO)
             lg.propagate = False
+            # Close old handlers to avoid leaking sockets (BC-XXX)
+            for old in lg.handlers:
+                with contextlib.suppress(Exception):
+                    old.close()
             lg.handlers = [handler]
             self._syslog = lg
         except Exception:
             logger.warning("syslog sink setup failed; disabling it", exc_info=True)
             self.syslog_host = ""
             self._syslog = None
+
+    def close(self) -> None:
+        """Close syslog handlers and shut down the thread pool."""
+        if self._syslog is not None:
+            for handler in self._syslog.handlers:
+                with contextlib.suppress(Exception):
+                    handler.close()
+            self._syslog.handlers.clear()
+            self._syslog = None
+        if self._pool is not None:
+            self._pool.shutdown(wait=False, cancel_futures=True)
+            self._pool = None
 
     def _setup_eventlog(self) -> None:
         """Bind the Windows Event Log writer (pywin32), or disable gracefully.
@@ -181,6 +198,8 @@ def _get_exporter() -> SiemExporter:
 def reset_exporter() -> None:
     """Drop the cached exporter so the next call re-reads the environment (tests)."""
     global _exporter
+    if _exporter is not None:
+        _exporter.close()
     _exporter = None
 
 
