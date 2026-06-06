@@ -176,7 +176,7 @@ class OAuthProvider(AuthProvider):
             from joserfc.jwk import KeySet  # type: ignore[no-redef]
         except ImportError:
             try:
-                import authlib.jose.jwt as _jwt  # type: ignore[no-redef]
+                import authlib.jose.jwt as _jwt  # type: ignore[no-redef,import-untyped]
                 KeySet = None
             except ImportError:
                 logger.warning("Neither joserfc nor authlib.jose available for JWT verification")

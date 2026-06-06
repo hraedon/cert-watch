@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from cert_watch.alerts import WebhookConfig
@@ -79,7 +79,7 @@ class GenericAdapter:
             if payload.lstrip().startswith("{"):
                 content_type = "application/json"
         else:
-            payload_dict = {
+            payload_dict: dict[str, Any] = {
                 "alert_type": alert.alert_type,
                 "cert_id": alert.cert_id,
                 "message": alert.message,

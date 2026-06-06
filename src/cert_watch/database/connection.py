@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cert_watch.certificate_model import Certificate
 
@@ -61,7 +62,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
                     current_stat.st_mtime,
                 )
                 return conn
-        except Exception:
+        except (OSError, sqlite3.Error):
             pass
         cache.pop(path_str, None)
         meta.pop(path_str, None)
@@ -89,7 +90,7 @@ def _parse_iso(s: str) -> datetime:
     return dt
 
 
-def _row_to_cert(row: sqlite3.Row) -> Certificate:
+def _row_to_cert(row: sqlite3.Row | dict[str, Any]) -> Certificate:
     cert = Certificate(
         subject=row["subject"],
         issuer=row["issuer"],

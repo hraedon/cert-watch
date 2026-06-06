@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,10 +26,10 @@ logger = logging.getLogger("cert_watch.migrations")
 # Each entry: (id: str, description: str, fn: callable(conn) -> None)
 # Ids must be monotonically increasing strings.
 # The first migration (0001) is the baseline that snapshots the current schema.
-_MIGRATIONS: list[tuple[str, str, object]] = []
+_MIGRATIONS: list[tuple[str, str, Callable[[sqlite3.Connection], None]]] = []
 
 
-def register(id: str, description: str, fn: object) -> None:
+def register(id: str, description: str, fn: Callable[[sqlite3.Connection], None]) -> None:
     """Register a migration. Ids must be unique and monotonically ordered."""
     ids = [m[0] for m in _MIGRATIONS]
     if id in ids:
@@ -36,7 +37,7 @@ def register(id: str, description: str, fn: object) -> None:
     _MIGRATIONS.append((id, description, fn))
 
 
-def get_migrations() -> list[tuple[str, str, object]]:
+def get_migrations() -> list[tuple[str, str, Callable[[sqlite3.Connection], None]]]:
     """Return all registered migrations in order."""
     return list(_MIGRATIONS)
 

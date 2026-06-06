@@ -40,7 +40,7 @@ def extract_chain(der_bytes: bytes) -> list[Certificate]:
                     out.append(parsed)
             _mark_leaf(out)
             return out
-    except Exception:  # noqa: BLE001
+    except (ValueError, TypeError):
         pass
     parsed = parse_certificate(der_bytes)
     if isinstance(parsed, Certificate):
@@ -62,7 +62,7 @@ def extract_chain_pem(pem_bytes: bytes) -> list[Certificate]:
                     out.append(parsed)
             _mark_leaf(out)
             return out
-    except Exception:  # noqa: BLE001
+    except (ValueError, TypeError):
         pass
     return []
 
@@ -189,7 +189,7 @@ def _load_x509(cert: Certificate | _AnchorLike) -> x509.Certificate | None:
         return None
     try:
         return x509.load_der_x509_certificate(cert.raw_der)
-    except Exception:  # noqa: BLE001
+    except (ValueError, TypeError):
         return None
 
 

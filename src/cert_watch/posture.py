@@ -58,10 +58,10 @@ def _extract_ocsp_url(cert_der: bytes) -> str | None:
         aia = x509_cert.extensions.get_extension_for_oid(
             ExtensionOID.AUTHORITY_INFORMATION_ACCESS
         )
-        for access_desc in aia.value:
+        for access_desc in aia.value:  # type: ignore[attr-defined]
             if access_desc.access_method == AuthorityInformationAccessOID.OCSP:
                 return access_desc.access_location.value
-    except Exception:
+    except (x509.ExtensionNotFound, ValueError, TypeError):
         pass
     return None
 
@@ -77,12 +77,12 @@ def _extract_crl_urls(cert_der: bytes) -> list[str]:
         cdp = x509_cert.extensions.get_extension_for_oid(
             ExtensionOID.CRL_DISTRIBUTION_POINTS
         )
-        for dp in cdp.value:
+        for dp in cdp.value:  # type: ignore[attr-defined]
             if dp.full_name:
                 for name in dp.full_name:
                     if hasattr(name, "value") and isinstance(name.value, str):
                         urls.append(name.value)
-    except Exception:
+    except (x509.ExtensionNotFound, ValueError, TypeError):
         pass
     return urls
 
@@ -347,7 +347,7 @@ def evaluate_posture(
 
     try:
         ext = x509_cert.extensions.get_extension_for_oid(ExtensionOID.TLS_FEATURE)
-        must_staple = any(feature.value == 5 for feature in ext.value)
+        must_staple = any(feature.value == 5 for feature in ext.value)  # type: ignore[attr-defined]
     except (x509.ExtensionNotFound, Exception):
         must_staple = False
     if must_staple:
