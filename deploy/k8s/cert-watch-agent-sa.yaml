@@ -1,0 +1,36 @@
+# Vault authentication role for the cert-watch agent ServiceAccount.
+# Binds the cert-watch-agent ServiceAccount to the cert-watch-e2e-runner policy.
+# Apply after enabling the kubernetes auth method:
+#
+#   vault write auth/kubernetes/role/cert-watch-agent \
+#     bound_service_account_names=cert-watch-agent \
+#     bound_service_account_namespaces=cert-watch \
+#     token_policies="cert-watch-e2e-runner" \
+#     ttl=30m
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cert-watch-agent
+  namespace: cert-watch
+  labels:
+    app: cert-watch
+---
+# Role and binding so the SA can be assumed by Vault's k8s auth
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cert-watch-agent
+rules: []  # scoped via Vault policy, not k8s RBAC
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cert-watch-agent
+subjects:
+  - kind: ServiceAccount
+    name: cert-watch-agent
+    namespace: cert-watch
+roleRef:
+  kind: ClusterRole
+  name: cert-watch-agent
+  apiGroup: rbac.authorization.k8s.io
