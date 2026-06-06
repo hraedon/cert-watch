@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import typing
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -165,7 +166,7 @@ def resolve_actor(request: object) -> str:
         return "anonymous"
 
 
-def resolve_source_ip(request: object) -> str | None:
+def resolve_source_ip(request: typing.Any) -> str | None:
     """Resolve source IP from a FastAPI Request object.
 
     Uses the proxy-aware IP extraction when CERT_WATCH_TRUST_PROXY is set.

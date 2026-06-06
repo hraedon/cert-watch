@@ -123,6 +123,24 @@ def _default_data_dir_str(os_name: str, programdata: str | None) -> str:
     return "/var/lib/cert-watch"
 
 
+def _parse_int(raw: str, default: int, name: str) -> int:
+    """Parse an integer env var with fallback and warning on invalid input."""
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+        return default
+
+
+def _parse_float(raw: str, default: float, name: str) -> float:
+    """Parse a float env var with fallback and warning on invalid input."""
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning("Invalid %s=%r, using default %s", name, raw, default)
+        return default
+
+
 def _default_data_dir() -> Path:
     """Platform-appropriate default data directory.
 
@@ -167,6 +185,11 @@ class Settings:
     drift_alerts: bool = True
     renewal_window_days: int = 30  # 0 disables the renewal-stall alert (Plan 027)
     check_revocation: bool = False
+    # Scan timeouts
+    scan_timeout: float = 10.0
+    scan_retries: int = 2
+    scan_retry_backoff: float = 1.0
+    hsts_timeout: float = 5.0
     # Auth
     auth_provider: str = ""  # "", "none", "ldap", "oauth", "entra"
     ldap_server: str = ""
@@ -191,6 +214,8 @@ class Settings:
     allowed_roles: tuple[str, ...] = ()
     # Admin users (comma-separated usernames allowed to access /settings)
     admin_users: tuple[str, ...] = ()
+    # Session lifetime in seconds (default 8 hours)
+    session_ttl: int = 28800
     # Write users (comma-separated usernames allowed to write). When empty,
     # all authenticated users can write.
     write_users: tuple[str, ...] = ()
@@ -355,6 +380,13 @@ class Settings:
                 for u in os.environ.get("CERT_WATCH_ADMINS", "").split(",")
                 if u.strip()
             ),
+            # Scan timeouts
+            scan_timeout=_parse_float(os.environ.get("CERT_WATCH_SCAN_TIMEOUT", "10.0"), 10.0, "CERT_WATCH_SCAN_TIMEOUT"),
+            scan_retries=_parse_int(os.environ.get("CERT_WATCH_SCAN_RETRIES", "2"), 2, "CERT_WATCH_SCAN_RETRIES"),
+            scan_retry_backoff=_parse_float(os.environ.get("CERT_WATCH_SCAN_RETRY_BACKOFF", "1.0"), 1.0, "CERT_WATCH_SCAN_RETRY_BACKOFF"),
+            hsts_timeout=_parse_float(os.environ.get("CERT_WATCH_HSTS_TIMEOUT", "5.0"), 5.0, "CERT_WATCH_HSTS_TIMEOUT"),
+            # Session TTL
+            session_ttl=_parse_int(os.environ.get("CERT_WATCH_SESSION_TTL", "28800"), 28800, "CERT_WATCH_SESSION_TTL"),
             # Write users
             write_users=tuple(
                 u.strip()
@@ -637,6 +669,8 @@ class Settings:
             allowed_roles=base.allowed_roles,
             # Admin users
             admin_users=base.admin_users,
+            # Session TTL
+            session_ttl=base.session_ttl,
             # Write users
             write_users=base.write_users,
             # Local break-glass admin

@@ -12,7 +12,6 @@ from fastapi.templating import Jinja2Templates
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from cert_watch import __commit__, __version__, ct_lookup
-from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
@@ -33,6 +32,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write,
 )
+from cert_watch.routes._deps import _db_path
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -41,14 +41,6 @@ router = APIRouter()
 BASE_DIR = Path(__file__).parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 register_filters(templates)
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
 
 
 @router.get("/healthz")
@@ -165,7 +157,7 @@ def api_health(request: Request) -> JSONResponse:
     overall = "ok"
     if not checks["scheduler_running"]:
         overall = "critical"
-    elif checks["failed_alerts_24h"] > 0 or checks.get("last_scan_status") == "failure":
+    elif ((checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0) or checks.get("last_scan_status") == "failure":
         overall = "warning"
 
     checks["overall"] = overall
@@ -198,7 +190,7 @@ def dashboard(
     if pivot_groups:
         # Pivot view: compute stats from SQL (no full inventory load)
         total = sum(g["count"] for g in pivot_groups)
-        page_entries = []
+        page_entries: list[dict] = []
         total_pages = 1
         # Urgency distribution via targeted SQL
         with _connect(db) as conn:
@@ -593,8 +585,8 @@ def discover_view(request: Request) -> HTMLResponse:
     domains_data = []
     tracked_count = 0
     ct_total = 0
-    untracked_all = []
-    misissuance_all = []
+    untracked_all: list[dict] = []
+    misissuance_all: list[dict] = []
     private_count = 0
 
     # Count private-CA hosts

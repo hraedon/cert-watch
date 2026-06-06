@@ -5,7 +5,6 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -13,7 +12,6 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from cert_watch import __commit__, __version__
 from cert_watch.alerts import Alert, resolve_group_recipients, send_webhook
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
@@ -30,17 +28,10 @@ from cert_watch.database import (
 )
 from cert_watch.middleware import rate_limit, require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
+from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
 from cert_watch.tags import format_tags, parse_tags
 
 logger = logging.getLogger("cert_watch.routes.api")
-
-_CSV_DANGEROUS_PREFIXES = ("=", "+", "-", "@", "\t", "\r", "\n")
-
-
-def _csv_safe(value: str) -> str:
-    if value and str(value)[0] in _CSV_DANGEROUS_PREFIXES:
-        return "'" + str(value)
-    return str(value)
 
 
 router = APIRouter()
@@ -70,14 +61,6 @@ def _pagination_links(request: Request, path: str, page: int, limit: int, total:
     links["next"] = f"{base}?page={page + 1}&limit={limit}" if page < pages else None
     links["prev"] = f"{base}?page={page - 1}&limit={limit}" if page > 1 else None
     return links
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
 
 
 def _runbook_url_error(url: str) -> str | None:
@@ -464,6 +447,8 @@ async def api_update_host_owner(
         source_ip=resolve_source_ip(request),
     )
     updated = repo.get(host_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="host not found")
     return JSONResponse(
         content={
             "id": host_id,

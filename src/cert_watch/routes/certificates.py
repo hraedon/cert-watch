@@ -14,7 +14,6 @@ from fastapi.templating import Jinja2Templates
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.cert_chain import validate_is_ca_certificate
-from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
@@ -39,6 +38,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
+from cert_watch.routes._deps import _db_path
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
@@ -52,16 +52,8 @@ register_filters(templates)
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings
-
-
-def _db_path(request: Request) -> Path:
-    return _get_settings(request).db_path
-
-
-@router.get("/certificates/{cert_id}", response_class=HTMLResponse)
-def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
+@router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
+def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
 
     repo = SqliteCertificateRepository(db)
@@ -286,17 +278,16 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse:
     from cert_watch.database import get_posture_for_cert
     from cert_watch.posture import evaluate_posture
 
-    posture = get_posture_for_cert(db, cert_id)
-    posture_data = None
-    if posture:
-        posture_data = posture
+    _posture = get_posture_for_cert(db, cert_id)
+    posture_data: dict | None = None
+    if _posture:
+        posture_data = _posture
     else:
         try:
-            cs_for_posture = cs
             result = evaluate_posture(
                 cert=cert,
-                chain_status=cs_for_posture,
-                chain_incomplete=posture.get('chain_incomplete') if posture else False,
+                chain_status=cs,
+                chain_incomplete=bool(_posture.get('chain_incomplete')) if _posture else False,
             )
             posture_data = {
                 "grade": result.grade,

@@ -264,7 +264,8 @@ def build_compliance_report(
         if cid not in posture_data:
             continue
         p = posture_data[cid]
-        findings = p.get("findings", [])
+        _findings = p.get("findings")
+        findings = _findings if _findings is not None else []
 
         sha1_total += 1
         sha1_pass = not any(
@@ -324,9 +325,11 @@ def build_compliance_report(
             owner=r.get("owner_name", ""),
             tags=r.get("tags", ""),
         )
-        p = posture_data.get(cid)
-        if p:
-            findings = p.get("findings", [])
+        _p = posture_data.get(cid)
+        if _p:
+            p = _p
+            _findings = p.get("findings")
+            findings = _findings if _findings is not None else []
             entry.findings = [
                 f["message"] for f in findings if f.get("status") == "fail"
             ]

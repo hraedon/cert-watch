@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import typing
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -61,21 +62,21 @@ def _setup_logging(log_format: str = "text") -> None:
 
     class _JsonFormatter(logging.Formatter):
         def format(self, record: logging.LogRecord) -> str:
-            entry = {
+            _entry: dict[str, typing.Any] = {
                 "timestamp": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
                 "level": record.levelname,
                 "logger": record.name,
                 "message": record.getMessage(),
             }
             if record.exc_info and record.exc_info[1]:
-                entry["exception"] = self.formatException(record.exc_info)
+                _entry["exception"] = self.formatException(record.exc_info)
             extra = {
                 k: v for k, v in record.__dict__.items()
                 if k not in _LOG_RECORD_KEYS and k not in ("message", "asctime")
             }
             if extra:
-                entry["extra"] = extra
-            return _json.dumps(entry, default=str)
+                _entry["extra"] = extra
+            return str(_json.dumps(_entry, default=str))
 
     handler = logging.StreamHandler(sys.stdout)
     if log_format == "json":
@@ -268,7 +269,8 @@ async def lifespan(app: FastAPI):
         hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
         return run_scan_now(
             scan_fn=lambda host, port: scan_host(
-                host, port, verify=s.tls_verify, allow_private=s.allow_private,
+                host, port, verify=s.tls_verify, timeout=s.scan_timeout,
+                retries=s.scan_retries, allow_private=s.allow_private,
                 allowed_subnets=s.allowed_subnets,
                 dns_servers=s.dns_servers,
             ),
@@ -276,7 +278,7 @@ async def lifespan(app: FastAPI):
             db_path=s.db_path,
             host_provider=lambda: hosts,
             store_fn=lambda r: store_scanned(
-                r, s.db_path,
+                r, s.db_path,  # type: ignore[arg-type]
                 drift_alerts=s.drift_alerts,
                 check_revocation=s.check_revocation,
                 allow_private=s.allow_private,
