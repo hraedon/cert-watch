@@ -71,7 +71,7 @@
           <span class="cw-fz-13-5 cw-fw-600">Operational summary</span>
           <div class="cw-spacer"></div>
           {% if may_write and host_id %}
-          <button class="cw-btn ghost sm" type="button" data-action="toggle-owner">
+          <button class="cw-btn ghost sm" type="button" data-action="toggle-owner" data-testid="owner-edit-btn">
             {{ icons.svg_icon('key', 13) }}<span id="owner-btn-label">Edit</span>
           </button>
           {% endif %}
@@ -154,7 +154,7 @@
           </div>
           <div class="cw-flex cw-gap-8 cw-mt-10">
             <button class="cw-btn sm" type="button" data-action="toggle-owner">Cancel</button>
-            <button class="cw-btn primary sm" type="button" data-action="save-owner">Save</button>
+            <button class="cw-btn primary sm" type="button" data-action="save-owner" data-testid="owner-save-btn">Save</button>
           </div>
         </div>
         {% endif %}
