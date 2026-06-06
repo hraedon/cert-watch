@@ -558,16 +558,7 @@ async def require_write(request: Request) -> str:
     if auth is None or isinstance(auth, NoAuthProvider):
         return username
 
-    auth_ctx: AuthContext | None = getattr(request.state, 'auth_context', None)
-
-    # RBAC: when a role map is configured, AuthContext carries resolved
-    # permissions; otherwise fall back to legacy write_users/admin_users.
-    settings = getattr(request.app.state, 'settings', None)
-    role_map = getattr(settings, 'role_map', {}) if settings else {}
-    if role_map:
-        if auth_ctx is not None and not auth_ctx.may_write():
-            raise HTTPException(status_code=403, detail='read-only user')
-    elif not _may_write(request, username):
+    if _write_denied(request, username):
         raise HTTPException(status_code=403, detail='read-only user')
 
     csrf_err = await check_csrf(request)
@@ -594,6 +585,23 @@ def _may_write(request: Request, username: str) -> bool:
     return username in settings.admin_users
 
 
+def _write_denied(request: Request, username: str) -> bool:
+    """Return True if *username* must be denied write access.
+
+    Single source of truth for the write decision shared by ``require_write``
+    (API, raises) and ``require_write_form`` (HTML forms, redirects), so the
+    two paths cannot diverge. When a role map is configured (Plan 035 RBAC),
+    the request's AuthContext permissions decide; otherwise the legacy
+    write_users/admin_users lists apply.
+    """
+    settings = getattr(request.app.state, "settings", None)
+    role_map = getattr(settings, "role_map", {}) if settings else {}
+    if role_map:
+        auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+        return auth_ctx is not None and not auth_ctx.may_write()
+    return not _may_write(request, username)
+
+
 async def require_write_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: check write access + CSRF, return redirect on failure.
 
@@ -610,7 +618,7 @@ async def require_write_form(request: Request) -> RedirectResponse | None:
     user = request.scope.get("auth_user")
     if not user:
         return RedirectResponse(url="/login", status_code=303)
-    if not _may_write(request, user):
+    if _write_denied(request, user):
         return RedirectResponse(url="/?error=read-only%20user", status_code=303)
     csrf_err = await check_csrf(request)
     if csrf_err:
