@@ -348,3 +348,31 @@ def test_get_session_id_generated():
     req.scope = {}
     sid = mw.get_session_id(req)
     assert len(sid) == 32  # hex of 16 bytes
+
+
+# ---------- HSTS (BC-154) ----------
+
+
+def test_hsts_present_when_secure(reload_app, monkeypatch):
+    """HSTS header is set when CERT_WATCH_COOKIE_SECURE=1."""
+    app_mod = reload_app()
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_COOKIE_SECURE", True)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    hsts = r.headers.get("strict-transport-security", "")
+    assert hsts
+    assert "max-age=31536000" in hsts
+    assert "includeSubDomains" in hsts
+
+
+def test_hsts_absent_when_insecure(reload_app, monkeypatch):
+    """HSTS header is omitted when CERT_WATCH_COOKIE_SECURE=0."""
+    app_mod = reload_app()
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert "strict-transport-security" not in r.headers
