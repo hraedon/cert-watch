@@ -166,6 +166,13 @@ class TestEntrypointHostNormalization:
         _, kwargs = run.call_args
         assert kwargs["host"] == "127.0.0.1"
         assert kwargs["port"] == 12345
+        # main() writes CERT_WATCH_HOST to os.environ directly (BC-090).
+        # monkeypatch.delenv is a no-op when the var was absent, so the
+        # direct write isn't tracked for undo.  Clean up to prevent the
+        # loopback value from leaking into later tests (e.g. the BC-083
+        # compliance auth-gate test would see network_exposed=False →
+        # SERVE_OPEN → NoAuthProvider → 200 instead of 401).
+        os.environ.pop("CERT_WATCH_HOST", None)
 
     def test_host_arg_overrides_env(self, monkeypatch):
         """--host wins over a pre-set CERT_WATCH_HOST."""
