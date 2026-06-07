@@ -23,10 +23,12 @@ jobs:
 
   visual:
     runs-on: ubuntu-latest
-    # Non-blocking: headless font rendering can drift slightly across runner
-    # images, so a visual diff should flag a review (artifact below), not break
-    # the merge gate. Promote to required once the baselines prove stable in CI.
-    continue-on-error: true
+    # Required gate: the committed baselines have matched ubuntu-latest across
+    # multiple runs at the configured 0.2 threshold (v0.6.5 review), so a visual
+    # diff is a real regression signal, not runner noise. On a deliberate UI
+    # change, re-baseline with `pytest -m visual --update-snapshots` and commit.
+    # If a runner-image change ever causes drift, drop back to continue-on-error
+    # and re-baseline. Diffs are uploaded as an artifact below on failure.
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5

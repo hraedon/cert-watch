@@ -11,6 +11,11 @@
       <div class="cw-page-head-sub">Reconcile Certificate Transparency logs against your tracked inventory.</div>
     </div>
     <div class="cw-flex cw-items-center cw-gap-9">
+      {% if reconciling %}
+      <span class="cw-chip" data-testid="discover-reconciling">{{ icons.svg_icon('refresh', 12, 1.6) }}reconciling…</span>
+      {% elif reconciled_age is not none %}
+      <span class="cw-chip" title="Reconciliation refreshes in the background">updated {{ reconciled_age }}s ago</span>
+      {% endif %}
       <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}source · crt.sh</span>
     </div>
   </div>
@@ -34,15 +39,6 @@
       </div>
       <div class="cw-stat-val cw-stat-val-crit">{{ untracked | length }}</div>
       <div class="cw-stat-sub">inventory gaps to review</div>
-    </div>
-    <div class="cw-stat">
-      <div class="cw-stat-rail cw-stat-rail-warn"></div>
-      <div class="cw-stat-top cw-stat-top-warn">
-        {{ icons.svg_icon('alert', 15, 1.8) }}
-        <span class="cw-stat-label cw-stat-label-color">Mis-issuance</span>
-      </div>
-      <div class="cw-stat-val cw-stat-val-warn">{{ misissuance | length }}</div>
-      <div class="cw-stat-sub">unexpected issuers / SANs</div>
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
@@ -97,8 +93,6 @@
         <tr>
           <th style="padding-left:20px">Hostname</th>
           <th>Domain</th>
-          <th>Issuer</th>
-          <th>First seen in CT</th>
           <th style="width:120px"></th>
         </tr>
       </thead>
@@ -111,8 +105,6 @@
             </div>
           </td>
           <td class="mono cw-fz-12 cw-text-text-3">{{ u.domain }}</td>
-          <td class="cw-fz-12-5 cw-text-text-2">{{ u.issuer or '—' }}</td>
-          <td class="mono cw-fz-12 cw-text-text-3">{{ u.firstSeen or '—' }}</td>
           <td style="padding-right:20px">
             {% if may_write %}
             <a href="/?hostname={{ u.host | urlencode }}" class="cw-btn sm" title="Add this host">{{ icons.svg_icon('plus', 12, 2) }}Add host</a>
@@ -125,38 +117,21 @@
   </div>
   {% endif %}
 
-  {# ---- Mis-issuance watch ---- #}
-  {% if misissuance %}
-  <div class="cw-panel cw-p-15-18 cw-mb-18">
-    <div class="cw-flex cw-items-center cw-gap-9 cw-mb-4">
-      {{ icons.svg_icon('alert', 15) }}
-      <span class="cw-fz-14 cw-fw-600">Mis-issuance watch</span>
-      <span class="cw-fz-12 cw-text-text-3">informational — certificates for your domains from unexpected issuers</span>
-    </div>
-    <div class="cw-flex cw-flex-col cw-gap-10 cw-mt-13">
-      {% for m in misissuance %}
-      <div style="display:flex;gap:13px;padding:13px 15px;border-radius:10px;background:var(--warn-soft);border:1px solid color-mix(in srgb,var(--warn) 24%,transparent)">
-        {{ icons.svg_icon('globe', 16, 1.7) }}
-        <div style="flex:1;min-width:0">
-          <div class="cw-flex cw-items-center cw-gap-10 cw-wrap">
-            <span class="cw-host cw-fz-13-5">{{ m.cn }}</span>
-            <span class="cw-chip tone-warn">{{ icons.svg_icon('key', 10, 1.7) }}{{ m.issuer }}</span>
-          </div>
-          <div class="cw-fz-12-5 cw-text-text-2 cw-mt-7">{{ m.reason }}</div>
-        </div>
-      </div>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
-
   {# ---- Empty state ---- #}
-  {% if not untracked and not misissuance %}
-  <div class="cw-panel cw-empty-state">
-    <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ icons.svg_icon('check-circle', 24) }}</div>
-    <div class="cw-fz-15 cw-fw-600">No gaps found</div>
-    <div class="cw-fz-13 cw-text-text-3 cw-mt-5">All CT-observed hostnames are already tracked in your inventory.</div>
-  </div>
+  {% if not untracked %}
+    {% if not domains and reconciling %}
+    <div class="cw-panel cw-empty-state" data-testid="discover-pending">
+      <div class="cw-empty-icon-circle">{{ icons.svg_icon('refresh', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">Reconciliation in progress</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Querying Certificate Transparency logs in the background — refresh in a moment.</div>
+    </div>
+    {% else %}
+    <div class="cw-panel cw-empty-state">
+      <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ icons.svg_icon('check-circle', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">No gaps found</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">All CT-observed hostnames are already tracked in your inventory.</div>
+    </div>
+    {% endif %}
   {% endif %}
 
   <div class="cw-mt-14 cw-fz-12 cw-text-text-3 cw-flex cw-items-center cw-gap-8">
