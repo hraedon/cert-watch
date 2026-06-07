@@ -20,7 +20,13 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
-from cert_watch.scan import ScanError, ScannedEntry, scan_host_async, store_scanned_async
+from cert_watch.scan import (
+    ScanError,
+    ScannedEntry,
+    resolve_and_validate_host,
+    scan_host_async,
+    store_scanned_async,
+)
 from cert_watch.scheduler import ScanHistory, record_scan_history
 
 ScanResult = ScannedEntry | ScanError
@@ -36,65 +42,6 @@ router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
-
-
-def _is_blocked_host_check(
-    hostname: str,
-    *,
-    allow_private: bool = True,
-    allowed_subnets: tuple[str, ...] = (),
-    dns_servers: tuple[str, ...] = (),
-) -> tuple[str | None, str | None]:
-    """SSRF pre-check for the add-host form.
-
-    Returns (error_message_or_None, pinned_ip_or_None).
-    When no error is found the pinned_ip is the first allowed address
-    so the subsequent scan can connect to the same IP (prevents DNS rebinding).
-    """
-    import ipaddress
-
-    from cert_watch.scan import _PRIVATE_NETWORKS, _is_blocked_ip, resolve_hostname
-
-    infos = resolve_hostname(hostname, 0, dns_servers=dns_servers)
-    if not infos:
-        return None, None
-    pinned_ip = None
-    blocked_info = None
-    for _family, sockaddr in infos:
-        ip_str = sockaddr[0]
-        if ip_str is None:
-            continue
-        try:
-            ip = ipaddress.ip_address(ip_str)
-        except ValueError:
-            continue
-        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            check_ip = (
-                ip.ipv4_mapped if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped else ip
-            )
-            is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
-            blocked_info = (ip, is_private)
-            continue
-        pinned_ip = ip_str
-        break
-    if pinned_ip is None:
-        if blocked_info is not None:
-            ip, is_private = blocked_info
-            if is_private and allowed_subnets:
-                return (
-                    f"hostname resolves to private address {ip}, which is outside the "
-                    f"configured CERT_WATCH_ALLOWED_SUBNETS. Add its range to scan it.",
-                    None,
-                )
-            if is_private and not allow_private:
-                return (
-                    f"hostname resolves to blocked address {ip}. "
-                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs.",
-                    None,
-                )
-            return f"hostname resolves to blocked address {ip}", None
-        return None, None
-    return None, pinned_ip
 
 
 @router.post("/hosts")
@@ -123,7 +70,7 @@ async def add_host(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     s = _get_settings(request)
-    ssrf_err, pinned_ip = _is_blocked_host_check(
+    ssrf_err, pinned_ip = resolve_and_validate_host(
         hostname,
         allow_private=s.allow_private,
         allowed_subnets=s.allowed_subnets,
@@ -251,7 +198,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid threshold_days '{threshold_str}'")
                 continue
-        ssrf_err, row_pinned_ip = _is_blocked_host_check(
+        ssrf_err, row_pinned_ip = resolve_and_validate_host(
             hostname,
             allow_private=s.allow_private,
             allowed_subnets=s.allowed_subnets,

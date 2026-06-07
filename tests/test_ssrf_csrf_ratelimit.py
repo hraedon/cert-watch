@@ -128,7 +128,7 @@ def test_resolve_host_dns_failure(monkeypatch):
 # ── SSRF: app._is_blocked_host (UX pre-check) ──────────────────────────────
 
 def test_app_is_blocked_host_private(monkeypatch):
-    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
+    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("10.0.0.1", None)),
     ])
@@ -136,7 +136,7 @@ def test_app_is_blocked_host_private(monkeypatch):
 
 
 def test_app_is_blocked_host_public(monkeypatch):
-    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
+    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", None)),
     ])
@@ -144,7 +144,7 @@ def test_app_is_blocked_host_public(monkeypatch):
 
 
 def test_app_is_blocked_host_unresolvable(monkeypatch):
-    from cert_watch.routes.hosts import _is_blocked_host_check as _is_blocked_host
+    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
 
     def _raise(*a, **kw):
         raise socket.gaierror("nope")

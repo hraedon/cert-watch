@@ -211,6 +211,64 @@ def resolve_hostname(
     return [(f, s) for f, _t, _p, _c, s in infos]
 
 
+def resolve_and_validate_host(
+    hostname: str,
+    port: int = 443,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+    dns_servers: tuple[str, ...] = (),
+) -> tuple[str | None, str | None]:
+    """SSRF pre-check: resolve hostname and validate all returned IPs.
+
+    Returns (error_message_or_None, pinned_ip_or_None).  When no error is
+    found the pinned_ip is the first allowed address so the subsequent scan
+    can connect to the same IP (prevents DNS rebinding).
+    """
+    infos = resolve_hostname(hostname, port, dns_servers=dns_servers)
+    if not infos:
+        return None, None
+    pinned_ip = None
+    blocked_info = None
+    for _family, sockaddr in infos:
+        ip_str = sockaddr[0]
+        if ip_str is None:
+            continue
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            check_ip = (
+                ip.ipv4_mapped
+                if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
+                else ip
+            )
+            is_private = any(check_ip in net for net in _PRIVATE_NETWORKS)
+            blocked_info = (ip, is_private)
+            continue
+        pinned_ip = ip_str
+        break
+    if pinned_ip is None:
+        if blocked_info is not None:
+            ip, is_private = blocked_info
+            if is_private and allowed_subnets:
+                return (
+                    f"hostname resolves to private address {ip}, which is outside the "
+                    f"configured CERT_WATCH_ALLOWED_SUBNETS. Add its range to scan it.",
+                    None,
+                )
+            if is_private and not allow_private:
+                return (
+                    f"hostname resolves to blocked address {ip}. "
+                    f"Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs.",
+                    None,
+                )
+            return f"hostname resolves to blocked address {ip}", None
+        return None, None
+    return None, pinned_ip
+
+
 def _resolve_host(
     hostname: str, port: int, *, allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
@@ -224,15 +282,28 @@ def _resolve_host(
     infos = resolve_hostname(hostname, port, dns_servers=dns_servers)
     if not infos:
         raise OSError(f"DNS resolution failed for {hostname}")
+    err, pinned_ip = resolve_and_validate_host(
+        hostname,
+        port,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+        dns_servers=dns_servers,
+    )
+    if err:
+        raise OSError(err)
+    if pinned_ip:
+        for family, sockaddr in infos:
+            if sockaddr[0] == pinned_ip:
+                return family, sockaddr
+    # Fallback (should not normally reach here if resolve_and_validate_host succeeded)
     for family, sockaddr in infos:
         ip_str = sockaddr[0]
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             continue
-        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            continue
-        return family, sockaddr
+        if not _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return family, sockaddr
     raise OSError(f"hostname {hostname} resolves only to blocked addresses")
 
 

@@ -24,6 +24,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.7",
     "mypy>=1.13",
+    "djlint>=1.36",
 ]
 e2e = [
     "playwright>=1.49",
