@@ -14,6 +14,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
@@ -47,14 +48,27 @@ def _key(security: SecurityContext | None) -> str:
 
 
 def _encode_list(items: list[str] | None) -> str:
-    """Serialize a list of strings into a compact base64url-safe string."""
+    """Serialize a list of strings into a compact base64url-safe string.
+
+    Uses JSON (not a ``,``-join) so values that themselves contain commas —
+    notably LDAP/AD group DNs like ``CN=admins,OU=Groups,DC=…`` — survive the
+    round-trip intact. The old ``,``-join shredded each DN into RDN fragments,
+    which then failed RBAC role-map matching and silently downgraded the user to
+    viewer (BC-150). base64url output contains no ``:``, so the outer
+    ``username:version:…:groups:roles`` split stays unambiguous.
+    """
     if not items:
         return ""
-    return base64.urlsafe_b64encode(",".join(items).encode()).decode().rstrip("=")
+    raw = json.dumps(items, separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
 
 
 def _decode_list(encoded: str) -> list[str]:
-    """Deserialize a base64url-safe string back into a list of strings."""
+    """Deserialize a base64url string produced by :func:`_encode_list`.
+
+    Returns ``[]`` on anything malformed (incl. tokens in the pre-JSON format),
+    which fails closed — an unreadable group list resolves to no roles.
+    """
     if not encoded:
         return []
     # Restore padding
@@ -63,9 +77,10 @@ def _decode_list(encoded: str) -> list[str]:
         encoded += "=" * padding
     try:
         decoded = base64.urlsafe_b64decode(encoded).decode()
+        items = json.loads(decoded)
     except Exception:
         return []
-    return decoded.split(",") if decoded else []
+    return [str(x) for x in items] if isinstance(items, list) else []
 
 # Session cookie config
 SESSION_COOKIE = "cw_auth"

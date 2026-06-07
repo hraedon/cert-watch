@@ -29,9 +29,14 @@ from cert_watch.auth.session import create_session
 from cert_watch.security import SecurityContext
 
 _AUTH_SECRET = "e2e-rbac-pinned-secret-0123456789abcdef"
+# Use real comma-containing group DNs (not bare names) so this exercises the
+# session group encode/decode round-trip end-to-end — a ,-join encoding would
+# shred these and silently downgrade the admin to viewer (BC-150).
+_ADMIN_DN = "CN=cert-watch-admins,OU=Groups,DC=cw,DC=test"
+_VIEWER_DN = "CN=cert-watch-users,OU=Groups,DC=cw,DC=test"
 _ROLE_MAP = {
-    "admin": {"groups": ["cw-admins"]},
-    "viewer": {"groups": ["cw-viewers"]},
+    "admin": {"groups": [_ADMIN_DN]},
+    "viewer": {"groups": [_VIEWER_DN]},
 }
 _SEC = SecurityContext(signing_key=_AUTH_SECRET, csrf_secret="e2e-rbac-csrf")
 
@@ -95,7 +100,7 @@ def test_unauthenticated_redirects_to_login(page: Page, rbac_server: str) -> Non
 
 
 def test_admin_sees_write_controls(page: Page, rbac_server: str) -> None:
-    _login_as(page, rbac_server, groups=["cw-admins"])
+    _login_as(page, rbac_server, groups=[_ADMIN_DN])
     page.goto(rbac_server)
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     expect(page.get_by_test_id("add-host-btn")).to_be_visible()
@@ -103,7 +108,7 @@ def test_admin_sees_write_controls(page: Page, rbac_server: str) -> None:
 
 
 def test_viewer_gets_readonly_dashboard(page: Page, rbac_server: str) -> None:
-    _login_as(page, rbac_server, groups=["cw-viewers"])
+    _login_as(page, rbac_server, groups=[_VIEWER_DN])
     page.goto(rbac_server)
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # The viewer must NOT see the Add-host control, and must see the notice.
@@ -113,7 +118,7 @@ def test_viewer_gets_readonly_dashboard(page: Page, rbac_server: str) -> None:
 
 def test_viewer_write_route_forbidden(page: Page, rbac_server: str) -> None:
     """A viewer's write request to the API is rejected by RBAC (BC-145)."""
-    _login_as(page, rbac_server, groups=["cw-viewers"])
+    _login_as(page, rbac_server, groups=[_VIEWER_DN])
     # A JSON-API write must be denied for a viewer role (403), proving the
     # gating is enforced server-side, not just hidden in the UI.
     resp = page.request.patch(
