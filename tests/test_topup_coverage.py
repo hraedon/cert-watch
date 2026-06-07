@@ -78,8 +78,15 @@ def test_config_build_webhook_config_none(monkeypatch, tmp_path):
 
 
 def test_config_build_webhook_config(monkeypatch, tmp_path):
+    import socket
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.example.com/test")
+    original_getaddrinfo = socket.getaddrinfo
+    def mock_getaddrinfo(host, port, *args, **kwargs):
+        if host == "hooks.example.com":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+    monkeypatch.setattr(socket, "getaddrinfo", mock_getaddrinfo)
     from cert_watch.config import Settings
 
     s = Settings.from_env()

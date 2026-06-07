@@ -298,6 +298,16 @@ def test_webhook_url_validate_allows_public_hostname(monkeypatch):
     assert error is None
 
 
+def test_build_webhook_config_skips_invalid_env_url(monkeypatch, tmp_path):
+    """build_webhook_config rejects an env-configured webhook URL that fails SSRF validation."""
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "http://127.0.0.1:8080/webhook")
+    from cert_watch.config import Settings
+
+    s = Settings.from_env()
+    assert s.build_webhook_config() is None
+
+
 # ---------- 8. BC-117 OCSP/CRL SSRF blocked path ----------
 
 

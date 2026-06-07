@@ -441,10 +441,25 @@ class Settings:
         )
 
     def build_webhook_config(self):
-        """Return a WebhookConfig if webhook URL is set, else None."""
+        """Return a WebhookConfig if webhook URL is set, else None.
+
+        Validates the URL against the same SSRF blocklist used by the GUI
+        path (BC-116), so env-configured webhooks are not silently unsafe.
+        """
         from cert_watch.alerts import WebhookConfig
+        from cert_watch.http_client import validate_webhook_url
 
         if not self.webhook_url:
+            return None
+        err = validate_webhook_url(
+            self.webhook_url,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
+        )
+        if err:
+            logger.warning(
+                "ALERT_WEBHOOK_URL is invalid and will be skipped: %s", err,
+            )
             return None
         return WebhookConfig(
             url=self.webhook_url,
