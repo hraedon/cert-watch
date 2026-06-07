@@ -140,32 +140,28 @@ class TestMutationVerify:
                 use_ssl=True,
             )
 
-    @pytest.mark.xfail(
-        reason="BC-149: invalid mutation — _resolve_ca_cert early-returns for "
-        "inline/multiline PEM before reaching Path.is_file, so monkeypatching "
-        "is_file no longer breaks auth. Test needs a mutation point on the "
-        "inline-PEM path; rewrite when the Samba container is available locally.",
-        strict=False,
-    )
     def test_bug2_inline_pem_path_is_file_caught(self, samba_ad, monkeypatch):
-        """Bug #2: ``Path.is_file()`` raises ``OSError(ENAMETOOLONG)`` on PEM.
+        """Bug #1 (BC-149): inline-PEM CA must not be stat-ed as a file path.
 
-        The old code called ``Path(ca_cert).is_file()`` on inline PEM, which
-        raised ``OSError(63)`` instead of returning ``False``.  ``MagicMock``
-        never raised.
+        The bug lived in **TLS construction** for ``ldaps://``: the pre-fix code
+        called ``Path(ca_cert).is_file()`` on inline PEM, and
+        ``Path(<multi-KB PEM>).is_file()`` raises ``OSError(ENAMETOOLONG)``
+        (verified errno 36) rather than returning ``False`` — breaking every
+        private-CA LDAPS login. It is **only** reachable on the ldaps/start_tls
+        branch of ``_build_tls`` (plain ``ldap://`` never touches ``ca_cert``),
+        and a full ``authenticate()`` can't distinguish the fix from the bug here
+        because this container's throwaway CA never matches Samba's own LDAPS
+        cert (both paths fail the handshake). So assert at the TLS-construction
+        boundary, over ``ldaps://``.
 
-        Mutation: monkeypatch ``Path.is_file`` to raise ``OSError``.
-        The provider authenticate *must* fail.
+        The earlier version drove plaintext ``ldap://`` and monkeypatched
+        ``Path.is_file`` — neither is on the CA-resolution path, so the mutation
+        never bit (BC-149).
         """
-        import pathlib
-
-        def _raise_enametoolong(self_path):
-            raise OSError(63, "File name too long")
-
-        monkeypatch.setattr(pathlib.Path, "is_file", _raise_enametoolong)
+        from pathlib import Path
 
         provider = LDAPAuthProvider(
-            server_url=samba_ad.ldap_uri,
+            server_url=samba_ad.ldaps_uri,
             base_dn=samba_ad.base_dn,
             bind_dn=samba_ad.bind_dn,
             bind_password=samba_ad.admin_password,
@@ -173,8 +169,23 @@ class TestMutationVerify:
             ca_cert=samba_ad.ca_cert_pem,
             required_groups=[],
         )
-        result = provider.authenticate("cw-admin", "Test1234!")
-        assert not result.success, "Bug #2 mutation passed — integration tier is theater"
+
+        # Baseline: the guard treats inline PEM as data (not a path), so TLS for
+        # the ldaps:// server builds cleanly — no stat, no raise.
+        assert provider._resolve_ca_cert() is None
+        tls, servers = provider._build_tls()
+        assert tls is not None and servers
+
+        # Mutation: reintroduce the pre-fix behavior — stat the inline PEM as a
+        # filesystem path. is_file() raises ENAMETOOLONG, which breaks TLS
+        # construction (and, in production, surfaced as "authentication failed").
+        def _unguarded_resolve(self):
+            p = Path(self.ca_cert)
+            return p if p.is_file() else None
+
+        monkeypatch.setattr(LDAPAuthProvider, "_resolve_ca_cert", _unguarded_resolve)
+        with pytest.raises(OSError, match="too long"):
+            provider._build_tls()
 
     def test_bug3_comma_split_on_required_groups_caught(self, samba_ad, monkeypatch, tmp_path):
         """Bug #3: ``LDAP_REQUIRED_GROUPS`` split on ``,`` shreds DNs.
