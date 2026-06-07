@@ -9,6 +9,7 @@ from cert_watch.scan import (
     _friendly_scan_error,
     _resolve_host,
     _scan_via_openssl,
+    resolve_and_validate_host,
     scan_host,
     store_scanned,
 )
@@ -430,3 +431,97 @@ def test_resolve_host_dns_failure(monkeypatch):
     )
     with pytest.raises(OSError, match="DNS resolution failed"):
         _resolve_host("nonexistent.invalid", 443)
+
+
+# ---------- resolve_and_validate_host coverage (BC-095 SSRF pre-check) ----------
+
+
+def test_validate_host_no_dns_returns_none(monkeypatch):
+    """Empty DNS result is a soft pass: (None, None), no pinned IP."""
+    monkeypatch.setattr("cert_watch.scan.resolve_hostname", lambda *a, **kw: [])
+    assert resolve_and_validate_host("nothing.invalid", 443) == (None, None)
+
+
+def test_validate_host_all_unparseable_returns_none(monkeypatch):
+    """When every entry is unparseable, validation soft-passes (None, None)."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("not-an-ip", 443))],
+    )
+    assert resolve_and_validate_host("garbage.invalid", 443) == (None, None)
+
+
+def test_resolve_host_fallback_raises_when_no_usable_ip(monkeypatch):
+    """If validation soft-passes but no IP is usable, _resolve_host raises."""
+    import pytest
+
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("not-an-ip", 443))],
+    )
+    with pytest.raises(OSError, match="blocked addresses"):
+        _resolve_host("garbage.invalid", 443)
+
+
+def test_validate_host_returns_pinned_ip_for_allowed(monkeypatch):
+    """First allowed public address is pinned to prevent DNS rebinding."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("93.184.216.34", 443))],
+    )
+    err, pinned = resolve_and_validate_host("example.com", 443)
+    assert err is None
+    assert pinned == "93.184.216.34"
+
+
+def test_validate_host_skips_none_and_bad_ip_then_pins(monkeypatch):
+    """A None sockaddr and an unparseable IP are skipped before the good one."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [
+            (2, (None, 443)),
+            (2, ("not-an-ip", 443)),
+            (2, ("93.184.216.34", 443)),
+        ],
+    )
+    err, pinned = resolve_and_validate_host("example.com", 443)
+    assert err is None
+    assert pinned == "93.184.216.34"
+
+
+def test_validate_host_private_blocked_when_disallowed(monkeypatch):
+    """Private IP with allow_private=False yields the ALLOW_PRIVATE_IPS hint."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("10.0.0.5", 443))],
+    )
+    err, pinned = resolve_and_validate_host("internal.example.com", 443, allow_private=False)
+    assert pinned is None
+    assert "CERT_WATCH_ALLOW_PRIVATE_IPS" in err
+
+
+def test_validate_host_private_outside_allowed_subnets(monkeypatch):
+    """Private IP outside configured allowed subnets points at the subnet config."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("10.0.0.5", 443))],
+    )
+    err, pinned = resolve_and_validate_host(
+        "internal.example.com",
+        443,
+        allow_private=False,
+        allowed_subnets=("192.168.0.0/16",),
+    )
+    assert pinned is None
+    assert "CERT_WATCH_ALLOWED_SUBNETS" in err
+
+
+def test_validate_host_public_blocked_address(monkeypatch):
+    """A non-private blocked address (loopback) yields a plain blocked message."""
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("127.0.0.1", 443))],
+    )
+    err, pinned = resolve_and_validate_host("loopback.example.com", 443, allow_private=False)
+    assert pinned is None
+    assert "blocked address" in err
