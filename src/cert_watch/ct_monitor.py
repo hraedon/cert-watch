@@ -10,6 +10,7 @@ CT log hostnames against tracked hosts to surface coverage gaps.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,65 @@ logger = logging.getLogger("cert_watch.ct_monitor")
 # Short-TTL cache for CT reconciliation results (BC-029 H)
 _CT_RECON_CACHE: dict[str, tuple[float, ReconciliationResult]] = {}
 _CT_RECON_CACHE_TTL = 300  # 5 minutes
+
+# Background-refresh bookkeeping (BC-097): the Discover page must never block on
+# live crt.sh calls in the request path, so stale/missing domains are warmed off
+# the request thread.
+_CT_REFRESH_LOCK = threading.Lock()
+_CT_REFRESH_INFLIGHT: set[str] = set()
+
+
+def peek_reconciliation(
+    db_path: str | Path, domain: str
+) -> tuple[ReconciliationResult | None, float | None]:
+    """Return ``(cached result | None, age_seconds | None)`` doing **no** I/O.
+
+    Used by the Discover page to render from cache without ever calling crt.sh in
+    the request path (BC-097). Returns the cached result regardless of TTL so a
+    stale-but-usable view renders instantly while a refresh runs in the
+    background.
+    """
+    cached = _CT_RECON_CACHE.get(f"{db_path}:{domain}")
+    if cached is None:
+        return None, None
+    return cached[1], time.monotonic() - cached[0]
+
+
+def _refresh_worker(db_path: str | Path, domains: list[str]) -> None:
+    for d in domains:
+        try:
+            ct_reconciliation(db_path, d)  # populates _CT_RECON_CACHE
+        except Exception:
+            logger.warning("CT reconciliation refresh failed for %s", d, exc_info=True)
+        finally:
+            with _CT_REFRESH_LOCK:
+                _CT_REFRESH_INFLIGHT.discard(f"{db_path}:{d}")
+
+
+def start_reconciliation_refresh(db_path: str | Path, domains: list[str]) -> bool:
+    """Warm the reconciliation cache for stale/missing *domains* off-thread.
+
+    Idempotent: a domain already fresh, or already being refreshed, is skipped.
+    Returns ``True`` if any refresh is in flight (so the caller can show a
+    "reconciling…" indicator). Never blocks on network I/O.
+    """
+    now = time.monotonic()
+    to_start: list[str] = []
+    with _CT_REFRESH_LOCK:
+        for d in domains:
+            key = f"{db_path}:{d}"
+            cached = _CT_RECON_CACHE.get(key)
+            fresh = cached is not None and (now - cached[0]) < _CT_RECON_CACHE_TTL
+            if fresh or key in _CT_REFRESH_INFLIGHT:
+                continue
+            _CT_REFRESH_INFLIGHT.add(key)
+            to_start.append(d)
+        any_inflight = bool(_CT_REFRESH_INFLIGHT)
+    if to_start:
+        threading.Thread(
+            target=_refresh_worker, args=(db_path, to_start), daemon=True
+        ).start()
+    return any_inflight
 
 
 @dataclass

@@ -11,6 +11,11 @@
       <div class="cw-page-head-sub">Reconcile Certificate Transparency logs against your tracked inventory.</div>
     </div>
     <div class="cw-flex cw-items-center cw-gap-9">
+      {% if reconciling %}
+      <span class="cw-chip" data-testid="discover-reconciling">{{ icons.svg_icon('refresh', 12, 1.6) }}reconciling…</span>
+      {% elif reconciled_age is not none %}
+      <span class="cw-chip" title="Reconciliation refreshes in the background">updated {{ reconciled_age }}s ago</span>
+      {% endif %}
       <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}source · crt.sh</span>
     </div>
   </div>
@@ -114,11 +119,19 @@
 
   {# ---- Empty state ---- #}
   {% if not untracked %}
-  <div class="cw-panel cw-empty-state">
-    <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ icons.svg_icon('check-circle', 24) }}</div>
-    <div class="cw-fz-15 cw-fw-600">No gaps found</div>
-    <div class="cw-fz-13 cw-text-text-3 cw-mt-5">All CT-observed hostnames are already tracked in your inventory.</div>
-  </div>
+    {% if not domains and reconciling %}
+    <div class="cw-panel cw-empty-state" data-testid="discover-pending">
+      <div class="cw-empty-icon-circle">{{ icons.svg_icon('refresh', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">Reconciliation in progress</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">Querying Certificate Transparency logs in the background — refresh in a moment.</div>
+    </div>
+    {% else %}
+    <div class="cw-panel cw-empty-state">
+      <div class="cw-empty-icon-circle cw-empty-icon-ok">{{ icons.svg_icon('check-circle', 24) }}</div>
+      <div class="cw-fz-15 cw-fw-600">No gaps found</div>
+      <div class="cw-fz-13 cw-text-text-3 cw-mt-5">All CT-observed hostnames are already tracked in your inventory.</div>
+    </div>
+    {% endif %}
   {% endif %}
 
   <div class="cw-mt-14 cw-fz-12 cw-text-text-3 cw-flex cw-items-center cw-gap-8">
