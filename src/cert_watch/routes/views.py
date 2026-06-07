@@ -588,13 +588,16 @@ def insights_view(
 @router.get("/discover", response_class=HTMLResponse)
 def discover_view(request: Request) -> HTMLResponse:
     db = _db_path(request)
-    from cert_watch.ct_monitor import ct_reconciliation as ct_recon
+    # BC-097: never call crt.sh in the request path. Read the reconciliation
+    # cache (no I/O) and warm stale/missing domains in a background thread.
+    from cert_watch.ct_monitor import peek_reconciliation, start_reconciliation_refresh
 
     domains_data = []
     tracked_count = 0
     ct_total = 0
     untracked_all: list[dict] = []
     private_count = 0
+    reconciled_age: float | None = None
 
     # Count private-CA hosts
     with _connect(db) as conn:
@@ -622,9 +625,12 @@ def discover_view(request: Request) -> HTMLResponse:
         if len(parts) >= 2:
             base_domains.add(".".join(parts[-2:]))
 
-    for domain in sorted(base_domains):
-        result = ct_recon(db, domain)
-        if result.error:
+    sorted_domains = sorted(base_domains)
+    for domain in sorted_domains:
+        result, age = peek_reconciliation(db, domain)
+        if age is not None:
+            reconciled_age = age if reconciled_age is None else max(reconciled_age, age)
+        if result is None or result.error:
             continue
         domains_data.append({
             "domain": domain,
@@ -639,6 +645,9 @@ def discover_view(request: Request) -> HTMLResponse:
                 "domain": domain,
             })
 
+    # Kick off (or note) a background refresh for any stale/missing domains.
+    # Idempotent and non-blocking; the next page load shows fresh results.
+    reconciling = start_reconciliation_refresh(db, sorted_domains)
     coverage = round(tracked_count / ct_total * 100) if ct_total > 0 else 0
 
     return templates.TemplateResponse(
@@ -654,6 +663,8 @@ def discover_view(request: Request) -> HTMLResponse:
             "total_tracked": tracked_count,
             "untracked": untracked_all,
             "private_count": private_count,
+            "reconciling": reconciling,
+            "reconciled_age": int(reconciled_age) if reconciled_age is not None else None,
         },
     )
 
