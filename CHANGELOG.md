@@ -2,6 +2,37 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.6.5] — 2026-06-07
+
+Truth-in-advertising hardening pass: fix a silently-inert RBAC path for AD,
+remove misleading UI surfaces, and close performance / CI hygiene gaps.
+
+### Fixed
+- **BC-150 — RBAC group-DN shredding for LDAP/AD (security).** The session token
+  used comma-join encoding for group lists, which shredded every Active Directory
+  group DN (commas are separators) into fragments. The result: every AD user
+  fell back to `viewer` regardless of `CERT_WATCH_ROLE_MAP`. Encoding is now
+  lossless base64url(JSON). RBAC gating now works correctly for AD group DNs.
+  Regression test: `tests/test_session_groups.py`.
+
+### Changed
+- **Discover honesty (BC-099 / BC-129).** The Discover page no longer shows the
+  always-empty "Mis-issuance" stat or the blank Issuer / first-seen columns.
+  CT mis-issuance detection and per-issuer first-seen are deferred to 1.1
+  (BC-151).
+- **Discover performance (BC-097).** The Discover view no longer blocks on live
+  crt.sh calls; it renders from the reconciliation cache and warms stale data
+  off-thread.
+- **Compliance report performance (BC-120 / BC-122).** Replaced the unbounded
+  `list_dashboard_rows` load with a dedicated, bounded SQL query that only
+  fetches leaf certificates and applies tag filtering at the database. Removes
+  the N+1 posture lookup and the memory overhead of materialising full chain
+  children + anchor rows.
+- **CI / release hygiene (BC-152 / BC-153).** Bumped `astral-sh/setup-uv`,
+  `actions/upload-artifact`, and `actions/download-artifact` to Node-24-capable
+  pins (GitHub removes Node-20 on 2026-06-16). Added `pip-audit` of the e2e
+  extra dependency closure.
+
 ## [0.6.0] — 2026-06-06
 
 Locks down role-based access control and machine-to-machine automation, proven
