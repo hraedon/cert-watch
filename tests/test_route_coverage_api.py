@@ -850,7 +850,7 @@ def test_add_host_blocked_by_ssrf(reload_app, tmp_path, monkeypatch):
     def fake_check(hostname, **kw):
         return "hostname resolves to blocked address 127.0.0.1", None
 
-    monkeypatch.setattr("cert_watch.routes.hosts._is_blocked_host_check", fake_check)
+    monkeypatch.setattr("cert_watch.routes.hosts.resolve_and_validate_host", fake_check)
     with TestClient(app_mod.app) as client:
         r = client.post("/hosts", data={"hostname": "blocked.example.com"}, follow_redirects=False)
     assert r.status_code == 303

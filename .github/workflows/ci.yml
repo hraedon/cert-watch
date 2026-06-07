@@ -31,6 +31,13 @@ jobs:
         # Gated now that the tree is at zero errors (BC-093 / BC-146). Config
         # lives in [tool.mypy] in pyproject.toml.
         run: .venv/bin/mypy src/cert_watch
+      - name: djlint
+        # Template linting (BC-143).  Ignore style conventions that are
+        # intentional in this project (inline styles, hardcoded URLs, bare
+        # endblocks, entity references, spaceless tags inside attributes).
+        run: |
+          .venv/bin/djlint src/cert_watch/templates/ --lint \
+            --ignore=T003,J004,J018,T028,H021,H023,H030,H031
       - name: pytest
         # COVERAGE_CORE=sysmon uses the faster sys.monitoring coverage core
         # (Python 3.12+). Parallelism (`-n auto`) comes from addopts in pyproject.
