@@ -594,7 +594,6 @@ def discover_view(request: Request) -> HTMLResponse:
     tracked_count = 0
     ct_total = 0
     untracked_all: list[dict] = []
-    misissuance_all: list[dict] = []
     private_count = 0
 
     # Count private-CA hosts
@@ -638,8 +637,6 @@ def discover_view(request: Request) -> HTMLResponse:
             untracked_all.append({
                 "host": h,
                 "domain": domain,
-                "issuer": "",
-                "firstSeen": "",
             })
 
     coverage = round(tracked_count / ct_total * 100) if ct_total > 0 else 0
@@ -656,7 +653,6 @@ def discover_view(request: Request) -> HTMLResponse:
             "total_ct": ct_total,
             "total_tracked": tracked_count,
             "untracked": untracked_all,
-            "misissuance": misissuance_all,
             "private_count": private_count,
         },
     )
