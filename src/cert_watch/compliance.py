@@ -198,6 +198,81 @@ def verify_report_signature(
     return True, "PASS"
 
 
+def _load_compliance_rows(
+    db_path: str | Path,
+    *,
+    scope_tag: str = "",
+) -> list[dict]:
+    """Fetch minimal leaf-certificate rows for compliance reporting.
+
+    Replaces ``list_dashboard_rows`` for the compliance path so the report
+    builder does not materialise full chain children, anchor rows, and
+    dashboard metadata (BC-122).  SQL-level tag filtering keeps the candidate
+    set tight when ``scope_tag`` is set.
+    """
+    from cert_watch.database import init_schema
+    from cert_watch.database.connection import _connect, _parse_iso
+
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        sql = """
+            SELECT
+                c.id,
+                c.subject,
+                c.issuer,
+                c.not_before,
+                c.not_after,
+                c.hostname,
+                c.port,
+                c.tags,
+                c.source,
+                COALESCE(h.owner_name, '') AS owner_name
+            FROM certificates c
+            LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
+            WHERE c.is_leaf = 1
+        """
+        params: list = []
+        if scope_tag:
+            # Tags are stored as comma-separated strings.  The pattern
+            # ,{tag}, inside ,{column}, reliably matches exact tags
+            # regardless of position (first, last, middle, or only).
+            sql += " AND (',' || c.tags || ',') LIKE ?"
+            params.append(f"%,{scope_tag},%")
+        rows = conn.execute(sql, params).fetchall()
+
+    result: list[dict] = []
+    now = datetime.now(UTC)
+    for r in rows:
+        d = dict(r)
+        days = (_parse_iso(d["not_after"]) - now).days
+        host = f"{d['hostname']}:{d['port']}" if d["hostname"] else f"(uploaded:{d['source']})"
+        urgency = (
+            "expired"
+            if days < 0
+            else "critical"
+            if days < 7
+            else "warning"
+            if days < 30
+            else "healthy"
+        )
+        result.append(
+            {
+                "id": d["id"],
+                "host": host,
+                "source": d["source"],
+                "subject": d["subject"],
+                "issuer": d["issuer"],
+                "not_before": d["not_before"],
+                "not_after": d["not_after"],
+                "days_remaining": days,
+                "urgency": urgency,
+                "owner_name": d["owner_name"],
+                "tags": d["tags"],
+            }
+        )
+    return result
+
+
 def build_compliance_report(
     db_path: str | Path,
     *,
@@ -210,18 +285,11 @@ def build_compliance_report(
         get_posture_for_certs,
         get_posture_grades_for_certs,
         init_schema,
-        list_dashboard_rows,
     )
     from cert_watch.posture import tls_version_meets_1_2
 
     init_schema(db_path)
-    rows = list_dashboard_rows(db_path)
-
-    if scope_tag:
-        rows = [
-            r for r in rows
-            if scope_tag in [t.strip() for t in (r.get("tags") or "").split(",") if t.strip()]
-        ]
+    rows = _load_compliance_rows(db_path, scope_tag=scope_tag)
 
     total_certs = len(rows)
     host_set: set[str] = set()

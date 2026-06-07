@@ -562,6 +562,26 @@ See [`docs/positioning.md`](docs/positioning.md) for the full landscape table,
 an honest account of where the alternatives are better, and how this shapes the
 roadmap.
 
+## Known limitations / Non-goals
+
+These boundaries are deliberate and documented so they don't look like bugs.
+
+- **Single-writer SQLite** — the database is a single SQLite file. The k8s
+  deployment uses a `Recreate` rollout strategy; do not scale to multiple
+  writers. Postgres is on the roadmap (1.x) but not here.
+- **CAA not stored per scan** — the compliance report shows CAA as
+  "Not collected" because CAA lookup is an on-demand endpoint, not a scan
+  field. Per-scan CAA storage is planned for 1.1 (BC-121).
+- **CT mis-issuance / first-seen** — the Discover page reconciles CT coverage
+  but does not yet detect mis-issued certificates or show per-issuer first-seen
+  dates. Planned for 1.1 (BC-151).
+- **HTTP client SSRF guard** — `http_client.ssrf_safe_urlopen` validates the
+  initial URL and every redirect hop, but `urllib` may re-resolve the hostname
+  on connect. This is a large improvement over unvalidated `urlopen`, not a
+  pinned-IP guarantee (documented in the module docstring).
+- **No native PDF export** — compliance reports are HTML (print-to-PDF) or
+  signed JSON/CSV. A native PDF renderer is a future optional extra.
+
 ## License
 
 MIT

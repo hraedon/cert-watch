@@ -9,10 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: "3.13"
       - run: uv pip install -e ".[dev,e2e]"
+      - name: pip-audit (e2e deps)
+        run: |
+          # Lightweight audit of the e2e extra dependency closure (BC-153).
+          uv pip freeze | grep -v 'cert-watch' > /tmp/audit-e2e.txt
+          uv pip install pip-audit
+          .venv/bin/pip-audit --strict --requirement /tmp/audit-e2e.txt
       - name: Install Playwright browsers + OS deps
         run: .venv/bin/playwright install --with-deps chromium
       - name: Run functional E2E tests
@@ -31,7 +37,7 @@ jobs:
     # and re-baseline. Diffs are uploaded as an artifact below on failure.
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: "3.13"
       - run: uv pip install -e ".[dev,e2e]"
@@ -41,7 +47,7 @@ jobs:
         run: .venv/bin/pytest -m visual tests/e2e -q --no-cov -n0
       - name: Upload visual diffs on mismatch
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: visual-snapshot-diffs
           path: snapshot_failures/**
