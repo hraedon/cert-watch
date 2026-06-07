@@ -576,6 +576,10 @@ async def security_headers_middleware(request: Request, call_next):
         "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
     )
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+    if _COOKIE_SECURE:
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains"
+        )
     return response
 
 

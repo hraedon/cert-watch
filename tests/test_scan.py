@@ -1,10 +1,14 @@
-from unittest.mock import MagicMock
+import subprocess
+from unittest.mock import MagicMock, patch
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import SqliteCertificateRepository
 from cert_watch.scan import (
     ScanError,
     ScannedEntry,
+    _friendly_scan_error,
+    _resolve_host,
+    _scan_via_openssl,
     scan_host,
     store_scanned,
 )
@@ -186,3 +190,243 @@ def test_store_scanned_with_repo(tmp_path, self_signed_leaf):
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
     leaf_id = store_scanned(entry, repo)
     assert leaf_id
+
+
+# ---------- _scan_via_openssl internal branch coverage (BC-155) ----------
+
+
+def _pem_block(der: bytes) -> bytes:
+    """Wrap DER bytes in a PEM certificate block."""
+    import base64
+
+    b64 = base64.b64encode(der).decode("ascii")
+    return (
+        b"-----BEGIN CERTIFICATE-----\n"
+        + b64.encode("ascii")
+        + b"\n-----END CERTIFICATE-----\n"
+    )
+
+
+def test_openssl_dns_resolution_failure(monkeypatch):
+    """OSError during DNS resolution returns empty chain."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("DNS failed")),
+    )
+    chain, proto = _scan_via_openssl("nonexistent.invalid", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_blocked_pinned_ip(monkeypatch):
+    """A pinned loopback IP is blocked, returns empty chain."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("should not resolve")),
+    )
+    chain, proto = _scan_via_openssl(
+        "example.com", 443, timeout=1, pinned_ip="127.0.0.1"
+    )
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_hostname_injection_blocked(monkeypatch):
+    """Hostname starting with '-' is rejected to prevent argument injection."""
+    chain, proto = _scan_via_openssl("-malicious", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_timeout_expired(monkeypatch, self_signed_leaf):
+    """subprocess.TimeoutExpired returns empty chain."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    mock_proc = MagicMock()
+    mock_proc.configure_mock(
+        returncode=1,
+        stdout=b"",
+        stderr=b"timeout",
+    )
+    with patch("cert_watch.scan.subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["openssl"], timeout=1)
+        chain, proto = _scan_via_openssl("slow.example.com", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_file_not_found(monkeypatch):
+    """FileNotFoundError (no openssl binary) returns empty chain."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    with patch("cert_watch.scan.subprocess.run") as mock_run:
+        mock_run.side_effect = FileNotFoundError("no openssl")
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_nonzero_return(monkeypatch):
+    """Non-zero, non-one return code returns empty chain."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    mock_proc = MagicMock()
+    mock_proc.returncode = 2
+    mock_proc.stdout = b""
+    mock_proc.stderr = b"some error"
+    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+def test_openssl_no_pem_in_output(monkeypatch):
+    """Output with no PEM blocks returns empty chain (protocol still extracted)."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = b"Protocol  : TLSv1.3\nNo certs here\n"
+    mock_proc.stderr = b""
+    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert chain == []
+    assert proto == "TLSv1.3"
+
+
+def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
+    """Invalid base64 in a PEM block is skipped gracefully."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    valid_pem = _pem_block(self_signed_leaf.der)
+    invalid_pem = (
+        b"-----BEGIN CERTIFICATE-----\n"
+        b"!!!not-base64!!!"
+        b"\n-----END CERTIFICATE-----\n"
+    )
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = valid_pem + invalid_pem
+    mock_proc.stderr = b""
+    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert len(chain) == 1
+    assert chain[0] == self_signed_leaf.der
+
+
+def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
+    """Full success path: chain + protocol version extracted."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    combined = _pem_block(chain_triplet["leaf"].der) + _pem_block(
+        chain_triplet["intermediate"].der
+    )
+    mock_proc = MagicMock()
+    mock_proc.returncode = 1
+    mock_proc.stdout = b"Protocol  : TLSv1.2\n" + combined
+    mock_proc.stderr = b"verify error"
+    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert len(chain) == 2
+    assert chain[0] == chain_triplet["leaf"].der
+    assert chain[1] == chain_triplet["intermediate"].der
+    assert proto == "TLSv1.2"
+
+
+def test_openssl_oserror_during_run(monkeypatch):
+    """OSError during subprocess.run (e.g., permission denied) returns empty."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    with patch("cert_watch.scan.subprocess.run") as mock_run:
+        mock_run.side_effect = OSError("permission denied")
+        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+    assert chain == []
+    assert proto == ""
+
+
+# ---------- _friendly_scan_error coverage ----------
+
+
+def test_friendly_error_connection_refused():
+    err = _friendly_scan_error(ConnectionRefusedError("Connection refused"))
+    assert "Connection refused" in err
+
+
+def test_friendly_error_timeout():
+    err = _friendly_scan_error(TimeoutError("timed out"))
+    assert "timed out" in err
+
+
+def test_friendly_error_dns_failure():
+    err = _friendly_scan_error(OSError("Name or service not known"))
+    assert "resolve hostname" in err
+
+
+def test_friendly_error_blocked_address():
+    err = _friendly_scan_error(OSError("pinned IP 127.0.0.1 is a blocked address"))
+    assert "blocked address" in err
+
+
+def test_friendly_error_network_unreachable():
+    err = _friendly_scan_error(OSError("Network is unreachable"))
+    assert "Network unreachable" in err
+
+
+def test_friendly_error_generic_oserror():
+    err = _friendly_scan_error(OSError("some weird error"))
+    assert "Connection failed" in err
+
+
+def test_friendly_error_errno_refused(monkeypatch):
+    import errno
+
+    exc = OSError("connection error")
+    exc.errno = errno.ECONNREFUSED
+    err = _friendly_scan_error(exc)
+    assert "Connection refused" in err
+
+
+def test_friendly_error_unknown_exception():
+    err = _friendly_scan_error(ValueError("bad value"))
+    assert "bad value" in err
+
+
+# ---------- _resolve_host coverage ----------
+
+
+def test_resolve_host_all_blocked(monkeypatch):
+    """When every resolved IP is blocked, OSError is raised."""
+    import pytest
+
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [(2, ("127.0.0.1", 443))],
+    )
+    with pytest.raises(OSError, match="blocked"):
+        _resolve_host("loopback.example.com", 443)
+
+
+def test_resolve_host_dns_failure(monkeypatch):
+    """When DNS returns no results, OSError is raised."""
+    import pytest
+
+    monkeypatch.setattr(
+        "cert_watch.scan.resolve_hostname",
+        lambda *a, **kw: [],
+    )
+    with pytest.raises(OSError, match="DNS resolution failed"):
+        _resolve_host("nonexistent.invalid", 443)
