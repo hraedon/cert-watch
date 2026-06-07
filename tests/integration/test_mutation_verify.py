@@ -11,6 +11,7 @@ Marked ``integration``; runs in the ``ldap-integration`` CI job.
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 
@@ -140,6 +141,18 @@ class TestMutationVerify:
                 use_ssl=True,
             )
 
+    @pytest.mark.skipif(
+        sys.version_info >= (3, 13),
+        reason=(
+            "BC-149's bug mechanism is Python <=3.12-specific: Path(<multi-KB "
+            "PEM>).is_file() raised OSError(ENAMETOOLONG). Python 3.13 "
+            "(gh-109544) makes is_file() return False for such errors, so the "
+            "unguarded path falls through to ca_certs_data exactly like the "
+            "fixed path — the mutation is unobservable and there is nothing to "
+            "catch. The production guard remains correct on 3.13 (covered by the "
+            "baseline assertions in unit tests)."
+        ),
+    )
     def test_bug2_inline_pem_path_is_file_caught(self, samba_ad, monkeypatch):
         """Bug #1 (BC-149): inline-PEM CA must not be stat-ed as a file path.
 
