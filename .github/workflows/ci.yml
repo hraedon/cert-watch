@@ -12,6 +12,9 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: "3.13"
+      # setup-uv@v8 no longer auto-creates a project venv (v5 did), so create
+      # one explicitly — the steps below invoke tools via `.venv/bin/...`.
+      - run: uv venv
       # Include the auth extras so the LDAP/OAuth providers are exercised (and
       # counted toward coverage) in CI, not just skipped for want of authlib/ldap3.
       - run: uv pip install -e ".[dev,auth]"
