@@ -814,8 +814,6 @@ def test_local_admin_disabled_when_unset(monkeypatch, reload_app):
     monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_USER", raising=False)
     monkeypatch.delenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", raising=False)
     app_mod = reload_app()
-    from cert_watch import auth as auth_mod
-    importlib.reload(auth_mod)
     provider = getattr(app_mod.app.state, "auth_provider", None)
     assert not isinstance(provider, LocalAdminProvider)
 

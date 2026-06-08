@@ -101,17 +101,8 @@ def test_fleet_pivot_worst_urgency(tmp_path):
     assert groups[0]["earliest_expiry"] <= 3
 
 
-def test_fleet_dashboard_view_param(tmp_path, monkeypatch):
-    import importlib
-
-    from cert_watch import config as _config
-
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-
+def test_fleet_dashboard_view_param(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     _insert_host_with_cert(db, "a.example.com", 443, "O=TestCA,CN=CA1", "", "", 90)
@@ -126,17 +117,8 @@ def test_fleet_dashboard_view_param(tmp_path, monkeypatch):
     assert "TestCA" in r.text
 
 
-def test_fleet_dashboard_view_all_shows_normal_table(tmp_path, monkeypatch):
-    import importlib
-
-    from cert_watch import config as _config
-
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-
+def test_fleet_dashboard_view_all_shows_normal_table(tmp_path, reload_app):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     _insert_host_with_cert(db, "a.example.com", 443, "Test CA", "", "", 90)

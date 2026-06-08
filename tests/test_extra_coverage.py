@@ -13,17 +13,8 @@ from fastapi.testclient import TestClient
 from cert_watch.upload import store_uploaded, upload_certificate
 
 
-def _reload(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
+def _reload(reload_app):
+    return reload_app()
 
 
 # ---------- scan.py: _is_blocked_ip and SSRF checks ----------
@@ -155,8 +146,8 @@ def test_chain_status_with_anchors(chain_triplet):
 # ---------- routes/certificates.py detail branches ----------
 
 
-def test_certificate_detail_uploaded(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_uploaded(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
     with TestClient(app_mod.app) as client:
@@ -165,8 +156,8 @@ def test_certificate_detail_uploaded(tmp_path, monkeypatch, leaf_pem_file):
     assert "leaf.example.com" in r.text
 
 
-def test_certificate_detail_with_posture(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_with_posture(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
 
@@ -189,9 +180,9 @@ def test_certificate_detail_with_posture(tmp_path, monkeypatch, leaf_pem_file):
     assert "TLS" in r.text
 
 
-def test_certificate_detail_revocation_button(tmp_path, monkeypatch, leaf_pem_file):
+def test_certificate_detail_revocation_button(reload_app, tmp_path, leaf_pem_file):
     """The detail page shows a Check revocation button when posture is present."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
 
@@ -213,7 +204,7 @@ def test_certificate_detail_revocation_button(tmp_path, monkeypatch, leaf_pem_fi
     assert "data-action=\"check-revocation\"" in r.text
 
 
-def test_certificate_detail_ecdsa_key(tmp_path, monkeypatch):
+def test_certificate_detail_ecdsa_key(reload_app, tmp_path):
     """Test detail page with ECDSA key type."""
 
     from cryptography import x509
@@ -237,7 +228,7 @@ def test_certificate_detail_ecdsa_key(tmp_path, monkeypatch):
     tmp_file = tmp_path / "ecdsa.der"
     tmp_file.write_bytes(der)
 
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import upload_certificate
 
@@ -252,8 +243,8 @@ def test_certificate_detail_ecdsa_key(tmp_path, monkeypatch):
 # ---------- routes/certificates.py upload paths ----------
 
 
-def test_upload_pfx_with_password(tmp_path, monkeypatch, pfx_file_with_password):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_upload_pfx_with_password(reload_app, tmp_path, pfx_file_with_password):
+    app_mod = reload_app()
     path, pw = pfx_file_with_password
     with TestClient(app_mod.app) as client, open(path, "rb") as f:
         r = client.post(
@@ -265,8 +256,8 @@ def test_upload_pfx_with_password(tmp_path, monkeypatch, pfx_file_with_password)
     assert r.status_code == 303
 
 
-def test_upload_p7c(tmp_path, monkeypatch, p7c_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_upload_p7c(reload_app, tmp_path, p7c_pem_file):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(p7c_pem_file, "rb") as f:
         r = client.post(
             "/upload",

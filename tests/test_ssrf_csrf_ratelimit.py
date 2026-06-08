@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import ipaddress
 import json
 import socket
@@ -185,14 +184,10 @@ def test_csrf_rejects_malformed_token():
 
 # ── CSRF: hidden field accepted in POST ────────────────────────────────────
 
-def test_csrf_hidden_field_accepted(tmp_path, monkeypatch):
+def test_csrf_hidden_field_accepted(tmp_path, monkeypatch, reload_app):
     """POST with _csrf_token in form body should pass CSRF check."""
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
+    app_mod = reload_app()
 
     with TestClient(app_mod.app) as client:
         r = client.get("/")
@@ -217,14 +212,10 @@ def test_csrf_hidden_field_accepted(tmp_path, monkeypatch):
     assert "csrf" not in (r.headers.get("location", "").lower())
 
 
-def test_csrf_missing_token_rejected(tmp_path, monkeypatch):
+def test_csrf_missing_token_rejected(tmp_path, monkeypatch, reload_app):
     """POST without CSRF token should be rejected when CSRF is enabled."""
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
+    app_mod = reload_app()
 
     with TestClient(app_mod.app, cookies={"cw_sid": "fake-session"}) as client:
         r = client.post("/hosts", data={

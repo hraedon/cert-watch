@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-
 from fastapi.testclient import TestClient
 
 
@@ -233,14 +231,11 @@ def test_dashboard_lists_tracked_hosts(tmp_path, reload_app):
     assert "tracked.example.com" in r.text
 
 
-def test_lifespan_starts_scheduler(tmp_path, monkeypatch):
+def test_lifespan_starts_scheduler(tmp_path, monkeypatch, reload_app):
     """Assert start_scheduler is invoked on app startup."""
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
+    import cert_watch.app as app_module
 
+    app_mod = reload_app()
     calls = {"start": 0, "stop": 0}
 
     def fake_start(**kwargs):
@@ -250,8 +245,8 @@ def test_lifespan_starts_scheduler(tmp_path, monkeypatch):
     def fake_stop():
         calls["stop"] += 1
 
-    monkeypatch.setattr(app_mod, "start_scheduler", fake_start)
-    monkeypatch.setattr(app_mod, "stop_scheduler", fake_stop)
+    monkeypatch.setattr(app_module, "start_scheduler", fake_start)
+    monkeypatch.setattr(app_module, "stop_scheduler", fake_stop)
 
     with TestClient(app_mod.app) as client:
         client.get("/healthz")
@@ -262,19 +257,16 @@ def test_lifespan_starts_scheduler(tmp_path, monkeypatch):
     assert calls["start_kwargs"]["minute"] == 0
 
 
-def test_lifespan_respects_sched_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+def test_lifespan_respects_sched_env(tmp_path, monkeypatch, reload_app):
     monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", "3")
     monkeypatch.setenv("CERT_WATCH_SCHED_MIN", "15")
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-    importlib.reload(app_mod)
+    import cert_watch.app as app_module
 
+    app_mod = reload_app()
     captured = {}
 
-    monkeypatch.setattr(app_mod, "start_scheduler", lambda **kw: captured.update(kw))
-    monkeypatch.setattr(app_mod, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(app_module, "start_scheduler", lambda **kw: captured.update(kw))
+    monkeypatch.setattr(app_module, "stop_scheduler", lambda: None)
 
     with TestClient(app_mod.app) as client:
         client.get("/healthz")
