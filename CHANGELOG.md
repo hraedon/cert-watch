@@ -2,6 +2,23 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.7.0] — 2026-06-08
+
+Discover and Compliance maturity: trust-anchor-based private-CA detection, CAA per scan, real CT mis-issuance detection, and UX polish.
+
+### Added
+- **Trust-anchor-based private-CA detection (BC-100).** The Discover page no longer uses hardcoded issuer name fragments (`NOT LIKE '%Let%'`) to guess private-CA hosts. Instead, it queries the `scan_posture.chain_status` column, which stores the actual cryptographic trust decision ("private" when anchored by a user-uploaded trust anchor). Migration 0016 adds `chain_status` to `scan_posture`; the scan flow stores it; the Discover view queries it. 4 tests covering migration, storage, query, and public/private counting.
+- **CAA per scan for compliance report (BC-121).** The compliance report no longer shows CAA as "Not collected". Migration 0017 adds `caa_present` and `caa_records` to `scan_posture`. The scan flow runs a CAA DNS lookup during posture evaluation and stores the result. The compliance report aggregates real CAA data (e.g., "CAA present for domain — 87% (42/48)"). Posture findings include a CAA pass/info line. 7 tests covering migration, storage, posture findings, and compliance metric collected/not-collected states.
+- **CT mis-issuance detection + first-seen capture (BC-151).** The Discover page now detects potential mis-issuance: when a tracked hostname's scanned certificate has a different issuer or fingerprint than what CT logs show, a "Potential mis-issuance detected" table is rendered with the scanned issuer vs. CT issuer. Per-issuer first-seen dates are captured in a new `ct_issuer_first_seen` table (migration 0018) and shown in a "CT issuers — first seen" table. The inline style budget for `discover.html` tightened from 8 → 2 (new CSS utility classes for table padding/width). 4 tests covering migration, first-seen recording, scanned issuer lookup, and ReconciliationResult shape.
+- **Webhook alert presets (BC-103).** The Settings → Alerts tab now has a "Webhook preset" dropdown (Slack, Microsoft Teams, PagerDuty, Alertmanager, Custom). Selecting a preset pre-fills the `webhook_kind` hidden field and sets the template textarea to the target's expected JSON shape. No inline `onchange` handler — delegated listener per BC-075.
+- **Progressive enhancement for dashboard notes (BC-021).** Each host row in the dashboard now has an inline edit button that toggles a small note form. Saving uses vanilla `fetch` to the `PATCH /api/hosts/{id}/notes` endpoint, updates the note chip in-place, and never reloads the page.
+
+### Changed
+- `discover.html` inline style budget tightened from 8 → 2 (new CSS utility classes: `.cw-th-pl-20`, `.cw-th-w-120`, `.cw-td-pl-20`, `.cw-td-pr-20`, `.cw-panel-overflow`, `.cw-panel-hd-pb-13`).
+
+### Resolved
+- BC-100, BC-121, BC-151, BC-103, BC-021 — all implemented in this release.
+
 ## [0.6.6] — 2026-06-08
 
 Host-level notes for pending and unscanned hosts, plus privacy and test-maintenance cleanup.
