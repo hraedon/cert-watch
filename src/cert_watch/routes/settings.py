@@ -103,6 +103,7 @@ _ALERT_KEYS = {
     "webhook_url": "ALERT_WEBHOOK_URL",
     "webhook_headers": "ALERT_WEBHOOK_HEADERS",
     "webhook_template": "ALERT_WEBHOOK_TEMPLATE",
+    "webhook_kind": "ALERT_WEBHOOK_KIND",
     "alert_digest_only": "ALERT_DIGEST_ONLY",
 }
 
