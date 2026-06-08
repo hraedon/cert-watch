@@ -13,6 +13,13 @@ Windows: fix a SQLite connection-handle leak that could block an in-process data
 ### Validated
 - Full test suite passes on **Windows Server 2025 + Python 3.14.5** (1394 passed, 9 skipped) — a new integration-test target in addition to Linux CI.
 
+### Added
+- **AD-login E2E for deployed Windows/IIS instances.** `scripts/e2e/ad-login-remote.sh` drives the full browser-shaped login flow against a deployed cert-watch instance (default: the mvmcitest01 IIS VM) and asserts the AD-login round-trip: form POST → 303 redirect → session cookie → authenticated GET. Also guards the `cw_auth` cookie size (BC-145/v0.7.2 regression). Credentials are brokered via Vault AppRole (`~/.cw-vault-ci.env` + `scripts/vault-login.sh`). Complements the local-process `ldap-e2e.sh` and the existing Playwright suite.
+- **Vault CI policy.** `deploy/vault/policies/cert-watch-ci.hcl` — a read-only policy for the CI Vault AppRole, granting `read` on `kv/data/cert-watch/ldap/*` and `list` on `kv/metadata/cert-watch/ldap/*`.
+
+### Fixed (BC-159)
+- **GUI-configured auth/smtp/alert settings are now merged into boot-time Settings.** Previously, `Settings.from_env()` (the production boot path) only read from environment variables, so GUI-configured LDAP, OAuth, SMTP, and alert settings were silently lost on restart (IIS app-pool recycle, service restart, k8s pod replacement). The lifespan now resolves the signing key, derives the encryption key, and rebuilds Settings via `Settings.from_env_with_kv(db_path, encryption_key)` — the same kv-aware loader that the Settings GUI page uses. Env vars continue to override kv_store (the documented escape hatch), so a web.config / env-based config still wins. 4 regression tests.
+
 ## [0.7.2] — 2026-06-08
 
 Bugfix: LDAP/AD users in many directory groups could not stay logged in — after a successful login they were bounced straight back to the login screen.
