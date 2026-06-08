@@ -596,6 +596,8 @@ def discover_view(request: Request) -> HTMLResponse:
     tracked_count = 0
     ct_total = 0
     untracked_all: list[dict] = []
+    misissued_all: list[dict] = []
+    first_seen_all: dict[str, str] = {}
     private_count = 0
     reconciled_age: float | None = None
 
@@ -645,6 +647,17 @@ def discover_view(request: Request) -> HTMLResponse:
                 "host": h,
                 "domain": domain,
             })
+        # BC-151: mis-issuance + first-seen
+        for m in result.misissued:
+            misissued_all.append({
+                "host": m["host"],
+                "scanned_issuer": m["scanned_issuer"],
+                "ct_issuer": m["ct_issuer"],
+                "domain": domain,
+            })
+        for issuer, first_seen in result.first_seen_by_issuer.items():
+            if issuer not in first_seen_all:
+                first_seen_all[issuer] = first_seen
 
     # Kick off (or note) a background refresh for any stale/missing domains.
     # Idempotent and non-blocking; the next page load shows fresh results.
@@ -663,6 +676,8 @@ def discover_view(request: Request) -> HTMLResponse:
             "total_ct": ct_total,
             "total_tracked": tracked_count,
             "untracked": untracked_all,
+            "misissued": misissued_all,
+            "first_seen_by_issuer": first_seen_all,
             "private_count": private_count,
             "reconciling": reconciling,
             "reconciled_age": int(reconciled_age) if reconciled_age is not None else None,

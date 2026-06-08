@@ -93,6 +93,46 @@ class ReconciliationResult:
     tracked_only_hostnames: list[str] = field(default_factory=list)
     coverage_pct: float = 0.0
     error: str = ""
+    # BC-151: mis-issued hostnames (CT shows a cert with different issuer/serial)
+    misissued: list[dict] = field(default_factory=list)
+    # BC-151: first-seen dates for issuers found in CT
+    first_seen_by_issuer: dict[str, str] = field(default_factory=dict)
+
+
+def _get_scanned_issuer_serial(db_path: str | Path, hostname: str) -> tuple[str, str] | None:
+    """Return (issuer, fingerprint_sha256) of the latest scanned leaf for hostname."""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT c.issuer, c.fingerprint_sha256 FROM certificates c
+            WHERE c.hostname = ? AND c.is_leaf = 1 AND c.source = 'scanned'
+            ORDER BY c.updated_at DESC LIMIT 1""",
+            (hostname,),
+        ).fetchone()
+    if row:
+        return row["issuer"], row["fingerprint_sha256"]
+    return None
+
+
+def _record_ct_issuer_first_seen(db_path: str | Path, issuer_name: str) -> str | None:
+    """Record first-seen date for an issuer if not already known."""
+    from datetime import UTC, datetime
+
+    from cert_watch.database.connection import _iso
+
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT first_seen_at FROM ct_issuer_first_seen WHERE issuer_name = ?",
+            (issuer_name,),
+        ).fetchone()
+        if row:
+            return row["first_seen_at"]
+        now_str = _iso(datetime.now(UTC))
+        conn.execute(
+            "INSERT INTO ct_issuer_first_seen (issuer_name, first_seen_at) VALUES (?, ?)",
+            (issuer_name, now_str),
+        )
+        conn.commit()
+        return now_str
 
 
 def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
@@ -104,6 +144,8 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
     - ct_only_hostnames: hostnames in CT but not tracked (gaps)
     - tracked_only_hostnames: hostnames tracked but not in CT (may be stale)
     - coverage_pct: percentage of CT hostnames that are tracked
+    - misissued: hostnames where CT shows a cert with different issuer/serial
+    - first_seen_by_issuer: {issuer_name: first_seen_at} for issuers in CT
     """
     cache_key = f"{db_path}:{domain}"
     now = time.monotonic()
@@ -156,6 +198,43 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
     covered = len(ct_set & tracked_set)
     coverage = (covered / total_ct * 100) if total_ct > 0 else 100.0
 
+    # BC-151: mis-issuance detection + first-seen capture
+    misissued: list[dict] = []
+    first_seen_by_issuer: dict[str, str] = {}
+    ct_issuers_by_host: dict[str, set[tuple[str, str]]] = {}
+    for entry in result:
+        for name in entry.name_value.split("\n"):
+            name = name.strip()
+            if name and (name == domain or name.endswith("." + domain)):
+                ct_issuers_by_host.setdefault(name, set()).add(
+                    (entry.issuer_name, entry.serial_number)
+                )
+        cn = entry.common_name
+        if cn and (cn == domain or cn.endswith("." + domain)):
+            ct_issuers_by_host.setdefault(cn, set()).add(
+                (entry.issuer_name, entry.serial_number)
+            )
+
+    for host in tracked_hostnames:
+        scanned = _get_scanned_issuer_serial(db_path, host)
+        ct_issuers = ct_issuers_by_host.get(host, set())
+        if scanned and ct_issuers:
+            scanned_issuer, scanned_serial = scanned
+            for ct_issuer, ct_serial in ct_issuers:
+                if ct_issuer != scanned_issuer or ct_serial != scanned_serial:
+                    misissued.append({
+                        "host": host,
+                        "scanned_issuer": scanned_issuer,
+                        "ct_issuer": ct_issuer,
+                        "scanned_serial": scanned_serial,
+                        "ct_serial": ct_serial,
+                    })
+                # Record first-seen for this issuer
+                if ct_issuer not in first_seen_by_issuer:
+                    first_seen = _record_ct_issuer_first_seen(db_path, ct_issuer)
+                    if first_seen:
+                        first_seen_by_issuer[ct_issuer] = first_seen
+
     recon = ReconciliationResult(
         domain=domain,
         tracked_hostnames=tracked_hostnames,
@@ -163,6 +242,8 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
         ct_only_hostnames=ct_only,
         tracked_only_hostnames=tracked_only,
         coverage_pct=round(coverage, 1),
+        misissued=misissued,
+        first_seen_by_issuer=first_seen_by_issuer,
     )
     _CT_RECON_CACHE[cache_key] = (now, recon)
     return recon
