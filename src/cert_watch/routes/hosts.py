@@ -53,6 +53,7 @@ async def add_host(
     tags: str = Form(""),
     scan_interval_hours: int | None = Form(None),
     common_ports: bool = Form(False),
+    notes: str = Form(""),
 ) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
@@ -90,6 +91,7 @@ async def add_host(
             threshold_days=threshold_days,
             tags=tags,
             scan_interval_hours=scan_interval_hours,
+            notes=notes,
         )
         record_audit(
             db,
@@ -208,6 +210,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             errors.append(f"row {i}: {ssrf_err}")
             continue
         row_tags = row.get("tags", "").strip()
+        row_notes = row.get("notes", "").strip()
         interval_str = row.get("scan_interval_hours", "").strip()
         interval_hours = None
         if interval_str:
@@ -222,6 +225,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             threshold_days=threshold,
             tags=row_tags,
             scan_interval_hours=interval_hours,
+            notes=row_notes,
         )
         scan_jobs.append((hostname, port, threshold, row_pinned_ip))
 
@@ -300,6 +304,34 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         logger.info("CSV import partial: %d imported, %d errors", imported, len(errors))
     else:
         logger.info("CSV import complete: %d hosts imported", imported)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/hosts/{host_id}/notes")
+async def update_host_notes(
+    request: Request, host_id: str, notes: str = Form(...)
+) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    if len(notes) > 10000:
+        return RedirectResponse(
+            url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
+        )
+    db = _db_path(request)
+    repo = SqliteHostRepository(db)
+    if not repo.update_notes(host_id, notes):
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.update_notes",
+        target_type="host",
+        target_id=host_id,
+        detail={"notes_length": len(notes)},
+        source_ip=resolve_source_ip(request),
+    )
+    logger.info("updated notes for host %s", host_id)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -493,6 +525,7 @@ def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -
             "owner_email",
             "owner_slack",
             "renewal_status",
+            "notes",
             "added_at",
         ]
     )
@@ -508,6 +541,7 @@ def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -
                 _csv_safe(h.owner_email),
                 _csv_safe(h.owner_slack),
                 _csv_safe(h.renewal_status),
+                _csv_safe(h.notes),
                 _csv_safe(h.added_at.isoformat()),
             ]
         )

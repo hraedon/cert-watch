@@ -208,6 +208,10 @@
         if (banner) banner.style.display = 'none';
       } else if (action === 'check-revocation') {
         if (typeof checkRevocation === 'function') checkRevocation(el);
+      } else if (action === 'toggle-host-notes') {
+        if (typeof toggleHostNotes === 'function') toggleHostNotes();
+      } else if (action === 'save-host-notes') {
+        if (typeof saveHostNotes === 'function') saveHostNotes();
       }
     });
     document.addEventListener('change', function(e) {

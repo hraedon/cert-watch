@@ -266,6 +266,9 @@
                   {% if h.owner_name %}
                     <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
                   {% endif %}
+                  {% if h.notes %}
+                    <span class="cw-chip cw-chip-muted" title="{{ h.notes }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                  {% endif %}
                 </div>
                 <div class="cw-host-row-actions">
                   {% if may_write and h.host_id %}
@@ -298,6 +301,9 @@
                   <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
                 {% elif e.source == 'scanned' %}
                   <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
+                {% endif %}
+                {% if e.notes %}
+                  <span class="cw-chip cw-chip-muted" title="{{ e.notes }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
                 {% endif %}
               </div>
               {% if e.san_dns_names %}

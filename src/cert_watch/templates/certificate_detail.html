@@ -118,12 +118,39 @@
                 {% endif %}
               </div>
             </div>
+            {% if host_info.notes %}
+            <div class="cw-col-span-2">
+              <div class="cw-detail-label">Host notes</div>
+              <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host_info.notes }}</div>
+            </div>
+            {% endif %}
           </div>
         </div>
         {% if may_write and host_id %}
         <form method="post" action="/certificates/{{ cert_id }}/owner" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         </form>
+        <div id="host-notes-view" class="cw-mt-10">
+          <div class="cw-flex cw-items-center cw-gap-8 cw-mb-8">
+            <div class="cw-detail-label">Host notes</div>
+            <div class="cw-spacer"></div>
+            <button class="cw-btn ghost sm" type="button" data-action="toggle-host-notes">
+              {{ icons.svg_icon('key', 13) }}<span id="host-notes-btn-label">Edit</span>
+            </button>
+          </div>
+          <div id="host-notes-display" class="cw-notes-pre">{{ host_info.notes or 'Add notes about this host…' }}</div>
+        </div>
+        <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-inline">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <textarea name="notes" class="cw-hidden" id="host-notes-hidden">{{ host_info.notes }}</textarea>
+        </form>
+        <div id="host-notes-edit" class="cw-hidden cw-mt-10">
+          <textarea id="host-notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ host_info.notes }}</textarea>
+          <div class="cw-flex cw-gap-8 cw-mt-8">
+            <button class="cw-btn sm" type="button" data-action="toggle-host-notes">Cancel</button>
+            <button class="cw-btn primary sm" type="button" data-action="save-host-notes">Save</button>
+          </div>
+        </div>
         <div id="owner-edit" class="cw-hidden">
           <div class="cw-grid-2-16-22">
             <div>
@@ -530,6 +557,30 @@ function saveOwner() {
     }
   });
   form.submit();
+}
+function toggleHostNotes() {
+  var view = document.getElementById('host-notes-view');
+  var edit = document.getElementById('host-notes-edit');
+  var label = document.getElementById('host-notes-btn-label');
+  var hidden = edit.classList.contains('cw-hidden') ||
+               getComputedStyle(edit).display === 'none';
+  if (hidden) {
+    edit.classList.remove('cw-hidden');
+    edit.style.display = 'block';
+    view.style.display = 'none';
+    label.textContent = 'Cancel';
+    document.getElementById('host-notes-textarea').focus();
+  } else {
+    edit.classList.add('cw-hidden');
+    edit.style.display = 'none';
+    view.style.display = 'block';
+    label.textContent = 'Edit';
+  }
+}
+function saveHostNotes() {
+  var notes = document.getElementById('host-notes-textarea').value;
+  document.getElementById('host-notes-hidden').value = notes;
+  document.querySelector('#host-notes-hidden').closest('form').submit();
 }
 function checkRevocation(el) {
   var certId = el.getAttribute('data-cert-id');
