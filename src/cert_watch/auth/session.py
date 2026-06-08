@@ -85,6 +85,9 @@ def _decode_list(encoded: str) -> list[str]:
 # Session cookie config
 SESSION_COOKIE = "cw_auth"
 SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
+# Browsers cap a single cookie at ~4096 bytes (name + value + attributes); past
+# that the cookie is silently dropped. Warn before a session token gets close.
+_MAX_SAFE_SESSION_BYTES = 3500
 _signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or None
 if not _signing_key:
     # Import-time fallback only. The lifespan replaces this via set_signing_key()
@@ -173,7 +176,19 @@ def create_session(
     payload = f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
     if groups or roles:
         payload += f":{_encode_list(groups)}:{_encode_list(roles)}"
-    return _sign_session(payload, security)
+    token = _sign_session(payload, security)
+    # Defence in depth: a token over ~4 KB makes the cw_auth cookie exceed the
+    # browser per-cookie limit, which silently drops it → post-login redirect
+    # loop. The login path already trims claims to the role map; warn loudly if
+    # a token still lands near the limit so the cause is diagnosable from logs.
+    if len(token) > _MAX_SAFE_SESSION_BYTES:
+        logger.warning(
+            "session token for %s is %d bytes, near the ~4KB browser cookie limit; "
+            "the cookie may be dropped (login loop). A large IdP group list is the "
+            "usual cause — scope CERT_WATCH_ROLE_MAP to fewer groups.",
+            username, len(token),
+        )
+    return token
 
 
 def decode_session(

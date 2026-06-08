@@ -2,6 +2,13 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.7.2] — 2026-06-08
+
+Bugfix: LDAP/AD users in many directory groups could not stay logged in — after a successful login they were bounced straight back to the login screen.
+
+### Fixed
+- **Post-login redirect loop for AD users in many groups.** Since BC-145 the session cookie carried the user's full set of IdP groups so RBAC could resolve roles on every request. For a real AD account, `memberOf` is often dozens of long group DNs — enough to push the `cw_auth` cookie past the browser's ~4 KB per-cookie limit, at which point the browser **silently drops it**. The login itself succeeded (no error), but every subsequent request arrived unauthenticated, so the user was redirected back to `/login` in a loop (over HTTP *and* HTTPS; invisible to the local admin and to tests, since neither carries groups). Only the groups/roles named in `CERT_WATCH_ROLE_MAP` ever affect role resolution, so the session now stores **just those** (none when no role map is configured) — behaviour-preserving, but the cookie stays small. Added a defensive warning when any session token approaches the cookie size limit. 4 regression tests, including proof that the full-`memberOf` token overflows while the filtered one fits and authenticates.
+
 ## [0.7.1] — 2026-06-08
 
 Bugfix: the LDAP/SMTP connection-test buttons in Settings returned a 500 (surfacing in the UI as `Request failed: SyntaxError: Unexpected token 'I', "Internal S"... is not valid JSON`) when a numeric field was left blank.

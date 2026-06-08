@@ -79,6 +79,36 @@ def resolve_roles(
     return list(matched) if matched else [ROLE_VIEWER]
 
 
+def claims_for_session(
+    user_groups: list[str] | None,
+    user_roles: list[str] | None,
+    role_map: dict,
+) -> tuple[list[str], list[str]]:
+    """Reduce IdP claims to only those the role map references, for the cookie.
+
+    The session cookie carries the user's groups/roles so RBAC can resolve roles
+    on every request (BC-145). But an AD user's full ``memberOf`` list can be
+    dozens of long DNs — easily enough to push the ``cw_auth`` cookie past the
+    browser's ~4 KB per-cookie limit, at which point the browser silently drops
+    the cookie and the user is stuck in a post-login redirect loop.
+
+    Only the groups/roles named in *role_map* ever affect resolution (see
+    :func:`resolve_roles`), so storing just those is **behaviour-preserving**
+    while keeping the cookie small. With no role map configured, no claims are
+    stored at all (the full-access path needs none).
+    """
+    if not role_map:
+        return [], []
+    relevant_groups: set[str] = set()
+    relevant_roles: set[str] = set()
+    for mapping in role_map.values():
+        relevant_groups.update(mapping.get("groups", []))
+        relevant_roles.update(mapping.get("roles", []))
+    groups = [g for g in (user_groups or []) if g in relevant_groups]
+    roles = [r for r in (user_roles or []) if r in relevant_roles]
+    return groups, roles
+
+
 # ---------------------------------------------------------------------------
 # AuthContext
 # ---------------------------------------------------------------------------
