@@ -54,6 +54,7 @@ class HostEntry:
     renewal_status: str = "pending"
     renewal_method: str = ""
     runbook_url: str = ""
+    notes: str = ""
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -414,6 +415,7 @@ class SqliteHostRepository:
         renewal_status: str = "pending",
         renewal_method: str = "",
         runbook_url: str = "",
+        notes: str = "",
     ) -> str:
         import sqlite3
         host_id = str(uuid.uuid4())
@@ -423,13 +425,13 @@ class SqliteHostRepository:
                     "INSERT INTO hosts"
                     " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
                     "  owner_name, owner_email, owner_slack, renewal_status,"
-                    "  renewal_method, runbook_url, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "  renewal_method, runbook_url, notes, added_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         host_id, hostname, port, threshold_days, tags,
                         scan_interval_hours, owner_name, owner_email,
                         owner_slack, renewal_status, renewal_method,
-                        runbook_url, _iso(datetime.now(UTC)),
+                        runbook_url, notes, _iso(datetime.now(UTC)),
                     ),
                 )
                 conn.commit()
@@ -458,6 +460,7 @@ class SqliteHostRepository:
                 renewal_status=dict(r).get("renewal_status", "pending"),
                 renewal_method=dict(r).get("renewal_method", ""),
                 runbook_url=dict(r).get("runbook_url", ""),
+                notes=dict(r).get("notes", ""),
                 added_at=_parse_iso(r["added_at"]),
             )
             for r in rows
@@ -484,6 +487,7 @@ class SqliteHostRepository:
                 renewal_status=dict(r).get("renewal_status", "pending"),
                 renewal_method=dict(r).get("renewal_method", ""),
                 runbook_url=dict(r).get("runbook_url", ""),
+                notes=dict(r).get("notes", ""),
                 added_at=_parse_iso(r["added_at"]),
             )
             for r in rows
@@ -512,6 +516,7 @@ class SqliteHostRepository:
             renewal_status=dict(r).get("renewal_status", "pending"),
             renewal_method=dict(r).get("renewal_method", ""),
             runbook_url=dict(r).get("runbook_url", ""),
+            notes=dict(r).get("notes", ""),
             added_at=_parse_iso(r["added_at"]),
         )
 
@@ -657,6 +662,15 @@ class SqliteHostRepository:
             )
             conn.commit()
         return True
+
+    def update_notes(self, host_id: str, notes: str) -> bool:
+        """Update notes for a host. Returns False if no such host."""
+        with _connect(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE hosts SET notes = ? WHERE id = ?", (notes, host_id)
+            )
+            conn.commit()
+        return cur.rowcount > 0
 
 
 # ---------- Alert Groups (Plan 015) ----------

@@ -191,6 +191,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
                 "renewal_status": h.get("renewal_status", "pending"),
                 "renewal_method": h.get("renewal_method", ""),
                 "runbook_url": h.get("runbook_url") or None,
+                "notes": h.get("notes", ""),
             }
             rm = h.get("renewal_method", "")
             if rm == "acme":

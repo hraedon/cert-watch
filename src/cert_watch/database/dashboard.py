@@ -544,6 +544,7 @@ def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
             "renewal_status": dict(h).get("renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
+            "notes": dict(h).get("notes", ""),
         }
         entries.append({
             "id": h["id"],
@@ -906,6 +907,7 @@ def _build_unified_from_dash(
             "renewal_status": dict(h).get("renewal_status", "pending"),
             "renewal_method": dict(h).get("renewal_method", ""),
             "runbook_url": dict(h).get("runbook_url", ""),
+            "notes": dict(h).get("notes", ""),
         }
         if host_key in scanned_map:
             row = scanned_map[host_key]
