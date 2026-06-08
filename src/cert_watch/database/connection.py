@@ -64,6 +64,13 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
                 return conn
         except (OSError, sqlite3.Error):
             pass
+        # The cached connection is stale (file replaced/removed, or the handle
+        # errored). Close it before discarding: an unclosed connection keeps the
+        # DB's -wal/-shm handles open, which POSIX tolerates but Windows does not
+        # (a later file replace fails with WinError 32). On 3.14 the orphan also
+        # sits in a GC cycle rather than being refcount-closed, so it lingers.
+        with contextlib.suppress(sqlite3.Error):
+            conn.close()
         cache.pop(path_str, None)
         meta.pop(path_str, None)
 
@@ -75,6 +82,27 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     if current_stat:
         meta[path_str] = (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime)
     return conn
+
+
+def close_connections() -> None:
+    """Close and forget all cached connections for the current thread.
+
+    SQLite holds the database (and its ``-wal`` / ``-shm`` sidecars) open for the
+    life of a cached connection. On POSIX an open file can still be unlinked or
+    replaced; on Windows it cannot (``WinError 32``). Callers that delete, rename,
+    or replace the database file from *within the same process* — e.g. a restore
+    that swaps in a backup — must release the handles first. This is the in-process
+    equivalent of stopping the service in the documented restore runbook.
+    """
+    cache = getattr(_conn_local, "connections", None)
+    if cache:
+        for conn in cache.values():
+            with contextlib.suppress(sqlite3.Error):
+                conn.close()
+        cache.clear()
+    meta = getattr(_conn_local, "connection_meta", None)
+    if meta:
+        meta.clear()
 
 
 def _iso(dt: datetime) -> str:

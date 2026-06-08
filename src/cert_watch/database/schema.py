@@ -10,6 +10,7 @@ cleanly.
 """
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -213,7 +214,10 @@ def ensure_base(db_path: str | Path) -> None:
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(path)) as conn:
+    # closing(): a sqlite3 ``with`` block commits but does not close; the handle
+    # then lingers until GC (which on 3.14 may not be prompt), keeping the -wal
+    # open and blocking a later file replace on Windows.
+    with contextlib.closing(sqlite3.connect(str(path))) as conn:
         # 1. Create tables (no-op if they already exist)
         conn.executescript(_BASE_TABLES)
 
