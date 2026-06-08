@@ -412,6 +412,61 @@ def test_test_ldap_missing_base_dn(reload_app):
     assert "base dn" in data["error"].lower()
 
 
+def test_test_ldap_blank_timeout_returns_json_not_500(reload_app):
+    """Regression: a blank connect-timeout must not 500.
+
+    The timeout field has no fallback value, so the browser submits an empty
+    string when it is cleared. The handler parsed it with an unguarded int()
+    *before* its try/except, so int("") raised ValueError -> 500 "Internal
+    Server Error" -> the frontend's r.json() failed with
+    "Unexpected token 'I'". The parse is now guarded and blank means default.
+    """
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc1.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_connect_timeout": "",
+            },
+        )
+    # The point of the test: a clean JSON response, never a 500.
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json()["ok"] in (True, False)
+
+
+def test_test_ldap_nonnumeric_timeout_returns_clean_error(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc1.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_connect_timeout": "abc",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "timeout" in data["error"].lower()
+
+
+def test_test_smtp_blank_port_returns_json_not_500(reload_app):
+    """Regression: the SMTP test handler had the same unguarded int(port)."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={"smtp_host": "smtp.example.com", "smtp_port": ""},
+        )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("application/json")
+    assert r.json()["ok"] in (True, False)
+
+
 def test_test_ldap_multi_server_reports_bad_source(reload_app, monkeypatch):
     """A bad URL anywhere in the list must fail the test, not be skipped.
 
