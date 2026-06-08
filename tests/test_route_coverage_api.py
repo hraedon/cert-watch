@@ -12,17 +12,8 @@ from fastapi.testclient import TestClient
 from cert_watch.upload import store_uploaded, upload_certificate
 
 
-def _reload(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
+def _reload(reload_app):
+    return reload_app()
 
 
 # ---------- API certificates pagination ----------
@@ -1064,8 +1055,8 @@ def test_api_download_pem_bad_der(reload_app, tmp_path):
 # ---------- Dashboard source filter ----------
 
 
-def test_dashboard_filter_source_scanned(tmp_path, monkeypatch):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_dashboard_filter_source_scanned(reload_app, tmp_path):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 

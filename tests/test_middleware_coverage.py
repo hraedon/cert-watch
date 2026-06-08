@@ -5,7 +5,6 @@ Plan 024 Slice 3 — rate-limit, CSRF, CSP nonce, trusted-proxy, metrics gate.
 
 from __future__ import annotations
 
-import importlib
 from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
@@ -44,7 +43,6 @@ def test_rate_limit_in_memory_fallback(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     mw._rate_db_path = None
     mw._rate_cache.clear()
     assert mw.check_rate_limit("test:key", 2, 60) is True
@@ -60,7 +58,6 @@ def test_rate_limit_db_path(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     db_path = tmp_path / "rate.sqlite3"
     mw._init_rate_db(db_path)
     mw._rate_db_initialized = False
@@ -80,7 +77,6 @@ def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     mw._rate_db_path = tmp_path / "nonexistent" / "dir" / "rate.sqlite3"
     mw._rate_db_initialized = False
     mw._rate_cache.clear()
@@ -97,7 +93,6 @@ def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     db_path = tmp_path / "rate.sqlite3"
     mw._init_rate_db(db_path)
     mw._rate_db_initialized = False
@@ -118,7 +113,6 @@ def test_get_rate_remaining(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     mw._rate_db_path = None
     mw._rate_cache.clear()
     remaining, retry_after = mw.get_rate_remaining("test:remaining", 5, 60)
@@ -136,7 +130,6 @@ def test_csrf_token_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     mw.set_csrf_secret("test-secret")
     token = mw.make_csrf_token("session123")
     assert mw.validate_csrf_token(token, "session123") is True
@@ -151,7 +144,6 @@ def test_csrf_token_expired(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
-    importlib.reload(mw)
     secret = "test-secret-expired"
     mw.set_csrf_secret(secret)
     # Create an expired token by manipulating timestamp

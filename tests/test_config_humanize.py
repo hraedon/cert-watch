@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -10,9 +9,8 @@ from unittest.mock import patch
 def _fresh_settings(monkeypatch, env: dict[str, str]):
     for k, v in env.items():
         monkeypatch.setenv(k, v)
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    return _config.Settings.from_env()
+    from cert_watch.config import Settings
+    return Settings.from_env()
 
 
 def test_alert_config_none_when_missing(monkeypatch, tmp_path):
@@ -136,18 +134,16 @@ def test_log_format_env_json(monkeypatch, tmp_path):
     monkeypatch.delenv("CERT_WATCH_LOG_FORMAT", raising=False)
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_LOG_FORMAT", "json")
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    s = _config.Settings.from_env()
+    from cert_watch.config import Settings
+    s = Settings.from_env()
     assert s.log_format == "json"
 
 
 def test_log_format_env_text_default(monkeypatch, tmp_path):
     monkeypatch.delenv("CERT_WATCH_LOG_FORMAT", raising=False)
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    from cert_watch import config as _config
-    importlib.reload(_config)
-    s = _config.Settings.from_env()
+    from cert_watch.config import Settings
+    s = Settings.from_env()
     assert s.log_format == "text"
 
 

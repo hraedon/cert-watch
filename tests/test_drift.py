@@ -313,18 +313,12 @@ class TestCreateDriftAlert:
 class TestDriftAlertsConfig:
     def test_default_enabled(self, monkeypatch, tmp_path):
         monkeypatch.delenv("CERT_WATCH_DRIFT_ALERTS", raising=False)
-        import importlib
-
-        import cert_watch.config as cfg
-        importlib.reload(cfg)
-        s = cfg.Settings.from_env()
+        from cert_watch.config import Settings
+        s = Settings.from_env()
         assert s.drift_alerts is True
 
     def test_disabled_via_env(self, monkeypatch, tmp_path):
         monkeypatch.setenv("CERT_WATCH_DRIFT_ALERTS", "0")
-        import importlib
-
-        import cert_watch.config as cfg
-        importlib.reload(cfg)
-        s = cfg.Settings.from_env()
+        from cert_watch.config import Settings
+        s = Settings.from_env()
         assert s.drift_alerts is False

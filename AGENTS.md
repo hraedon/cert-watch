@@ -44,6 +44,16 @@ excludes e2e (opt-in marker), so UI redesigns can drift from the e2e selectors
 without local feedback — CI's `e2e.yml` catches it, but only after push. A local
 pass keeps that loop short. (Requires the `[e2e]` extra + `playwright install`.)
 
+**Interactive UI validation (Playwright MCP).** Separate from the e2e *test*
+suite, a `playwright` MCP server is wired up for ad-hoc, agent-driven UI checks —
+navigate the running app, click through flows, take screenshots — without writing
+a test. It's configured in `.mcp.json` (Claude Code; pre-approved via
+`.claude/settings.json`) and in the global opencode config (`mcp.playwright`).
+Both run `@playwright/mcp@latest` headless+isolated against the Chromium already
+installed for e2e. Use it to *see* a change before committing; use the e2e suite
+to *lock it in*. Start the app first (`python -m cert_watch ...`) and point the
+browser at its local URL.
+
 **Dependency resolution:** `pyproject.toml` uses open-ended `>=` lower bounds. The resolved dependency set is locked in `uv.lock` (managed by `uv pip compile` / `uv pip install`). CI and reproducible builds should use `uv.lock` as the source of truth; a bare `pip install -e .` will re-resolve and may pull newer versions. `uv.lock` is uv's **native** lockfile (TOML, `version = 1`) — when changing dependencies, regenerate it with `uv lock` (not `uv pip compile`, which emits a requirements.txt and cannot round-trip this format).
 
 The default pytest config (`pyproject.toml` `addopts`) runs `-m 'not e2e and not integration'` **in parallel** (`-n auto`, pytest-xdist, `--dist loadscope`). The unit suite is process- and `tmp_path`-isolated, so workers don't collide; for interactive debugging (`-s`, pdb, readable serial output) override with `-n0`. For the faster coverage core, prefix with `COVERAGE_CORE=sysmon` (Python 3.12+ `sys.monitoring`; CI sets this). Together these took the unit suite from ~273s → ~90s. Real sleeps are neutralized in unit tests by an autouse conftest fixture that no-ops `retry`'s backoff (the only legit sleeps live in the e2e suite). The `@integration` openssl-`s_client` tests are environment-sensitive (need openssl on PATH + a local TLS server) and are excluded from the default run. E2E tests on the dev host need `libatk-1.0-0t64 libatk-bridge-2.0-0t64 libcups2t64 libxcomposite1 libxdamage1 libxrandr2 libgtk-3-0t64 libasound2t64` (one-time sudo install). CI handles this via `playwright install --with-deps`.

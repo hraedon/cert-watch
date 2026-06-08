@@ -11,19 +11,8 @@ def test_dashboard_empty_state():
     assert "No matching certificates" in r.text
 
 
-def test_dashboard_shows_uploaded_cert(leaf_pem_file, monkeypatch, tmp_path):
-    # Ensure app sees this tmp data dir.
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    # Re-import app module so it picks up the new settings.
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-
+def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         # Use upload via HTTP to exercise the route.
         with open(leaf_pem_file, "rb") as f:
@@ -34,17 +23,8 @@ def test_dashboard_shows_uploaded_cert(leaf_pem_file, monkeypatch, tmp_path):
     assert "leaf.example.com" in r.text
 
 
-def test_dashboard_sorted_by_urgency(tmp_path, monkeypatch, leaf_pem_file, chain_pem_file):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-
+def test_dashboard_sorted_by_urgency(reload_app, tmp_path, leaf_pem_file, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     # Upload both.
     entry_a = upload_certificate(leaf_pem_file)
@@ -84,21 +64,12 @@ def test_readyz(reload_app):
     assert "scheduler" in data["checks"]
 
 
-def _reload(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
+def _reload(reload_app):
+    return reload_app()
 
 
-def test_dashboard_filter_by_search(tmp_path, monkeypatch, leaf_pem_file, chain_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_dashboard_filter_by_search(reload_app, tmp_path, leaf_pem_file, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     store_uploaded(upload_certificate(leaf_pem_file), db)
     store_uploaded(upload_certificate(chain_pem_file), db)
@@ -114,8 +85,8 @@ def test_dashboard_filter_by_search(tmp_path, monkeypatch, leaf_pem_file, chain_
     assert len(groups) == 1
 
 
-def test_dashboard_filter_by_urgency(tmp_path, monkeypatch, leaf_pem_file, expiring_soon_leaf):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_dashboard_filter_by_urgency(reload_app, tmp_path, leaf_pem_file, expiring_soon_leaf):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry
 
@@ -133,8 +104,8 @@ def test_dashboard_filter_by_urgency(tmp_path, monkeypatch, leaf_pem_file, expir
     assert "expiring.example.com" in r.text
 
 
-def test_dashboard_filter_by_source(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_dashboard_filter_by_source(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     store_uploaded(upload_certificate(leaf_pem_file), db)
 
@@ -149,8 +120,8 @@ def test_dashboard_filter_by_source(tmp_path, monkeypatch, leaf_pem_file):
     assert "leaf.example.com" not in r.text
 
 
-def test_dashboard_filter_clear_link(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_dashboard_filter_clear_link(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     store_uploaded(upload_certificate(leaf_pem_file), db)
 
@@ -161,9 +132,9 @@ def test_dashboard_filter_clear_link(tmp_path, monkeypatch, leaf_pem_file):
     assert 'value="leaf"' in r.text
 
 
-def test_dashboard_chain_tree_view(tmp_path, monkeypatch, chain_pem_file):
+def test_dashboard_chain_tree_view(reload_app, tmp_path, chain_pem_file):
     """FEAT-001: chain certs should be visible on the detail page."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(chain_pem_file), db)
 
@@ -209,9 +180,9 @@ def test_dashboard_pagination_empty():
     assert "pagination" not in r.text or "Page" not in r.text
 
 
-def test_dashboard_notes_ui(tmp_path, monkeypatch, leaf_pem_file):
+def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
     """FEAT-013: detail page should show notes UI for certificates."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
 
@@ -222,9 +193,9 @@ def test_dashboard_notes_ui(tmp_path, monkeypatch, leaf_pem_file):
     assert "Notes" in r.text
 
 
-def test_dashboard_notes_form_posts(tmp_path, monkeypatch, leaf_pem_file):
+def test_dashboard_notes_form_posts(reload_app, tmp_path, leaf_pem_file):
     """FEAT-013: notes form should POST and persist."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry
     entry = upload_certificate(leaf_pem_file)
@@ -246,9 +217,9 @@ def test_dashboard_notes_form_posts(tmp_path, monkeypatch, leaf_pem_file):
     assert r.json()["notes"] == "test note from UI"
 
 
-def test_dashboard_pagination_with_data(tmp_path, monkeypatch):
+def test_dashboard_pagination_with_data(reload_app, tmp_path):
     """FEAT-009: dashboard should paginate when > 25 certs."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from datetime import UTC, timedelta
@@ -476,9 +447,9 @@ def test_group_entries_mixed_urgency():
     assert result[0]["host_count"] == 2
 
 
-def test_dashboard_grouped_by_fingerprint(tmp_path, monkeypatch):
+def test_dashboard_grouped_by_fingerprint(reload_app, tmp_path):
     """BC-033: dashboard groups hosts with same cert fingerprint."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from datetime import UTC, datetime, timedelta
@@ -523,9 +494,9 @@ def test_dashboard_grouped_by_fingerprint(tmp_path, monkeypatch):
     assert "host3.example.com" in r.text
 
 
-def test_dashboard_grouped_search_matches_host(tmp_path, monkeypatch):
+def test_dashboard_grouped_search_matches_host(reload_app, tmp_path):
     """BC-033: search matches hosts inside a group."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from datetime import UTC, datetime, timedelta
@@ -558,9 +529,9 @@ def test_dashboard_grouped_search_matches_host(tmp_path, monkeypatch):
     assert "*.example.com" in r.text
 
 
-def test_dashboard_grouped_disabled(tmp_path, monkeypatch):
+def test_dashboard_grouped_disabled(reload_app, tmp_path):
     """BC-033: grouped=0 shows individual rows."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
 
     from datetime import UTC, datetime, timedelta

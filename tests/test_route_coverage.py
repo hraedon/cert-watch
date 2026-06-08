@@ -10,17 +10,8 @@ from fastapi.testclient import TestClient
 from cert_watch.upload import store_uploaded, upload_certificate
 
 
-def _reload(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    import importlib
-
-    from cert_watch import config as _config
-
-    importlib.reload(_config)
-    from cert_watch import app as app_mod
-
-    importlib.reload(app_mod)
-    return app_mod
+def _reload(reload_app):
+    return reload_app()
 
 
 # ---------- readyz ----------
@@ -103,7 +94,7 @@ def test_api_health_with_scan_and_alerts(tmp_path, reload_app):
 # ---------- dashboard pivot views ----------
 
 
-def test_dashboard_pivot_issuer(tmp_path, monkeypatch, reload_app, self_signed_leaf):
+def test_dashboard_pivot_issuer(reload_app, tmp_path, self_signed_leaf):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -126,7 +117,7 @@ def test_dashboard_pivot_issuer(tmp_path, monkeypatch, reload_app, self_signed_l
     assert "Test CA" in r.text
 
 
-def test_dashboard_pivot_owner(tmp_path, monkeypatch, reload_app):
+def test_dashboard_pivot_owner(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -149,7 +140,7 @@ def test_dashboard_pivot_owner(tmp_path, monkeypatch, reload_app):
     assert "own.example.com" in r.text  # cert appears in the owner pivot
 
 
-def test_dashboard_pivot_renewal_method(tmp_path, monkeypatch, reload_app):
+def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -175,7 +166,7 @@ def test_dashboard_pivot_renewal_method(tmp_path, monkeypatch, reload_app):
 # ---------- dashboard fleet grade ----------
 
 
-def test_dashboard_fleet_grade_with_data(tmp_path, monkeypatch, reload_app):
+def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
@@ -194,7 +185,7 @@ def test_dashboard_fleet_grade_with_data(tmp_path, monkeypatch, reload_app):
 # ---------- dashboard ungrouped view with data ----------
 
 
-def test_dashboard_ungrouped_with_data(tmp_path, monkeypatch, reload_app):
+def test_dashboard_ungrouped_with_data(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -222,7 +213,7 @@ def test_dashboard_ungrouped_with_data(tmp_path, monkeypatch, reload_app):
 # ---------- dashboard sort orders ----------
 
 
-def test_dashboard_sort_by_subject(tmp_path, monkeypatch, reload_app):
+def test_dashboard_sort_by_subject(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -379,7 +370,7 @@ def test_discover_view_empty(reload_app):
     assert r.status_code == 200
 
 
-def test_discover_view_with_hosts(tmp_path, monkeypatch, reload_app):
+def test_discover_view_with_hosts(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
@@ -636,8 +627,8 @@ def test_certificate_detail_not_found(reload_app):
     assert "error" in r.headers["location"]
 
 
-def test_certificate_detail_with_chain(tmp_path, monkeypatch, chain_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_with_chain(reload_app, tmp_path, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(chain_pem_file), db)
     with TestClient(app_mod.app) as client:
@@ -647,8 +638,8 @@ def test_certificate_detail_with_chain(tmp_path, monkeypatch, chain_pem_file):
     assert "Certificate chain" in r.text
 
 
-def test_certificate_detail_with_trust_anchor(tmp_path, monkeypatch, chain_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_with_trust_anchor(reload_app, tmp_path, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteTrustAnchorRepository, init_schema
     from cert_watch.upload import upload_certificate
@@ -681,8 +672,8 @@ def _stored_cert_id(db, hostname, port=443):
     return row["id"]
 
 
-def test_certificate_detail_host_info_acme(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_host_info_acme(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -717,8 +708,8 @@ def test_certificate_detail_host_info_acme(tmp_path, monkeypatch, leaf_pem_file)
     assert "Ops Team" in r.text
 
 
-def test_certificate_detail_host_info_cert_manager(tmp_path, monkeypatch):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_host_info_cert_manager(reload_app, tmp_path):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -747,8 +738,8 @@ def test_certificate_detail_host_info_cert_manager(tmp_path, monkeypatch):
     assert "auto-renews" in r.text
 
 
-def test_certificate_detail_host_info_manual(tmp_path, monkeypatch):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_host_info_manual(reload_app, tmp_path):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -778,8 +769,8 @@ def test_certificate_detail_host_info_manual(tmp_path, monkeypatch):
     assert "auto-renews" not in r.text
 
 
-def test_certificate_detail_host_info_custom_method(tmp_path, monkeypatch):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -809,8 +800,8 @@ def test_certificate_detail_host_info_custom_method(tmp_path, monkeypatch):
     assert "requires manual action" not in r.text
 
 
-def test_certificate_detail_with_drift_events(tmp_path, monkeypatch):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_certificate_detail_with_drift_events(reload_app, tmp_path):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -877,8 +868,8 @@ def test_update_notes_not_found(reload_app):
     assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
 
 
-def test_update_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_update_notes_too_long(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
     with TestClient(app_mod.app) as client:
@@ -894,8 +885,8 @@ def test_update_notes_too_long(tmp_path, monkeypatch, leaf_pem_file):
 # ---------- certificate owner ----------
 
 
-def test_update_owner_via_certificate(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_update_owner_via_certificate(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -951,8 +942,8 @@ def test_update_owner_via_certificate_not_found(reload_app):
     assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
 
 
-def test_update_owner_via_certificate_no_host(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_update_owner_via_certificate_no_host(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
     with TestClient(app_mod.app) as client:
@@ -966,8 +957,8 @@ def test_update_owner_via_certificate_no_host(tmp_path, monkeypatch, leaf_pem_fi
     assert "no+host" in loc or "no%20host" in loc or "associated" in loc
 
 
-def test_update_owner_via_certificate_invalid_email(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_update_owner_via_certificate_invalid_email(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -996,8 +987,8 @@ def test_update_owner_via_certificate_invalid_email(tmp_path, monkeypatch, leaf_
     assert "invalid+email" in r.headers["location"] or "invalid%20email" in r.headers["location"]
 
 
-def test_update_owner_via_certificate_invalid_method(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_update_owner_via_certificate_invalid_method(reload_app, tmp_path, leaf_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from datetime import UTC, datetime, timedelta
 
@@ -1043,8 +1034,8 @@ def test_upload_invalid_cert(reload_app, tmp_path):
     assert r.status_code == 303
 
 
-def test_upload_pfx(tmp_path, monkeypatch, pfx_file_no_password):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_upload_pfx(reload_app, tmp_path, pfx_file_no_password):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(pfx_file_no_password, "rb") as f:
         r = client.post(
             "/upload",
@@ -1054,8 +1045,8 @@ def test_upload_pfx(tmp_path, monkeypatch, pfx_file_no_password):
     assert r.status_code == 303
 
 
-def test_upload_p7b(tmp_path, monkeypatch, p7b_der_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_upload_p7b(reload_app, tmp_path, p7b_der_file):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(p7b_der_file, "rb") as f:
         r = client.post(
             "/upload",
@@ -1065,8 +1056,8 @@ def test_upload_p7b(tmp_path, monkeypatch, p7b_der_file):
     assert r.status_code == 303
 
 
-def test_upload_rate_limit(tmp_path, monkeypatch, leaf_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_upload_rate_limit(reload_app, tmp_path, monkeypatch, leaf_pem_file):
+    app_mod = reload_app()
     import cert_watch.routes.certificates as cert_mod
 
     call_count = {"n": 0}
@@ -1093,8 +1084,8 @@ def test_upload_rate_limit(tmp_path, monkeypatch, leaf_pem_file):
 # ---------- trust anchors ----------
 
 
-def test_add_trust_anchor_valid(tmp_path, monkeypatch, chain_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_add_trust_anchor_valid(reload_app, tmp_path, chain_pem_file):
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(chain_pem_file, "rb") as f:
         r = client.post(
             "/trust-anchors",
@@ -1104,9 +1095,9 @@ def test_add_trust_anchor_valid(tmp_path, monkeypatch, chain_pem_file):
     assert r.status_code == 303
 
 
-def test_add_trust_anchor_invalid_cert(tmp_path, monkeypatch, leaf_pem_file):
+def test_add_trust_anchor_invalid_cert(reload_app, tmp_path, leaf_pem_file):
     """Non-CA cert should be rejected as trust anchor."""
-    app_mod = _reload(monkeypatch, tmp_path)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(leaf_pem_file, "rb") as f:
         r = client.post(
             "/trust-anchors",
@@ -1117,8 +1108,8 @@ def test_add_trust_anchor_invalid_cert(tmp_path, monkeypatch, leaf_pem_file):
     assert "error" in r.headers["location"]
 
 
-def test_delete_trust_anchor(tmp_path, monkeypatch, chain_pem_file):
-    app_mod = _reload(monkeypatch, tmp_path)
+def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import SqliteTrustAnchorRepository, init_schema
     from cert_watch.upload import upload_certificate

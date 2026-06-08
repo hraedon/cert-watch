@@ -84,7 +84,7 @@ class SiemExporter:
             lg = logging.getLogger("cert_watch.siem.syslog")
             lg.setLevel(logging.INFO)
             lg.propagate = False
-            # Close old handlers to avoid leaking sockets (BC-XXX)
+            # Close old handlers to avoid leaking sockets (BC-028)
             for old in lg.handlers:
                 with contextlib.suppress(Exception):
                     old.close()
