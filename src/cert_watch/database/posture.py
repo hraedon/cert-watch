@@ -23,6 +23,7 @@ def store_scan_posture(
     must_staple: bool = False,
     verify_requested: bool | None = None,
     chain_incomplete: bool = False,
+    chain_status: str | None = None,
     scanned_at: str | None = None,
 ) -> str:
     """Store a posture evaluation result in the scan_posture table.
@@ -47,8 +48,8 @@ def store_scan_posture(
             """INSERT INTO scan_posture
             (id, cert_id, hostname, port, grade, protocol_version,
              ocsp_stapling, hsts, must_staple, verify_requested,
-             chain_incomplete, findings, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             chain_incomplete, chain_status, findings, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 posture_id,
                 cert_id,
@@ -61,6 +62,7 @@ def store_scan_posture(
                 1 if must_staple else 0,
                 1 if verify_requested is True else (0 if verify_requested is False else None),
                 1 if chain_incomplete else 0,
+                chain_status,
                 findings_json,
                 scanned_at,
             ),
@@ -93,6 +95,7 @@ def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict | None:
     except (json.JSONDecodeError, TypeError):
         d["findings"] = []
     d["chain_incomplete"] = bool(d.get("chain_incomplete"))
+    d["chain_status"] = d.get("chain_status")
     return d
 
 
@@ -162,5 +165,6 @@ def get_posture_for_certs(
         except (json.JSONDecodeError, TypeError):
             d["findings"] = []
         d["chain_incomplete"] = bool(d.get("chain_incomplete"))
+        d["chain_status"] = d.get("chain_status")
         result[d["cert_id"]] = d
     return result

@@ -599,15 +599,16 @@ def discover_view(request: Request) -> HTMLResponse:
     private_count = 0
     reconciled_age: float | None = None
 
-    # Count private-CA hosts
+    # Count private-CA hosts (BC-100: trust-anchor-based, not hardcoded issuer names)
     with _connect(db) as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM certificates c "
-            "WHERE c.is_leaf = 1 AND c.source = 'scanned' "
-            "AND c.issuer NOT LIKE '%Let%' AND c.issuer NOT LIKE '%ISRG%' "
-            "AND c.issuer NOT LIKE '%Sectigo%' AND c.issuer NOT LIKE '%DigiCert%' "
-            "AND c.issuer NOT LIKE '%GlobalSign%' AND c.issuer NOT LIKE '%Amazon%' "
-            "AND c.issuer NOT LIKE '%Google%' AND c.issuer NOT LIKE '%Apple%'"
+            """SELECT COUNT(*) FROM certificates c
+            WHERE c.is_leaf = 1 AND c.source = 'scanned'
+            AND (
+                SELECT sp.chain_status FROM scan_posture sp
+                WHERE sp.cert_id = c.id
+                ORDER BY sp.scanned_at DESC, sp.id DESC LIMIT 1
+            ) = 'private'"""
         ).fetchone()
         private_count = row[0] if row else 0
 
