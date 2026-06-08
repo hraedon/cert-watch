@@ -112,3 +112,49 @@ def test_full_memberof_overflows_but_filtered_token_fits():
     info = decode_session(fitted)
     assert info is not None
     assert info.groups == ["CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com"]
+
+
+def test_login_path_emits_small_cookie_for_user_in_many_groups(reload_app):
+    """Integration guard: a real POST /login for an AD user in many groups must
+    emit a cw_auth cookie well under the browser limit, and authenticate the
+    next request. This fails if routes/auth.py stops filtering claims — the
+    unit tests above can't catch that, only this end-to-end check does.
+    """
+    import json
+
+    from starlette.testclient import TestClient
+
+    from cert_watch.auth.protocol import AuthResult
+    from cert_watch.auth.session import _MAX_SAFE_SESSION_BYTES
+
+    role_map = {"admin": {"groups": ["CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com"]}}
+    app_mod = reload_app(
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+        CERT_WATCH_ROLE_MAP=json.dumps(role_map),
+        CERT_WATCH_CSRF_DISABLED="1",
+    )
+
+    class _FakeLdap:
+        provider_name = "ldap"
+        supports_form_login = True
+
+        def authenticate(self, username: str, password: str) -> AuthResult:
+            return AuthResult(success=True, username=username, groups=_MANY_GROUPS, roles=[])
+
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        # Swap in a provider that returns a large memberOf, like a real AD user.
+        app_mod.app.state.auth_provider = _FakeLdap()
+        r = client.post(
+            "/login",
+            data={"username": "pmerritt", "password": "x"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        cookie = client.cookies.get("cw_auth")
+        assert cookie is not None
+        # The whole point: the cookie stays comfortably under the browser limit.
+        assert len(cookie) < _MAX_SAFE_SESSION_BYTES
+        # ...and the session actually works on the next request (no login loop).
+        assert client.get("/").status_code == 200
