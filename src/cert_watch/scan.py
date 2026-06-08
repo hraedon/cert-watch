@@ -876,6 +876,18 @@ def _evaluate_and_store_posture(
 
     cs = chain_status(cert, chain, anchors) if chain else None
 
+    # CAA lookup (BC-121)
+    caa_present: bool | None = None
+    caa_records: list[str] | None = None
+    if entry.host:
+        from cert_watch.caa_check import check_caa
+        try:
+            caa_result = check_caa(entry.host)
+            caa_present = bool(caa_result.records) and not caa_result.error
+            caa_records = caa_result.records
+        except Exception:
+            caa_present = None
+
     result = evaluate_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
@@ -884,6 +896,8 @@ def _evaluate_and_store_posture(
         hsts=entry.hsts,
         check_revocation=check_revocation,
         port=entry.port,
+        caa_present=caa_present,
+        caa_records=caa_records,
         allow_private=allow_private,
         allowed_subnets=allowed_subnets,
     )
@@ -902,6 +916,8 @@ def _evaluate_and_store_posture(
         verify_requested=entry.verify_requested,
         chain_incomplete=entry.chain_incomplete,
         chain_status=cs,
+        caa_present=caa_present,
+        caa_records=caa_records,
         scanned_at=entry.scanned_at,
     )
     return result.grade

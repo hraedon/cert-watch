@@ -33,6 +33,9 @@ from cert_watch.migrations.m0015_api_keys import (
 from cert_watch.migrations.m0016_chain_status import (
     upgrade as chain_status_upgrade,
 )
+from cert_watch.migrations.m0017_caa_per_scan import (
+    upgrade as caa_per_scan_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -73,4 +76,8 @@ runner.register(
 runner.register(
     "0016", "add chain_status column to scan_posture (BC-100)",
     chain_status_upgrade,
+)
+runner.register(
+    "0017", "add CAA columns to scan_posture (BC-121)",
+    caa_per_scan_upgrade,
 )

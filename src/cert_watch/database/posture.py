@@ -24,6 +24,8 @@ def store_scan_posture(
     verify_requested: bool | None = None,
     chain_incomplete: bool = False,
     chain_status: str | None = None,
+    caa_present: bool | None = None,
+    caa_records: list[str] | None = None,
     scanned_at: str | None = None,
 ) -> str:
     """Store a posture evaluation result in the scan_posture table.
@@ -48,8 +50,9 @@ def store_scan_posture(
             """INSERT INTO scan_posture
             (id, cert_id, hostname, port, grade, protocol_version,
              ocsp_stapling, hsts, must_staple, verify_requested,
-             chain_incomplete, chain_status, findings, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             chain_incomplete, chain_status, caa_present, caa_records,
+             findings, scanned_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 posture_id,
                 cert_id,
@@ -63,6 +66,8 @@ def store_scan_posture(
                 1 if verify_requested is True else (0 if verify_requested is False else None),
                 1 if chain_incomplete else 0,
                 chain_status,
+                1 if caa_present is True else (0 if caa_present is False else None),
+                json.dumps(caa_records or []),
                 findings_json,
                 scanned_at,
             ),
@@ -96,6 +101,17 @@ def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict | None:
         d["findings"] = []
     d["chain_incomplete"] = bool(d.get("chain_incomplete"))
     d["chain_status"] = d.get("chain_status")
+    d["caa_present"] = (
+        True if d.get("caa_present") == 1 else (False if d.get("caa_present") == 0 else None)
+    )
+    try:
+        d["caa_records"] = (
+            json.loads(d["caa_records"])
+            if isinstance(d.get("caa_records"), str) and d.get("caa_records")
+            else []
+        )
+    except (json.JSONDecodeError, TypeError):
+        d["caa_records"] = []
     return d
 
 
@@ -166,5 +182,16 @@ def get_posture_for_certs(
             d["findings"] = []
         d["chain_incomplete"] = bool(d.get("chain_incomplete"))
         d["chain_status"] = d.get("chain_status")
+        d["caa_present"] = (
+            True if d.get("caa_present") == 1 else (False if d.get("caa_present") == 0 else None)
+        )
+        try:
+            d["caa_records"] = (
+                json.loads(d["caa_records"])
+                if isinstance(d.get("caa_records"), str) and d.get("caa_records")
+                else []
+            )
+        except (json.JSONDecodeError, TypeError):
+            d["caa_records"] = []
         result[d["cert_id"]] = d
     return result
