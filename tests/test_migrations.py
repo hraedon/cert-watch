@@ -11,6 +11,7 @@ AC-5: Documented, tested restore procedure.
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from pathlib import Path
 
@@ -126,8 +127,10 @@ def test_backup_restore_round_trip(tmp_path: Path) -> None:
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
 
-    # Insert data
-    with sqlite3.connect(str(db)) as conn:
+    # Insert data. Use contextlib.closing: a sqlite3 ``with`` block only commits,
+    # it does NOT close the connection, so the handle (and the -wal it holds)
+    # would survive into the restore step below and block the unlink on Windows.
+    with contextlib.closing(sqlite3.connect(str(db))) as conn:
         conn.execute(
             "INSERT INTO hosts (id, hostname, port, added_at)"
             " VALUES ('h1', 'roundtrip.example.com', 443, '2026-01-01T00:00:00+00:00')"
@@ -142,17 +145,21 @@ def test_backup_restore_round_trip(tmp_path: Path) -> None:
     from cert_watch.migrations.runner import create_backup
     backup = create_backup(db, tmp_path / "backup.sqlite3")
 
-    # Restore: stop (no-op), replace file, start (verify)
-    # Also remove WAL/SHM artifacts so the restored DB isn't confused
-    # by stale journal files from the connection cache (BC-049).
+    # Restore: stop the service, replace the file, start (verify). Closing the
+    # cached connections is the in-process stand-in for stopping the service —
+    # without it the cache still holds the -wal/-shm handles, which POSIX lets
+    # you unlink anyway but Windows does not (WinError 32). (BC-049)
+    from cert_watch.database.connection import close_connections
+    close_connections()
     for artifact in (db.with_suffix(".sqlite3-wal"), db.with_suffix(".sqlite3-shm")):
         artifact.unlink(missing_ok=True)
     db.unlink()
     backup.rename(db)
 
-    # Verify restored data
+    # Verify restored data (closing() again so the tmp dir teardown can delete
+    # the DB + -wal on Windows).
     init_schema(db)  # Should be idempotent on restored DB
-    with sqlite3.connect(str(db)) as conn:
+    with contextlib.closing(sqlite3.connect(str(db))) as conn:
         hosts = conn.execute("SELECT hostname FROM hosts").fetchone()
         assert hosts[0] == "roundtrip.example.com"
         audits = conn.execute("SELECT action FROM audit_log").fetchone()

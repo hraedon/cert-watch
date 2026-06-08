@@ -2,6 +2,17 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.7.3] — 2026-06-08
+
+Windows: fix a SQLite connection-handle leak that could block an in-process database file replace (e.g. restore). Found by running the suite on Windows + Python 3.14.
+
+### Fixed
+- **Cached connections were evicted without being closed (`database/connection.py`).** When `_connect` detected that the database file had been replaced/removed (or the handle errored), it popped the stale connection from the per-thread cache but never called `.close()`. The orphaned connection kept the DB's `-wal`/`-shm` handles open — tolerated on POSIX (you can unlink an open file), but on Windows it makes a later file replace fail with `WinError 32`, and on Python 3.14 the orphan lingers in a GC cycle rather than being refcount-closed. Stale connections are now closed on eviction.
+- **Deterministic connection close in the backup/init paths.** `migrations.runner._backup` (the `cert-watch backup` source connection) and `database.schema.ensure_base` now use `contextlib.closing` instead of relying on a sqlite3 `with` block (which commits but does not close). Added a public `database.connection.close_connections()` to release the thread-local cache (the in-process equivalent of stopping the service before a restore).
+
+### Validated
+- Full test suite passes on **Windows Server 2025 + Python 3.14.5** (1394 passed, 9 skipped) — a new integration-test target in addition to Linux CI.
+
 ## [0.7.2] — 2026-06-08
 
 Bugfix: LDAP/AD users in many directory groups could not stay logged in — after a successful login they were bounced straight back to the login screen.

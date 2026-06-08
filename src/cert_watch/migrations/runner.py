@@ -12,6 +12,7 @@ Usage::
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from collections.abc import Callable
@@ -71,7 +72,10 @@ def _backup(db_path: str | Path, backup_path: str | Path | None = None) -> Path:
         backup_path = db_path.parent / f"{db_path.stem}-pre-migration-{ts}{db_path.suffix}"
     backup_path = Path(backup_path)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(str(db_path)) as conn:
+    # closing(): a sqlite3 ``with`` block commits but does not close, leaving the
+    # source DB (and its -wal) handle open until GC — which blocks a subsequent
+    # file replace/restore on Windows. Close it deterministically.
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
         conn.execute("VACUUM INTO ?", (str(backup_path),))
     # Remove any stale WAL/SHM artifacts so the backup is a clean standalone file.
     for suffix in ("-wal", "-shm"):
