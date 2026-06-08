@@ -300,6 +300,18 @@
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
 
         <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="webhook_preset">Webhook preset</label>
+          <select class="cw-input" id="webhook_preset" name="webhook_preset"
+                  data-action="apply-webhook-preset">
+            <option value="" {% if not alert.webhook_kind %}selected{% endif %}>Custom / generic</option>
+            <option value="slack" {% if alert.webhook_kind == 'slack' %}selected{% endif %}>Slack</option>
+            <option value="teams" {% if alert.webhook_kind == 'teams' %}selected{% endif %}>Microsoft Teams</option>
+            <option value="pagerduty" {% if alert.webhook_kind == 'pagerduty' %}selected{% endif %}>PagerDuty</option>
+            <option value="alertmanager" {% if alert.webhook_kind == 'alertmanager' %}selected{% endif %}>Alertmanager</option>
+          </select>
+        </div>
+
+        <div class="cw-field cw-mb-12">
           <label class="cw-label" for="webhook_url">Webhook URL (optional)</label>
           <input class="cw-input" type="text" id="webhook_url" name="webhook_url"
                  value="{{ alert.webhook_url }}" placeholder="https://hooks.slack.com/services/...">
@@ -308,8 +320,10 @@
         <div class="cw-field cw-mb-12">
           <label class="cw-label" for="webhook_template">Webhook template (optional)</label>
           <textarea class="cw-input" id="webhook_template" name="webhook_template" rows="3"
-                    placeholder="Leave empty for default JSON payload"></textarea>
+                    placeholder="Leave empty for default JSON payload">{{ alert.webhook_template }}</textarea>
         </div>
+
+        <input type="hidden" id="webhook_kind" name="webhook_kind" value="{{ alert.webhook_kind or 'generic' }}">
 
         <div class="cw-field cw-mb-16">
           <label class="cw-label" for="alert_digest_only">Digest mode</label>
@@ -480,6 +494,40 @@
       });
   }
 
+  var _WEBHOOK_PRESETS = {
+    slack: {
+      kind: 'slack',
+      url: '',
+      template: '{"text": "Certificate alert: {{subject}} ({{host}}) expires in {{days_remaining}} days — grade {{grade}}"}'
+    },
+    teams: {
+      kind: 'teams',
+      url: '',
+      template: '{"type": "message", "attachments": [{"contentType": "application/vnd.microsoft.card.adaptive", "content": {"type": "AdaptiveCard", "body": [{"type": "TextBlock", "text": "Certificate alert: {{subject}} ({{host}}) expires in {{days_remaining}} days — grade {{grade}}", "weight": "bolder"}], "$schema": "http://adaptivecards.io/schemas/adaptive-card.json", "version": "1.0"}}]}'
+    },
+    pagerduty: {
+      kind: 'pagerduty',
+      url: '',
+      template: '{"routing_key": "YOUR_ROUTING_KEY", "event_action": "trigger", "payload": {"summary": "Certificate alert: {{subject}} ({{host}}) expires in {{days_remaining}} days", "severity": "warning", "source": "cert-watch"}}'
+    },
+    alertmanager: {
+      kind: 'generic',
+      url: '',
+      template: '[{"labels": {"alertname": "CertificateExpiry", "host": "{{host}}", "subject": "{{subject}}"}, "annotations": {"summary": "Certificate expires in {{days_remaining}} days", "grade": "{{grade}}"}}]'
+    }
+  };
+
+  function applyWebhookPreset(preset) {
+    var cfg = _WEBHOOK_PRESETS[preset];
+    if (!cfg) return;
+    document.getElementById('webhook_kind').value = cfg.kind;
+    document.getElementById('webhook_url').placeholder = cfg.url || 'https://...';
+    var ta = document.getElementById('webhook_template');
+    if (!ta.value.trim()) {
+      ta.value = cfg.template;
+    }
+  }
+
   document.querySelector('[data-action="test-ldap"]').addEventListener('click', function(e) {
     e.preventDefault();
     testLdap(e.currentTarget);
@@ -496,5 +544,11 @@
     e.preventDefault();
     copyLdapCa();
   });
+  var presetSelect = document.querySelector('[data-action="apply-webhook-preset"]');
+  if (presetSelect) {
+    presetSelect.addEventListener('change', function() {
+      applyWebhookPreset(this.value);
+    });
+  }
 </script>
 {% endblock %}
