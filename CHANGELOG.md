@@ -2,6 +2,27 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.6.6] — 2026-06-08
+
+Host-level notes for pending and unscanned hosts, plus privacy and test-maintenance cleanup.
+
+### Added
+- **Host-level notes (BC-020).** Pending and unscanned hosts now support a free-text `notes` field.
+  - Schema: `notes` column on the `hosts` table (with migration for existing DBs).
+  - API: `PATCH /api/hosts/{host_id}/notes` and form POST `/hosts/{host_id}/notes`.
+  - Add host / bulk import: notes accepted via form field and CSV column.
+  - Dashboard: note chip shown in expandable host rows and normal entries.
+  - Certificate detail page: inline edit/save toggle for host notes.
+  - CSV export: hosts export includes the `notes` column.
+  - 16 new tests covering repository, API, form routes, CSV export, and UI rendering.
+
+### Changed
+- **Privacy:** Removed Google Fonts CDN dependency; fonts are now self-hosted / local.
+- **Test maintenance:** Cleaned up inline `importlib.reload` patterns in ~13 test files.
+
+### Resolved
+- BC-131, BC-147, BC-118, BC-137 — stale breadcrumbs resolved in the BC-020 session.
+
 ## [0.6.5] — 2026-06-07
 
 Truth-in-advertising hardening pass: fix a silently-inert RBAC path for AD,
