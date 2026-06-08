@@ -17,6 +17,7 @@ from cert_watch.auth import (
     check_authz,
     create_session,
 )
+from cert_watch.auth.rbac import claims_for_session
 from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.middleware import (
     _COOKIE_SECURE,
@@ -123,12 +124,17 @@ async def login_submit(
     if version == 0:
         bump_session_version(settings.db_path, result.username)
         version = get_session_version(_db_path, result.username)
+    # Store only role-map-relevant claims in the cookie — a full AD memberOf
+    # list can overflow the browser's ~4 KB cookie limit and cause a silent
+    # post-login redirect loop (see claims_for_session).
+    role_map = getattr(settings, "role_map", {}) or {}
+    stored_groups, stored_roles = claims_for_session(result.groups, result.roles, role_map)
     token = create_session(
         result.username,
         _request_security(request),
         version=version,
-        groups=result.groups,
-        roles=result.roles,
+        groups=stored_groups,
+        roles=stored_roles,
     )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
@@ -278,12 +284,17 @@ def oauth_callback(
     if version == 0:
         bump_session_version(settings.db_path, result.username)
         version = get_session_version(_db_path, result.username)
+    # Store only role-map-relevant claims in the cookie — a full AD memberOf
+    # list can overflow the browser's ~4 KB cookie limit and cause a silent
+    # post-login redirect loop (see claims_for_session).
+    role_map = getattr(settings, "role_map", {}) or {}
+    stored_groups, stored_roles = claims_for_session(result.groups, result.roles, role_map)
     token = create_session(
         result.username,
         _request_security(request),
         version=version,
-        groups=result.groups,
-        roles=result.roles,
+        groups=stored_groups,
+        roles=stored_roles,
     )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
