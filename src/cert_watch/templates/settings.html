@@ -351,6 +351,21 @@
     return div.innerHTML;
   }
 
+  // Parse a test-endpoint response defensively. The handlers normally return
+  // JSON, but an unexpected 500 yields a plain-text body ("Internal Server
+  // Error") that JSON.parse() would choke on, surfacing a cryptic
+  // "Unexpected token 'I'" instead of a usable message. Fall back to a readable
+  // error keyed on the HTTP status.
+  function parseTestResponse(r) {
+    return r.text().then(function(t) {
+      try {
+        return JSON.parse(t);
+      } catch (e) {
+        return {ok: false, error: 'Server error (HTTP ' + r.status + ')'};
+      }
+    });
+  }
+
   function toggleProvider() {
     var provider = document.getElementById('auth_provider').value;
     document.getElementById('ldap-section').classList.toggle('active', provider === 'ldap');
@@ -384,7 +399,7 @@
     form.append('ldap_connect_timeout', document.getElementById('ldap_connect_timeout').value);
 
     fetch('/settings/test-ldap', {method: 'POST', body: form})
-      .then(function(r) { return r.json(); })
+      .then(parseTestResponse)
       .then(function(data) {
         if (data.tofu) {
           capturedLdapCaPem = data.tofu.pem;
@@ -423,7 +438,7 @@
     form.append('_csrf_token', {{ csrf_token | tojson }});
     form.append('ldap_ca_cert', capturedLdapCaPem);
     fetch('/settings/pin-ldap-ca', {method: 'POST', body: form})
-      .then(function(r) { return r.json(); })
+      .then(parseTestResponse)
       .then(function(data) {
         if (data.ok) {
           document.getElementById('ldap_ca_cert').value = capturedLdapCaPem;
@@ -479,7 +494,7 @@
     form.append('alert_recipients', document.getElementById('alert_recipients').value);
 
     fetch('/settings/test-smtp', {method: 'POST', body: form})
-      .then(function(r) { return r.json(); })
+      .then(parseTestResponse)
       .then(function(data) {
         result.className = 'cw-test-result ' + (data.ok ? 'ok' : 'err');
         result.textContent = data.ok ? data.message : 'Error: ' + data.error;

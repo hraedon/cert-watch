@@ -2,6 +2,13 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.7.1] — 2026-06-08
+
+Bugfix: the LDAP/SMTP connection-test buttons in Settings returned a 500 (surfacing in the UI as `Request failed: SyntaxError: Unexpected token 'I', "Internal S"... is not valid JSON`) when a numeric field was left blank.
+
+### Fixed
+- **"Test Connection" 500 on a blank numeric field.** The LDAP test handler parsed the connect-timeout with an unguarded `int()` *before* its `try/except`; a blank field (the input has no fallback value) made `int("")` raise `ValueError`, which escaped as a 500 with a plain-text `Internal Server Error` body. The frontend's `r.json()` then failed to parse it, surfacing the cryptic `Unexpected token 'I'` message. The parse is now guarded — blank means the default (5s), and a non-numeric value returns a clean JSON error. The **SMTP** test handler had the identical latent bug on `int(port)` (blank → default 587); fixed too. **Frontend hardening:** all three Settings "test" buttons now parse responses defensively, so any future 500 shows `Server error (HTTP 500)` rather than a JSON-parse crash. 4 regression tests.
+
 ## [0.7.0] — 2026-06-08
 
 Discover and Compliance maturity: trust-anchor-based private-CA detection, CAA per scan, real CT mis-issuance detection, and UX polish.

@@ -681,7 +681,17 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
     bind_password = _pw.strip() if isinstance(_pw, str) else ""
     start_tls = form.get("ldap_start_tls", "0") == "1"
     ca_cert = _ca.strip() if isinstance(_ca, str) else ""
-    connect_timeout = int(_timeout.strip() if isinstance(_timeout, str) else "5")
+    # Guard the parse: a blank field (the input has no fallback value) or a
+    # non-numeric value must surface as a clean JSON error, never an uncaught
+    # ValueError -> 500 "Internal Server Error" that the frontend then fails to
+    # parse as JSON. Mirrors the guarded parse in config.from_kv.
+    _timeout_str = _timeout.strip() if isinstance(_timeout, str) else ""
+    try:
+        connect_timeout = int(_timeout_str) if _timeout_str else 5
+    except ValueError:
+        return JSONResponse(
+            {"ok": False, "error": "Connect timeout must be a whole number of seconds"}
+        )
 
     if not server or not base_dn:
         return JSONResponse({"ok": False, "error": "LDAP server and base DN are required"})
@@ -881,7 +891,13 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
     _from = form.get("alert_from", "")
     _recip = form.get("alert_recipients", "")
     host = _host.strip() if isinstance(_host, str) else ""
-    port = int(_port.strip() if isinstance(_port, str) else "587")
+    # Guard the parse (see test_ldap_connection): a blank or non-numeric port
+    # must return a JSON error, not raise -> 500.
+    _port_str = _port.strip() if isinstance(_port, str) else ""
+    try:
+        port = int(_port_str) if _port_str else 587
+    except ValueError:
+        return JSONResponse({"ok": False, "error": "SMTP port must be a whole number"})
     user = _user.strip() if isinstance(_user, str) else ""
     password = _pw.strip() if isinstance(_pw, str) else ""
     from_addr = _from.strip() if isinstance(_from, str) else ""
