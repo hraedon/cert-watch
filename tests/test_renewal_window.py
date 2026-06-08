@@ -4,28 +4,31 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from cert_watch.certificate_model import Certificate
+
 
 def _insert_cert(db, *, cid, days_valid, hostname="h.example.com", port=443, replaces=None):
-    from cert_watch.database import init_schema
-    from cert_watch.database.queries import _connect, _iso
+    from tests._helpers import seed_certificate
 
-    init_schema(db)
     now = datetime.now(UTC)
-    with _connect(db) as conn:
-        conn.execute(
-            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
-            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, "
-            "is_leaf, chain_valid, replaces_cert_id, tags, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,'[]',?,?,?,?,?,1,1,?,?,?,?)",
-            (
-                cid, f"CN={cid}", "CN=Test CA",
-                _iso(now - timedelta(days=10)),
-                _iso(now + timedelta(days=days_valid)),
-                cid + "-fp", b"\x00", "scanned", hostname, port,
-                replaces, "", _iso(now), _iso(now),
-            ),
-        )
-        conn.commit()
+    cert = Certificate(
+        subject=f"CN={cid}",
+        issuer="CN=Test CA",
+        not_before=now - timedelta(days=10),
+        not_after=now + timedelta(days=days_valid),
+        fingerprint_sha256=cid + "-fp",
+        raw_der=b"\x00",
+    )
+    return seed_certificate(
+        db,
+        cert,
+        cert_id=cid,
+        hostname=hostname,
+        port=port,
+        source="scanned",
+        chain_valid=True,
+        replaces_cert_id=replaces,
+    )
 
 
 def _seed(db):

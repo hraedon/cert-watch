@@ -422,29 +422,31 @@ def test_evaluate_thresholds_custom_cooldown(alert_repo, expiring_cert):
 
 
 def _insert_cert(db_path, *, subject="CN=test", hostname="h.example.com", port=443,
-                 not_after="2026-06-01T00:00:00+00:00", is_leaf=1):
+                 not_after="2026-06-01T00:00:00+00:00"):
     """Insert a minimal certificate row for digest testing."""
     import uuid
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
-    from cert_watch.database import _connect, init_schema
-    init_schema(db_path)
-    now = datetime.now(UTC).isoformat()
+    from cert_watch.certificate_model import Certificate
+    from tests._helpers import seed_certificate
+
+    if isinstance(not_after, str):
+        not_after = datetime.fromisoformat(not_after)
     cert_id = str(uuid.uuid4())
-    with _connect(db_path) as conn:
-        conn.execute(
-            """INSERT INTO certificates
-            (id, subject, issuer, not_before, not_after, san_dns_names,
-             fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
-             created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (cert_id, subject, "CN=CA", "2025-01-01T00:00:00+00:00", not_after,
-             "", "fp" + cert_id[:8], b"", "scan", hostname, port, is_leaf,
-             None, None, None, "", "", now, now),
-        )
-        conn.commit()
-    return cert_id
+    cert = Certificate(
+        subject=subject,
+        issuer="CN=CA",
+        not_before=datetime.now(UTC) - timedelta(days=1),
+        not_after=not_after,
+        fingerprint_sha256="fp" + cert_id[:8],
+        raw_der=b"",
+    )
+    return seed_certificate(
+        db_path, cert,
+        hostname=hostname,
+        port=port,
+        source="scan",
+    )
 
 
 def test_send_expiry_digest_returns_true_with_expiring_certs(tmp_path):

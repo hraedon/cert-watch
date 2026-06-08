@@ -13,6 +13,7 @@ from cert_watch.database.queries import (
     _drift_summary,
     create_drift_alert,
     detect_drift,
+    record_cert_history,
 )
 
 
@@ -63,23 +64,24 @@ def _seed_history(
     san_count: int = 1,
     fingerprint: str = "old_fp",
 ) -> None:
-    """Insert a cert_history row directly."""
+    """Insert a cert_history row via record_cert_history."""
     now = datetime.now(UTC)
-    ts = (now - timedelta(hours=1)).isoformat()
-    not_after = (now + timedelta(days=not_after_days)).isoformat()
-    with _connect(db) as conn:
-        conn.execute(
-            """INSERT INTO cert_history
-            (id, hostname, port, fingerprint_sha256, issuer, not_after,
-             key_algo, sig_algo, posture_grade, protocol_version, san_count, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                f"hist-{hostname}-{port}",
-                hostname, port, fingerprint, issuer, not_after,
-                key_algo, sig_algo, posture_grade, protocol_version, san_count, ts,
-            ),
-        )
-        conn.commit()
+    not_after = now + timedelta(days=not_after_days)
+    leaf = Certificate(
+        subject=f"CN={hostname}",
+        issuer=issuer,
+        not_before=now - timedelta(days=1),
+        not_after=not_after,
+        san_dns_names=["test.example.com"],
+        fingerprint_sha256=fingerprint,
+        raw_der=b"",
+    )
+    record_cert_history(
+        db, hostname, port, leaf,
+        posture_grade=posture_grade,
+        protocol_version=protocol_version,
+        scanned_at=(now - timedelta(hours=1)).isoformat(),
+    )
 
 
 # ---------- _compute_drift_events ----------

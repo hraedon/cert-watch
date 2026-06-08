@@ -23,8 +23,9 @@ from cert_watch.compliance import (
 def _seed_fleet(db_path: str | Path) -> list[str]:
     from datetime import UTC, datetime, timedelta
 
+    from cert_watch.certificate_model import Certificate
     from cert_watch.database import init_schema, store_scan_posture
-    from cert_watch.database.queries import _connect, _iso
+    from tests._helpers import seed_certificate
 
     init_schema(db_path)
     cert_ids = []
@@ -48,28 +49,35 @@ def _seed_fleet(db_path: str | Path) -> list[str]:
          "TLSv1.0", False, 5),
     ]
 
-    with _connect(db_path) as conn:
-        for i, (hostname, port, grade, findings, proto, hsts_val, days_valid) in enumerate(entries):
-            cid = f"cert-{hostname.split('.')[0]}"
-            not_after = _iso(now + timedelta(days=days_valid))
-            not_before = _iso(now - timedelta(days=30))
-            tags = "prod" if i % 2 == 0 else ""
-            conn.execute(
-                "INSERT INTO certificates "
-                "(id, subject, issuer, not_before, not_after, san_dns_names, "
-                "fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
-                "chain_valid, tags, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,'[]',?,?,?,?,?,1,1,?,?,?)",
-                (cid, f"CN={hostname}", "CN=Test CA", not_before, not_after,
-                 cid.replace("cert-", "fp-"), b"\x00", "scanned",
-                 hostname, port, tags, _iso(now), _iso(now)),
-            )
-            store_scan_posture(
-                db_path, cid, hostname, port, grade, findings,
-                protocol_version=proto, hsts=hsts_val,
-            )
-            cert_ids.append(cid)
-        conn.commit()
+    for i, (hostname, port, grade, findings, proto, hsts_val, days_valid) in enumerate(entries):
+        cid = f"cert-{hostname.split('.')[0]}"
+        tags = "prod" if i % 2 == 0 else ""
+        cert = Certificate(
+            subject=f"CN={hostname}",
+            issuer="CN=Test CA",
+            not_before=now - timedelta(days=30),
+            not_after=now + timedelta(days=days_valid),
+            san_dns_names=[],
+            fingerprint_sha256=cid.replace("cert-", "fp-"),
+            raw_der=b"\x00",
+            is_leaf=True,
+            notes="",
+            source="scanned",
+        )
+        seed_certificate(
+            db_path, cert,
+            cert_id=cid,
+            hostname=hostname,
+            port=port,
+            source="scanned",
+            chain_valid=True,
+            tags=tags,
+        )
+        store_scan_posture(
+            db_path, cid, hostname, port, grade, findings,
+            protocol_version=proto, hsts=hsts_val,
+        )
+        cert_ids.append(cid)
     return cert_ids
 
 

@@ -859,6 +859,7 @@ def _evaluate_and_store_posture(
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import Certificate as _Cert
     from cert_watch.database import SqliteTrustAnchorRepository
+    from cert_watch.database.connection import _iso
     from cert_watch.database.queries import store_scan_posture
     from cert_watch.posture import evaluate_posture
 
@@ -918,7 +919,7 @@ def _evaluate_and_store_posture(
         chain_status=cs,
         caa_present=caa_present,
         caa_records=caa_records,
-        scanned_at=entry.scanned_at,
+        scanned_at=_iso(entry.scanned_at),
     )
     return result.grade
 
