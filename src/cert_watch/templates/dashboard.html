@@ -267,7 +267,10 @@
                     <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
                   {% endif %}
                   {% if h.notes %}
-                    <span class="cw-chip cw-chip-muted" title="{{ h.notes }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                    <span class="cw-chip cw-chip-muted" title="{{ h.notes }}" id="note-chip-{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                  {% endif %}
+                  {% if may_write and h.host_id %}
+                    <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ h.host_id }}" data-note="{{ h.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
                   {% endif %}
                 </div>
                 <div class="cw-host-row-actions">
@@ -303,7 +306,10 @@
                   <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
                 {% endif %}
                 {% if e.notes %}
-                  <span class="cw-chip cw-chip-muted" title="{{ e.notes }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                  <span class="cw-chip cw-chip-muted" title="{{ e.notes }}" id="note-chip-{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                {% endif %}
+                {% if may_write and e.host_id %}
+                  <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ e.host_id }}" data-note="{{ e.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
                 {% endif %}
               </div>
               {% if e.san_dns_names %}
@@ -709,8 +715,63 @@ document.addEventListener('submit', function(e) {
     var msg = form.getAttribute('data-confirm') || 'Are you sure?';
     if (!confirm(msg)) {
       e.preventDefault();
-    }
+     }
+   }
+ });
+
+/* BC-021: inline note editing */
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-action="edit-note"]');
+  if (!btn) return;
+  var hostId = btn.getAttribute('data-host-id');
+  var csrf = btn.getAttribute('data-csrf');
+  var existing = document.getElementById('note-inline-form-' + hostId);
+  if (existing) {
+    existing.remove();
+    return;
   }
+  var form = document.createElement('form');
+  form.id = 'note-inline-form-' + hostId;
+  form.className = 'cw-inline';
+  form.style.cssText = 'margin-left:6px;';
+  form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + escHtml(csrf) + '">' +
+    '<input type="text" name="notes" class="cw-input" style="width:200px;padding:3px 8px;font-size:12px;" placeholder="Add note…">' +
+    '<button type="submit" class="cw-btn sm" style="margin-left:4px;">Save</button>';
+  btn.parentNode.insertBefore(form, btn.nextSibling);
+  form.querySelector('input[name="notes"]').focus();
+  form.addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    var note = form.querySelector('input[name="notes"]').value;
+    fetch('/api/hosts/' + hostId + '/notes', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf,
+      },
+      body: JSON.stringify({notes: note}),
+    }).then(function(r) {
+      if (!r.ok) throw new Error('Failed to save note');
+      return r.json();
+    }).then(function() {
+      form.remove();
+      var chip = document.getElementById('note-chip-' + hostId);
+      if (note.trim()) {
+        if (!chip) {
+          chip = document.createElement('span');
+          chip.id = 'note-chip-' + hostId;
+          chip.className = 'cw-chip cw-chip-muted';
+          chip.innerHTML = '{{ icons.svg_icon("file", 11, 1.6) | safe }}note';
+          btn.parentNode.insertBefore(chip, btn);
+        }
+        chip.setAttribute('title', note);
+        chip.style.display = '';
+      } else if (chip) {
+        chip.style.display = 'none';
+      }
+    }).catch(function(err) {
+      alert('Error saving note: ' + err.message);
+    });
+  });
 });
-</script>
-{% endblock %}
+ </script>
+ {% endblock %}
