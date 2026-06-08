@@ -1,0 +1,194 @@
+"""kv_store-aware Settings loader: merges GUI-configured values into env base.
+
+Decomposed from the monolithic config.py (BC-144a / config decomposition).
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from cert_watch.config.helpers import (
+    SENSITIVE_SETTING_KEYS,
+    split_group_dns,
+)
+
+
+def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
+    """Merge kv_store values into a base Settings object.
+
+    Returns a new Settings instance.  Env vars take precedence over kv_store.
+    """
+    if not db_path:
+        return base
+    try:
+        from cert_watch.database import fernet_decrypt, kv_all
+        kv = kv_all(db_path)
+    except Exception:
+        return base
+    if not kv:
+        return base
+
+    def _decrypt(key: str, val: str) -> str:
+        if encryption_key and key in SENSITIVE_SETTING_KEYS:
+            result = fernet_decrypt(val, encryption_key)
+            return result if result is not None else ""
+        return val
+
+    def _kv(env_val: str, kv_key: str, default: str = "") -> str:
+        """Return env_val if set, else kv_store value, else default."""
+        if env_val:
+            return env_val
+        raw = kv.get(kv_key, "")
+        return _decrypt(kv_key, raw) if raw else default
+
+    def _kv_bool(env_val: bool, kv_key: str, env_name: str) -> bool:
+        """Env wins when explicitly set (even to 0); else kv_store; else default."""
+        import os
+        if env_name in os.environ:
+            return env_val
+        kv_val = kv.get(kv_key, "")
+        if kv_val:
+            return kv_val == "1" or kv_val.lower() == "true"
+        return env_val
+
+    def _kv_tuple(env_val: tuple[str, ...], kv_key: str) -> tuple[str, ...]:
+        """Return env_val if set, else parse kv_store csv."""
+        if env_val:
+            return env_val
+        raw = kv.get(kv_key, "")
+        if raw:
+            return tuple(g.strip() for g in raw.split(",") if g.strip())
+        return env_val
+
+    # Merge auth fields
+    auth_provider = _kv(base.auth_provider, "auth_provider")
+    ldap_server = _kv(base.ldap_server, "ldap_server")
+    ldap_base_dn = _kv(base.ldap_base_dn, "ldap_base_dn")
+    ldap_bind_dn = _kv(base.ldap_bind_dn, "ldap_bind_dn")
+    ldap_bind_password = _kv(base.ldap_bind_password, "ldap_bind_password")
+    ldap_user_filter = _kv(
+        base.ldap_user_filter, "ldap_user_filter", "(sAMAccountName={username})"
+    )
+    ldap_start_tls = _kv_bool(base.ldap_start_tls, "ldap_start_tls", "LDAP_START_TLS")
+    allowed_subnets = _kv_tuple(base.allowed_subnets, "allowed_subnets")
+    ldap_ca_cert = _kv(base.ldap_ca_cert, "ldap_ca_cert")
+    ldap_required_groups = base.ldap_required_groups or split_group_dns(
+        kv.get("ldap_required_groups", "")
+    )
+    ldap_connect_timeout_str = kv.get("ldap_connect_timeout", "")
+    if ldap_connect_timeout_str:
+        try:
+            ldap_connect_timeout = int(ldap_connect_timeout_str)
+        except ValueError:
+            ldap_connect_timeout = base.ldap_connect_timeout
+    else:
+        ldap_connect_timeout = base.ldap_connect_timeout
+    ldap_group_filter = _kv(base.ldap_group_filter, "ldap_group_filter")
+    oauth_client_id = _kv(base.oauth_client_id, "oauth_client_id")
+    oauth_client_secret = _kv(base.oauth_client_secret, "oauth_client_secret")
+    oauth_issuer_url = _kv(base.oauth_issuer_url, "oauth_issuer_url")
+    oauth_scope = _kv(base.oauth_scope, "oauth_scope", "openid profile email")
+    oauth_authorization_endpoint = _kv(
+        base.oauth_authorization_endpoint, "oauth_authorization_endpoint"
+    )
+    oauth_token_endpoint = _kv(base.oauth_token_endpoint, "oauth_token_endpoint")
+    oauth_userinfo_endpoint = _kv(base.oauth_userinfo_endpoint, "oauth_userinfo_endpoint")
+
+    # Merge SMTP fields
+    smtp_host = _kv(base.smtp_host or "", "smtp_host") or None
+    smtp_port_str = kv.get("smtp_port", "")
+    try:
+        smtp_port = int(smtp_port_str) if smtp_port_str else base.smtp_port
+    except ValueError:
+        smtp_port = base.smtp_port
+    smtp_user = _kv(base.smtp_user or "", "smtp_user") or None
+    smtp_password = _kv(base.smtp_password or "", "smtp_password") or None
+    alert_from = _kv(base.alert_from or "", "alert_from") or None
+    alert_recipients_raw = kv.get("alert_recipients", "")
+    if not base.alert_recipients and alert_recipients_raw:
+        alert_recipients = tuple(
+            r.strip() for r in alert_recipients_raw.split(",") if r.strip()
+        )
+    else:
+        alert_recipients = base.alert_recipients
+
+    # Merge alert fields
+    webhook_url = _kv(base.webhook_url or "", "webhook_url") or None
+    webhook_template = _kv(base.webhook_template, "webhook_template")
+    webhook_kind = _kv(base.webhook_kind, "webhook_kind")
+    pagerduty_routing_key = _kv(base.pagerduty_routing_key, "pagerduty_routing_key")
+    alert_digest_only_str = kv.get("alert_digest_only", "")
+    alert_digest_only = base.alert_digest_only
+    if alert_digest_only_str and not base.alert_digest_only:
+        alert_digest_only = alert_digest_only_str == "1"
+
+    # Merge local admin from kv_store
+    local_admin_user = base.local_admin_user
+    local_admin_password_hash = base.local_admin_password_hash
+    if not local_admin_user:
+        local_admin_user = kv.get("local_admin_user", "")
+    if not local_admin_password_hash:
+        local_admin_password_hash = kv.get("local_admin_password_hash", "")
+
+    return base.__class__(
+        db_path=base.db_path,
+        data_dir=base.data_dir,
+        sched_hour=base.sched_hour,
+        sched_min=base.sched_min,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_password=smtp_password,
+        alert_from=alert_from,
+        alert_recipients=alert_recipients,
+        webhook_url=webhook_url,
+        webhook_headers=base.webhook_headers,
+        webhook_template=webhook_template,
+        webhook_kind=webhook_kind,
+        pagerduty_routing_key=pagerduty_routing_key,
+        alert_digest_only=alert_digest_only,
+        tls_verify=base.tls_verify,
+        allow_private=base.allow_private,
+        allowed_subnets=allowed_subnets,
+        dns_servers=base.dns_servers,
+        log_format=base.log_format,
+        audit_retention_days=base.audit_retention_days,
+        history_retention_days=base.history_retention_days,
+        alert_retention_days=base.alert_retention_days,
+        drift_alerts=base.drift_alerts,
+        renewal_window_days=base.renewal_window_days,
+        check_revocation=base.check_revocation,
+        auth_provider=auth_provider,
+        ldap_server=ldap_server,
+        ldap_base_dn=ldap_base_dn,
+        ldap_bind_dn=ldap_bind_dn,
+        ldap_bind_password=ldap_bind_password,
+        ldap_user_filter=ldap_user_filter,
+        ldap_start_tls=ldap_start_tls,
+        ldap_ca_cert=ldap_ca_cert,
+        ldap_required_groups=ldap_required_groups,
+        ldap_connect_timeout=ldap_connect_timeout,
+        ldap_group_filter=ldap_group_filter,
+        oauth_client_id=oauth_client_id,
+        oauth_client_secret=oauth_client_secret,
+        oauth_issuer_url=oauth_issuer_url,
+        oauth_scope=oauth_scope,
+        oauth_authorization_endpoint=oauth_authorization_endpoint,
+        oauth_token_endpoint=oauth_token_endpoint,
+        oauth_userinfo_endpoint=oauth_userinfo_endpoint,
+        allowed_groups=base.allowed_groups,
+        allowed_roles=base.allowed_roles,
+        admin_users=base.admin_users,
+        session_ttl=base.session_ttl,
+        write_users=base.write_users,
+        role_map=base.role_map,
+        local_admin_user=local_admin_user,
+        local_admin_password_hash=local_admin_password_hash,
+        base_url=base.base_url,
+        allow_unauth=base.allow_unauth,
+        jwks_cache_ttl=base.jwks_cache_ttl,
+        scan_timeout=base.scan_timeout,
+        scan_retries=base.scan_retries,
+        scan_retry_backoff=base.scan_retry_backoff,
+        hsts_timeout=base.hsts_timeout,
+    )
