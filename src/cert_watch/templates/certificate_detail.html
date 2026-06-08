@@ -598,9 +598,9 @@ function checkRevocation(el) {
       results.innerHTML = '';
       results.style.display = 'block';
       data.findings.forEach(function(f) {
-        var icon = f.status === 'pass' ? '{{ icons.svg_icon('check', 13) }}' :
-          (f.status === 'warn' ? '{{ icons.svg_icon('alert', 13, 1.7) }}' :
-          '{{ icons.svg_icon('swap', 13, 1.7) }}');
+        var icon = f.status === 'pass' ? '{{ icons.svg_icon('check', 13) | replace("\n", "") }}' :
+          (f.status === 'warn' ? '{{ icons.svg_icon('alert', 13, 1.7) | replace("\n", "") }}' :
+          '{{ icons.svg_icon('swap', 13, 1.7) | replace("\n", "") }}');
         var tone = f.status === 'pass' ? 'cw-text-text-ok' :
           (f.status === 'warn' ? 'cw-text-text-warn' : 'cw-text-text-3');
         var div = document.createElement('div');

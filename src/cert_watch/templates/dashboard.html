@@ -760,7 +760,7 @@ document.addEventListener('click', function(e) {
           chip = document.createElement('span');
           chip.id = 'note-chip-' + hostId;
           chip.className = 'cw-chip cw-chip-muted';
-          chip.innerHTML = '{{ icons.svg_icon("file", 11, 1.6) | safe }}note';
+          chip.innerHTML = '{{ icons.svg_icon("file", 11, 1.6) | safe | replace("\n", "") }}note';
           btn.parentNode.insertBefore(chip, btn);
         }
         chip.setAttribute('title', note);
