@@ -901,6 +901,8 @@ def _evaluate_and_store_posture(
         must_staple=result.must_staple,
         verify_requested=entry.verify_requested,
         chain_incomplete=entry.chain_incomplete,
+        chain_status=cs,
+        scanned_at=entry.scanned_at,
     )
     return result.grade
 

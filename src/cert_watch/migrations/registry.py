@@ -30,6 +30,9 @@ from cert_watch.migrations.m0014_alert_read import (
 from cert_watch.migrations.m0015_api_keys import (
     upgrade as api_keys_upgrade,
 )
+from cert_watch.migrations.m0016_chain_status import (
+    upgrade as chain_status_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -66,4 +69,8 @@ runner.register(
 runner.register(
     "0015", "add api_keys table for M2M auth (Plan 039 / BC-104)",
     api_keys_upgrade,
+)
+runner.register(
+    "0016", "add chain_status column to scan_posture (BC-100)",
+    chain_status_upgrade,
 )
