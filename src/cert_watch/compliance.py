@@ -326,6 +326,8 @@ def build_compliance_report(
     tls_total = 0
     hsts_ok = 0
     hsts_total = 0
+    caa_ok = 0
+    caa_total = 0
 
     for r in rows:
         cid = r.get("id", "")
@@ -359,16 +361,24 @@ def build_compliance_report(
         if p.get("hsts"):
             hsts_ok += 1
 
+        caa_present = p.get("caa_present")
+        if caa_present is not None:
+            caa_total += 1
+            if caa_present:
+                caa_ok += 1
+
     metrics = [
         ComplianceMetric("No SHA-1 signature (SHA-256+)", sha1_ok, sha1_total),
         ComplianceMetric("Strong key (RSA >= 2048 or ECDSA)", strong_key_ok, strong_key_total),
         ComplianceMetric("TLS >= 1.2 at last scan", tls_ok, tls_total),
         ComplianceMetric("HSTS present (port 443)", hsts_ok, hsts_total),
-        # CAA is currently an on-demand lookup, not stored per scan, so it isn't
-        # aggregated here. Surfaced as an explicit "Not collected" row rather
-        # than omitted, so an auditor sees the checklist item was considered.
-        # Storing CAA per scan is a small follow-on (Plan 025 risk note).
-        ComplianceMetric("CAA present for domain", 0, 0, collected=False),
+        # CAA is now stored per scan (BC-121). Only show a collected metric when
+        # at least one scan has CAA data; otherwise fall back to "Not collected".
+        ComplianceMetric(
+            "CAA present for domain",
+            caa_ok, caa_total,
+            collected=caa_total > 0,
+        ),
     ]
 
     now = datetime.now(UTC)

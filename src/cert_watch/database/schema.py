@@ -264,6 +264,14 @@ def ensure_base(db_path: str | Path) -> None:
             conn.execute(
                 "ALTER TABLE scan_posture ADD COLUMN chain_status TEXT"
             )
+        if "caa_present" not in sp_cols:
+            conn.execute(
+                "ALTER TABLE scan_posture ADD COLUMN caa_present INTEGER"
+            )
+        if "caa_records" not in sp_cols:
+            conn.execute(
+                "ALTER TABLE scan_posture ADD COLUMN caa_records TEXT"
+            )
 
         # 3. Create indexes
         conn.executescript(_BASE_INDEXES)

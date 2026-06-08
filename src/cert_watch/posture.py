@@ -226,6 +226,8 @@ def evaluate_posture(
     check_revocation: bool = False,
     revocation_timeout: int = 5,
     port: int = 443,
+    caa_present: bool | None = None,
+    caa_records: list[str] | None = None,
     *,
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
@@ -239,6 +241,7 @@ def evaluate_posture(
     - Self-signed leaf
     - Missing intermediate (chain_status incomplete)
     - OCSP must-staple without stapling
+    - CAA presence (stored per scan, BC-121)
 
     When ``check_revocation`` is True, OCSP and CRL endpoint reachability
     is checked (network calls).  Gated by ``CERT_WATCH_CHECK_REVOCATION``.
@@ -416,6 +419,20 @@ def evaluate_posture(
         findings.append(Finding(
             check="hsts", status="pass",
             message="HSTS header present",
+        ))
+
+    # CAA presence (BC-121)
+    if caa_present is True:
+        recs = caa_records or []
+        recs_str = "; ".join(recs) if recs else "records present"
+        findings.append(Finding(
+            check="caa", status="pass",
+            message=f"CAA present — {recs_str}",
+        ))
+    elif caa_present is False:
+        findings.append(Finding(
+            check="caa", status="info",
+            message="No CAA records found (issuance implicitly allowed)",
         ))
 
     # Revocation endpoint health (opt-in, Plan 017 A1)
