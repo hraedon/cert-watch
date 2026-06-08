@@ -170,17 +170,32 @@ async def lifespan(app: FastAPI):
     ``create_app(...)`` for tests; otherwise they are resolved from the
     environment here (the production path).
     """
-    s = getattr(app.state, "_injected_settings", None) or Settings.from_env()
+    s = getattr(app.state, "_injected_settings", None)
+    if s is None:
+        # Two-phase boot: env first (to get data_dir), then merge kv_store for
+        # auth/smtp/alert persistence (BC-159). Without this, GUI-configured LDAP,
+        # OAuth, SMTP, and alert settings evaporate on restart.
+        base = Settings.from_env()
+        security = _resolve_security(base)
+        encryption_key = derive_encryption_key(security.signing_key)
+        try:
+            s = Settings.from_env_with_kv(base.db_path, encryption_key)
+        except Exception:
+            logger.warning("Could not merge kv_store settings, using env-only")
+            s = base
+        # Phase-1 backward compat: keep the module-level signing/CSRF globals in sync
+        # so fallback paths (OAuth state signing, direct unit-test calls) use the
+        # same keys. The request path reads app.state.security directly.
+        set_signing_key(security.signing_key)
+        set_csrf_secret(security.csrf_secret)
+    else:
+        security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
+        set_signing_key(security.signing_key)
+        set_csrf_secret(security.csrf_secret)
+
     _setup_logging(log_format=s.log_format)
     init_schema(s.db_path)
     _init_rate_db(s.db_path)
-
-    security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
-    # Phase-1 backward compat: keep the module-level signing/CSRF globals in sync
-    # so fallback paths (OAuth state signing, direct unit-test calls) use the
-    # same keys. The request path reads app.state.security directly.
-    set_signing_key(security.signing_key)
-    set_csrf_secret(security.csrf_secret)
 
     auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider()
 
