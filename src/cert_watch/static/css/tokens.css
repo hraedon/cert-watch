@@ -660,9 +660,17 @@ body {
 
 /* ---- TABLE HELPERS ---- */
 .cw-th-pt-14 { padding-top: 14px; }
+.cw-th-pl-20 { padding-left: 20px; }
+.cw-th-w-120 { width: 120px; }
+.cw-td-pl-20 { padding-left: 20px; }
+.cw-td-pr-20 { padding-right: 20px; }
 .cw-td-mw-300 { max-width: 300px; }
 .cw-td-mw-360 { max-width: 360px; }
 .cw-td-minw-150 { min-width: 150px; }
+
+/* ---- PANEL HELPERS ---- */
+.cw-panel-overflow { overflow: hidden; }
+.cw-panel-hd-pb-13 { padding-bottom: 13px; }
 
 /* ---- STATUS DOT ---- */
 .cw-status-dot {

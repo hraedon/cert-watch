@@ -80,8 +80,8 @@
 
   {# ---- Untracked hostnames ---- #}
   {% if untracked %}
-  <div class="cw-panel cw-mb-18" style="overflow:hidden">
-    <div class="cw-flex cw-items-center cw-gap-9 cw-p-15-18" style="padding-bottom:13px">
+  <div class="cw-panel cw-mb-18 cw-panel-overflow">
+    <div class="cw-flex cw-items-center cw-gap-9 cw-p-15-18 cw-panel-hd-pb-13">
       {{ icons.svg_icon('search', 15) }}
       <span class="cw-fz-14 cw-fw-600">Untracked hostnames in CT</span>
       <span class="cw-chip">{{ untracked | length }}</span>
@@ -91,21 +91,21 @@
     <table class="cw-table">
       <thead>
         <tr>
-          <th style="padding-left:20px">Hostname</th>
+          <th class="cw-th-pl-20">Hostname</th>
           <th>Domain</th>
-          <th style="width:120px"></th>
+          <th class="cw-th-w-120"></th>
         </tr>
       </thead>
       <tbody>
         {% for u in untracked %}
         <tr>
-          <td style="padding-left:20px">
+          <td class="cw-td-pl-20">
             <div class="cw-flex cw-items-center cw-gap-8">
               <span class="cw-host cw-fz-13">{{ u.host }}</span>
             </div>
           </td>
           <td class="mono cw-fz-12 cw-text-text-3">{{ u.domain }}</td>
-          <td style="padding-right:20px">
+          <td class="cw-td-pr-20">
             {% if may_write %}
             <a href="/?hostname={{ u.host | urlencode }}" class="cw-btn sm" title="Add this host">{{ icons.svg_icon('plus', 12, 2) }}Add host</a>
             {% endif %}
@@ -117,8 +117,75 @@
   </div>
   {% endif %}
 
+  {# ---- Mis-issuance detection (BC-151) ---- #}
+  {% if misissued %}
+  <div class="cw-panel cw-mb-18 cw-panel-overflow">
+    <div class="cw-flex cw-items-center cw-gap-9 cw-p-15-18 cw-panel-hd-pb-13">
+      {{ icons.svg_icon('alert', 15) }}
+      <span class="cw-fz-14 cw-fw-600">Potential mis-issuance detected</span>
+      <span class="cw-chip cw-chip-crit">{{ misissued | length }}</span>
+      <div class="cw-spacer"></div>
+      <span class="cw-fz-12 cw-text-text-3">CT shows a different issuer or serial than the scanned certificate</span>
+    </div>
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th class="cw-th-pl-20">Hostname</th>
+          <th>Scanned issuer</th>
+          <th>CT issuer</th>
+          <th class="cw-th-w-120"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in misissued %}
+        <tr>
+          <td class="cw-td-pl-20">
+            <span class="cw-host cw-fz-13">{{ m.host }}</span>
+          </td>
+          <td class="mono cw-fz-12 cw-text-text-3">{{ m.scanned_issuer }}</td>
+          <td class="mono cw-fz-12 cw-text-crit">{{ m.ct_issuer }}</td>
+          <td class="cw-td-pr-20">
+            <a href="/certificates/{{ m.host }}" class="cw-btn sm">View cert</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
+  {# ---- First-seen by issuer (BC-151) ---- #}
+  {% if first_seen_by_issuer %}
+  <div class="cw-panel cw-mb-18 cw-panel-overflow">
+    <div class="cw-flex cw-items-center cw-gap-9 cw-p-15-18 cw-panel-hd-pb-13">
+      {{ icons.svg_icon('globe', 15) }}
+      <span class="cw-fz-14 cw-fw-600">CT issuers — first seen</span>
+      <div class="cw-spacer"></div>
+      <span class="cw-fz-12 cw-text-text-3">per-issuer first appearance in CT logs</span>
+    </div>
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th class="cw-th-pl-20">Issuer</th>
+          <th>First seen</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for issuer, first_seen in first_seen_by_issuer.items() %}
+        <tr>
+          <td class="cw-td-pl-20">
+            <span class="mono cw-fz-12 cw-text-text-3">{{ issuer }}</span>
+          </td>
+          <td class="cw-fz-12 cw-text-text-3">{{ first_seen[:10] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+
   {# ---- Empty state ---- #}
-  {% if not untracked %}
+  {% if not untracked and not misissued %}
     {% if not domains and reconciling %}
     <div class="cw-panel cw-empty-state" data-testid="discover-pending">
       <div class="cw-empty-icon-circle">{{ icons.svg_icon('refresh', 24) }}</div>
