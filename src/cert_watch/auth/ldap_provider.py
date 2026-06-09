@@ -201,12 +201,14 @@ class LDAPAuthProvider(AuthProvider):
                     )
                 return AuthResult(success=False, error="user not found")
 
-            user_dn = str(conn.entries[0].distinguishedName)
+            entry = conn.entries[0]
+            user_dn = str(entry.distinguishedName)
             user_groups = (
-                list(conn.entries[0].memberOf.values)
-                if hasattr(conn.entries[0], "memberOf")
+                list(entry.memberOf.values)
+                if hasattr(entry, "memberOf")
                 else []
             )
+            email = str(entry.mail.value) if hasattr(entry, "mail") and entry.mail else ""
             conn.unbind()
 
             user_conn = ldap3.Connection(
@@ -228,6 +230,7 @@ class LDAPAuthProvider(AuthProvider):
                 success=True,
                 username=username,
                 groups=user_groups,
+                email=email,
             )
         except ldap3.core.exceptions.LDAPBindError:
             return AuthResult(success=False, error="invalid credentials")

@@ -145,6 +145,14 @@ from cert_watch.database.session_versions import (
     get_session_version,
 )
 
+# Users & Roles (Plan 040)
+from cert_watch.database.users_roles import (
+    Role,
+    SqliteRoleRepository,
+    SqliteUserRepository,
+    User,
+)
+
 __all__ = [
     # schema
     "init_schema",
@@ -235,6 +243,11 @@ __all__ = [
     # session_versions
     "get_session_version",
     "bump_session_version",
+    # users & roles
+    "Role",
+    "User",
+    "SqliteRoleRepository",
+    "SqliteUserRepository",
     # pagination
     "_count_alerts_by_filter",
     "_total_alerts",

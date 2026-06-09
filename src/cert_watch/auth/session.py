@@ -37,6 +37,7 @@ class SessionInfo:
     nonce: str
     groups: list[str]
     roles: list[str]
+    email: str = ""
 
 
 def _key(security: SecurityContext | None) -> str:
@@ -163,6 +164,7 @@ def create_session(
     version: int = 0,
     groups: list[str] | None = None,
     roles: list[str] | None = None,
+    email: str = "",
 ) -> str:
     """Create a signed session token for the given username.
 
@@ -172,10 +174,13 @@ def create_session(
 
     *groups* and *roles* are optional IdP claims that travel with the session
     so RBAC role resolution can use them on every request (BC-145).
+    *email* is the user's contact email (Plan 040).
     """
     payload = f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
-    if groups or roles:
+    if groups or roles or email:
         payload += f":{_encode_list(groups)}:{_encode_list(roles)}"
+        if email:
+            payload += f":{email}"
     token = _sign_session(payload, security)
     # Defence in depth: a token over ~4 KB makes the cw_auth cookie exceed the
     # browser per-cookie limit, which silently drops it → post-login redirect
@@ -218,7 +223,28 @@ def decode_session(
     #   3 parts: username:ts:nonce                (old format, version=0)
     #   4 parts: username:version:ts:nonce          (BC-081)
     #   6 parts: username:version:ts:nonce:groups:roles  (BC-145)
+    #   7 parts: username:version:ts:nonce:groups:roles:email  (Plan 040)
     #   5 parts is rejected as malformed.
+    if len(parts) == 7:
+        username = parts[0]
+        try:
+            version = int(parts[1])
+        except ValueError:
+            return None
+        ts = _parse_ts(parts, start=2)
+        nonce = parts[3]
+        groups = _decode_list(parts[4])
+        roles = _decode_list(parts[5])
+        email = parts[6]
+        return SessionInfo(
+            username=username,
+            version=version,
+            timestamp=ts,
+            nonce=nonce,
+            groups=groups,
+            roles=roles,
+            email=email,
+        )
     if len(parts) == 6:
         username = parts[0]
         try:

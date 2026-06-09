@@ -321,6 +321,8 @@ class OAuthProvider(AuthProvider):
             username = ""
             roles: list[str] = []
             groups: list[str] = []
+            claims: dict | None = None
+            info: dict = {}
             id_token_str = token.get("id_token")
             if id_token_str:
                 try:
@@ -420,7 +422,12 @@ class OAuthProvider(AuthProvider):
                     groups = [str(g) for g in (info.get("groups") or [])]
             if not username:
                 return AuthResult(success=False, error="could not determine username from token")
-            return AuthResult(success=True, username=username, roles=roles, groups=groups)
+            email = (
+                (claims.get("email") if claims else "")
+                or info.get("email")
+                or ""
+            )
+            return AuthResult(success=True, username=username, roles=roles, groups=groups, email=email)
         except Exception as exc:
             logger.warning("OAuth token exchange failed: %s", exc)
             return AuthResult(success=False, error="OAuth authentication failed")

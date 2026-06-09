@@ -39,6 +39,9 @@ from cert_watch.migrations.m0017_caa_per_scan import (
 from cert_watch.migrations.m0018_ct_issuer_first_seen import (
     upgrade as ct_issuer_first_seen_upgrade,
 )
+from cert_watch.migrations.m0019_users_roles import (
+    upgrade as users_roles_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -87,4 +90,8 @@ runner.register(
 runner.register(
     "0018", "add ct_issuer_first_seen table (BC-151)",
     ct_issuer_first_seen_upgrade,
+)
+runner.register(
+    "0019", "add users and roles tables for local auth (Plan 040)",
+    users_roles_upgrade,
 )

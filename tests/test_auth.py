@@ -741,7 +741,7 @@ def test_local_admin_username_mismatch_computes_dummy_hash():
     ) as dummy:
         result = provider.authenticate("not-admin", "whatever")
     assert result.success is False
-    dummy.assert_called_once_with("whatever")
+    dummy.assert_called_once_with("whatever", h)
 
 
 def test_local_admin_dummy_verify_invokes_scrypt():

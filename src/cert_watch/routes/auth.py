@@ -135,6 +135,7 @@ async def login_submit(
         version=version,
         groups=stored_groups,
         roles=stored_roles,
+        email=result.email,
     )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
@@ -295,6 +296,7 @@ def oauth_callback(
         version=version,
         groups=stored_groups,
         roles=stored_roles,
+        email=result.email,
     )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
