@@ -36,7 +36,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
@@ -49,7 +49,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
-def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | RedirectResponse:
+def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
 
     repo = SqliteCertificateRepository(db)
@@ -375,7 +375,7 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
 
 
 @router.get("/api/certificates/{cert_id}/posture", response_model=None)
-def certificate_posture_api(request: Request, cert_id: str, _auth: str = Depends(require_auth)):
+def certificate_posture_api(request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)):
     """Return the latest posture evaluation for a certificate as JSON."""
     db = _db_path(request)
     from cert_watch.database import get_posture_for_cert
@@ -396,7 +396,7 @@ def certificate_posture_api(request: Request, cert_id: str, _auth: str = Depends
 
 
 @router.post("/certificates/{cert_id}/delete")
-async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse:
+async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
         return write_err
@@ -416,7 +416,7 @@ async def delete_certificate(request: Request, cert_id: str) -> RedirectResponse
 
 @router.post("/certificates/{cert_id}/notes")
 async def update_certificate_notes(
-    request: Request, cert_id: str, notes: str = Form(...)
+    request: Request, cert_id: IdParam, notes: str = Form(...)
 ) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
@@ -447,7 +447,7 @@ async def update_certificate_notes(
 @router.post("/certificates/{cert_id}/owner")
 async def update_certificate_owner(
     request: Request,
-    cert_id: str,
+    cert_id: IdParam,
     owner_name: str = Form(""),
     owner_email: str = Form(""),
     owner_slack: str = Form(""),
@@ -647,7 +647,7 @@ async def add_trust_anchor(
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
-async def delete_trust_anchor(request: Request, anchor_id: str) -> RedirectResponse:
+async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
         return write_err

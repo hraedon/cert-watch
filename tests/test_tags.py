@@ -173,8 +173,9 @@ def test_api_set_cert_tags_bad_body(tmp_path, reload_app, leaf_pem_file):
 
 def test_api_set_cert_tags_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.put("/api/certificates/nope/tags", json={"tags": ["x"]})
+        r = client.put(f"/api/certificates/{_MISSING}/tags", json={"tags": ["x"]})
         assert r.status_code == 404
 
 
@@ -188,5 +189,6 @@ def test_api_set_host_tags(tmp_path, reload_app):
         r = client.put(f"/api/hosts/{host_id}/tags", json={"tags": ["team-net"]})
         assert r.status_code == 200, r.text
         assert r.json()["tags"] == ["team-net"]
-        miss = client.put("/api/hosts/missing/tags", json={"tags": ["x"]})
+        _MISSING = "00000000-0000-0000-0000-000000000000"
+        miss = client.put(f"/api/hosts/{_MISSING}/tags", json={"tags": ["x"]})
         assert miss.status_code == 404

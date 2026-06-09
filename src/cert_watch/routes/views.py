@@ -29,7 +29,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write,
 )
-from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, get_templates
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -452,7 +452,7 @@ def caa_check_view(request: Request, domain: str) -> dict:
 @router.post("/api/alerts/{alert_id}/read")
 async def mark_alert_read(
     request: Request,
-    alert_id: str,
+    alert_id: IdParam,
     _auth: str = Depends(require_write),
 ) -> dict:
     """Mark an alert as read."""

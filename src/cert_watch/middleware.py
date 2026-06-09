@@ -565,8 +565,10 @@ def _build_csp(nonce: str) -> str:
 
     ``style-src`` keeps ``'unsafe-inline'``: the UI binds dynamic CSS custom
     properties via inline ``style=`` attributes, which nonces can't cover.
+
+    ``report-uri`` is appended when ``CERT_WATCH_CSP_REPORT_URI`` is set.
     """
-    return (
+    policy = (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
         "style-src 'self' 'unsafe-inline'; "
@@ -574,6 +576,10 @@ def _build_csp(nonce: str) -> str:
         "connect-src 'self'; "
         "frame-ancestors 'none'"
     )
+    report_uri = os.environ.get("CERT_WATCH_CSP_REPORT_URI", "")
+    if report_uri:
+        policy += f"; report-uri {report_uri}"
+    return policy
 
 
 class CSPNonceMiddleware:

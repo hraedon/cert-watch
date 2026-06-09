@@ -16,7 +16,7 @@ from cert_watch.database import (
 )
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
-from cert_watch.routes._deps import _db_path, _get_settings
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings
 from cert_watch.routes.api._shared import (
     _normalize_pagination,
     _pagination_links,
@@ -53,7 +53,7 @@ def api_list_certificates(
 
 @router.get("/api/certificates/{cert_id}")
 def api_get_certificate(
-    request: Request, cert_id: str, _auth: str = Depends(require_auth)
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     db = _db_path(request)
 
@@ -81,7 +81,7 @@ def api_get_certificate(
 
 @router.get("/api/certificates/{cert_id}/pem")
 def api_download_pem(
-    request: Request, cert_id: str, _auth: str = Depends(require_auth)
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> PlainTextResponse:
     db = _db_path(request)
 
@@ -107,7 +107,7 @@ def api_download_pem(
 
 @router.patch("/api/certificates/{cert_id}/notes")
 async def api_update_notes(
-    cert_id: str, request: Request, _auth: str = Depends(require_write)
+    cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteCertificateRepository(db)
@@ -138,7 +138,7 @@ async def api_update_notes(
 
 @router.get("/api/certificates/{cert_id}/history")
 def api_cert_history(
-    request: Request, cert_id: str, _auth: str = Depends(require_auth), limit: int = 365
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth), limit: int = 365
 ) -> JSONResponse:
     db = _db_path(request)
     from cert_watch.database.connection import _connect
@@ -155,7 +155,7 @@ def api_cert_history(
 
 @router.get("/api/certificates/{cert_id}/revocation")
 def api_check_revocation(
-    request: Request, cert_id: str, _auth: str = Depends(require_auth)
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     """Check OCSP/CRL endpoint reachability for a certificate on demand."""
     db = _db_path(request)
@@ -194,7 +194,7 @@ def api_list_tags(request: Request, _auth: str = Depends(require_auth)) -> JSONR
 
 @router.put("/api/certificates/{cert_id}/tags")
 async def api_set_cert_tags(
-    cert_id: str, request: Request, _auth: str = Depends(require_write)
+    cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteCertificateRepository(db)

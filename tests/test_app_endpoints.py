@@ -122,7 +122,7 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch, reload_app):
 def test_scan_now_404_redirect_on_unknown_host(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.post("/hosts/does-not-exist/scan", follow_redirects=False)
+        r = client.post("/hosts/00000000-0000-0000-0000-000000000000/scan", follow_redirects=False)
     assert r.status_code == 303
     assert "error" in r.headers["location"]
 

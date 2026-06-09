@@ -15,7 +15,7 @@ from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteApiKeyRepository
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.middleware import require_admin, require_admin_write
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import IdParam, _db_path
 
 logger = logging.getLogger("cert_watch.routes.api.keys")
 
@@ -80,7 +80,7 @@ async def api_create_key(
 
 @router.delete("/api/api-keys/{key_id}")
 async def api_revoke_key(
-    key_id: str, request: Request, _auth: str = Depends(require_admin_write)
+    key_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     repo = SqliteApiKeyRepository(_db_path(request))
     revoked = repo.revoke_key(key_id)

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
+from typing import Annotated
 
+from fastapi import Path as PathParam
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
@@ -11,6 +14,13 @@ from cert_watch.config import Settings
 from cert_watch.filters import register_filters
 
 _CSV_DANGEROUS_PREFIXES = frozenset({"=", "+", "-", "@", "\t", "\r", "\n"})
+
+# UUID format: 32 hex chars (no dashes) or 8-4-4-4-12 with dashes.
+_UUID_RE = re.compile(r"^[0-9a-fA-F]{32}$|^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+# Annotated path parameter type for UUID identifiers — FastAPI validates the
+# format before the handler runs, returning 422 on mismatch.
+IdParam = Annotated[str, PathParam(pattern=r"^[0-9a-fA-F-]{32,36}$")]
 
 # Single shared templates instance avoids repeated setup across route modules.
 _BASE_DIR = Path(__file__).parent.parent

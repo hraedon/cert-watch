@@ -378,7 +378,7 @@ class TestAlertGroupAPI:
     def test_delete_not_found(self, reload_app):
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:
-            d = client.delete("/api/alert-groups/nope")
+            d = client.delete("/api/alert-groups/00000000-0000-0000-0000-000000000000")
             assert d.status_code == 404
 
     def test_assign_and_unassign_cert(self, reload_app, tmp_path, leaf_pem_file):
@@ -406,8 +406,9 @@ class TestAlertGroupAPI:
 
     def test_assign_group_not_found(self, reload_app):
         app_mod = reload_app()
+        _MISSING = "00000000-0000-0000-0000-000000000000"
         with TestClient(app_mod.app) as client:
-            r = client.post("/api/alert-groups/nope/certs/cert-id")
+            r = client.post(f"/api/alert-groups/{_MISSING}/certs/{_MISSING}")
             assert r.status_code == 404
 
     def test_assign_cert_not_found(self, reload_app):
@@ -417,7 +418,7 @@ class TestAlertGroupAPI:
                 "name": "g", "recipients": ["a@b.com"], "match_tags": [],
             })
             gid = r.json()["id"]
-            a = client.post(f"/api/alert-groups/{gid}/certs/nope")
+            a = client.post(f"/api/alert-groups/{gid}/certs/00000000-0000-0000-0000-000000000000")
             assert a.status_code == 404
 
     def test_alert_routing_preview(self, reload_app, tmp_path, leaf_pem_file):
@@ -445,7 +446,7 @@ class TestAlertGroupAPI:
     def test_alert_routing_not_found(self, reload_app):
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:
-            r = client.get("/api/certificates/nope/alert-routing")
+            r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/alert-routing")
             assert r.status_code == 404
 
     def test_list_groups(self, reload_app):
