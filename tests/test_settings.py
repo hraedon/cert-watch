@@ -5,6 +5,22 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+
+@pytest.fixture(autouse=True)
+def _mock_ssrf_resolver(monkeypatch):
+    """Bypass DNS resolution in SSRF checks for test hostnames.
+
+    The LDAP/SMTP test endpoints now resolve hostnames through
+    resolve_and_validate_host before connecting. Tests use hostnames like
+    smtp.example.com that don't resolve, so mock the resolver to return a
+    public IP. Tests that pass literal IPs (e.g. 127.0.0.1) still hit the
+    IP-check path before the resolver.
+    """
+    monkeypatch.setattr(
+        "cert_watch.scan_resolver.resolve_and_validate_host",
+        lambda *a, **k: (None, "93.184.216.34"),
+    )
+
 # ---------- Settings page rendering ----------
 
 

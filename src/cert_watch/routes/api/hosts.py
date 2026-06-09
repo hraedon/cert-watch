@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import require_auth, require_write
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
@@ -58,7 +58,7 @@ def api_list_hosts(
 
 @router.patch("/api/hosts/{host_id}/owner")
 async def api_update_host_owner(
-    host_id: str, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     """Update owner/contact and renewal status for a host."""
     try:
@@ -159,7 +159,7 @@ async def api_update_host_owner(
 
 @router.patch("/api/hosts/{host_id}/notes")
 async def api_update_host_notes(
-    host_id: str, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteHostRepository(db)
@@ -190,7 +190,7 @@ async def api_update_host_notes(
 
 @router.put("/api/hosts/{host_id}/tags")
 async def api_set_host_tags(
-    host_id: str, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteHostRepository(db)

@@ -255,6 +255,16 @@ async def lifespan(app: FastAPI):
         )
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
+    if os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
+        logger.warning(
+            "CSRF protection is DISABLED via CERT_WATCH_CSRF_DISABLED=1. "
+            "This should only be used for testing — never in production."
+        )
+    if os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") != "1":
+        logger.warning(
+            "Session cookie Secure flag is DISABLED via CERT_WATCH_COOKIE_SECURE=0. "
+            "Cookies will be sent over plain HTTP — never use in production."
+        )
 
     # BC-083 fail-closed fallback: if after the provisioning attempt we still
     # have no auth on a network-exposed bind (e.g. provisioning could not persist

@@ -34,16 +34,16 @@ def test_api_posture_returns_stored_grade(tmp_path, reload_app):
 
     init_schema(str(db))
     store_scan_posture(
-        str(db), "cert-xyz", "example.com", 443, "B",
+        str(db), "00000000-0000-0000-0000-000000000001", "example.com", 443, "B",
         [{"check": "tls_version", "status": "warn", "message": "TLS 1.0 offered"}],
         protocol_version="TLSv1.0",
     )
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/cert-xyz/posture")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000001/posture")
     assert r.status_code == 200
     data = r.json()
-    assert data["cert_id"] == "cert-xyz"
+    assert data["cert_id"] == "00000000-0000-0000-0000-000000000001"
     assert data["grade"] == "B"
     assert data["protocol_version"] == "TLSv1.0"
     assert data["findings"][0]["check"] == "tls_version"
@@ -52,7 +52,7 @@ def test_api_posture_returns_stored_grade(tmp_path, reload_app):
 def test_api_posture_no_data(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/missing/posture")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/posture")
     assert r.status_code == 200
     assert r.json()["error"] == "no posture data"
 
@@ -79,7 +79,7 @@ def test_api_certificate_by_id(tmp_path, reload_app, leaf_pem_file):
 def test_api_certificate_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/nonexistent")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 404
 
 
@@ -120,7 +120,7 @@ def test_api_revocation_check(tmp_path, reload_app, leaf_pem_file, monkeypatch):
 def test_api_revocation_check_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/nonexistent/revocation")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/revocation")
     assert r.status_code == 404
     assert r.json()["error"] == "not found"
 
@@ -318,7 +318,7 @@ def test_api_patch_notes_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.patch(
-            "/api/certificates/nonexistent/notes",
+            "/api/certificates/00000000-0000-0000-0000-000000000000/notes",
             json={"notes": "test"},
         )
     assert r.status_code == 404
@@ -378,5 +378,5 @@ def test_api_download_pem(tmp_path, reload_app, leaf_pem_file):
 def test_api_download_pem_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/nonexistent/pem")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/pem")
     assert r.status_code == 404

@@ -361,7 +361,7 @@ def test_api_cert_history_not_found(reload_app):
     app_mod = reload_app()
 
     with TestClient(app_mod.app) as client:
-        resp = client.get("/api/certificates/nonexistent/history")
+        resp = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/history")
     assert resp.status_code == 404
 
 

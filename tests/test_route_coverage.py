@@ -628,7 +628,7 @@ def test_metrics_no_error_message(reload_app, tmp_path):
 def test_certificate_detail_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/certificates/nonexistent", follow_redirects=False)
+        r = client.get("/certificates/00000000-0000-0000-0000-000000000000", follow_redirects=False)
     assert r.status_code == 303
     assert "error" in r.headers["location"]
 
@@ -857,8 +857,9 @@ def test_certificate_detail_with_drift_events(reload_app, tmp_path):
 
 def test_delete_certificate_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.post("/certificates/nonexistent/delete", follow_redirects=False)
+        r = client.post(f"/certificates/{_MISSING}/delete", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/"
 
@@ -868,9 +869,10 @@ def test_delete_certificate_not_found(reload_app):
 
 def test_update_notes_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
         r = client.post(
-            "/certificates/nonexistent/notes", data={"notes": "test"}, follow_redirects=False
+            f"/certificates/{_MISSING}/notes", data={"notes": "test"}, follow_redirects=False
         )
     assert r.status_code == 303
     assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
@@ -942,7 +944,7 @@ def test_update_owner_via_certificate_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.post(
-            "/certificates/nonexistent/owner",
+            "/certificates/00000000-0000-0000-0000-000000000000/owner",
             data={"owner_name": "Alice"},
             follow_redirects=False,
         )

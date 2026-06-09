@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
@@ -60,7 +60,7 @@ def query_ct_log(
     """
     if not domain or len(domain) > _MAX_DOMAIN_LEN or not _DOMAIN_RE.match(domain):
         return f"Invalid domain: {domain}"
-    url = f"{_ct_log_url()}/?q={domain}&output=json"
+    url = f"{_ct_log_url()}/?q={quote(domain, safe='')}&output=json"
     try:
         with ssrf_safe_urlopen(
             url, timeout=timeout, headers={"User-Agent": "cert-watch/0.3"},

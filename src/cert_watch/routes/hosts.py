@@ -19,7 +19,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.routes._deps import _csv_safe, _db_path, _get_settings
+from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
 from cert_watch.scan import (
     ScanError,
     ScannedEntry,
@@ -309,7 +309,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
 @router.post("/hosts/{host_id}/notes")
 async def update_host_notes(
-    request: Request, host_id: str, notes: str = Form(...)
+    request: Request, host_id: IdParam, notes: str = Form(...)
 ) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
@@ -336,7 +336,7 @@ async def update_host_notes(
 
 
 @router.post("/hosts/{host_id}/delete")
-async def delete_host(request: Request, host_id: str) -> RedirectResponse:
+async def delete_host(request: Request, host_id: IdParam) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
         return write_err
@@ -432,7 +432,7 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
 
 
 @router.post("/hosts/{host_id}/scan")
-async def scan_host_now(request: Request, host_id: str) -> RedirectResponse:
+async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
         return write_err

@@ -85,7 +85,7 @@ def test_api_cert_history(reload_app, tmp_path, leaf_pem_file):
 def test_api_cert_history_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/nonexistent/history")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/history")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -156,8 +156,9 @@ def test_api_set_cert_tags_invalid(reload_app, tmp_path, leaf_pem_file):
 
 def test_api_set_cert_tags_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.put("/api/certificates/nonexistent/tags", json={"tags": ["a"]})
+        r = client.put(f"/api/certificates/{_MISSING}/tags", json={"tags": ["a"]})
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -195,7 +196,7 @@ def test_api_set_host_tags(reload_app, tmp_path):
 def test_api_set_host_tags_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.put("/api/hosts/nonexistent/tags", json={"tags": ["a"]})
+        r = client.put("/api/hosts/00000000-0000-0000-0000-000000000000/tags", json={"tags": ["a"]})
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -323,8 +324,9 @@ def test_api_update_host_owner_invalid_runbook_url(reload_app, tmp_path):
 
 def test_api_update_host_owner_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.patch("/api/hosts/nonexistent/owner", json={"owner_name": "Alice"})
+        r = client.patch(f"/api/hosts/{_MISSING}/owner", json={"owner_name": "Alice"})
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -535,7 +537,7 @@ def test_api_get_alert_group(reload_app, tmp_path):
 def test_api_get_alert_group_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/alert-groups/nonexistent")
+        r = client.get("/api/alert-groups/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -552,8 +554,9 @@ def test_api_update_alert_group(reload_app, tmp_path):
 
 def test_api_update_alert_group_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.patch("/api/alert-groups/nonexistent", json={"name": "x"})
+        r = client.patch(f"/api/alert-groups/{_MISSING}", json={"name": "x"})
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -646,7 +649,7 @@ def test_api_delete_alert_group(reload_app, tmp_path):
 def test_api_delete_alert_group_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.delete("/api/alert-groups/nonexistent")
+        r = client.delete("/api/alert-groups/00000000-0000-0000-0000-000000000000")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -671,7 +674,7 @@ def test_api_assign_cert_group_not_found(reload_app, tmp_path, leaf_pem_file):
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
     with TestClient(app_mod.app) as client:
-        r = client.post(f"/api/alert-groups/nonexistent/certs/{cert_id}")
+        r = client.post(f"/api/alert-groups/00000000-0000-0000-0000-000000000000/certs/{cert_id}")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -681,7 +684,7 @@ def test_api_assign_cert_cert_not_found(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r1 = client.post("/api/alert-groups", json={"name": "g", "recipients": ["a@b.com"]})
         gid = r1.json()["id"]
-        r2 = client.post(f"/api/alert-groups/{gid}/certs/nonexistent")
+        r2 = client.post(f"/api/alert-groups/{gid}/certs/00000000-0000-0000-0000-000000000000")
     assert r2.status_code == 404
 
 
@@ -700,8 +703,9 @@ def test_api_unassign_cert_from_group(reload_app, tmp_path, leaf_pem_file):
 
 def test_api_unassign_cert_group_not_found(reload_app):
     app_mod = reload_app()
+    _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
-        r = client.delete("/api/alert-groups/nonexistent/certs/cert1")
+        r = client.delete(f"/api/alert-groups/{_MISSING}/certs/{_MISSING}")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -724,7 +728,7 @@ def test_api_cert_alert_routing(reload_app, tmp_path, leaf_pem_file):
 def test_api_cert_alert_routing_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/nonexistent/alert-routing")
+        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/alert-routing")
     assert r.status_code == 404
     assert "not found" in r.json()["error"]
 
@@ -1287,6 +1291,11 @@ def test_test_ldap_no_ldap3(reload_app, monkeypatch):
 
     orig = sys.modules.get("ldap3")
     sys.modules["ldap3"] = None  # type: ignore[assignment]
+    # Bypass DNS resolution for the SSRF check (localhost would be blocked)
+    monkeypatch.setattr(
+        "cert_watch.scan_resolver.resolve_and_validate_host",
+        lambda *a, **k: (None, "127.0.0.1"),
+    )
     try:
         with TestClient(app_mod.app) as client:
             r = client.post(

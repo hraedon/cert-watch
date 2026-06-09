@@ -55,7 +55,7 @@ def test_api_update_host_notes_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.patch(
-            "/api/hosts/nonexistent/notes",
+            "/api/hosts/00000000-0000-0000-0000-000000000000/notes",
             json={"notes": "notes"},
         )
     assert r.status_code == 404
@@ -119,7 +119,7 @@ def test_form_update_host_notes_not_found(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.post(
-            "/hosts/nonexistent/notes",
+            "/hosts/00000000-0000-0000-0000-000000000000/notes",
             data={"notes": "notes"},
             follow_redirects=False,
         )

@@ -15,7 +15,7 @@ from cert_watch.database import (
     list_alerts_with_subject,
 )
 from cert_watch.middleware import require_auth, require_write
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes.api._shared import (
     _alert_group_json,
     _normalize_pagination,
@@ -122,7 +122,7 @@ async def api_create_alert_group(
 
 @router.get("/api/alert-groups/{group_id}")
 def api_get_alert_group(
-    request: Request, group_id: str, _auth: str = Depends(require_auth)
+    request: Request, group_id: IdParam, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -134,7 +134,7 @@ def api_get_alert_group(
 
 @router.patch("/api/alert-groups/{group_id}")
 async def api_update_alert_group(
-    group_id: str, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -211,7 +211,7 @@ async def api_update_alert_group(
 
 @router.delete("/api/alert-groups/{group_id}")
 async def api_delete_alert_group(
-    group_id: str, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -234,7 +234,7 @@ async def api_delete_alert_group(
 
 @router.post("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_assign_cert_to_group(
-    group_id: str, cert_id: str, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -259,7 +259,7 @@ async def api_assign_cert_to_group(
 
 @router.delete("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_unassign_cert_from_group(
-    group_id: str, cert_id: str, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -281,7 +281,7 @@ async def api_unassign_cert_from_group(
 
 @router.get("/api/certificates/{cert_id}/alert-routing")
 def api_cert_alert_routing(
-    request: Request, cert_id: str, _auth: str = Depends(require_auth)
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     """Preview which alert groups match a cert and the resolved recipients."""
     db = _db_path(request)

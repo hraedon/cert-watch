@@ -7,25 +7,37 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import ssl
 from pathlib import Path
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
-from cert_watch.middleware import get_auth_context, get_csrf_context
-from cert_watch.routes._deps import _db_path, _get_settings, get_templates
+from cert_watch.middleware import get_auth_context, get_csrf_context, require_admin_write
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 
 logger = logging.getLogger("cert_watch.routes.settings")
 
 router = APIRouter()
 
 templates = get_templates()
+
+# Regex to strip IP addresses and ports from error messages to prevent info leakage.
+_IP_ADDR_RE = re.compile(
+    r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b"
+    r"|\[?(?:[0-9a-fA-F]{1,4}:){2,}[0-9a-fA-F]{1,4}\]?(?::\d+)?"
+)
+
+
+def _sanitize_test_error(msg: str) -> str:
+    """Strip IP addresses and internal details from error messages returned to the client."""
+    return _IP_ADDR_RE.sub("<redacted>", msg)
 
 
 def _get_encryption_key(request: Request) -> str | None:
@@ -47,20 +59,23 @@ def _local_admin_configured(request: Request) -> bool:
 
 
 def _require_admin(request: Request) -> RedirectResponse | JSONResponse | None:
-    """Return redirect to /login if not authenticated, 403 if not admin, or None if OK."""
-    from cert_watch.auth import LocalAdminProvider, NoAuthProvider, _CompositeProvider
+    """Return redirect to /login if not authenticated, 403 if not admin, or None if OK.
+
+    Uses AuthContext.is_admin (RBAC-aware) when available, falling back to the
+    legacy settings.admin_users list for backward compatibility.
+    """
+    from cert_watch.auth import NoAuthProvider
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return None  # No auth configured — allow access
     user = request.scope.get("auth_user")
     if not user:
         return RedirectResponse(url="/login", status_code=303)
-    # Local admin / break-glass always has admin access
-    if isinstance(auth, LocalAdminProvider):
+    # RBAC-aware check: AuthContext is set by the auth middleware pipeline
+    ctx = getattr(request.state, "auth_context", None)
+    if ctx is not None and ctx.is_admin:
         return None
-    if isinstance(auth, _CompositeProvider) and auth._local and user == auth._local.username:
-        return None
-    # Check CERT_WATCH_ADMINS list
+    # Legacy fallback: settings.admin_users list
     settings = getattr(request.app.state, "settings", None)
     if settings and settings.admin_users and user not in settings.admin_users:
         return JSONResponse(
@@ -320,7 +335,7 @@ async def api_keys_create(
 
 @router.post("/settings/api-keys/{key_id}/revoke", response_model=None)
 async def api_keys_revoke(
-    key_id: str, request: Request
+    key_id: IdParam, request: Request
 ) -> RedirectResponse | HTMLResponse | JSONResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
@@ -591,13 +606,19 @@ def _capture_starttls_chain(
         with contextlib.suppress(ValueError):
             port = int(rest.split(":")[1].split("/")[0])
 
-    # SSRF guard
+    # SSRF guard — resolve hostnames to catch DNS-based bypasses
     try:
         ip = ipaddress.ip_address(host)
         if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
             return None
     except ValueError:
-        pass
+        from cert_watch.scan_resolver import resolve_and_validate_host
+
+        err, _ = resolve_and_validate_host(
+            host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
+        )
+        if err:
+            return None
 
     # Try ldap3 StartTLS first
     try:
@@ -647,13 +668,19 @@ def _probe_tls_chain(
 
     from cert_watch.scan import _is_blocked_ip, _scan_via_openssl
 
-    # SSRF guard
+    # SSRF guard — resolve hostnames to catch DNS-based bypasses
     try:
         ip = ipaddress.ip_address(host)
         if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
             return None
     except ValueError:
-        pass
+        from cert_watch.scan_resolver import resolve_and_validate_host
+
+        err, _ = resolve_and_validate_host(
+            host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
+        )
+        if err:
+            return None
 
     der_chain: list[bytes] = []
     try:
@@ -747,14 +774,10 @@ def _is_cert_verify_error(exc: Exception) -> bool:
 
 
 @router.post("/settings/test-ldap")
-async def test_ldap_connection(request: Request) -> JSONResponse:
-    _redirect = _require_admin(request)
-    if _redirect:
-        return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
-    from cert_watch.middleware import check_csrf
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
+async def test_ldap_connection(
+    request: Request,
+    _auth: str = Depends(require_admin_write),
+) -> JSONResponse:
 
     form = await request.form()
     _server = form.get("ldap_server", "")
@@ -785,19 +808,24 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "LDAP server and base DN are required"})
 
     # SSRF guard: block connections to loopback/link-local/metadata addresses.
-    from cert_watch.scan import _is_blocked_ip
+    # Resolve hostnames through the SSRF guard so DNS-based bypasses are caught.
+    from cert_watch.scan_resolver import resolve_and_validate_host
 
     for s in [s.strip() for s in server.split(",") if s.strip()]:
         host_part = s.split("://", 1)[-1].split(":")[0].split("/")[0]
         try:
             import ipaddress as _ip
             ip = _ip.ip_address(host_part)
+            from cert_watch.scan import _is_blocked_ip
             if _is_blocked_ip(ip):
                 return JSONResponse(
                     {"ok": False, "error": f"LDAP server IP blocked: {ip}"},
                 )
         except ValueError:
-            pass  # hostname — DNS-resolved at connect time
+            # hostname — resolve and validate all returned IPs
+            err, _ = resolve_and_validate_host(host_part, allow_private=False)
+            if err:
+                return JSONResponse({"ok": False, "error": f"LDAP server blocked: {err}"})
 
     try:
         import os
@@ -867,7 +895,7 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
                         if tofu_chain:
                             return JSONResponse({
                                 "ok": False,
-                                "error": f"{url}: {exc}",
+                                "error": _sanitize_test_error(f"{url}: {exc}"),
                                 "tofu": {
                                     "chain": [
                                         {
@@ -881,7 +909,9 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
                                     "pem": "".join(c["pem"] for c in tofu_chain),
                                 },
                             })
-                    return JSONResponse({"ok": False, "error": f"{url}: {exc}"})
+                    return JSONResponse(
+                        {"ok": False, "error": _sanitize_test_error(f"{url}: {exc}")}
+                    )
                 tls_active = srv_is_ldaps or bool(getattr(conn, "tls_started", False))
                 conn.unbind()
                 if use_tls and not tls_active:
@@ -913,21 +943,18 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
             "error": "ldap3 not installed (pip install cert-watch[auth-ldap])",
         })
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)})
+        logger.warning("LDAP test failed: %s", exc)
+        return JSONResponse({"ok": False, "error": _sanitize_test_error(str(exc))})
 
 
 # ---------- Pin LDAP CA (TOFU trust) ----------
 
 
 @router.post("/settings/pin-ldap-ca")
-async def pin_ldap_ca(request: Request) -> JSONResponse:
-    _redirect = _require_admin(request)
-    if _redirect:
-        return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
-    from cert_watch.middleware import check_csrf
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
+async def pin_ldap_ca(
+    request: Request,
+    _auth: str = Depends(require_admin_write),
+) -> JSONResponse:
 
     form = await request.form()
     _pem = form.get("ldap_ca_cert", "")
@@ -971,14 +998,10 @@ async def pin_ldap_ca(request: Request) -> JSONResponse:
 
 
 @router.post("/settings/test-smtp")
-async def test_smtp_connection(request: Request) -> JSONResponse:
-    _redirect = _require_admin(request)
-    if _redirect:
-        return JSONResponse({"ok": False, "error": "not authenticated"}, status_code=401)
-    from cert_watch.middleware import check_csrf
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return JSONResponse({"ok": False, "error": csrf_err}, status_code=400)
+async def test_smtp_connection(
+    request: Request,
+    _auth: str = Depends(require_admin_write),
+) -> JSONResponse:
 
     form = await request.form()
     _host = form.get("smtp_host", "")
@@ -1004,17 +1027,22 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
         return JSONResponse({"ok": False, "error": "SMTP host is required"})
 
     # SSRF guard: block connections to loopback/link-local/metadata addresses.
-    from cert_watch.scan import _is_blocked_ip
+    # Resolve hostnames through the SSRF guard so DNS-based bypasses are caught.
+    from cert_watch.scan_resolver import resolve_and_validate_host
 
     try:
         import ipaddress as _ip
         ip = _ip.ip_address(host)
+        from cert_watch.scan import _is_blocked_ip
         if _is_blocked_ip(ip):
             return JSONResponse(
                 {"ok": False, "error": f"SMTP host IP blocked: {ip}"},
             )
     except ValueError:
-        pass  # hostname — DNS-resolved at connect time
+        # hostname — resolve and validate all returned IPs
+        err, _ = resolve_and_validate_host(host, allow_private=False)
+        if err:
+            return JSONResponse({"ok": False, "error": f"SMTP host blocked: {err}"})
 
     if not from_addr or not recipients:
         return JSONResponse({
@@ -1053,7 +1081,8 @@ async def test_smtp_connection(request: Request) -> JSONResponse:
             s.send_message(msg)
         return JSONResponse({"ok": True, "message": f"Test email sent to {recipients}"})
     except Exception as exc:
-        return JSONResponse({"ok": False, "error": str(exc)})
+        logger.warning("SMTP test failed: %s", exc)
+        return JSONResponse({"ok": False, "error": _sanitize_test_error(str(exc))})
 
 
 # ---------- Role management (Plan 040) ----------
@@ -1109,7 +1138,7 @@ async def create_role(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/roles/{role_id}/delete")
-async def delete_role(role_id: str, request: Request) -> RedirectResponse:
+async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
         return redirect_resp
@@ -1192,7 +1221,7 @@ async def create_user(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/users/{user_id}/delete")
-async def delete_user(user_id: str, request: Request) -> RedirectResponse:
+async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
         return redirect_resp
