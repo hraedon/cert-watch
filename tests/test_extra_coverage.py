@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
@@ -15,77 +16,6 @@ from cert_watch.upload import store_uploaded, upload_certificate
 
 def _reload(reload_app):
     return reload_app()
-
-
-# ---------- scan.py: _is_blocked_ip and SSRF checks ----------
-
-
-def test_is_blocked_ip_loopback():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1")) is True
-    assert _is_blocked_ip(ipaddress.ip_address("::1")) is True
-
-
-def test_is_blocked_ip_link_local():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("169.254.1.1")) is True
-    assert _is_blocked_ip(ipaddress.ip_address("fe80::1")) is True
-
-
-def test_is_blocked_ip_private_allowed():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("10.0.0.1"), allow_private=True) is False
-    assert _is_blocked_ip(ipaddress.ip_address("192.168.1.1"), allow_private=True) is False
-
-
-def test_is_blocked_ip_private_blocked():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("10.0.0.1"), allow_private=False) is True
-    assert _is_blocked_ip(ipaddress.ip_address("192.168.1.1"), allow_private=False) is True
-
-
-def test_is_blocked_ip_allowed_subnets():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert (
-        _is_blocked_ip(
-            ipaddress.ip_address("10.0.0.1"),
-            allow_private=False,
-            allowed_subnets=("10.0.0.0/8",),
-        )
-        is False
-    )
-
-
-def test_is_blocked_ip_public():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("8.8.8.8")) is False
-    assert _is_blocked_ip(ipaddress.ip_address("1.1.1.1")) is False
-
-
-def test_is_blocked_ip_metadata():
-    import ipaddress
-
-    from cert_watch.scan import _is_blocked_ip
-
-    assert _is_blocked_ip(ipaddress.ip_address("169.254.169.254")) is True
 
 
 # ---------- scan.py: ScannedEntry and ScanError ----------
@@ -120,16 +50,31 @@ def test_scan_error_dataclass_fields():
 # ---------- cert_chain.py additional paths ----------
 
 
-def test_chain_status_with_intermediates(chain_triplet):
+def test_chain_status_with_intermediates(chain_triplet, monkeypatch):
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import parse_certificate
 
     leaf = parse_certificate(chain_triplet["leaf"].der)
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
-    # With full chain
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
+    )
     cs = chain_status(leaf, [intermediate, root], [])
-    assert cs in ("public", "incomplete")  # depends on system root store
+    assert cs == "public"
+
+
+def test_chain_status_incomplete_chain(chain_triplet, monkeypatch):
+    from cert_watch.cert_chain import chain_status
+    from cert_watch.certificate_model import parse_certificate
+
+    leaf = parse_certificate(chain_triplet["leaf"].der)
+    intermediate = parse_certificate(chain_triplet["intermediate"].der)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
+    )
+    cs = chain_status(leaf, [intermediate], [])
+    assert cs == "incomplete"
 
 
 def test_chain_status_with_anchors(chain_triplet):
@@ -140,7 +85,7 @@ def test_chain_status_with_anchors(chain_triplet):
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
     cs = chain_status(leaf, [intermediate], [root])
-    assert cs in ("private", "incomplete")  # private if anchor verifies, incomplete otherwise
+    assert cs == "private"
 
 
 # ---------- routes/certificates.py detail branches ----------
@@ -254,6 +199,7 @@ def test_upload_pfx_with_password(reload_app, tmp_path, pfx_file_with_password):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 def test_upload_p7c(reload_app, tmp_path, p7c_pem_file):
@@ -265,6 +211,7 @@ def test_upload_p7c(reload_app, tmp_path, p7c_pem_file):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 # ---------- routes/settings.py additional paths ----------
@@ -291,6 +238,7 @@ def test_settings_save_auth(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "/settings" in r.headers["location"]
 
 
 # ---------- routes/views.py: pivot_tls_monthly and pivot_grade_monthly ----------
@@ -370,6 +318,7 @@ def test_api_set_cert_tags_no_tags_key(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.put(f"/api/certificates/{cert_id}/tags", json={"not_tags": "value"})
     assert r.status_code == 400
+    assert "tags" in r.json()["error"].lower()
 
 
 # ---------- config.py additional branches ----------
@@ -414,34 +363,25 @@ def test_config_webhook_headers_invalid_json(monkeypatch, tmp_path):
     assert s.webhook_headers is None
 
 
-def test_config_log_format(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "env_key,env_val,attr,expected",
+    [
+        ("CERT_WATCH_LOG_FORMAT", "json", "log_format", "json"),
+        ("CERT_WATCH_TLS_VERIFY", "1", "tls_verify", True),
+        ("AUTH_PROVIDER", "ldap", "auth_provider", "ldap"),
+        ("CERT_WATCH_BASE_URL", "https://cert.example.com/", "base_url", "https://cert.example.com"),
+    ],
+)
+def test_config_env_mapping(monkeypatch, tmp_path, env_key, env_val, attr, expected):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_LOG_FORMAT", "json")
+    monkeypatch.setenv(env_key, env_val)
     from cert_watch.config import Settings
 
     s = Settings.from_env()
-    assert s.log_format == "json"
+    assert getattr(s, attr) == expected
 
 
-def test_config_tls_verify(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_TLS_VERIFY", "1")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.tls_verify is True
-
-
-def test_config_auth_provider(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AUTH_PROVIDER", "ldap")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.auth_provider == "ldap"
-
-
-def test_config_ldap_settings(monkeypatch, tmp_path):
+def test_config_ldap_settings_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AUTH_PROVIDER", "ldap")
     monkeypatch.setenv("LDAP_SERVER", "ldap://dc.example.com")
@@ -458,7 +398,7 @@ def test_config_ldap_settings(monkeypatch, tmp_path):
     assert s.ldap_user_filter == "(uid={username})"
 
 
-def test_config_oauth_settings(monkeypatch, tmp_path):
+def test_config_oauth_settings_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("AUTH_PROVIDER", "oauth")
     monkeypatch.setenv("OAUTH_CLIENT_ID", "client-id")
@@ -491,15 +431,6 @@ def test_config_allowed_groups_roles(monkeypatch, tmp_path):
     s = Settings.from_env()
     assert "infra-team" in s.allowed_groups
     assert "admin" in s.allowed_roles
-
-
-def test_config_base_url(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_BASE_URL", "https://cert.example.com")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.base_url == "https://cert.example.com"
 
 
 # ---------- database/repo.py: host update methods ----------

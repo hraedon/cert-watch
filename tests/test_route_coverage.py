@@ -356,8 +356,9 @@ def test_insights_view_tls_tab(tmp_path, reload_app):
 
     init_schema(db)
     with TestClient(app_mod.app) as client:
-        r = client.get("/insights?tab=tls")
+        r = client.get("/insights?tab=trends")
     assert r.status_code == 200
+    assert "TLS" in r.text
 
 
 # ---------- discover ----------
@@ -368,6 +369,7 @@ def test_discover_view_empty(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/discover")
     assert r.status_code == 200
+    assert "Discover" in r.text
 
 
 def test_discover_view_with_hosts(reload_app, tmp_path):
@@ -393,6 +395,7 @@ def test_discover_view_with_hosts(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/discover")
     assert r.status_code == 200
+    assert "No gaps found" in r.text or "Discover" in r.text
 
 
 # ---------- ct-lookup ----------
@@ -449,7 +452,7 @@ def test_caa_check_empty_domain(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/caa-check/")
-    assert r.status_code in (200, 404)
+    assert r.status_code == 404
 
 
 def test_caa_check_long_domain(reload_app):
@@ -521,6 +524,7 @@ def test_metrics_unauthorized(reload_app, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 401
+    assert "unauthorized" in r.text.lower()
 
 
 def test_metrics_authorized(reload_app, monkeypatch):
@@ -531,6 +535,7 @@ def test_metrics_authorized(reload_app, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics", headers={"Authorization": "Bearer secret-token"})
     assert r.status_code == 200
+    assert "cert_" in r.text
 
 
 def test_metrics_with_scan_errors(tmp_path, reload_app):
@@ -614,6 +619,7 @@ def test_metrics_no_error_message(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 200
+    assert "cert_scan_errors_total" in r.text
 
 
 # ---------- certificate detail ----------
@@ -653,6 +659,7 @@ def test_certificate_detail_with_trust_anchor(reload_app, tmp_path, chain_pem_fi
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
+    assert "Verified to trusted root" in r.text or "public" in r.text
 
 
 def _stored_cert_id(db, hostname, port=443):
@@ -853,6 +860,7 @@ def test_delete_certificate_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/certificates/nonexistent/delete", follow_redirects=False)
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 # ---------- certificate notes ----------
@@ -1032,6 +1040,7 @@ def test_upload_invalid_cert(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "error" in r.headers["location"]
 
 
 def test_upload_pfx(reload_app, tmp_path, pfx_file_no_password):
@@ -1043,6 +1052,7 @@ def test_upload_pfx(reload_app, tmp_path, pfx_file_no_password):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 def test_upload_p7b(reload_app, tmp_path, p7b_der_file):
@@ -1054,6 +1064,7 @@ def test_upload_p7b(reload_app, tmp_path, p7b_der_file):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 def test_upload_rate_limit(reload_app, tmp_path, monkeypatch, leaf_pem_file):
@@ -1093,6 +1104,7 @@ def test_add_trust_anchor_valid(reload_app, tmp_path, chain_pem_file):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "error" in r.headers["location"]
 
 
 def test_add_trust_anchor_invalid_cert(reload_app, tmp_path, leaf_pem_file):
@@ -1121,6 +1133,7 @@ def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/trust-anchors/{anchor_id}/delete", follow_redirects=False)
     assert r.status_code == 303
+    assert r.headers["location"] == "/"
 
 
 # ---------- audit page ----------
@@ -1131,6 +1144,7 @@ def test_audit_page_empty(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/audit")
     assert r.status_code == 200
+    assert "No audit events" in r.text or "Audit log" in r.text
 
 
 def test_audit_page_with_entries(tmp_path, reload_app):

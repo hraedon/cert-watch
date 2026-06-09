@@ -87,6 +87,7 @@ def test_api_cert_history_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/nonexistent/history")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 # ---------- API tags ----------
@@ -150,6 +151,7 @@ def test_api_set_cert_tags_invalid(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.put(f"/api/certificates/{cert_id}/tags", json={"tags": 123})
     assert r.status_code == 400
+    assert "tags" in r.json()["error"]
 
 
 def test_api_set_cert_tags_not_found(reload_app):
@@ -157,6 +159,7 @@ def test_api_set_cert_tags_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.put("/api/certificates/nonexistent/tags", json={"tags": ["a"]})
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_set_cert_tags_invalid_json(reload_app, tmp_path, leaf_pem_file):
@@ -170,6 +173,7 @@ def test_api_set_cert_tags_invalid_json(reload_app, tmp_path, leaf_pem_file):
             headers={"Content-Type": "application/json"},
         )
     assert r.status_code == 400
+    assert "error" in r.json()
 
 
 # ---------- API set host tags ----------
@@ -193,6 +197,7 @@ def test_api_set_host_tags_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.put("/api/hosts/nonexistent/tags", json={"tags": ["a"]})
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_set_host_tags_invalid(reload_app, tmp_path):
@@ -205,6 +210,7 @@ def test_api_set_host_tags_invalid(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.put(f"/api/hosts/{hid}/tags", json={"tags": 123})
     assert r.status_code == 400
+    assert "tags" in r.json()["error"]
 
 
 def test_api_set_host_tags_invalid_json(reload_app, tmp_path):
@@ -221,6 +227,7 @@ def test_api_set_host_tags_invalid_json(reload_app, tmp_path):
             headers={"Content-Type": "application/json"},
         )
     assert r.status_code == 400
+    assert "error" in r.json()
 
 
 # ---------- API host owner update ----------
@@ -259,6 +266,7 @@ def test_api_update_host_owner_invalid_status(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.patch(f"/api/hosts/{hid}/owner", json={"renewal_status": "invalid"})
     assert r.status_code == 400
+    assert "renewal_status" in r.json()["error"]
 
 
 def test_api_update_host_owner_invalid_email(reload_app, tmp_path):
@@ -271,6 +279,7 @@ def test_api_update_host_owner_invalid_email(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.patch(f"/api/hosts/{hid}/owner", json={"owner_email": "noatsign"})
     assert r.status_code == 400
+    assert "email" in r.json()["error"]
 
 
 def test_api_update_host_owner_invalid_field_type(reload_app, tmp_path):
@@ -283,6 +292,7 @@ def test_api_update_host_owner_invalid_field_type(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.patch(f"/api/hosts/{hid}/owner", json={"owner_name": 123})
     assert r.status_code == 400
+    assert "owner_name" in r.json()["error"]
 
 
 def test_api_update_host_owner_invalid_renewal_method(reload_app, tmp_path):
@@ -295,6 +305,7 @@ def test_api_update_host_owner_invalid_renewal_method(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.patch(f"/api/hosts/{hid}/owner", json={"renewal_method": "invalid"})
     assert r.status_code == 400
+    assert "renewal_method" in r.json()["error"]
 
 
 def test_api_update_host_owner_invalid_runbook_url(reload_app, tmp_path):
@@ -307,6 +318,7 @@ def test_api_update_host_owner_invalid_runbook_url(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.patch(f"/api/hosts/{hid}/owner", json={"runbook_url": 123})
     assert r.status_code == 400
+    assert "runbook" in r.json()["error"]
 
 
 def test_api_update_host_owner_not_found(reload_app):
@@ -314,6 +326,7 @@ def test_api_update_host_owner_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.patch("/api/hosts/nonexistent/owner", json={"owner_name": "Alice"})
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_update_host_owner_invalid_json(reload_app, tmp_path):
@@ -330,6 +343,7 @@ def test_api_update_host_owner_invalid_json(reload_app, tmp_path):
             headers={"Content-Type": "application/json"},
         )
     assert r.status_code == 400
+    assert "error" in r.json()
 
 
 def test_api_update_host_owner_with_runbook(reload_app, tmp_path):
@@ -452,6 +466,7 @@ def test_api_create_alert_group_missing_name(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/api/alert-groups", json={"recipients": ["a@b.com"]})
     assert r.status_code == 400
+    assert "name" in r.json()["error"]
 
 
 def test_api_create_alert_group_invalid_recipients(reload_app):
@@ -459,6 +474,7 @@ def test_api_create_alert_group_invalid_recipients(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/api/alert-groups", json={"name": "g", "recipients": "not-a-list"})
     assert r.status_code == 400
+    assert "recipients" in r.json()["error"]
 
 
 def test_api_create_alert_group_invalid_match_tags(reload_app):
@@ -466,6 +482,7 @@ def test_api_create_alert_group_invalid_match_tags(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/api/alert-groups", json={"name": "g", "match_tags": "not-a-list"})
     assert r.status_code == 400
+    assert "match_tags" in r.json()["error"]
 
 
 def test_api_create_alert_group_invalid_webhook_url(reload_app):
@@ -473,6 +490,7 @@ def test_api_create_alert_group_invalid_webhook_url(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/api/alert-groups", json={"name": "g", "webhook_url": 123})
     assert r.status_code == 400
+    assert "webhook" in r.json()["error"]
 
 
 def test_api_create_alert_group_invalid_email(reload_app):
@@ -480,6 +498,7 @@ def test_api_create_alert_group_invalid_email(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.post("/api/alert-groups", json={"name": "g", "recipients": ["noatsign"]})
     assert r.status_code == 400
+    assert "email" in r.json()["error"]
 
 
 def test_api_create_alert_group_duplicate(reload_app, tmp_path):
@@ -488,6 +507,7 @@ def test_api_create_alert_group_duplicate(reload_app, tmp_path):
         client.post("/api/alert-groups", json={"name": "dup", "recipients": ["a@b.com"]})
         r = client.post("/api/alert-groups", json={"name": "dup", "recipients": ["a@b.com"]})
     assert r.status_code == 409
+    assert "exists" in r.json()["error"]
 
 
 def test_api_create_alert_group_invalid_json(reload_app):
@@ -499,6 +519,7 @@ def test_api_create_alert_group_invalid_json(reload_app):
             headers={"Content-Type": "application/json"},
         )
     assert r.status_code == 400
+    assert "error" in r.json()
 
 
 def test_api_get_alert_group(reload_app, tmp_path):
@@ -516,6 +537,7 @@ def test_api_get_alert_group_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/alert-groups/nonexistent")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_update_alert_group(reload_app, tmp_path):
@@ -533,6 +555,7 @@ def test_api_update_alert_group_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.patch("/api/alert-groups/nonexistent", json={"name": "x"})
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_update_alert_group_invalid_name(reload_app, tmp_path):
@@ -542,6 +565,7 @@ def test_api_update_alert_group_invalid_name(reload_app, tmp_path):
         gid = r1.json()["id"]
         r2 = client.patch(f"/api/alert-groups/{gid}", json={"name": ""})
     assert r2.status_code == 400
+    assert "name" in r2.json()["error"]
 
 
 def test_api_update_alert_group_invalid_recipients(reload_app, tmp_path):
@@ -551,6 +575,7 @@ def test_api_update_alert_group_invalid_recipients(reload_app, tmp_path):
         gid = r1.json()["id"]
         r2 = client.patch(f"/api/alert-groups/{gid}", json={"recipients": "not-list"})
     assert r2.status_code == 400
+    assert "recipients" in r2.json()["error"]
 
 
 def test_api_update_alert_group_invalid_recipient_email(reload_app, tmp_path):
@@ -560,6 +585,7 @@ def test_api_update_alert_group_invalid_recipient_email(reload_app, tmp_path):
         gid = r1.json()["id"]
         r2 = client.patch(f"/api/alert-groups/{gid}", json={"recipients": ["noatsign"]})
     assert r2.status_code == 400
+    assert "email" in r2.json()["error"]
 
 
 def test_api_update_alert_group_invalid_match_tags(reload_app, tmp_path):
@@ -569,6 +595,7 @@ def test_api_update_alert_group_invalid_match_tags(reload_app, tmp_path):
         gid = r1.json()["id"]
         r2 = client.patch(f"/api/alert-groups/{gid}", json={"match_tags": "not-list"})
     assert r2.status_code == 400
+    assert "match_tags" in r2.json()["error"]
 
 
 def test_api_update_alert_group_invalid_webhook_url(reload_app, tmp_path):
@@ -578,6 +605,7 @@ def test_api_update_alert_group_invalid_webhook_url(reload_app, tmp_path):
         gid = r1.json()["id"]
         r2 = client.patch(f"/api/alert-groups/{gid}", json={"webhook_url": 123})
     assert r2.status_code == 400
+    assert "webhook" in r2.json()["error"]
 
 
 def test_api_update_alert_group_invalid_json(reload_app, tmp_path):
@@ -591,6 +619,7 @@ def test_api_update_alert_group_invalid_json(reload_app, tmp_path):
             headers={"Content-Type": "application/json"},
         )
     assert r2.status_code == 400
+    assert "error" in r2.json()
 
 
 def test_api_update_alert_group_duplicate_name(reload_app, tmp_path):
@@ -601,6 +630,7 @@ def test_api_update_alert_group_duplicate_name(reload_app, tmp_path):
         gid = r2.json()["id"]
         r3 = client.patch(f"/api/alert-groups/{gid}", json={"name": "first"})
     assert r3.status_code == 409
+    assert "exists" in r3.json()["error"]
 
 
 def test_api_delete_alert_group(reload_app, tmp_path):
@@ -618,6 +648,7 @@ def test_api_delete_alert_group_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.delete("/api/alert-groups/nonexistent")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 # ---------- Alert group cert assignment ----------
@@ -642,6 +673,7 @@ def test_api_assign_cert_group_not_found(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/api/alert-groups/nonexistent/certs/{cert_id}")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 def test_api_assign_cert_cert_not_found(reload_app, tmp_path):
@@ -671,6 +703,7 @@ def test_api_unassign_cert_group_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.delete("/api/alert-groups/nonexistent/certs/cert1")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 # ---------- Alert routing preview ----------
@@ -693,6 +726,7 @@ def test_api_cert_alert_routing_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/nonexistent/alert-routing")
     assert r.status_code == 404
+    assert "not found" in r.json()["error"]
 
 
 # ---------- Webhook test ----------
@@ -822,6 +856,7 @@ def test_api_calendar_day_bucket(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/calendar?bucket=day")
     assert r.status_code == 200
+    assert r.json()["bucket"] == "day"
 
 
 def test_api_calendar_invalid_bucket(reload_app):
@@ -904,6 +939,7 @@ def test_import_hosts_valid_csv(reload_app, tmp_path, monkeypatch):
         )
     assert r.status_code == 303
     assert len(scanned) == 2
+    assert r.headers["location"] == "/"
 
 
 def test_import_hosts_malformed_csv(reload_app, tmp_path):
@@ -916,6 +952,7 @@ def test_import_hosts_malformed_csv(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "/" in r.headers["location"]
 
 
 def test_import_hosts_all_errors(reload_app, tmp_path):
@@ -966,6 +1003,7 @@ def test_import_hosts_invalid_threshold(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "threshold" in r.headers["location"]
 
 
 def test_import_hosts_port_out_of_range(reload_app, tmp_path):
@@ -978,6 +1016,7 @@ def test_import_hosts_port_out_of_range(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "port" in r.headers["location"]
 
 
 def test_import_hosts_invalid_port(reload_app, tmp_path):
@@ -990,6 +1029,7 @@ def test_import_hosts_invalid_port(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "port" in r.headers["location"]
 
 
 def test_import_hosts_invalid_interval(reload_app, tmp_path):
@@ -1002,6 +1042,7 @@ def test_import_hosts_invalid_interval(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "scan_interval" in r.headers["location"]
 
 
 # ---------- Notes via API ----------
@@ -1044,6 +1085,7 @@ def test_api_download_pem_bad_der(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/api/certificates/{cid}/pem")
     assert r.status_code == 500
+    assert "cannot encode" in r.text
 
 
 # ---------- Webhook URL validation in API ----------
@@ -1075,6 +1117,7 @@ def test_dashboard_filter_source_scanned(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?source=scanned")
     assert r.status_code == 200
+    assert "Certificates" in r.text or "certificates" in r.text
 
 
 # ---------- Settings page ----------
@@ -1085,6 +1128,7 @@ def test_settings_page_renders(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/settings")
     assert r.status_code == 200
+    assert "Settings" in r.text
 
 
 def test_settings_page_tabs(reload_app, tmp_path):
@@ -1093,6 +1137,7 @@ def test_settings_page_tabs(reload_app, tmp_path):
         for tab in ("auth", "smtp", "alerts"):
             r = client.get(f"/settings?tab={tab}")
             assert r.status_code == 200
+            assert f"tab-{tab}" in r.text
 
 
 def test_settings_save_smtp(reload_app, tmp_path):
@@ -1111,6 +1156,7 @@ def test_settings_save_smtp(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "/settings" in r.headers["location"]
 
 
 def test_settings_save_alerts(reload_app, tmp_path):
@@ -1127,6 +1173,7 @@ def test_settings_save_alerts(reload_app, tmp_path):
             follow_redirects=False,
         )
     assert r.status_code == 303
+    assert "/settings" in r.headers["location"]
 
 
 def test_settings_change_password_no_local_admin(reload_app, tmp_path):

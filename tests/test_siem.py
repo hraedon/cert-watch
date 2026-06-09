@@ -189,5 +189,142 @@ def test_hec_failure_is_swallowed(monkeypatch):
         raise OSError("connection refused")
 
     monkeypatch.setattr("cert_watch.http_client.ssrf_safe_urlopen", boom)
-    # Fail-open: a down SIEM must not raise into the caller.
     siem._get_exporter()._to_hec({"action": "x"})
+
+
+def test_invalid_port_falls_back_to_default(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_PORT", "not-a-number")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    exp = siem._get_exporter()
+    assert exp.syslog_port == 514
+
+
+def test_syslog_setup_failure_disables_sink(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    from logging.handlers import SysLogHandler
+
+    from cert_watch import siem
+
+    def bad_handler(*a, **kw):
+        raise OSError("cannot create socket")
+
+    monkeypatch.setattr(SysLogHandler, "__init__", bad_handler)
+    siem.reset_exporter()
+    exp = siem._get_exporter()
+    assert exp.syslog_host == ""
+    assert exp._syslog is None
+    assert exp.enabled is False
+
+
+def test_syslog_replaces_old_handlers(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    exp = siem._get_exporter()
+    first_handler = exp._syslog.handlers[0]
+    assert first_handler is not None
+    exp._setup_syslog()
+    assert first_handler not in exp._syslog.handlers
+    assert len(exp._syslog.handlers) == 1
+
+
+def test_syslog_export_failure_is_swallowed(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    exp = siem._get_exporter()
+    exp._syslog.info = lambda msg: (_ for _ in ()).throw(OSError("broken pipe"))
+    exp.export({"action": "x"})
+
+
+def test_eventlog_export_failure_is_swallowed(monkeypatch):
+    import sys
+    import types
+
+    fake_util = types.ModuleType("win32evtlogutil")
+    fake_evtlog = types.ModuleType("win32evtlog")
+    fake_evtlog.EVENTLOG_INFORMATION_TYPE = 4
+
+    def bad_report(*a, **kw):
+        raise OSError("event log full")
+
+    fake_util.ReportEvent = bad_report
+    monkeypatch.setitem(sys.modules, "win32evtlogutil", fake_util)
+    monkeypatch.setitem(sys.modules, "win32evtlog", fake_evtlog)
+    monkeypatch.setenv("CERT_WATCH_EVENTLOG", "1")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    assert siem.siem_enabled() is True
+    siem._get_exporter()._to_eventlog({"action": "x"})
+
+
+def test_hec_non_2xx_logs_warning(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_HEC_URL", "https://hec.example:8088/services/collector")
+    monkeypatch.setenv("CERT_WATCH_HEC_TOKEN", "tok123")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+
+    class Resp500:
+        status = 503
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        "cert_watch.http_client.ssrf_safe_urlopen",
+        lambda url, **kw: Resp500(),
+    )
+    siem._get_exporter()._to_hec({"action": "x"})
+
+
+def test_hec_no_index_omits_from_envelope(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_HEC_URL", "https://hec.example:8088/services/collector")
+    monkeypatch.setenv("CERT_WATCH_HEC_TOKEN", "tok123")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    captured: dict = {}
+
+    class FakeResp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(url, **kwargs):
+        captured["data"] = kwargs.get("data", b"")
+        return FakeResp()
+
+    monkeypatch.setattr("cert_watch.http_client.ssrf_safe_urlopen", fake_urlopen)
+    siem._get_exporter()._to_hec({"action": "scan"})
+    body = json.loads(captured["data"])
+    assert "index" not in body
+    assert body["sourcetype"] == "cert_watch"
+
+
+def test_close_cleans_up_pool_and_syslog(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SYSLOG_HOST", "127.0.0.1")
+    monkeypatch.setenv("CERT_WATCH_HEC_URL", "https://hec.example:8088/s")
+    monkeypatch.setenv("CERT_WATCH_HEC_TOKEN", "tok")
+    from cert_watch import siem
+
+    siem.reset_exporter()
+    exp = siem._get_exporter()
+    assert exp._syslog is not None
+    assert exp._pool is not None
+    exp.close()
+    assert exp._syslog is None
+    assert exp._pool is None

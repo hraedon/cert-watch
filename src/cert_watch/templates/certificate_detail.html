@@ -81,6 +81,9 @@
             <div>
               <div class="cw-detail-label">Owner</div>
               <div class="mono cw-fz-12-5 cw-text-text">{{ host_info.owner_name or '—' }}</div>
+              {% if host_info.owner_email %}
+              <div class="mono cw-fz-12-5 cw-muted">{{ host_info.owner_email }}</div>
+              {% endif %}
             </div>
             <div>
               <div class="cw-detail-label">Renewal</div>
