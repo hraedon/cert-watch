@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 # ---------- config.py ----------
 
 
@@ -21,24 +23,27 @@ def test_config_from_env_defaults(monkeypatch, tmp_path):
     assert s.allow_private is True
 
 
-def test_config_from_env_custom(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "env_vars,attr,expected",
+    [
+        ({"CERT_WATCH_SCHED_HOUR": "3", "CERT_WATCH_SCHED_MIN": "15"}, "sched_hour", 3),
+        ({"CERT_WATCH_SCHED_HOUR": "3", "CERT_WATCH_SCHED_MIN": "15"}, "sched_min", 15),
+        ({"CERT_WATCH_ALLOW_PRIVATE_IPS": "0"}, "allow_private", False),
+        ({"CERT_WATCH_CHECK_REVOCATION": "1"}, "check_revocation", True),
+        ({"CERT_WATCH_DRIFT_ALERTS": "0"}, "drift_alerts", False),
+        ({"CERT_WATCH_HISTORY_RETENTION_DAYS": "30"}, "history_retention_days", 30),
+        ({"CERT_WATCH_ALERT_RETENTION_DAYS": "60"}, "alert_retention_days", 60),
+        ({"CERT_WATCH_AUDIT_RETENTION_DAYS": "120"}, "audit_retention_days", 120),
+    ],
+)
+def test_config_env_overrides(monkeypatch, tmp_path, env_vars, attr, expected):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", "3")
-    monkeypatch.setenv("CERT_WATCH_SCHED_MIN", "15")
+    for k, v in env_vars.items():
+        monkeypatch.setenv(k, v)
     from cert_watch.config import Settings
 
     s = Settings.from_env()
-    assert s.sched_hour == 3
-    assert s.sched_min == 15
-
-
-def test_config_allow_private_ips(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_ALLOW_PRIVATE_IPS", "0")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.allow_private is False
+    assert getattr(s, attr) == expected
 
 
 def test_config_allow_private_ips_default(monkeypatch, tmp_path):
@@ -95,70 +100,13 @@ def test_config_build_webhook_config(monkeypatch, tmp_path):
     assert cfg.url == "https://hooks.example.com/test"
 
 
-def test_config_sched_hour_minute(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", "3")
-    monkeypatch.setenv("CERT_WATCH_SCHED_MIN", "30")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.sched_hour == 3
-    assert s.sched_min == 30
-
-
 def test_config_metrics_token(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_METRICS_TOKEN", "tok123")
     from cert_watch.config import Settings
 
     s = Settings.from_env()
-    # Metrics token is read from env in middleware, not stored in Settings
     assert not hasattr(s, "metrics_token") or s.metrics_token is None
-
-
-def test_config_check_revocation(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CHECK_REVOCATION", "1")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.check_revocation is True
-
-
-def test_config_drift_alerts_disabled(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_DRIFT_ALERTS", "0")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.drift_alerts is False
-
-
-def test_config_history_retention(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_HISTORY_RETENTION_DAYS", "30")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.history_retention_days == 30
-
-
-def test_config_alert_retention(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_ALERT_RETENTION_DAYS", "60")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.alert_retention_days == 60
-
-
-def test_config_audit_retention(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_AUDIT_RETENTION_DAYS", "120")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.audit_retention_days == 120
 
 
 def test_config_pagerduty_routing_key(monkeypatch, tmp_path):
@@ -185,15 +133,18 @@ def test_chain_status_self_signed(self_signed_leaf):
     assert cs == "self-signed"
 
 
-def test_chain_status_complete(chain_triplet):
+def test_chain_status_complete(chain_triplet, monkeypatch):
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import parse_certificate
 
     leaf = parse_certificate(chain_triplet["leaf"].der)
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
+    )
     cs = chain_status(leaf, [intermediate, root], [])
-    assert cs in ("public", "incomplete")  # depends on system root store
+    assert cs == "public"
 
 
 def test_chain_status_incomplete(chain_triplet):
@@ -207,8 +158,6 @@ def test_chain_status_incomplete(chain_triplet):
 
 def test_validate_is_ca_certificate_valid():
     """A cert with BasicConstraints(ca=True) passes the trust-anchor check."""
-    from datetime import UTC, datetime, timedelta
-
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import rsa

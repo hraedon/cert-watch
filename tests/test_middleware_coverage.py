@@ -259,10 +259,12 @@ def test_metrics_token_gate(reload_app, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 401
+    assert "unauthorized" in r.text.lower()
 
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics", headers={"Authorization": "Bearer my-secret"})
     assert r.status_code == 200
+    assert "cert_" in r.text
 
 
 def test_metrics_token_wrong_bearer(reload_app, monkeypatch):
@@ -273,6 +275,7 @@ def test_metrics_token_wrong_bearer(reload_app, monkeypatch):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics", headers={"Authorization": "Bearer wrong"})
     assert r.status_code == 401
+    assert "unauthorized" in r.text.lower()
 
 
 # ---------- CSRF on form POST ----------

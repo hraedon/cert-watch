@@ -16,8 +16,12 @@ def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         # Use upload via HTTP to exercise the route.
         with open(leaf_pem_file, "rb") as f:
-            r = client.post("/upload", files={"file": ("leaf.pem", f, "application/x-pem-file")})
-        assert r.status_code in (200, 303)
+            r = client.post(
+                "/upload",
+                files={"file": ("leaf.pem", f, "application/x-pem-file")},
+                follow_redirects=True,
+            )
+        assert r.status_code == 200
         r = client.get("/")
     assert r.status_code == 200
     assert "leaf.example.com" in r.text
