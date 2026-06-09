@@ -104,7 +104,7 @@ async def login_submit(
                     detail={"break_glass": True},
                     source_ip=_extract_client_ip(request) if request else None,
                 )
-        except Exception:
+        except OSError:
             logger.debug("audit log write failed for break-glass login", exc_info=True)
     else:
         settings = getattr(request.app.state, "settings", None)

@@ -555,6 +555,111 @@ def _capture_ldaps_chain(
     if ":" in rest:
         with contextlib.suppress(ValueError):
             port = int(rest.split(":")[1].split("/")[0])
+    return _probe_tls_chain(host, port, timeout, allow_private=allow_private, allowed_subnets=allowed_subnets)
+
+
+def _capture_starttls_chain(
+    url: str,
+    timeout: int = 5,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> list[dict] | None:
+    """Capture the certificate chain presented by an LDAP server via StartTLS.
+
+    Uses ldap3 to negotiate StartTLS, then reads the peer certificate from the
+    wrapped SSL socket.  Falls back to a raw TLS probe on the same host/port
+    when ldap3 is unavailable or StartTLS negotiation fails.
+
+    Returns a list of dicts (one per CA cert, leaf excluded) with:
+    - subject, issuer, not_after, sha256, pem
+
+    Returns None when the URL is not ldap://, the host is blocked by the SSRF
+    guard, or no chain can be read.
+    """
+    from cert_watch.certificate_model import Certificate, parse_certificate
+    from cert_watch.scan import _is_blocked_ip
+
+    lowered = url.lower()
+    if not lowered.startswith("ldap://"):
+        return None
+    rest = url[7:]
+    host = rest.split(":")[0].split("/")[0]
+    port = 389
+    if ":" in rest:
+        with contextlib.suppress(ValueError):
+            port = int(rest.split(":")[1].split("/")[0])
+
+    # SSRF guard
+    try:
+        ip = ipaddress.ip_address(host)
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return None
+    except ValueError:
+        pass
+
+    # Try ldap3 StartTLS first
+    try:
+        import ldap3
+    except ImportError:
+        return None
+
+    der_chain: list[bytes] = []
+    try:
+        srv = ldap3.Server(url, get_info=ldap3.NONE, connect_timeout=timeout)
+        conn = ldap3.Connection(srv, auto_bind=False, receive_timeout=timeout)
+        conn.open()
+        conn.start_tls()
+        ssl_sock = conn.socket
+        if ssl_sock is not None:
+            # Try native chain API (CPython 3.13+)
+            for method in ("get_unverified_chain", "get_verified_chain"):
+                getter = getattr(ssl_sock, method, None)
+                if getter:
+                    try:
+                        items = getter()
+                        der_chain = []
+                        for c in items:
+                            try:
+                                der = c.public_bytes(Encoding.DER)
+                            except AttributeError:
+                                der = bytes(c)
+                            der_chain.append(der)
+                        break
+                    except Exception:
+                        continue
+            else:
+                leaf = ssl_sock.getpeercert(binary_form=True)
+                if leaf:
+                    der_chain.append(leaf)
+        conn.unbind()
+    except Exception:
+        pass
+
+    # Fallback: raw TLS probe on the same port (some servers present the same
+    # cert on StartTLS and LDAPS, but not all — this is best-effort).
+    if not der_chain:
+        return _probe_tls_chain(host, port, timeout, allow_private=allow_private, allowed_subnets=allowed_subnets)
+
+    return _der_chain_to_ca_dicts(der_chain)
+
+
+def _probe_tls_chain(
+    host: str,
+    port: int,
+    timeout: int = 5,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> list[dict] | None:
+    """Non-validating TLS probe to capture the certificate chain from *host:port*.
+
+    Returns a list of dicts (one per CA cert, leaf excluded) or None.
+    """
+    import socket
+
+    from cert_watch.certificate_model import Certificate, parse_certificate
+    from cert_watch.scan import _is_blocked_ip, _scan_via_openssl
 
     # SSRF guard
     try:
@@ -590,7 +695,6 @@ def _capture_ldaps_chain(
                     except Exception:
                         continue
             else:
-                # Fallback: leaf via getpeercert, then openssl for full chain
                 leaf = ssl_sock.getpeercert(binary_form=True)
                 if leaf:
                     der_chain.append(leaf)
@@ -608,6 +712,13 @@ def _capture_ldaps_chain(
                 der_chain = openssl_chain
         except Exception:
             pass
+
+    return _der_chain_to_ca_dicts(der_chain)
+
+
+def _der_chain_to_ca_dicts(der_chain: list[bytes]) -> list[dict] | None:
+    """Convert a list of DER-encoded certificates to CA dicts (leaf excluded)."""
+    from cert_watch.certificate_model import Certificate, parse_certificate
 
     if not der_chain:
         return None
@@ -769,12 +880,21 @@ async def test_ldap_connection(request: Request) -> JSONResponse:
                 except Exception as exc:  # noqa: BLE001 — report which URL failed
                     if use_tls and _is_cert_verify_error(exc):
                         settings = getattr(request.app.state, "settings", None)
+                        _allow_private = settings.allow_private if settings else True
+                        _allowed_subnets = settings.allowed_subnets if settings else ()
                         tofu_chain = _capture_ldaps_chain(
                             url,
                             timeout=connect_timeout,
-                            allow_private=settings.allow_private if settings else True,
-                            allowed_subnets=settings.allowed_subnets if settings else (),
+                            allow_private=_allow_private,
+                            allowed_subnets=_allowed_subnets,
                         )
+                        if not tofu_chain and start_tls and not srv_is_ldaps:
+                            tofu_chain = _capture_starttls_chain(
+                                url,
+                                timeout=connect_timeout,
+                                allow_private=_allow_private,
+                                allowed_subnets=_allowed_subnets,
+                            )
                         if tofu_chain:
                             return JSONResponse({
                                 "ok": False,

@@ -1109,3 +1109,131 @@ def test_pin_ldap_ca_missing_pem(reload_app):
     assert r.status_code == 200
     assert r.json()["ok"] is False
     assert "No CA certificate" in r.json()["error"]
+
+
+# ---------- StartTLS TOFU capture (BC-156) ----------
+
+
+def test_capture_starttls_chain_skips_non_ldap():
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    assert _capture_starttls_chain("ldaps://dc.example.com") is None
+
+
+def test_capture_starttls_chain_blocks_ssrf():
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    assert _capture_starttls_chain("ldap://127.0.0.1") is None
+
+
+def test_capture_starttls_chain_returns_ca_excluding_leaf(monkeypatch, chain_triplet):
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    ldap3 = pytest.importorskip("ldap3")
+    leaf = chain_triplet["leaf"]
+    intermediate = chain_triplet["intermediate"]
+    root = chain_triplet["root"]
+    der_chain = [leaf.der, intermediate.der, root.der]
+
+    class FakeSSL:
+        def get_unverified_chain(self):
+            return der_chain
+
+    class FakeConn:
+        socket = FakeSSL()
+        tls_started = True
+
+        def open(self):
+            pass
+
+        def start_tls(self):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", lambda *a, **k: FakeConn())
+    monkeypatch.setattr(ldap3, "Server", lambda *a, **k: None)
+
+    result = _capture_starttls_chain("ldap://dc.example.com")
+    assert result is not None
+    assert len(result) == 2  # intermediate + root
+    assert result[0]["subject"] == "CN=Test Intermediate CA"
+    assert result[1]["subject"] == "CN=Test Root CA"
+
+
+def test_capture_starttls_chain_fallback_to_probe(monkeypatch, chain_triplet):
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    ldap3 = pytest.importorskip("ldap3")
+    intermediate = chain_triplet["intermediate"]
+    root = chain_triplet["root"]
+    der_chain = [intermediate.der, root.der]
+
+    # ldap3 StartTLS fails → falls back to raw TLS probe
+    monkeypatch.setattr(ldap3, "Connection", lambda *a, **k: (_ for _ in ()).throw(Exception("boom")))
+    monkeypatch.setattr(ldap3, "Server", lambda *a, **k: None)
+    monkeypatch.setattr(
+        "cert_watch.routes.settings._probe_tls_chain",
+        lambda *a, **k: [
+            {"subject": "CN=Test Intermediate CA", "issuer": "CN=Test Root CA", "not_after": "", "sha256": "aa", "pem": "PEM1"},
+            {"subject": "CN=Test Root CA", "issuer": "CN=Test Root CA", "not_after": "", "sha256": "bb", "pem": "PEM2"},
+        ],
+    )
+
+    result = _capture_starttls_chain("ldap://dc.example.com")
+    assert result is not None
+    assert len(result) == 2
+
+
+def test_test_ldap_starttls_tofu_on_cert_verify_failure(reload_app, monkeypatch, chain_triplet):
+    """When StartTLS connection fails with a cert error, the handler returns a tofu block."""
+    from cryptography.hazmat.primitives import hashes
+
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        def __init__(self, *a, **k):
+            raise ldap3.core.exceptions.LDAPSocketOpenError(
+                "SSL: CERTIFICATE_VERIFY_FAILED"
+            )
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+
+    root = chain_triplet["root"]
+
+    def fake_capture(url, *a, **k):
+        return [
+            {
+                "subject": "CN=Test Root CA",
+                "issuer": "CN=Test Root CA",
+                "not_after": root.cert.not_valid_after_utc.isoformat(),
+                "sha256": root.cert.fingerprint(hashes.SHA256()).hex(),
+                "pem": root.pem.decode(),
+            }
+        ]
+
+    monkeypatch.setattr(
+        "cert_watch.routes.settings._capture_starttls_chain", fake_capture
+    )
+    monkeypatch.setattr(
+        "cert_watch.routes.settings._capture_ldaps_chain", lambda *a, **k: None
+    )
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_start_tls": "1",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "tofu" in data
+    assert data["tofu"]["pem"] == root.pem.decode()
+    assert len(data["tofu"]["chain"]) == 1
+    assert data["tofu"]["chain"][0]["subject"] == "CN=Test Root CA"

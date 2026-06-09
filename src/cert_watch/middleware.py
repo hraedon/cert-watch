@@ -349,7 +349,7 @@ def get_auth_context(request: Request) -> dict:
                 user = user_repo.get_by_username(username)
                 if user:
                     user_email = user.email
-        except Exception:
+        except (OSError, ValueError):
             pass
 
     return {

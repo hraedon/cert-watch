@@ -83,7 +83,7 @@ def _decode_list(encoded: str) -> list[str]:
     try:
         decoded = base64.urlsafe_b64decode(encoded).decode()
         items = json.loads(decoded)
-    except Exception:
+    except (ValueError, TypeError):
         return []
     return [str(x) for x in items] if isinstance(items, list) else []
 
