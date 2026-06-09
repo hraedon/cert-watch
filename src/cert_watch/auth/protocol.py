@@ -15,6 +15,7 @@ class AuthResult:
     oauth_state: str = ""  # Signed OAuth state for callback verification (BC-045)
     groups: list[str] | None = None
     roles: list[str] | None = None
+    email: str = ""  # User email (Plan 040: for local users + AD/Entra contact)
 
 
 class AuthProvider(ABC):

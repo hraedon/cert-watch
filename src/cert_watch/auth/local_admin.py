@@ -66,11 +66,12 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
 
 
 class LocalAdminProvider(AuthProvider):
-    def __init__(self, username: str, password_hash: str) -> None:
+    def __init__(self, username: str, password_hash: str, db_path: str | None = None) -> None:
         self.username = username
         self.password_hash = password_hash
+        self.db_path = db_path
 
-    def _dummy_verify(self, password: str) -> None:
+    def _dummy_verify(self, password: str, hash_ref: str = "") -> None:
         """Compute a throwaway scrypt hash to equalize timing on username
         mismatch (BC-072). Without this, a non-matching username returns
         immediately while a matching username spends ~100ms in scrypt, letting
@@ -82,7 +83,7 @@ class LocalAdminProvider(AuthProvider):
         dummy, reintroducing the very timing oracle this method exists to close.
         """
         n, r, p = _DUMMY_N, _DUMMY_R, _DUMMY_P
-        parts = self.password_hash.split("$") if self.password_hash else []
+        parts = hash_ref.split("$") if hash_ref else []
         if len(parts) == 6:
             try:
                 n, r, p = int(parts[1]), int(parts[2]), int(parts[3])
@@ -104,10 +105,38 @@ class LocalAdminProvider(AuthProvider):
     def authenticate(self, username: str, password: str) -> AuthResult:
         if not username or not password:
             return AuthResult(success=False, error="username and password required")
+
+        # Plan 040: try the users table first (full local auth)
+        if self.db_path:
+            try:
+                from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
+
+                user_repo = SqliteUserRepository(self.db_path)
+                user = user_repo.get_by_username(username)
+                if user is not None and user.password_hash:
+                    if verify_scrypt_hash(password, user.password_hash):
+                        role_name = ""
+                        if user.role_id:
+                            role_repo = SqliteRoleRepository(self.db_path)
+                            role = role_repo.get(user.role_id)
+                            if role:
+                                role_name = role.name
+                        return AuthResult(
+                            success=True,
+                            username=username,
+                            email=user.email,
+                            groups=[role_name] if role_name else [],
+                            roles=[role_name] if role_name else [],
+                        )
+                    # Wrong password for DB user — spend dummy time then fail
+                    self._dummy_verify(password, user.password_hash)
+                    return AuthResult(success=False, error="invalid credentials")
+            except Exception:
+                logger.debug("local auth DB lookup failed", exc_info=True)
+
+        # Legacy break-glass path (env-var local admin)
         if username != self.username:
-            # BC-072: spend comparable CPU time so timing doesn't reveal whether
-            # the supplied username matches the configured break-glass admin.
-            self._dummy_verify(password)
+            self._dummy_verify(password, self.password_hash)
             return AuthResult(success=False, error="invalid credentials")
         if not verify_scrypt_hash(password, self.password_hash):
             return AuthResult(success=False, error="invalid credentials")
@@ -115,6 +144,7 @@ class LocalAdminProvider(AuthProvider):
         return AuthResult(
             success=True,
             username=username,
+            email="",
             groups=["admins"],
             roles=["admin"],
         )

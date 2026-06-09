@@ -27,6 +27,8 @@
       <a href="/settings?tab=auth" class="cw-tab {% if tab == 'auth' %}active{% endif %}">Authentication</a>
       <a href="/settings?tab=smtp" class="cw-tab {% if tab == 'smtp' %}active{% endif %}">SMTP</a>
       <a href="/settings?tab=alerts" class="cw-tab {% if tab == 'alerts' %}active{% endif %}">Alerts</a>
+      <a href="/settings/roles" class="cw-tab {% if tab == 'roles' %}active{% endif %}">Roles</a>
+      <a href="/settings/users" class="cw-tab {% if tab == 'users' %}active{% endif %}">Users</a>
       <a href="/settings/api-keys" class="cw-tab" data-testid="settings-api-keys-link">API keys</a>
     </div>
 
@@ -119,6 +121,30 @@
           <div class="cw-mt-12">
             <button type="button" class="cw-btn" data-action="test-ldap">Test Connection</button>
             <div id="ldap-test-result" class="cw-test-result"></div>
+          </div>
+
+          <!-- LDAP role mapping (Plan 040) -->
+          <div class="cw-panel cw-mt-16">
+            <h4 class="cw-set-title cw-mb-12">LDAP group → role mapping</h4>
+            <p class="cw-muted cw-fz-11 cw-mb-12">
+              Map Active Directory groups to cert-watch roles. Members of the mapped groups receive the corresponding role.
+            </p>
+            <form method="post" action="/settings/ldap-role-map">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              {% if roles %}
+                {% for r in roles %}
+                <div class="cw-field cw-mb-12">
+                  <label class="cw-label" for="role_map_{{ r.id }}">{{ r.name }} groups (comma-separated DNs)</label>
+                  <input class="cw-input" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.name }}"
+                         value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join(', ') }}"
+                         placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
+                </div>
+                {% endfor %}
+                <button type="submit" class="cw-btn primary">Save role mapping</button>
+              {% else %}
+                <p class="cw-muted">Create roles in the <a href="/settings/roles">Roles</a> tab first.</p>
+              {% endif %}
+            </form>
           </div>
 
           <div id="ldap-tofu-panel" class="cw-panel cw-mt-16 cw-hidden">
@@ -339,6 +365,113 @@
         <button type="submit" class="cw-btn primary">Save alert settings</button>
       </form>
     </div>
+
+    <!-- Roles tab -->
+    <div class="cw-tab-panel {% if tab == 'roles' %}active{% endif %}" id="tab-roles">
+      <div class="cw-mb-16">
+        <h3 class="cw-heading-3">Roles</h3>
+        <p class="cw-muted">Roles define teams and their shared email for alerts and contact display.</p>
+      </div>
+      <form method="post" action="/settings/roles">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label" for="role_name">Name</label>
+          <input class="cw-input" type="text" id="role_name" name="name" placeholder="e.g., operators" required>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="role_email">Email</label>
+          <input class="cw-input" type="email" id="role_email" name="email" placeholder="ops@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="role_description">Description</label>
+          <input class="cw-input" type="text" id="role_description" name="description" placeholder="Certificate operators">
+        </div>
+        <button type="submit" class="cw-btn primary">Add role</button>
+      </form>
+
+      {% if roles %}
+      <table class="cw-table cw-mt-16">
+        <thead>
+          <tr><th>Name</th><th>Email</th><th>Description</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for r in roles %}
+          <tr>
+            <td>{{ r.name }}</td>
+            <td>{{ r.email }}</td>
+            <td>{{ r.description }}</td>
+            <td>
+              <form method="post" action="/settings/roles/{{ r.id }}/delete" style="display:inline">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="cw-btn ghost sm">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+
+    <!-- Users tab -->
+    <div class="cw-tab-panel {% if tab == 'users' %}active{% endif %}" id="tab-users">
+      <div class="cw-mb-16">
+        <h3 class="cw-heading-3">Local users</h3>
+        <p class="cw-muted">Local users can authenticate without LDAP or OAuth. Useful for standalone deployments.</p>
+      </div>
+      <form method="post" action="/settings/users">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label" for="user_username">Username</label>
+          <input class="cw-input" type="text" id="user_username" name="username" placeholder="jsmith" required>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="user_email">Email</label>
+          <input class="cw-input" type="email" id="user_email" name="email" placeholder="jsmith@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="user_password">Password</label>
+          <input class="cw-input" type="password" id="user_password" name="password" placeholder="Min 8 characters" required>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="user_role">Role</label>
+          <select class="cw-input" id="user_role" name="role_id">
+            <option value="">(none)</option>
+            {% for r in roles %}
+            <option value="{{ r.id }}">{{ r.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="cw-btn primary">Add user</button>
+      </form>
+
+      {% if users %}
+      <table class="cw-table cw-mt-16">
+        <thead>
+          <tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u.username }}</td>
+            <td>{{ u.email }}</td>
+            <td>
+              {% for r in roles %}
+                {% if r.id == u.role_id %}{{ r.name }}{% endif %}
+              {% endfor %}
+            </td>
+            <td>
+              <form method="post" action="/settings/users/{{ u.id }}/delete" style="display:inline">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="cw-btn ghost sm">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endblock %}
@@ -543,14 +676,7 @@
     }
   }
 
-  document.querySelector('[data-action="test-ldap"]').addEventListener('click', function(e) {
-    e.preventDefault();
-    testLdap(e.currentTarget);
-  });
-  document.querySelector('[data-action="test-smtp"]').addEventListener('click', function(e) {
-    e.preventDefault();
-    testSmtp(e.currentTarget);
-  });
+  // test-ldap and test-smtp are handled by the delegated listener in base.html
   document.querySelector('[data-action="pin-ldap-ca"]').addEventListener('click', function(e) {
     e.preventDefault();
     pinLdapCa(e.currentTarget);

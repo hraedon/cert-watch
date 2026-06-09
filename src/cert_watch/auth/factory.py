@@ -72,6 +72,7 @@ def build_auth_provider(
     # Local break-glass admin
     local_admin_user: str = "",
     local_admin_password_hash: str = "",
+    db_path: str | None = None,
 ) -> AuthProvider:
     """Build an auth provider from config values. Returns NoAuthProvider if provider is empty."""
     provider = provider.lower().strip()
@@ -84,12 +85,12 @@ def build_auth_provider(
 
     local_admin: LocalAdminProvider | None = None
     if local_admin_user and local_admin_password_hash:
-        local_admin = LocalAdminProvider(local_admin_user, local_admin_password_hash)
+        local_admin = LocalAdminProvider(local_admin_user, local_admin_password_hash, db_path=db_path)
 
     primary: AuthProvider
     if not provider or provider == "none":
         if local_admin:
-            return LocalAdminProvider(local_admin_user, local_admin_password_hash)
+            return local_admin
         return NoAuthProvider()
     if provider == "ldap":
         if not ldap_server or not ldap_base_dn:
