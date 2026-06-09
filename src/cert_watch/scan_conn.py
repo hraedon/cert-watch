@@ -105,7 +105,10 @@ def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
     a load balancer), the openssl fallback is invoked as a standalone
     scan — see _scan_via_openssl().
     """
-    leaf = ssl_sock.getpeercert(binary_form=True)
+    try:
+        leaf = ssl_sock.getpeercert(binary_form=True)
+    except (AttributeError, ValueError):
+        leaf = None
     chain: list[bytes] = []
     if leaf:
         chain.append(leaf)

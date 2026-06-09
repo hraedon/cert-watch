@@ -340,7 +340,8 @@ def store_scanned(
         if replaced_cert_id and webhook_config is not None:
             try:
                 from cert_watch.alerts import WebhookConfig, resolve_pagerduty_for_renewed_cert
-                assert isinstance(webhook_config, WebhookConfig)
+                if not isinstance(webhook_config, WebhookConfig):
+                    raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
                 resolved = resolve_pagerduty_for_renewed_cert(
                     repo_path_or_repo, replaced_cert_id, webhook_config,
                 )

@@ -284,7 +284,9 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
                 curr.get("posture_grade") and prev.get("posture_grade")
                 and curr["posture_grade"] != prev["posture_grade"]
             ):
-                grade_order = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+                from cert_watch.posture import GRADE_WORST_ORDER
+
+                grade_order = GRADE_WORST_ORDER
                 curr_g = grade_order.get(curr["posture_grade"], 0)
                 prev_g = grade_order.get(prev["posture_grade"], 0)
                 if curr_g > prev_g:

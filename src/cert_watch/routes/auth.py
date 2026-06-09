@@ -117,7 +117,8 @@ async def login_submit(
             )
     # BC-081: embed current session version in the token
     settings = getattr(request.app.state, "settings", None)
-    assert settings is not None
+    if settings is None:
+        raise RuntimeError("settings not initialized on app.state")
     _db_path = str(settings.db_path)
     version = get_session_version(_db_path, result.username)
     # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out
@@ -278,7 +279,8 @@ def oauth_callback(
         return response
     # BC-081: embed current session version in the token
     settings = getattr(request.app.state, "settings", None)
-    assert settings is not None
+    if settings is None:
+        raise RuntimeError("settings not initialized on app.state")
     _db_path = str(settings.db_path)
     version = get_session_version(_db_path, result.username)
     # BC-029 D: ensure stored version is >= 1 so old 3-part tokens are phased out

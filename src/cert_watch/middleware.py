@@ -211,6 +211,11 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                 return False
             ts.append(now)
             _rate_cache[key] = ts
+            # Evict stale keys to prevent unbounded growth
+            if len(_rate_cache) > 256:
+                stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
+                for k in stale:
+                    del _rate_cache[k]
             return True
 
     with _rate_lock:
@@ -230,6 +235,12 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                     ts = [t for t in cache_ts if t >= cutoff]
                 else:
                     ts = _load_timestamps(conn, key, cutoff)
+
+                # Evict stale in-memory cache entries periodically
+                if len(_rate_cache) > 256:
+                    stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
+                    for k in stale:
+                        del _rate_cache[k]
 
                 if len(ts) >= max_requests:
                     _rate_cache[key] = ts
@@ -258,6 +269,11 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                 return False
             ts.append(now)
             _rate_cache[key] = ts
+            # Evict stale keys to prevent unbounded growth
+            if len(_rate_cache) > 256:
+                stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
+                for k in stale:
+                    del _rate_cache[k]
             return True
 
 

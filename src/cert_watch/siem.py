@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import socket
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import SysLogHandler
@@ -186,21 +187,25 @@ class SiemExporter:
 
 
 _exporter: SiemExporter | None = None
+_exporter_lock = threading.Lock()
 
 
 def _get_exporter() -> SiemExporter:
     global _exporter
     if _exporter is None:
-        _exporter = SiemExporter()
+        with _exporter_lock:
+            if _exporter is None:
+                _exporter = SiemExporter()
     return _exporter
 
 
 def reset_exporter() -> None:
     """Drop the cached exporter so the next call re-reads the environment (tests)."""
     global _exporter
-    if _exporter is not None:
-        _exporter.close()
-    _exporter = None
+    with _exporter_lock:
+        if _exporter is not None:
+            _exporter.close()
+        _exporter = None
 
 
 def siem_enabled() -> bool:
