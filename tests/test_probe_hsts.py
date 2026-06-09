@@ -63,8 +63,8 @@ class TestProbeHts:
         mock_ctx.wrap_socket = fake_wrap_socket
 
         with (
-            patch("cert_watch.scan.socket.create_connection") as mock_connect,
-            patch("cert_watch.scan.ssl.create_default_context", return_value=mock_ctx),
+            patch("cert_watch.scan_conn.socket.create_connection") as mock_connect,
+            patch("cert_watch.scan_conn.ssl.create_default_context", return_value=mock_ctx),
             patch("http.client.HTTPSConnection", return_value=mock_conn),
         ):
             mock_connect.return_value = mock_raw_sock
@@ -81,8 +81,8 @@ class TestProbeHts:
         mock_ctx.wrap_socket.side_effect = OSError("TLS handshake failed")
 
         with (
-            patch("cert_watch.scan.socket.create_connection", return_value=mock_raw_sock),
-            patch("cert_watch.scan.ssl.create_default_context", return_value=mock_ctx),
+            patch("cert_watch.scan_conn.socket.create_connection", return_value=mock_raw_sock),
+            patch("cert_watch.scan_conn.ssl.create_default_context", return_value=mock_ctx),
         ):
             result = _probe_hsts("example.com", 443, pinned_ip="10.0.0.1")
 
@@ -91,7 +91,7 @@ class TestProbeHts:
 
     def test_pinned_ip_connection_refused_returns_none(self):
         with patch(
-            "cert_watch.scan.socket.create_connection",
+            "cert_watch.scan_conn.socket.create_connection",
             side_effect=ConnectionRefusedError("refused"),
         ):
             result = _probe_hsts(
