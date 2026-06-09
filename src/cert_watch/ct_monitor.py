@@ -23,6 +23,18 @@ logger = logging.getLogger("cert_watch.ct_monitor")
 # Short-TTL cache for CT reconciliation results (BC-029 H)
 _CT_RECON_CACHE: dict[str, tuple[float, ReconciliationResult]] = {}
 _CT_RECON_CACHE_TTL = 300  # 5 minutes
+_CT_RECON_CACHE_MAX = 512  # evict oldest entries when exceeded
+
+
+def _evict_ct_cache(now: float) -> None:
+    """Evict stale and overflow entries from _CT_RECON_CACHE."""
+    stale_keys = [k for k, (ts, _) in _CT_RECON_CACHE.items() if now - ts > _CT_RECON_CACHE_TTL * 2]
+    for k in stale_keys:
+        del _CT_RECON_CACHE[k]
+    if len(_CT_RECON_CACHE) > _CT_RECON_CACHE_MAX:
+        sorted_keys = sorted(_CT_RECON_CACHE, key=lambda k: _CT_RECON_CACHE[k][0])
+        for k in sorted_keys[: len(_CT_RECON_CACHE) - _CT_RECON_CACHE_MAX]:
+            del _CT_RECON_CACHE[k]
 
 # Background-refresh bookkeeping (BC-097): the Discover page must never block on
 # live crt.sh calls in the request path, so stale/missing domains are warmed off
@@ -174,6 +186,7 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
             error=result,
         )
         _CT_RECON_CACHE[cache_key] = (now, recon)
+        _evict_ct_cache(now)
         return recon
 
     ct_hostnames: set[str] = set()
@@ -246,6 +259,7 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
         first_seen_by_issuer=first_seen_by_issuer,
     )
     _CT_RECON_CACHE[cache_key] = (now, recon)
+    _evict_ct_cache(now)
     return recon
 
 

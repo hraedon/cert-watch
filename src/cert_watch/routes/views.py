@@ -191,7 +191,7 @@ def dashboard(
         total_pages = 1
         # Urgency distribution via targeted SQL
         with _connect(db) as conn:
-            rows = conn.execute(
+            row = conn.execute(
                 """SELECT
                     SUM(CASE WHEN c.not_after < datetime('now') THEN 1 ELSE 0 END) AS expired,
                     SUM(CASE WHEN c.not_after >= datetime('now')
@@ -208,7 +208,7 @@ def dashboard(
                 WHERE c.is_leaf = 1
                 """
             ).fetchone()
-        r = dict(rows)
+        r = dict(row)
         # Add pending hosts count (no cert = gray, not counted in urgency buckets)
         pivot_stats = {
             "expired": r.get("expired") or 0,
@@ -251,7 +251,9 @@ def dashboard(
             "SELECT grade, COUNT(*) as cnt FROM scan_posture GROUP BY grade"
         ).fetchall()
     if grade_rows:
-        grade_order = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+        from cert_watch.posture import GRADE_WORST_ORDER
+
+        grade_order = GRADE_WORST_ORDER
         counts = {}
         worst = 0
         for r in grade_rows:
@@ -431,14 +433,8 @@ def ct_lookup_view(request: Request, domain: str) -> dict:
 )
 def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
-    import re as _re
-
-    _DOMAIN_RE = _re.compile(
-        r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
-        r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*"
-        r"\.[a-zA-Z]{2,}$",
-    )
-    if not domain or len(domain) > 253 or not _DOMAIN_RE.match(domain):
+    from cert_watch.ct_lookup import _DOMAIN_RE, _MAX_DOMAIN_LEN
+    if not domain or len(domain) > _MAX_DOMAIN_LEN or not _DOMAIN_RE.match(domain):
         return {"domain": domain, "error": "invalid domain"}
     from cert_watch.caa_check import check_caa
 

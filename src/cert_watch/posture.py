@@ -28,6 +28,11 @@ class PostureResult:
     must_staple: bool = False
 
 
+# Worst-grade ordering: higher value = worse grade.
+# Used for grade-drop detection and worst-grade aggregation.
+GRADE_WORST_ORDER: dict[str, int] = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+
+
 def tls_version_meets_1_2(protocol_version: str | None) -> bool:
     """Return True if *protocol_version* is TLS 1.2 or newer.
 

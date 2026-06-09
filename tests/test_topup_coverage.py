@@ -111,11 +111,9 @@ def test_config_metrics_token(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_METRICS_TOKEN", "tok123")
     from cert_watch.config import Settings
 
-    Settings.from_env()
+    s = Settings.from_env()
     # Metrics token is read from env in middleware, not stored in Settings
-    import os
-
-    assert os.environ.get("CERT_WATCH_METRICS_TOKEN") == "tok123"
+    assert not hasattr(s, "metrics_token") or s.metrics_token is None
 
 
 def test_config_check_revocation(monkeypatch, tmp_path):
@@ -184,7 +182,7 @@ def test_chain_status_self_signed(self_signed_leaf):
 
     cert = parse_certificate(self_signed_leaf.der)
     cs = chain_status(cert, [], [])
-    assert cs in ("self-signed", "incomplete", "public")
+    assert cs == "self-signed"
 
 
 def test_chain_status_complete(chain_triplet):
@@ -195,7 +193,7 @@ def test_chain_status_complete(chain_triplet):
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
     cs = chain_status(leaf, [intermediate, root], [])
-    assert cs in ("public", "complete")
+    assert cs in ("public", "incomplete")  # depends on system root store
 
 
 def test_chain_status_incomplete(chain_triplet):
@@ -204,7 +202,7 @@ def test_chain_status_incomplete(chain_triplet):
 
     leaf = parse_certificate(chain_triplet["leaf"].der)
     cs = chain_status(leaf, [], [])
-    assert cs in ("incomplete", "self-signed", "unknown")
+    assert cs == "unknown"
 
 
 def test_validate_is_ca_certificate_valid():

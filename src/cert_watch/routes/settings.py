@@ -177,7 +177,6 @@ def settings_page(
 ) -> HTMLResponse | RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
-        assert isinstance(redirect_resp, RedirectResponse)
         return redirect_resp
     db = _db_path(request)
     enc_key = _get_encryption_key(request)
@@ -364,7 +363,6 @@ async def _save_config_section(
     """
     redirect_resp = _require_admin(request)
     if redirect_resp:
-        assert isinstance(redirect_resp, RedirectResponse)
         return redirect_resp
 
     from cert_watch.middleware import check_csrf
@@ -409,7 +407,7 @@ async def save_auth_config(request: Request) -> RedirectResponse:
             request.app.state.auth_provider = auth
             request.app.state.needs_setup = False
             logger.info("settings: auth provider updated to '%s'", s.auth_provider)
-        except (ValueError, Exception) as exc:
+        except Exception as exc:
             logger.warning("settings: auth provider rebuild failed: %s", exc)
             return RedirectResponse(
                 url=f"/settings?tab=auth&error={str(exc)[:120].replace(chr(10), ' ')}",
@@ -440,7 +438,6 @@ async def save_alert_config(request: Request) -> RedirectResponse:
 async def change_local_admin_password(request: Request) -> RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
-        assert isinstance(redirect_resp, RedirectResponse)
         return redirect_resp
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
@@ -610,32 +607,15 @@ def _capture_starttls_chain(
 
     der_chain: list[bytes] = []
     try:
+        from cert_watch.scan_conn import _get_chain_der
+
         srv = ldap3.Server(url, get_info=ldap3.NONE, connect_timeout=timeout)
         conn = ldap3.Connection(srv, auto_bind=False, receive_timeout=timeout)
         conn.open()
         conn.start_tls()
         ssl_sock = conn.socket
         if ssl_sock is not None:
-            # Try native chain API (CPython 3.13+)
-            for method in ("get_unverified_chain", "get_verified_chain"):
-                getter = getattr(ssl_sock, method, None)
-                if getter:
-                    try:
-                        items = getter()
-                        der_chain = []
-                        for c in items:
-                            try:
-                                der = c.public_bytes(Encoding.DER)
-                            except AttributeError:
-                                der = bytes(c)
-                            der_chain.append(der)
-                        break
-                    except Exception:
-                        continue
-            else:
-                leaf = ssl_sock.getpeercert(binary_form=True)
-                if leaf:
-                    der_chain.append(leaf)
+            der_chain = _get_chain_der(ssl_sock)
         conn.unbind()
     except Exception:
         pass
@@ -684,26 +664,9 @@ def _probe_tls_chain(
             socket.create_connection((host, port), timeout=timeout) as sock,
             ctx.wrap_socket(sock, server_hostname=host) as ssl_sock,
         ):
-            # Try native chain API (CPython 3.13+)
-            for method in ("get_unverified_chain", "get_verified_chain"):
-                getter = getattr(ssl_sock, method, None)
-                if getter:
-                    try:
-                        items = getter()
-                        der_chain = []
-                        for c in items:
-                            try:
-                                der = c.public_bytes(Encoding.DER)
-                            except AttributeError:
-                                der = bytes(c)
-                            der_chain.append(der)
-                        break
-                    except Exception:
-                        continue
-            else:
-                leaf = ssl_sock.getpeercert(binary_form=True)
-                if leaf:
-                    der_chain.append(leaf)
+            from cert_watch.scan_conn import _get_chain_der
+
+            der_chain = _get_chain_der(ssl_sock)
     except Exception:
         pass
 

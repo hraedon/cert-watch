@@ -129,7 +129,7 @@ def test_chain_status_with_intermediates(chain_triplet):
     root = parse_certificate(chain_triplet["root"].der)
     # With full chain
     cs = chain_status(leaf, [intermediate, root], [])
-    assert cs in ("public", "complete", "unknown")
+    assert cs in ("public", "incomplete")  # depends on system root store
 
 
 def test_chain_status_with_anchors(chain_triplet):
@@ -140,7 +140,7 @@ def test_chain_status_with_anchors(chain_triplet):
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
     cs = chain_status(leaf, [intermediate], [root])
-    assert cs in ("public", "complete", "unknown", "private")
+    assert cs in ("private", "incomplete")  # private if anchor verifies, incomplete otherwise
 
 
 # ---------- routes/certificates.py detail branches ----------
