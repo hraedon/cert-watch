@@ -19,7 +19,12 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
-from cert_watch.middleware import get_auth_context, get_csrf_context, require_admin_write
+from cert_watch.middleware import (
+    get_auth_context,
+    get_csrf_context,
+    require_admin_form,
+    require_admin_write,
+)
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 
 logger = logging.getLogger("cert_watch.routes.settings")
@@ -299,9 +304,9 @@ def api_keys_page(request: Request) -> RedirectResponse:
 async def api_keys_create(
     request: Request,
 ) -> HTMLResponse | RedirectResponse | JSONResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
     from cert_watch.database import SqliteApiKeyRepository
     from cert_watch.database.api_keys import VALID_SCOPES
@@ -337,9 +342,9 @@ async def api_keys_create(
 async def api_keys_revoke(
     key_id: IdParam, request: Request
 ) -> RedirectResponse | HTMLResponse | JSONResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
     from cert_watch.database import SqliteApiKeyRepository
     from cert_watch.middleware import check_csrf
@@ -376,9 +381,9 @@ async def _save_config_section(
                  that are non-blank are stored encrypted (BC-082).
     *rebuild*  – when True, ``_rebuild_settings`` is called after saving.
     """
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
 
     from cert_watch.middleware import check_csrf
 
@@ -451,9 +456,9 @@ async def save_alert_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/change-password")
 async def change_local_admin_password(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -1115,9 +1120,9 @@ def roles_page(request: Request) -> HTMLResponse | RedirectResponse | JSONRespon
 
 @router.post("/settings/roles")
 async def create_role(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -1139,9 +1144,9 @@ async def create_role(request: Request) -> RedirectResponse:
 
 @router.post("/settings/roles/{role_id}/delete")
 async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -1185,9 +1190,9 @@ def users_page(request: Request) -> HTMLResponse | RedirectResponse | JSONRespon
 
 @router.post("/settings/users")
 async def create_user(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -1222,9 +1227,9 @@ async def create_user(request: Request) -> RedirectResponse:
 
 @router.post("/settings/users/{user_id}/delete")
 async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:
@@ -1241,9 +1246,9 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
 
 @router.post("/settings/ldap-role-map")
 async def save_ldap_role_map(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
-    if redirect_resp:
-        return redirect_resp
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
     from cert_watch.middleware import check_csrf
     csrf_err = await check_csrf(request)
     if csrf_err:

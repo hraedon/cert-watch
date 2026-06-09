@@ -296,8 +296,18 @@ def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
         counts = process_pending(alert_repo, smtp_config, webhook_config=webhook_config)
+    # SMTP was deliberately broken: fallback to webhook must have fired.
+    # A regression that drops the fallback would leave failed > 0 and sent == 0.
     assert counts["sent"] > 0
     assert counts["failed"] == 0
+    # The webhook URL was hit (not just any HTTP call — verify the URL matches).
+    assert mock_urlopen.called
+    called_url = (
+        mock_urlopen.call_args.args[0]
+        if mock_urlopen.call_args and mock_urlopen.call_args.args
+        else mock_urlopen.call_args.kwargs.get("url", "")
+    )
+    assert str(called_url) == "https://hooks.example.com/alert"
 
 
 def test_process_pending_webhook_only(alert_repo, expiring_cert):
@@ -310,8 +320,10 @@ def test_process_pending_webhook_only(alert_repo, expiring_cert):
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
         counts = process_pending(alert_repo, None, webhook_config=webhook_config)
+    # Webhook-only path: no SMTP attempted, one webhook call.
     assert counts["sent"] > 0
     assert counts["failed"] == 0
+    assert mock_urlopen.call_count >= 1
 
 
 def test_send_webhook_ssrf_blocked():
