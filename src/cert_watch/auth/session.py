@@ -44,7 +44,11 @@ def _key(security: SecurityContext | None) -> str:
     """Resolve the signing key: the injected SecurityContext, else the
     module-level import-time fallback (Plan 018 B1)."""
     val = security.signing_key if security is not None else _signing_key
-    assert val is not None
+    if val is None:
+        raise ValueError(
+            "Signing key is None — neither SecurityContext nor module-level "
+            "fallback was initialised.  This is a startup-time bug."
+        )
     return val
 
 

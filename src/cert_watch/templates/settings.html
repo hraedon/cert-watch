@@ -135,7 +135,7 @@
                 {% for r in roles %}
                 <div class="cw-field cw-mb-12">
                   <label class="cw-label" for="role_map_{{ r.id }}">{{ r.name }} groups (comma-separated DNs)</label>
-                  <input class="cw-input" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.name }}"
+                  <input class="cw-input" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
                          value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join(', ') }}"
                          placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
                 </div>

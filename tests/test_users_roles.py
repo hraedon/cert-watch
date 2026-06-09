@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
-from cert_watch.auth import LocalAdminProvider, _scrypt_hash, verify_scrypt_hash
+from cert_watch.auth import LocalAdminProvider, _scrypt_hash
 from cert_watch.database import (
     Role,
     SqliteRoleRepository,
@@ -215,6 +216,3 @@ class TestSettingsRoutes:
             r = client.get("/settings/users")
         assert r.status_code == 200
         assert "Users" in r.text
-
-
-from fastapi.testclient import TestClient

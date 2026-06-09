@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import json
 import logging
+import os
 import ssl
 from pathlib import Path
 
@@ -196,9 +198,6 @@ def settings_page(
             display_config[k] = "••••••••"
         else:
             display_config[k] = v
-    import json
-    import os
-
     from cert_watch.database import kv_get
 
     local_admin = _local_admin_configured(request)
@@ -1133,16 +1132,20 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
 
     form = await request.form()
-    import json
-    from cert_watch.database import kv_set
+    from cert_watch.database import SqliteRoleRepository, kv_set
 
+    role_repo = SqliteRoleRepository(_db_path(request))
     map_data = {}
     for key in form:
         if key.startswith("role_map_"):
-            role_name = key[len("role_map_"):]
+            role_id = key[len("role_map_"):]
             groups = str(form.get(key) or "").strip()
             if groups:
-                map_data[role_name] = {"groups": [g.strip() for g in groups.split(",") if g.strip()]}
+                role = role_repo.get(role_id)
+                if role:
+                    map_data[role.name] = {
+                        "groups": [g.strip() for g in groups.split(",") if g.strip()]
+                    }
     kv_set(_db_path(request), "ldap_role_map", json.dumps(map_data))
     return RedirectResponse(url="/settings?tab=auth&saved=1", status_code=303)
 

@@ -126,7 +126,8 @@ class SqliteUserRepository:
         now = datetime.now(UTC).isoformat()
         with _connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO users (id, username, email, password_hash, role_id, created_at, updated_at) "
+                "INSERT INTO users "
+                "(id, username, email, password_hash, role_id, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (user_id, user.username, user.email, user.password_hash, user.role_id, now, now),
             )
@@ -194,8 +195,8 @@ class SqliteUserRepository:
         now = datetime.now(UTC).isoformat()
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE users SET username = ?, email = ?, password_hash = ?, role_id = ?, updated_at = ? "
-                "WHERE id = ?",
+                "UPDATE users SET username = ?, email = ?, password_hash = ?, "
+                "role_id = ?, updated_at = ? WHERE id = ?",
                 (user.username, user.email, user.password_hash, user.role_id, now, user.id),
             )
             conn.commit()

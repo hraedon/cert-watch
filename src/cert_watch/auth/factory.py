@@ -85,7 +85,9 @@ def build_auth_provider(
 
     local_admin: LocalAdminProvider | None = None
     if local_admin_user and local_admin_password_hash:
-        local_admin = LocalAdminProvider(local_admin_user, local_admin_password_hash, db_path=db_path)
+        local_admin = LocalAdminProvider(
+            local_admin_user, local_admin_password_hash, db_path=db_path
+        )
 
     primary: AuthProvider
     if not provider or provider == "none":
