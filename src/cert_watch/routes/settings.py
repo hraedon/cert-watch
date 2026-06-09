@@ -541,11 +541,6 @@ def _capture_ldaps_chain(
     Returns None when the URL is not LDAPS, the host is blocked by the SSRF
     guard, or no chain can be read.
     """
-    import socket
-
-    from cert_watch.certificate_model import Certificate, parse_certificate
-    from cert_watch.scan import _is_blocked_ip, _scan_via_openssl
-
     lowered = url.lower()
     if not lowered.startswith("ldaps://"):
         return None
@@ -555,7 +550,10 @@ def _capture_ldaps_chain(
     if ":" in rest:
         with contextlib.suppress(ValueError):
             port = int(rest.split(":")[1].split("/")[0])
-    return _probe_tls_chain(host, port, timeout, allow_private=allow_private, allowed_subnets=allowed_subnets)
+    return _probe_tls_chain(
+        host, port, timeout,
+        allow_private=allow_private, allowed_subnets=allowed_subnets,
+    )
 
 
 def _capture_starttls_chain(
@@ -577,7 +575,6 @@ def _capture_starttls_chain(
     Returns None when the URL is not ldap://, the host is blocked by the SSRF
     guard, or no chain can be read.
     """
-    from cert_watch.certificate_model import Certificate, parse_certificate
     from cert_watch.scan import _is_blocked_ip
 
     lowered = url.lower()
@@ -639,10 +636,13 @@ def _capture_starttls_chain(
     # Fallback: raw TLS probe on the same port (some servers present the same
     # cert on StartTLS and LDAPS, but not all — this is best-effort).
     if not der_chain:
-        return _probe_tls_chain(host, port, timeout, allow_private=allow_private, allowed_subnets=allowed_subnets)
+        return _probe_tls_chain(
+            host, port, timeout,
+            allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
+        )
 
     return _der_chain_to_ca_dicts(der_chain)
-
 
 def _probe_tls_chain(
     host: str,
@@ -658,7 +658,6 @@ def _probe_tls_chain(
     """
     import socket
 
-    from cert_watch.certificate_model import Certificate, parse_certificate
     from cert_watch.scan import _is_blocked_ip, _scan_via_openssl
 
     # SSRF guard

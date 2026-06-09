@@ -1166,18 +1166,29 @@ def test_capture_starttls_chain_fallback_to_probe(monkeypatch, chain_triplet):
     from cert_watch.routes.settings import _capture_starttls_chain
 
     ldap3 = pytest.importorskip("ldap3")
-    intermediate = chain_triplet["intermediate"]
-    root = chain_triplet["root"]
-    der_chain = [intermediate.der, root.der]
-
     # ldap3 StartTLS fails → falls back to raw TLS probe
-    monkeypatch.setattr(ldap3, "Connection", lambda *a, **k: (_ for _ in ()).throw(Exception("boom")))
+    monkeypatch.setattr(
+        ldap3, "Connection",
+        lambda *a, **k: (_ for _ in ()).throw(Exception("boom")),
+    )
     monkeypatch.setattr(ldap3, "Server", lambda *a, **k: None)
     monkeypatch.setattr(
         "cert_watch.routes.settings._probe_tls_chain",
         lambda *a, **k: [
-            {"subject": "CN=Test Intermediate CA", "issuer": "CN=Test Root CA", "not_after": "", "sha256": "aa", "pem": "PEM1"},
-            {"subject": "CN=Test Root CA", "issuer": "CN=Test Root CA", "not_after": "", "sha256": "bb", "pem": "PEM2"},
+            {
+                "subject": "CN=Test Intermediate CA",
+                "issuer": "CN=Test Root CA",
+                "not_after": "",
+                "sha256": "aa",
+                "pem": "PEM1",
+            },
+            {
+                "subject": "CN=Test Root CA",
+                "issuer": "CN=Test Root CA",
+                "not_after": "",
+                "sha256": "bb",
+                "pem": "PEM2",
+            },
         ],
     )
 
