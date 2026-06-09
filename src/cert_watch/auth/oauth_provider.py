@@ -427,7 +427,9 @@ class OAuthProvider(AuthProvider):
                 or info.get("email")
                 or ""
             )
-            return AuthResult(success=True, username=username, roles=roles, groups=groups, email=email)
+            return AuthResult(
+                success=True, username=username, roles=roles, groups=groups, email=email
+            )
         except Exception as exc:
             logger.warning("OAuth token exchange failed: %s", exc)
             return AuthResult(success=False, error="OAuth authentication failed")

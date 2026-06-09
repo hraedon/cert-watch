@@ -109,7 +109,10 @@ class LocalAdminProvider(AuthProvider):
         # Plan 040: try the users table first (full local auth)
         if self.db_path:
             try:
-                from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
+                from cert_watch.database.users_roles import (
+                    SqliteRoleRepository,
+                    SqliteUserRepository,
+                )
 
                 user_repo = SqliteUserRepository(self.db_path)
                 user = user_repo.get_by_username(username)
