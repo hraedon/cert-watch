@@ -1248,3 +1248,743 @@ def test_test_ldap_starttls_tofu_on_cert_verify_failure(reload_app, monkeypatch,
     assert data["tofu"]["pem"] == root.pem.decode()
     assert len(data["tofu"]["chain"]) == 1
     assert data["tofu"]["chain"][0]["subject"] == "CN=Test Root CA"
+
+
+# ---------- Role CRUD (Plan 040) ----------
+
+
+def test_roles_page_loads(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.get("/settings/roles")
+    assert r.status_code == 200
+    assert "Roles" in r.text
+
+
+def test_create_role_success(reload_app, tmp_path, monkeypatch):
+    from cert_watch.database import SqliteRoleRepository
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/roles",
+            data={"name": "ops-team", "email": "ops@example.com", "description": "Ops team"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "saved=1" in r.headers["location"]
+    db = tmp_path / "cert-watch.sqlite3"
+    roles = SqliteRoleRepository(db).list_all()
+    assert any(ro.name == "ops-team" for ro in roles)
+
+
+def test_create_role_missing_name(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/roles",
+            data={"name": "", "email": "x@x.com", "description": ""},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "error" in r.headers["location"]
+
+
+def test_delete_role(reload_app, tmp_path, monkeypatch):
+    from cert_watch.database import Role, SqliteRoleRepository
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    role_id = SqliteRoleRepository(db).add(Role(name="to-delete"))
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            f"/settings/roles/{role_id}/delete",
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert SqliteRoleRepository(db).get(role_id) is None
+
+
+# ---------- User CRUD (Plan 040) ----------
+
+
+def test_users_page_loads(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.get("/settings/users")
+    assert r.status_code == 200
+    assert "Users" in r.text
+
+
+def test_create_user_success(reload_app, tmp_path, monkeypatch):
+    from cert_watch.database import SqliteUserRepository
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/users",
+            data={
+                "username": "analyst",
+                "email": "analyst@example.com",
+                "password": "securepass1",
+                "role_id": "",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "saved=1" in r.headers["location"]
+    db = tmp_path / "cert-watch.sqlite3"
+    user = SqliteUserRepository(db).get_by_username("analyst")
+    assert user is not None
+
+
+def test_create_user_missing_username(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/users",
+            data={"username": "", "password": "securepass1"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "error" in r.headers["location"]
+
+
+def test_create_user_short_password(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/users",
+            data={"username": "analyst", "password": "short"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "8+characters" in r.headers["location"]
+
+
+def test_delete_user(reload_app, tmp_path, monkeypatch):
+    from cert_watch.auth import _scrypt_hash
+    from cert_watch.database import SqliteUserRepository, User
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    user_id = SqliteUserRepository(db).add(
+        User(username="to-delete", password_hash=_scrypt_hash("password1"))
+    )
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            f"/settings/users/{user_id}/delete",
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert SqliteUserRepository(db).get(user_id) is None
+
+
+# ---------- LDAP role mapping (Plan 040) ----------
+
+
+def test_save_ldap_role_map(reload_app, tmp_path, monkeypatch):
+    import json
+
+    from cert_watch.database import Role, SqliteRoleRepository, kv_get
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    role_id = SqliteRoleRepository(db).add(Role(name="admins"))
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/ldap-role-map",
+            data={f"role_map_{role_id}": "cert-watch-admins, cert-watch-users"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "saved=1" in r.headers["location"]
+    stored = json.loads(kv_get(db, "ldap_role_map"))
+    assert "admins" in stored
+    assert stored["admins"]["groups"] == ["cert-watch-admins", "cert-watch-users"]
+
+
+def test_save_ldap_role_map_skips_blank_groups(reload_app, tmp_path, monkeypatch):
+    import json
+
+    from cert_watch.database import Role, SqliteRoleRepository, kv_get
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    role_id = SqliteRoleRepository(db).add(Role(name="ops"))
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/ldap-role-map",
+            data={f"role_map_{role_id}": "  "},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    stored = json.loads(kv_get(db, "ldap_role_map"))
+    assert "ops" not in stored
+
+
+# ---------- SMTP port 465 (SMTP_SSL) path ----------
+
+
+def test_test_smtp_port_465_uses_smtp_ssl(reload_app, monkeypatch):
+    import smtplib
+
+    calls = {}
+
+    class FakeSMTP_SSL:
+        def __init__(self, host, port, timeout=10):
+            calls["target"] = (host, port)
+            calls["class"] = "SMTP_SSL"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def send_message(self, msg):
+            calls["sent_to"] = msg["To"]
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTP_SSL)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "465",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert calls["target"] == ("smtp.example.com", 465)
+    assert calls["class"] == "SMTP_SSL"
+
+
+def test_test_smtp_nonnumeric_port_returns_error(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "smtp.example.com",
+                "smtp_port": "abc",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "port" in data["error"].lower()
+
+
+def test_test_smtp_ssrf_blocked_ip(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "127.0.0.1",
+                "smtp_port": "25",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "blocked" in data["error"].lower()
+
+
+# ---------- _probe_tls_chain native chain / openssl fallback ----------
+
+
+def test_probe_tls_chain_returns_none_for_ssrf_ip():
+    from cert_watch.routes.settings import _probe_tls_chain
+
+    assert _probe_tls_chain("127.0.0.1", 636) is None
+
+
+def test_probe_tls_chain_openssl_fallback(monkeypatch, chain_triplet):
+    from cert_watch.routes.settings import _probe_tls_chain
+
+    leaf = chain_triplet["leaf"]
+    intermediate = chain_triplet["intermediate"]
+    root = chain_triplet["root"]
+    der_chain = [leaf.der, intermediate.der, root.der]
+
+    import socket as _socket
+
+    class FakeSSLSock:
+        def get_unverified_chain(self):
+            raise RuntimeError("not available")
+
+        def get_verified_chain(self):
+            raise RuntimeError("not available")
+
+        def getpeercert(self, binary_form=False):
+            if binary_form:
+                return leaf.der
+            return {}
+
+    class FakeConn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_create_connection(addr, timeout=5):
+        return FakeConn()
+
+    def fake_wrap_socket(sock, server_hostname=None):
+        return FakeSSLSock()
+
+    monkeypatch.setattr(_socket, "create_connection", fake_create_connection)
+    import ssl as _ssl
+
+    monkeypatch.setattr(_ssl.SSLContext, "wrap_socket", fake_wrap_socket)
+
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **k: (der_chain, "TLSv1.3"),
+    )
+
+    result = _probe_tls_chain("dc.example.com", 636)
+    assert result is not None
+    assert len(result) == 2
+    assert result[0]["subject"] == "CN=Test Intermediate CA"
+
+
+# ---------- _der_chain_to_ca_dicts edge cases ----------
+
+
+def test_der_chain_to_ca_dicts_empty():
+    from cert_watch.routes.settings import _der_chain_to_ca_dicts
+
+    assert _der_chain_to_ca_dicts([]) is None
+
+
+def test_der_chain_to_ca_dicts_no_ca_certs(self_signed_leaf):
+    from cert_watch.routes.settings import _der_chain_to_ca_dicts
+
+    assert _der_chain_to_ca_dicts([self_signed_leaf.der]) is None
+
+
+# ---------- _require_admin auth paths ----------
+
+
+def test_require_admin_no_auth_provider(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/settings")
+    assert r.status_code == 200
+
+
+def test_require_admin_unauthenticated_redirects_with_auth(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/settings", follow_redirects=False)
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    from cert_watch.auth import _CompositeProvider
+    from cert_watch.auth.local_admin import LocalAdminProvider
+    from cert_watch.config import Settings
+    from cert_watch.routes.settings import _require_admin
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    monkeypatch.setenv("CERT_WATCH_ADMINS", "superuser")
+    app_mod = reload_app()
+
+    settings = Settings.from_env()
+    app_mod.app.state.settings = settings
+
+    primary = MagicMock()
+    primary.provider_name = "mock"
+    local = LocalAdminProvider(
+        "otheruser", "fakehash", db_path=str(tmp_path / "cert-watch.sqlite3")
+    )
+    composite = _CompositeProvider(local, primary)
+    app_mod.app.state.auth_provider = composite
+
+    from starlette.requests import Request
+
+    scope = {
+        "type": "http", "method": "GET", "path": "/settings",
+        "query_string": b"", "headers": [],
+        "app": app_mod.app,
+        "auth_user": "admin",
+        "session": {},
+    }
+    req = Request(scope)
+    result = _require_admin(req)
+    assert result is not None
+    assert result.status_code == 403
+
+
+# ---------- API keys admin redirect ----------
+
+
+def test_api_keys_page_unauthenticated_redirects(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/settings/api-keys", follow_redirects=False)
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+# ---------- _effective_config encrypted value decrypt ----------
+
+
+def test_effective_config_decrypts_encrypted_values(reload_app, tmp_path, monkeypatch):
+    from cert_watch.database import derive_encryption_key, fernet_encrypt, init_schema, kv_set
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    enc_key = derive_encryption_key("test-auth-secret-for-tests")
+    encrypted = fernet_encrypt("secret-value", enc_key)
+    kv_set(db, "smtp_password", encrypted)
+
+    from cert_watch.routes.settings import _SMTP_KEYS, _effective_config
+
+    result = _effective_config(_SMTP_KEYS, db, enc_key)
+    assert result["smtp_password"] == "secret-value"
+
+
+def test_effective_config_file_secret_override(reload_app, tmp_path, monkeypatch):
+    from cert_watch.database import init_schema
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+
+    secret_file = tmp_path / "smtp_password_file"
+    secret_file.write_text("file-secret-value")
+    monkeypatch.setenv("SMTP_PASSWORD_FILE", str(secret_file))
+
+    from cert_watch.routes.settings import _SMTP_KEYS, _effective_config
+
+    result = _effective_config(_SMTP_KEYS, db)
+    assert result["smtp_password"] == "file-secret-value"
+
+
+# ---------- _capture_starttls_chain port parsing ----------
+
+
+def test_capture_starttls_chain_custom_port(monkeypatch, chain_triplet):
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    ldap3 = pytest.importorskip("ldap3")
+    leaf = chain_triplet["leaf"]
+    intermediate = chain_triplet["intermediate"]
+    root = chain_triplet["root"]
+    der_chain = [leaf.der, intermediate.der, root.der]
+
+    class FakeSSL:
+        def get_unverified_chain(self):
+            return der_chain
+
+    class FakeConn:
+        socket = FakeSSL()
+        tls_started = True
+
+        def open(self):
+            pass
+
+        def start_tls(self):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", lambda *a, **k: FakeConn())
+    monkeypatch.setattr(ldap3, "Server", lambda *a, **k: None)
+
+    result = _capture_starttls_chain("ldap://dc.example.com:390")
+    assert result is not None
+    assert len(result) == 2
+
+
+def test_capture_starttls_chain_import_error(monkeypatch):
+    from cert_watch.routes.settings import _capture_starttls_chain
+
+    monkeypatch.setattr(
+        "cert_watch.routes.settings._probe_tls_chain",
+        lambda *a, **k: None,
+    )
+    import builtins
+
+    real_import = builtins.__import__
+
+    def blocking_import(name, *args, **kwargs):
+        if name == "ldap3":
+            raise ImportError("no ldap3")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", blocking_import)
+    assert _capture_starttls_chain("ldap://dc.example.com") is None
+
+
+# ---------- LDAP test SSRF block ----------
+
+
+def test_test_ldap_ssrf_blocked_ip(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://127.0.0.1",
+                "ldap_base_dn": "DC=example,DC=com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "blocked" in data["error"].lower()
+
+
+# ---------- LDAP test TLS validated / StartTLS messages ----------
+
+
+def test_test_ldap_tls_validated_with_ca_cert(reload_app, monkeypatch):
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        tls_started = True
+
+        def __init__(self, *a, **k):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldaps://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_ca_cert": "-----BEGIN CERTIFICATE-----\nMIIDfake\n-----END CERTIFICATE-----",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "pinned CA certificate" in data["message"]
+
+
+def test_test_ldap_tls_validated_without_ca_cert(reload_app, monkeypatch):
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        tls_started = True
+
+        def __init__(self, *a, **k):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldaps://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is True
+    assert "system trust store" in data["message"]
+
+
+def test_test_ldap_tls_not_established(reload_app, monkeypatch):
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        tls_started = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_start_tls": "1",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "TLS was requested but not established" in data["error"]
+
+
+def test_test_ldap_starttls_no_negotiation_message(reload_app, monkeypatch):
+    ldap3 = pytest.importorskip("ldap3")
+
+    class FakeConn:
+        tls_started = False
+
+        def __init__(self, *a, **k):
+            pass
+
+        def unbind(self):
+            pass
+
+    monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-ldap",
+            data={
+                "ldap_server": "ldap://dc.example.com",
+                "ldap_base_dn": "DC=example,DC=com",
+                "ldap_start_tls": "1",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "TLS was requested but not established" in data["error"]
+
+
+# ---------- pin_ldap_ca enc_key branch ----------
+
+
+def test_pin_ldap_ca_without_encryption_key(reload_app, tmp_path, chain_triplet, monkeypatch):
+    root = chain_triplet["root"]
+    pem = root.pem.decode()
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(
+            "cert_watch.routes.settings._get_encryption_key",
+            lambda r: None,
+        )
+        r = client.post(
+            "/settings/pin-ldap-ca",
+            data={"ldap_ca_cert": pem},
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+# ---------- _save_config_section admin redirect ----------
+
+
+def test_save_auth_config_admin_redirect(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/auth",
+            data={"auth_provider": "", "ldap_server": "", "ldap_base_dn": ""},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "/login" in r.headers["location"]
+
+
+# ---------- save_auth_config rebuild failure ----------
+
+
+def test_save_auth_config_rebuild_failure(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/auth",
+            data={
+                "auth_provider": "ldap",
+                "ldap_server": "",
+                "ldap_base_dn": "",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303

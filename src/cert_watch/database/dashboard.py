@@ -11,6 +11,35 @@ from cert_watch.database.schema import init_schema
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
 
+_SORT_COLUMNS_BARE = frozenset({
+    "subject", "not_before", "not_after", "created_at",
+})
+
+_SORT_COLUMNS_ALIAS = frozenset({
+    "sort_name", "sort_issue", "sort_scan", "sort_expiry",
+})
+
+_SORT_COLUMNS_GROUPED = frozenset({
+    "LOWER(COALESCE(c.subject, c.hostname || ':' || c.port))",
+    "c.not_before",
+    "COALESCE(last_scan_at, '0000-01-01T00:00:00')",
+    "c.not_after",
+})
+
+_SQL_DIRS = frozenset({"ASC", "DESC"})
+
+
+def _safe_col(col: str, allowed: frozenset[str]) -> str:
+    if col not in allowed:
+        raise ValueError(f"Invalid sort column: {col!r}")
+    return col
+
+
+def _safe_dir(direction: str) -> str:
+    if direction not in _SQL_DIRS:
+        raise ValueError(f"Invalid sort direction: {direction!r}")
+    return direction
+
 
 def _escape_like(s: str) -> str:
     """Escape ``%``, ``_`` and ``\\`` so they are treated as literals in a LIKE pattern."""
@@ -130,8 +159,8 @@ def list_dashboard_rows(
         "days": "not_after",
         "last_scan": "not_after",
     }
-    sql_col = _sort_map.get(sort_by, "not_after")
-    sql_dir = "ASC" if sort_order == "asc" else "DESC"
+    sql_col = _safe_col(_sort_map.get(sort_by, "not_after"), _SORT_COLUMNS_BARE)
+    sql_dir = _safe_dir("ASC" if sort_order == "asc" else "DESC")
 
     with _connect(db_path) as conn:
         if per_page > 0:
@@ -345,8 +374,8 @@ def list_dashboard_page(
         "expiry": "sort_expiry",
         "days": "sort_expiry",
     }
-    sort_col = _SORT_COLS.get(sort_by, "sort_expiry")
-    sql_dir = "DESC" if sort_order == "desc" else "ASC"
+    sort_col = _safe_col(_SORT_COLS.get(sort_by, "sort_expiry"), _SORT_COLUMNS_ALIAS)
+    sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
 
     # Source filter pushed to SQL: which candidate kinds to include.
     include_scanned = True
@@ -617,8 +646,8 @@ def list_dashboard_grouped_page(
         "expiry": "c.not_after",
         "days": "c.not_after",
     }
-    sort_col = _SORT_COLS.get(sort_by, _SORT_COLS["days"])
-    sql_dir = "DESC" if sort_order == "desc" else "ASC"
+    sort_col = _safe_col(_SORT_COLS.get(sort_by, _SORT_COLS["days"]), _SORT_COLUMNS_GROUPED)
+    sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
 
     like = f"%{_escape_like(q.lower())}%" if q else None
 

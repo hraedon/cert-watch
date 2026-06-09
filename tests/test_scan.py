@@ -1,3 +1,5 @@
+import asyncio
+import ssl
 import subprocess
 from unittest.mock import MagicMock, patch
 
@@ -7,11 +9,21 @@ from cert_watch.scan import (
     ScanError,
     ScannedEntry,
     _friendly_scan_error,
+    _get_chain_der,
+    _open_tls_connection,
+    _parse_allowed_subnets,
+    _probe_hsts,
     _resolve_host,
+    _resolve_with_dns,
+    _scan_host_once,
+    _scan_host_via_openssl,
     _scan_via_openssl,
     resolve_and_validate_host,
+    resolve_hostname,
     scan_host,
+    scan_host_async,
     store_scanned,
+    store_scanned_async,
 )
 
 
@@ -211,7 +223,7 @@ def _pem_block(der: bytes) -> bytes:
 def test_openssl_dns_resolution_failure(monkeypatch):
     """OSError during DNS resolution returns empty chain."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (_ for _ in ()).throw(OSError("DNS failed")),
     )
     chain, proto = _scan_via_openssl("nonexistent.invalid", 443, timeout=1)
@@ -222,7 +234,7 @@ def test_openssl_dns_resolution_failure(monkeypatch):
 def test_openssl_blocked_pinned_ip(monkeypatch):
     """A pinned loopback IP is blocked, returns empty chain."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (_ for _ in ()).throw(OSError("should not resolve")),
     )
     chain, proto = _scan_via_openssl(
@@ -242,7 +254,7 @@ def test_openssl_hostname_injection_blocked(monkeypatch):
 def test_openssl_timeout_expired(monkeypatch, self_signed_leaf):
     """subprocess.TimeoutExpired returns empty chain."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     mock_proc = MagicMock()
@@ -251,7 +263,7 @@ def test_openssl_timeout_expired(monkeypatch, self_signed_leaf):
         stdout=b"",
         stderr=b"timeout",
     )
-    with patch("cert_watch.scan.subprocess.run") as mock_run:
+    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["openssl"], timeout=1)
         chain, proto = _scan_via_openssl("slow.example.com", 443, timeout=1)
     assert chain == []
@@ -261,10 +273,10 @@ def test_openssl_timeout_expired(monkeypatch, self_signed_leaf):
 def test_openssl_file_not_found(monkeypatch):
     """FileNotFoundError (no openssl binary) returns empty chain."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    with patch("cert_watch.scan.subprocess.run") as mock_run:
+    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
         mock_run.side_effect = FileNotFoundError("no openssl")
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
@@ -274,14 +286,14 @@ def test_openssl_file_not_found(monkeypatch):
 def test_openssl_nonzero_return(monkeypatch):
     """Non-zero, non-one return code returns empty chain."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     mock_proc = MagicMock()
     mock_proc.returncode = 2
     mock_proc.stdout = b""
     mock_proc.stderr = b"some error"
-    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
     assert proto == ""
@@ -290,14 +302,14 @@ def test_openssl_nonzero_return(monkeypatch):
 def test_openssl_no_pem_in_output(monkeypatch):
     """Output with no PEM blocks returns empty chain (protocol still extracted)."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     mock_proc = MagicMock()
     mock_proc.returncode = 0
     mock_proc.stdout = b"Protocol  : TLSv1.3\nNo certs here\n"
     mock_proc.stderr = b""
-    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
     assert proto == "TLSv1.3"
@@ -306,7 +318,7 @@ def test_openssl_no_pem_in_output(monkeypatch):
 def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
     """Invalid base64 in a PEM block is skipped gracefully."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     valid_pem = _pem_block(self_signed_leaf.der)
@@ -319,7 +331,7 @@ def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
     mock_proc.returncode = 0
     mock_proc.stdout = valid_pem + invalid_pem
     mock_proc.stderr = b""
-    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert len(chain) == 1
     assert chain[0] == self_signed_leaf.der
@@ -328,7 +340,7 @@ def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
 def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
     """Full success path: chain + protocol version extracted."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     combined = _pem_block(chain_triplet["leaf"].der) + _pem_block(
@@ -338,7 +350,7 @@ def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
     mock_proc.returncode = 1
     mock_proc.stdout = b"Protocol  : TLSv1.2\n" + combined
     mock_proc.stderr = b"verify error"
-    with patch("cert_watch.scan.subprocess.run", return_value=mock_proc):
+    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert len(chain) == 2
     assert chain[0] == chain_triplet["leaf"].der
@@ -349,10 +361,10 @@ def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
 def test_openssl_oserror_during_run(monkeypatch):
     """OSError during subprocess.run (e.g., permission denied) returns empty."""
     monkeypatch.setattr(
-        "cert_watch.scan._resolve_host",
+        "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    with patch("cert_watch.scan.subprocess.run") as mock_run:
+    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
         mock_run.side_effect = OSError("permission denied")
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
@@ -414,7 +426,7 @@ def test_resolve_host_all_blocked(monkeypatch):
     import pytest
 
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("127.0.0.1", 443))],
     )
     with pytest.raises(OSError, match="blocked"):
@@ -426,7 +438,7 @@ def test_resolve_host_dns_failure(monkeypatch):
     import pytest
 
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [],
     )
     with pytest.raises(OSError, match="DNS resolution failed"):
@@ -438,14 +450,14 @@ def test_resolve_host_dns_failure(monkeypatch):
 
 def test_validate_host_no_dns_returns_none(monkeypatch):
     """Empty DNS result is a soft pass: (None, None), no pinned IP."""
-    monkeypatch.setattr("cert_watch.scan.resolve_hostname", lambda *a, **kw: [])
+    monkeypatch.setattr("cert_watch.scan_resolver.resolve_hostname", lambda *a, **kw: [])
     assert resolve_and_validate_host("nothing.invalid", 443) == (None, None)
 
 
 def test_validate_host_all_unparseable_returns_none(monkeypatch):
     """When every entry is unparseable, validation soft-passes (None, None)."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("not-an-ip", 443))],
     )
     assert resolve_and_validate_host("garbage.invalid", 443) == (None, None)
@@ -456,7 +468,7 @@ def test_resolve_host_fallback_raises_when_no_usable_ip(monkeypatch):
     import pytest
 
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("not-an-ip", 443))],
     )
     with pytest.raises(OSError, match="blocked addresses"):
@@ -466,7 +478,7 @@ def test_resolve_host_fallback_raises_when_no_usable_ip(monkeypatch):
 def test_validate_host_returns_pinned_ip_for_allowed(monkeypatch):
     """First allowed public address is pinned to prevent DNS rebinding."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("93.184.216.34", 443))],
     )
     err, pinned = resolve_and_validate_host("example.com", 443)
@@ -477,7 +489,7 @@ def test_validate_host_returns_pinned_ip_for_allowed(monkeypatch):
 def test_validate_host_skips_none_and_bad_ip_then_pins(monkeypatch):
     """A None sockaddr and an unparseable IP are skipped before the good one."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [
             (2, (None, 443)),
             (2, ("not-an-ip", 443)),
@@ -492,7 +504,7 @@ def test_validate_host_skips_none_and_bad_ip_then_pins(monkeypatch):
 def test_validate_host_private_blocked_when_disallowed(monkeypatch):
     """Private IP with allow_private=False yields the ALLOW_PRIVATE_IPS hint."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("10.0.0.5", 443))],
     )
     err, pinned = resolve_and_validate_host("internal.example.com", 443, allow_private=False)
@@ -503,7 +515,7 @@ def test_validate_host_private_blocked_when_disallowed(monkeypatch):
 def test_validate_host_private_outside_allowed_subnets(monkeypatch):
     """Private IP outside configured allowed subnets points at the subnet config."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("10.0.0.5", 443))],
     )
     err, pinned = resolve_and_validate_host(
@@ -519,9 +531,751 @@ def test_validate_host_private_outside_allowed_subnets(monkeypatch):
 def test_validate_host_public_blocked_address(monkeypatch):
     """A non-private blocked address (loopback) yields a plain blocked message."""
     monkeypatch.setattr(
-        "cert_watch.scan.resolve_hostname",
+        "cert_watch.scan_resolver.resolve_hostname",
         lambda *a, **kw: [(2, ("127.0.0.1", 443))],
     )
     err, pinned = resolve_and_validate_host("loopback.example.com", 443, allow_private=False)
     assert pinned is None
     assert "blocked address" in err
+
+
+# ---------- _probe_hsts coverage ----------
+
+
+def test_probe_hsts_non_443_port():
+    assert _probe_hsts("example.com", 8443) is None
+
+
+def test_probe_hsts_ssl_wrap_exception_pinned_ip(monkeypatch):
+    fake_sock = MagicMock()
+    monkeypatch.setattr("socket.create_connection", lambda *a, **kw: fake_sock)
+    monkeypatch.setattr(
+        "ssl.create_default_context",
+        lambda: MagicMock(wraps=lambda *a, **kw: (_ for _ in ()).throw(Exception("ssl fail"))),
+    )
+
+    class _BadCtx:
+        def wrap_socket(self, sock, **kw):
+            raise Exception("ssl fail")
+
+    monkeypatch.setattr("ssl.create_default_context", lambda: _BadCtx())
+    assert _probe_hsts("example.com", 443, pinned_ip="93.184.216.34") is None
+    fake_sock.close.assert_called_once()
+
+
+def test_probe_hsts_non_pinned_ip_path(monkeypatch):
+    class _Conn:
+        sock = None
+        def request(self, *a, **kw):
+            pass
+        def getresponse(self):
+            r = MagicMock()
+            r.getheader = (
+                lambda name: "max-age=31536000"
+                if name == "Strict-Transport-Security"
+                else None
+            )
+            return r
+        def close(self):
+            pass
+
+    monkeypatch.setattr("http.client.HTTPSConnection", lambda *a, **kw: _Conn())
+    assert _probe_hsts("example.com", 443) is True
+
+
+def test_probe_hsts_generic_exception(monkeypatch):
+    monkeypatch.setattr(
+        "ssl.create_default_context",
+        lambda: (_ for _ in ()).throw(Exception("boom")),
+    )
+    assert _probe_hsts("example.com", 443) is None
+
+
+# ---------- _parse_allowed_subnets coverage ----------
+
+
+def test_parse_allowed_subnets_invalid_entry():
+    _parse_allowed_subnets.cache_clear()
+    result = _parse_allowed_subnets(("192.168.0.0/16", "not-a-cidr", "10.0.0.0/8"))
+    assert len(result) == 2
+
+
+def test_parse_allowed_subnets_empty():
+    _parse_allowed_subnets.cache_clear()
+    assert _parse_allowed_subnets(()) == ()
+
+
+# ---------- _resolve_with_dns coverage ----------
+
+
+def test_resolve_with_dns_success(monkeypatch):
+    mock_rdata_a = MagicMock()
+    mock_rdata_a.address = "93.184.216.34"
+    mock_rdata_aaaa = MagicMock()
+    mock_rdata_aaaa.address = "2606:2800:220:1:248:1893:25c8:1946"
+    mock_resolver = MagicMock()
+    mock_resolver.resolve.side_effect = [[mock_rdata_a], [mock_rdata_aaaa]]
+    monkeypatch.setattr("dns.resolver.Resolver", lambda configure=False: mock_resolver)
+    results = _resolve_with_dns("example.com", 443, ("8.8.8.8",))
+    assert len(results) == 2
+    assert results[0][1][0] == "93.184.216.34"
+
+
+def test_resolve_with_dns_exception_falls_through(monkeypatch):
+    import dns.exception
+    mock_resolver = MagicMock()
+    mock_resolver.resolve.side_effect = dns.exception.DNSException("timeout")
+    monkeypatch.setattr("dns.resolver.Resolver", lambda configure=False: mock_resolver)
+    assert _resolve_with_dns("example.com", 443, ("8.8.8.8",)) == []
+
+
+def test_resolve_with_dns_oserror(monkeypatch):
+    mock_resolver = MagicMock()
+    mock_resolver.resolve.side_effect = OSError("network down")
+    monkeypatch.setattr("dns.resolver.Resolver", lambda configure=False: mock_resolver)
+    assert _resolve_with_dns("example.com", 443, ("8.8.8.8",)) == []
+
+
+# ---------- resolve_hostname custom DNS path ----------
+
+
+def test_resolve_hostname_custom_dns(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan_resolver._resolve_with_dns",
+        lambda *a, **kw: [(2, ("10.0.0.1", 443))],
+    )
+    results = resolve_hostname("internal.corp", 443, dns_servers=("8.8.8.8",))
+    assert len(results) == 1
+    assert results[0][1][0] == "10.0.0.1"
+
+
+def test_resolve_hostname_custom_dns_empty_falls_back(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan_resolver._resolve_with_dns",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *a, **kw: [(2, 1, 6, "", ("93.184.216.34", 443))],
+    )
+    results = resolve_hostname("example.com", 443, dns_servers=("8.8.8.8",))
+    assert len(results) == 1
+    assert results[0][1][0] == "93.184.216.34"
+
+
+# ---------- _open_tls_connection coverage ----------
+
+
+def test_open_tls_connection_pinned_ip(monkeypatch, chain_triplet):
+    fake_ssl_sock = _fake_ssl_socket([chain_triplet["leaf"].der])
+    mock_socket = MagicMock()
+    mock_socket.connect = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.wrap_socket.return_value = fake_ssl_sock
+    monkeypatch.setattr("socket.socket", lambda *a, **kw: mock_socket)
+    monkeypatch.setattr("ssl.create_default_context", lambda: mock_ctx)
+    result = _open_tls_connection("example.com", 443, 5.0, pinned_ip="93.184.216.34")
+    assert result is fake_ssl_sock
+
+
+def test_open_tls_connection_blocked_pinned_ip():
+    import pytest
+    with pytest.raises(OSError, match="blocked address"):
+        _open_tls_connection("example.com", 443, 5.0, pinned_ip="127.0.0.1")
+
+
+def test_open_tls_connection_resolve_path(monkeypatch, chain_triplet):
+    fake_ssl_sock = _fake_ssl_socket([chain_triplet["leaf"].der])
+    mock_socket = MagicMock()
+    mock_socket.connect = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.wrap_socket.return_value = fake_ssl_sock
+    monkeypatch.setattr("socket.socket", lambda *a, **kw: mock_socket)
+    monkeypatch.setattr("ssl.create_default_context", lambda: mock_ctx)
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    result = _open_tls_connection("example.com", 443, 5.0)
+    assert result is fake_ssl_sock
+
+
+def test_open_tls_connection_exception_closes_socket(monkeypatch):
+    mock_socket = MagicMock()
+    mock_ctx = MagicMock()
+    mock_ctx.wrap_socket.side_effect = Exception("tls fail")
+    monkeypatch.setattr("socket.socket", lambda *a, **kw: mock_socket)
+    monkeypatch.setattr("ssl.create_default_context", lambda: mock_ctx)
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    import pytest
+    with pytest.raises(Exception, match="tls fail"):
+        _open_tls_connection("example.com", 443, 5.0)
+    mock_socket.close.assert_called_once()
+
+
+# ---------- _get_chain_der error paths ----------
+
+
+def test_get_chain_der_getter_exception(monkeypatch):
+    sock = MagicMock(spec=["getpeercert", "get_unverified_chain", "close"])
+    sock.getpeercert.return_value = b"\x00"
+    sock.get_unverified_chain.side_effect = Exception("chain api broke")
+    result = _get_chain_der(sock)
+    assert result == [b"\x00"]
+
+
+def test_get_chain_der_public_bytes_attribute_error(monkeypatch):
+    class _WeirdCert:
+        def public_bytes(self, _enc):
+            raise AttributeError("no public_bytes")
+        def __bytes__(self):
+            return b"\x01\x02"
+
+    sock = MagicMock()
+    sock.getpeercert.return_value = b"\x00"
+    sock.get_unverified_chain.return_value = [_WeirdCert()]
+    result = _get_chain_der(sock)
+    assert result == [b"\x01\x02"]
+
+
+# ---------- _scan_host_once error paths ----------
+
+
+def test_scan_host_once_oserror_resolve(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("DNS fail")),
+    )
+    result = _scan_host_once("bad.invalid", 443)
+    assert isinstance(result, ScanError)
+    assert "DNS" in result.error_message
+
+
+def test_scan_host_once_generic_exception(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("weird")),
+    )
+    result = _scan_host_once("example.com", 443)
+    assert isinstance(result, ScanError)
+    assert "weird" in result.error_message
+
+
+def test_scan_host_once_leaf_not_certificate(monkeypatch):
+    sock = MagicMock()
+    sock.getpeercert.return_value = b"not-a-cert"
+    sock.get_unverified_chain.return_value = []
+    sock.version.return_value = "TLSv1.3"
+    sock.close.return_value = None
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
+    monkeypatch.setattr("cert_watch.scan._open_tls_connection", lambda *a, **kw: sock)
+    result = _scan_host_once("example.com", 443)
+    assert isinstance(result, ScanError)
+
+
+# ---------- _scan_host_via_openssl fallback branches ----------
+
+
+def test_scan_host_via_openssl_fallback_generic_exception(monkeypatch):
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: ([], ""),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("weird")),
+    )
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+    )
+    assert isinstance(result, ScanError)
+    assert "weird" in result.error_message
+
+
+def test_scan_host_via_openssl_fallback_no_leaf(monkeypatch):
+    sock = MagicMock()
+    sock.getpeercert.return_value = None
+    sock.version.return_value = "TLSv1.3"
+    sock.close.return_value = None
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: ([], ""),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._open_tls_connection", lambda *a, **kw: sock)
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+    )
+    assert isinstance(result, ScanError)
+    assert "no certificate" in result.error_message
+
+
+def test_scan_host_via_openssl_fallback_leaf_parse_fail(monkeypatch):
+    sock = MagicMock()
+    sock.getpeercert.return_value = b"not-a-cert"
+    sock.version.return_value = "TLSv1.3"
+    sock.close.return_value = None
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: ([], ""),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._open_tls_connection", lambda *a, **kw: sock)
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+    )
+    assert isinstance(result, ScanError)
+
+
+# ---------- store_scanned branches ----------
+
+
+def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.alerts import WebhookConfig
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", "old-cert-id"),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://events.pagerduty.com/v2/enqueue",
+        kind="pagerduty",
+        routing_key="rk1",
+    )
+
+    mock_resolve = MagicMock(return_value=1)
+    monkeypatch.setattr(
+        "cert_watch.alerts.resolve_pagerduty_for_renewed_cert",
+        mock_resolve,
+    )
+
+    leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
+    assert leaf_id == "leaf-id-1"
+    mock_resolve.assert_called_once()
+
+
+def test_store_scanned_pagerduty_resolve_exception(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.alerts import WebhookConfig
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", "old-cert-id"),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://events.pagerduty.com/v2/enqueue",
+        kind="pagerduty",
+        routing_key="rk1",
+    )
+    monkeypatch.setattr(
+        "cert_watch.alerts.resolve_pagerduty_for_renewed_cert",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("pd down")),
+    )
+
+    leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_signed_leaf):
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("posture boom")),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.database.drift import DriftEvent
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    drift_events = [DriftEvent(field="issuer", old="OldCA", new="NewCA", severity="high")]
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries._extract_key_algo", lambda x: "RSA"
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries._extract_sig_algo", lambda x: "SHA256"
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.create_drift_alert",
+        lambda *a, **kw: "alert-id",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.database.drift import DriftEvent
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    drift_events = [DriftEvent(field="issuer", old="OldCA", new="NewCA", severity="high")]
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr("cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events)
+    monkeypatch.setattr("cert_watch.database.queries._extract_key_algo", lambda x: "RSA")
+    monkeypatch.setattr("cert_watch.database.queries._extract_sig_algo", lambda x: "SHA256")
+    monkeypatch.setattr(
+        "cert_watch.database.queries.create_drift_alert",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("db locked")),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_signed_leaf):
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries._extract_key_algo",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("drift import fail")),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed_leaf):
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("history write fail")),
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_signed_leaf):
+    db = tmp_path / "cw.sqlite3"
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[], chain_incomplete=True)
+
+    monkeypatch.setattr(
+        "cert_watch.scan.replace_scanned",
+        lambda *a, **kw: ("leaf-id-1", None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id == "leaf-id-1"
+
+
+# ---------- _evaluate_and_store_posture CAA exception ----------
+
+
+def test_evaluate_and_store_posture_caa_exception(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.scan import _evaluate_and_store_posture
+
+    db = tmp_path / "cw.sqlite3"
+    from cert_watch.database.schema import init_schema
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="example.com", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.posture.evaluate_posture",
+        lambda **kw: MagicMock(grade="A", findings=[], protocol_version="TLSv1.3",
+                               ocsp_stapling=False, hsts=False, must_staple=False),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.store_scan_posture",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "cert_watch.caa_check.check_caa",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("dns timeout")),
+    )
+
+    grade = _evaluate_and_store_posture(db, "cert-id", entry)
+    assert grade == "A"
+
+
+def test_evaluate_and_store_posture_caa_value_error(monkeypatch, tmp_path, self_signed_leaf):
+    from cert_watch.scan import _evaluate_and_store_posture
+
+    db = tmp_path / "cw.sqlite3"
+    from cert_watch.database.schema import init_schema
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="example.com", port=443, leaf=leaf, chain=[])
+
+    monkeypatch.setattr(
+        "cert_watch.posture.evaluate_posture",
+        lambda **kw: MagicMock(grade="B", findings=[], protocol_version="TLSv1.2",
+                               ocsp_stapling=False, hsts=False, must_staple=False),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.store_scan_posture",
+        MagicMock(),
+    )
+    monkeypatch.setattr(
+        "cert_watch.caa_check.check_caa",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad domain")),
+    )
+
+    grade = _evaluate_and_store_posture(db, "cert-id", entry)
+    assert grade == "B"
+
+
+# ---------- async wrappers ----------
+
+
+def test_scan_host_async(monkeypatch, chain_triplet):
+    der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
+    )
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(scan_host_async("example.com", 443))
+    finally:
+        loop.close()
+    assert isinstance(result, ScannedEntry)
+
+
+def test_store_scanned_async(tmp_path, self_signed_leaf):
+    db = tmp_path / "cw.sqlite3"
+    from cert_watch.database.schema import init_schema
+    init_schema(db)
+    repo = SqliteCertificateRepository(db, source="scanned")
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(store_scanned_async(entry, repo))
+    finally:
+        loop.close()
+    assert result
+
+
+# ---------- additional edge-case coverage ----------
+
+
+def test_open_tls_connection_verify_true(monkeypatch, chain_triplet):
+    fake_ssl_sock = _fake_ssl_socket([chain_triplet["leaf"].der])
+    mock_ctx = MagicMock()
+    mock_ctx.wrap_socket.return_value = fake_ssl_sock
+    mock_socket = MagicMock()
+    mock_socket.connect = MagicMock()
+    monkeypatch.setattr("socket.socket", lambda *a, **kw: mock_socket)
+    monkeypatch.setattr("ssl.create_default_context", lambda: mock_ctx)
+    _open_tls_connection("example.com", 443, 5.0, verify=True, pinned_ip="93.184.216.34")
+    assert mock_ctx.check_hostname is True
+    assert mock_ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_friendly_error_oserror_timed_out_substring():
+    err = _friendly_scan_error(OSError("connection timed out unexpectedly"))
+    assert "timed out" in err
+
+
+def test_scan_via_openssl_dash_hostname_with_valid_pinned_ip(monkeypatch):
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not resolve")),
+    )
+    chain, proto = _scan_via_openssl(
+        "-malicious", 443, timeout=1, pinned_ip="93.184.216.34"
+    )
+    assert chain == []
+    assert proto == ""
+
+
+def test_scan_via_openssl_valid_pinned_ip(monkeypatch, chain_triplet):
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not resolve")),
+    )
+    combined = _pem_block(chain_triplet["leaf"].der) + _pem_block(
+        chain_triplet["intermediate"].der
+    )
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = b"Protocol  : TLSv1.3\n" + combined
+    mock_proc.stderr = b""
+    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+        chain, proto = _scan_via_openssl(
+            "example.com", 443, timeout=1, pinned_ip="93.184.216.34"
+        )
+    assert len(chain) == 2
+    assert proto == "TLSv1.3"
+
+
+def test_scan_host_once_leaf_parse_error_native_path(monkeypatch):
+    sock = MagicMock()
+    sock.getpeercert.return_value = b"\x00\x01"
+    sock.get_unverified_chain.return_value = []
+    sock.version.return_value = "TLSv1.3"
+    sock.close.return_value = None
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
+    monkeypatch.setattr("cert_watch.scan._open_tls_connection", lambda *a, **kw: sock)
+    result = _scan_host_once("example.com", 443)
+    assert isinstance(result, ScanError)
+
+
+def test_store_scanned_with_repo_and_chain(tmp_path, self_signed_leaf, chain_triplet):
+    db = tmp_path / "cw.sqlite3"
+    from cert_watch.database.schema import init_schema
+    init_schema(db)
+    repo = SqliteCertificateRepository(db, source="scanned")
+    leaf = parse_certificate(self_signed_leaf.der)
+    chain_cert = parse_certificate(chain_triplet["intermediate"].der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[chain_cert])
+    leaf_id = store_scanned(entry, repo)
+    assert leaf_id
