@@ -762,6 +762,64 @@ def _write_denied(request: Request, username: str) -> bool:
     return not _may_write(request, username)
 
 
+def _admin_redirect_target(request: Request) -> str:
+    """Return a sensible redirect URL for admin-form failures.
+
+    Settings POSTs should bounce back to the settings page; other admin
+    routes can pass their own via the helper. Falls back to ``/`` when the
+    route is unknown.
+    """
+    path = request.url.path
+    if path.startswith("/settings"):
+        return "/settings"
+    return "/"
+
+
+async def require_admin_form(request: Request) -> RedirectResponse | None:
+    """Form-POST helper: admin-only check (no CSRF), return redirect on failure.
+
+    Use this when a handler still needs manual CSRF handling (e.g. to
+    preserve a custom redirect target like ``?tab=roles&error=…``) but wants
+    the admin check to come from a single source of truth — matching the
+    ``_require_admin`` semantics in ``routes/settings.py`` (RBAC-aware with a
+    legacy ``settings.admin_users`` fallback) so the JSON and form paths
+    cannot diverge.
+    """
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        return None
+    user = request.scope.get("auth_user")
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    settings = getattr(request.app.state, "settings", None)
+    role_map = getattr(settings, "role_map", {}) if settings else {}
+    # RBAC-aware: AuthContext is set by the auth middleware pipeline. When a
+    # role map is configured, RBAC is the source of truth — the legacy
+    # ``admin_users`` list is ignored. Without a role map we fall back to
+    # the legacy list (and an unset/empty list leaves the route open, the
+    # documented backward-compat contract).
+    if role_map:
+        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+        if ctx is not None and ctx.is_admin:
+            return None
+        return RedirectResponse(
+            url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
+            status_code=303,
+        )
+    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+    admin_ok = ctx is not None and ctx.is_admin
+    if not admin_ok:
+        admin_list = getattr(settings, "admin_users", None) if settings else None
+        if not admin_list or user in admin_list:
+            admin_ok = True
+    if not admin_ok:
+        return RedirectResponse(
+            url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
+            status_code=303,
+        )
+    return None
+
+
 async def require_write_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: check write access + CSRF, return redirect on failure.
 
@@ -783,6 +841,70 @@ async def require_write_form(request: Request) -> RedirectResponse | None:
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
+    return None
+
+
+async def require_admin_write_form(request: Request) -> RedirectResponse | None:
+    """Form-POST helper: check admin + write + CSRF, return redirect on failure.
+
+    Mirrors ``Depends(require_admin_write)`` for handlers that must return a
+    ``RedirectResponse`` (settings tabs, role/user CRUD). The legacy
+    ``settings.admin_users`` list is honored as a fallback when no role map
+    is configured (RBAC-off backward-compat), matching ``_require_admin`` in
+    ``routes/settings.py`` so the JSON and form paths cannot diverge.
+
+    Failure shapes:
+      - not authenticated → 303 to ``/login``
+      - not admin        → 303 to settings (or ``/``) with ``?error=admin+required``
+      - CSRF failure     → 303 with ``?error=<message>``
+
+    On success returns ``None`` so the handler can proceed.
+    """
+    auth = getattr(request.app.state, "auth_provider", None)
+    if auth is None or isinstance(auth, NoAuthProvider):
+        csrf_err = await check_csrf(request)
+        if csrf_err:
+            return RedirectResponse(
+                url=f"{_admin_redirect_target(request)}?error={quote(csrf_err)}",
+                status_code=303,
+            )
+        return None
+    user = request.scope.get("auth_user")
+    if not user:
+        return RedirectResponse(url="/login", status_code=303)
+    settings = getattr(request.app.state, "settings", None)
+    role_map = getattr(settings, "role_map", {}) if settings else {}
+    # RBAC-aware: AuthContext is set by the auth middleware pipeline. When a
+    # role map is configured, RBAC is the source of truth — the legacy
+    # ``admin_users`` list is ignored. Without a role map we fall back to
+    # the legacy list (and an unset/empty list leaves the route open, the
+    # documented backward-compat contract).
+    if role_map:
+        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+        if ctx is None or not ctx.is_admin:
+            return RedirectResponse(
+                url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
+                status_code=303,
+            )
+    else:
+        # Legacy fallback: settings.admin_users list (no role map → RBAC off)
+        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+        admin_ok = ctx is not None and ctx.is_admin
+        if not admin_ok:
+            admin_list = getattr(settings, "admin_users", None) if settings else None
+            if not admin_list or user in admin_list:
+                admin_ok = True
+        if not admin_ok:
+            return RedirectResponse(
+                url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
+                status_code=303,
+            )
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(
+            url=f"{_admin_redirect_target(request)}?error={quote(csrf_err)}",
+            status_code=303,
+        )
     return None
 
 

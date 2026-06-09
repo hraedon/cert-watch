@@ -12,7 +12,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
 from cert_watch.database import kv_set
 from cert_watch.database.queries import bump_session_version
-from cert_watch.middleware import get_csrf_context
+from cert_watch.middleware import check_csrf, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 
 logger = logging.getLogger("cert_watch.routes.setup")
@@ -53,7 +53,11 @@ async def setup_submit(
     password_confirm: str = Form(""),
     allowed_subnets: str = Form(""),
 ) -> RedirectResponse:
-    from cert_watch.middleware import check_csrf
+    # /setup is intentionally callable when no auth is configured (first-run
+    # wizard). CSRF is still required (review #19) and the failure target
+    # must be /setup (not /) so the wizard can re-render. Authenticated
+    # users reaching this path get bounced to / (handled by the
+    # needs_setup check below).
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(

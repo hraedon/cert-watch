@@ -315,6 +315,9 @@ def oauth_callback(
 
 @router.post("/auth/logout")
 async def logout(request: Request) -> RedirectResponse:
+    # /auth/logout is intentionally a public path so expired sessions can still
+    # log out (BC-081 / middleware._PUBLIC_PATHS). Only enforce CSRF here — no
+    # auth/role check, matching the prior behavior.
     csrf_err = await check_csrf(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)

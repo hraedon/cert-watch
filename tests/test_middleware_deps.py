@@ -565,3 +565,246 @@ async def test_auth_middleware_no_role_map_no_auth_context(tmp_path):
     # all downstream code (templates, form helpers) has a single source of truth.
     assert request.state.auth_context is not None
     assert request.state.auth_context.may_write() is True
+
+
+# ── require_admin_form / require_admin_write_form ────────────────────────
+#
+# These mirror require_auth / require_write for form-POST handlers that
+# return RedirectResponse on failure (settings tabs, role/user CRUD).
+# They replace the manual ``_require_admin`` + ``check_csrf`` boilerplate
+# that used to live in routes/settings.py.
+
+
+class _AppWithAdmin:
+    """Fake app with a configurable role map and admin_users list."""
+
+    def __init__(self, role_map=None, admin_users=None):
+        from cert_watch.config import Settings
+
+        class _Provider:
+            pass
+
+        self.state = type("State", (), {
+            "auth_provider": _Provider(),
+            "settings": Settings(
+                db_path="/tmp/_unused.sqlite3",
+                data_dir="/tmp",
+                role_map=role_map or {},
+                admin_users=admin_users or [],
+            ),
+        })()
+
+
+def _admin_request(
+    path: str,
+    *,
+    auth_provider=None,
+    cookies=None,
+    headers=None,
+    username: str | None = None,
+    groups=None,
+    roles=None,
+):
+    """Build a Request whose scope includes a real session cookie + RBAC groups.
+
+    The form helpers key off ``request.scope['auth_user']`` (set by the
+    auth_middleware pipeline in production); we set it explicitly here so
+    the unit test doesn't need the full middleware stack.
+    """
+    from cert_watch.auth import SESSION_COOKIE, create_session
+
+    if auth_provider is not None and username is not None:
+        token = create_session(username, groups=groups or [], roles=roles or [])
+        cookies = {**(cookies or {}), SESSION_COOKIE: token}
+    request = _make_request(
+        auth_provider=auth_provider,
+        cookies=cookies,
+        headers=headers,
+    )
+    request.scope["path"] = path
+    if username is not None:
+        request.scope["auth_user"] = username
+    return request
+
+
+@pytest.mark.anyio
+async def test_require_admin_form_no_auth_returns_none():
+    """No auth configured → no admin check, returns None."""
+    from cert_watch.middleware import require_admin_form
+
+    request = _admin_request("/settings/roles", auth_provider=NoAuthProvider())
+    assert await require_admin_form(request) is None
+
+
+@pytest.mark.anyio
+async def test_require_admin_form_no_session_redirects_to_login(tmp_path):
+    """Auth configured but no user → 303 to /login."""
+    from fastapi.responses import RedirectResponse
+
+    from cert_watch.middleware import require_admin_form
+
+    class _Provider:
+        pass
+
+    app = type("App", (), {"state": type("State", (), {"auth_provider": _Provider()})()})()
+    request = _admin_request("/settings/roles", auth_provider=_Provider())
+    request.scope["app"] = app
+    response = await require_admin_form(request)
+    assert isinstance(response, RedirectResponse)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/login"
+
+
+@pytest.mark.anyio
+async def test_require_admin_form_non_admin_redirects_with_error(tmp_path):
+    """An authenticated non-admin is bounced back to the page with ?error=admin+required."""
+    from fastapi.responses import RedirectResponse
+
+    from cert_watch.config import Settings
+    from cert_watch.middleware import require_admin_form
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={"admin": {"groups": ["g-admins"]}},
+    )
+    app = type("App", (), {
+        "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
+    })()
+    # User has no admin group → not an admin
+    request = _admin_request(
+        "/settings/roles",
+        auth_provider=_Provider(),
+        username="bob",
+        groups=["g-others"],
+    )
+    request.scope["app"] = app
+    response = await require_admin_form(request)
+    assert isinstance(response, RedirectResponse)
+    assert response.status_code == 303
+    assert "error=admin" in response.headers["location"]
+    assert response.headers["location"].startswith("/settings")
+
+
+@pytest.mark.anyio
+async def test_require_admin_form_rbac_admin_allowed(tmp_path):
+    """RBAC admin (admin group match) → None."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import require_admin_form
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={"admin": {"groups": ["g-admins"]}},
+    )
+    app = type("App", (), {
+        "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
+    })()
+    request = _admin_request(
+        "/settings/roles",
+        auth_provider=_Provider(),
+        username="alice",
+        groups=["g-admins"],
+    )
+    request.scope["app"] = app
+    # Manually attach AuthContext (the auth_middleware pipeline would normally
+    # do this — for the form helper we simulate the post-pipeline state).
+    from cert_watch.auth.rbac import AuthContext
+
+    request.state.auth_context = AuthContext.from_roles("alice", ["admin"])
+    assert await require_admin_form(request) is None
+
+
+@pytest.mark.anyio
+async def test_require_admin_form_legacy_admin_users_fallback(tmp_path):
+    """No role map + user in admin_users → allowed (RBAC-off backward compat)."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import require_admin_form
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        admin_users=("alice",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
+    })()
+    request = _admin_request(
+        "/settings/roles",
+        auth_provider=_Provider(),
+        username="alice",
+    )
+    request.scope["app"] = app
+    assert await require_admin_form(request) is None
+
+
+@pytest.mark.anyio
+async def test_require_admin_write_form_csrf_failure(tmp_path):
+    """require_admin_write_form catches CSRF failures too (admin + write + CSRF)."""
+    from fastapi.responses import RedirectResponse
+
+    from cert_watch.config import Settings
+    from cert_watch.middleware import require_admin_write_form
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        admin_users=("alice",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
+    })()
+    request = _admin_request(
+        "/settings/roles",
+        auth_provider=_Provider(),
+        username="alice",
+        # No CSRF token → expect CSRF failure (CSRF is re-enabled in this test file)
+    )
+    request.scope["app"] = app
+    response = await require_admin_write_form(request)
+    assert isinstance(response, RedirectResponse)
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+    assert "csrf" in response.headers["location"].lower() or "CSRF" in response.headers["location"]
+
+
+@pytest.mark.anyio
+async def test_require_admin_write_form_all_pass(tmp_path):
+    """All three checks pass → returns None."""
+    from cert_watch.config import Settings
+    from cert_watch.middleware import make_csrf_token, require_admin_write_form
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        admin_users=("alice",),
+    )
+    app = type("App", (), {
+        "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
+    })()
+    sid = "sid-for-csrf"
+    request = _admin_request(
+        "/settings/roles",
+        auth_provider=_Provider(),
+        username="alice",
+        cookies={"cw_sid": sid},
+        headers={"x-csrf-token": make_csrf_token(sid)},
+    )
+    request.scope["app"] = app
+    assert await require_admin_write_form(request) is None
+
