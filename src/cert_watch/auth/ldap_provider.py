@@ -234,8 +234,11 @@ class LDAPAuthProvider(AuthProvider):
             )
         except ldap3.core.exceptions.LDAPBindError:
             return AuthResult(success=False, error="invalid credentials")
-        except Exception as exc:
+        except (ldap3.core.exceptions.LDAPException, OSError) as exc:
             logger.warning("LDAP auth error: %s", exc)
+            return AuthResult(success=False, error="authentication failed")
+        except Exception as exc:  # noqa: BLE001 — final safety net for unexpected errors
+            logger.warning("LDAP auth unexpected error: %s", exc)
             return AuthResult(success=False, error="authentication failed")
 
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:

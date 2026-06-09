@@ -886,7 +886,7 @@ def _evaluate_and_store_posture(
             caa_result = check_caa(entry.host)
             caa_present = bool(caa_result.records) and not caa_result.error
             caa_records = caa_result.records
-        except Exception:
+        except (OSError, ValueError):
             caa_present = None
 
     result = evaluate_posture(

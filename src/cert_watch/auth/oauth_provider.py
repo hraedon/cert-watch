@@ -123,7 +123,7 @@ class OAuthProvider(AuthProvider):
                     data.get("id_token_signing_alg_values_supported", ["RS256"])
                 ),
             }
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             logger.warning("OIDC discovery failed: %s", exc)
             self._discovered = {
                 "authorization_endpoint": self.config.authorization_endpoint,
@@ -157,7 +157,7 @@ class OAuthProvider(AuthProvider):
             self._jwks = json.loads(resp.read(_JWKS_MAX_BYTES))
             self._jwks_fetched_at = time.monotonic()
             resp.close()
-        except Exception as exc:
+        except (OSError, ValueError, SSRFBlockedError) as exc:
             logger.warning("JWKS fetch failed: %s", exc)
             return None
         return self._jwks
@@ -256,7 +256,7 @@ class OAuthProvider(AuthProvider):
                                     self.config.client_id, nonce,
                                 )
                             return dict(raw_claims)
-                except Exception:
+                except Exception:  # noqa: BLE001 — retry path safety net
                     pass
             logger.warning("ID token verification failed: %s", exc)
             return None
@@ -347,7 +347,7 @@ class OAuthProvider(AuthProvider):
                             success=False,
                             error="ID token verification failed; refusing userinfo fallback",
                         )
-                except Exception as exc:
+                except (ValueError, TypeError, OSError) as exc:
                     logger.warning("ID token verification error: %s", exc)
                     return AuthResult(
                         success=False,
@@ -430,7 +430,7 @@ class OAuthProvider(AuthProvider):
             return AuthResult(
                 success=True, username=username, roles=roles, groups=groups, email=email
             )
-        except Exception as exc:
+        except (OSError, ValueError, TypeError, SSRFBlockedError) as exc:
             logger.warning("OAuth token exchange failed: %s", exc)
             return AuthResult(success=False, error="OAuth authentication failed")
 
