@@ -55,6 +55,35 @@ def certificate_detail(request: Request, cert_id: str) -> HTMLResponse | Redirec
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
     if cert is None:
+        # No cert — maybe this is a pending host (scan failed, no cert stored yet).
+        host_repo = SqliteHostRepository(db)
+        host = host_repo.get(cert_id)
+        if host is not None:
+            # Get latest scan status/error for this host
+            with _connect(db) as conn:
+                scan_row = conn.execute(
+                    "SELECT status, scanned_at, error_message FROM scan_history "
+                    "WHERE hostname = ? AND port = ? "
+                    "ORDER BY scanned_at DESC LIMIT 1",
+                    (host.hostname, host.port),
+                ).fetchone()
+            csrf_ctx = get_csrf_context(request)
+            auth_ctx = get_auth_context(request)
+            return templates.TemplateResponse(
+                request=request,
+                name="host_detail.html",
+                context={
+                    "host": host,
+                    "scan_status": scan_row["status"] if scan_row else None,
+                    "scan_error": scan_row["error_message"] if scan_row else None,
+                    "scan_at": scan_row["scanned_at"] if scan_row else None,
+                    **auth_ctx,
+                    **csrf_ctx,
+                    "active_page": "dashboard",
+                    "version": __version__,
+                    "commit": __commit__,
+                },
+            )
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     from cryptography import x509
@@ -428,39 +457,47 @@ async def update_certificate_owner(
         return write_err
     db = _db_path(request)
 
-    repo = SqliteCertificateRepository(db)
-    cert = repo.get_by_id(cert_id)
-    if cert is None:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-
-    # Find host by certificate hostname/port
-    hostname = ""
-    port = 443
-    with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
-        ).fetchone()
-        if row:
-            hostname = row["hostname"] or ""
-            port = row["port"] or 443
-
-    if not hostname:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('no host associated')}",
-            status_code=303,
-        )
-
+    # If no cert exists, the cert_id may be a host_id (pending/failed scan).
     host_repo = SqliteHostRepository(db)
-    with _connect(db) as conn:
-        host_row = conn.execute(
-            "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
-        ).fetchone()
-    if not host_row:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
-        )
+    host = host_repo.get(cert_id)
+    if host is not None:
+        # Pending host path — apply updates directly.
+        host_id = cert_id
+        hostname = host.hostname
+        port = host.port
+    else:
+        repo = SqliteCertificateRepository(db)
+        cert = repo.get_by_id(cert_id)
+        if cert is None:
+            return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
-    host_id = host_row["id"]
+        # Find host by certificate hostname/port
+        hostname = ""
+        port = 443
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+            ).fetchone()
+            if row:
+                hostname = row["hostname"] or ""
+                port = row["port"] or 443
+
+        if not hostname:
+            return RedirectResponse(
+                url=f"/certificates/{cert_id}?error={quote('no host associated')}",
+                status_code=303,
+            )
+
+        with _connect(db) as conn:
+            host_row = conn.execute(
+                "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
+            ).fetchone()
+        if not host_row:
+            return RedirectResponse(
+                url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
+            )
+
+        host_id = host_row["id"]
     valid_methods = {"", "acme", "cert-manager", "manual"}
     if renewal_method not in valid_methods:
         return RedirectResponse(

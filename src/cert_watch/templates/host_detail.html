@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — {{ host.hostname }}:{{ host.port }}{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+
+{% block content %}
+<div class="cw-page-wrap">
+  {# ---- Breadcrumb ---- #}
+  <div class="cw-breadcrumb">
+    <a href="/" class="cw-link">Certificates</a>
+    {{ icons.svg_icon('chevron-right', 13) }}
+    <span class="mono cw-text-text-2">{{ host.hostname }}:{{ host.port }}</span>
+  </div>
+
+  {# ---- Header ---- #}
+  <div class="cw-page-head cw-page-head--start cw-mb-20">
+    <div>
+      <div class="cw-flex cw-items-center cw-gap-12">
+        <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="host-detail-heading">{{ host.hostname }}:{{ host.port }}</h1>
+        <span class="cw-pill gray"><span class="dot"></span>Pending</span>
+      </div>
+      <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
+        <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
+        <span class="mono cw-fz-12-5 cw-text-text-3">
+          {% if scan_status == 'failure' %}Last scan failed{% elif scan_at %}Last scanned {{ scan_at[:16] }}{% else %}No scan recorded{% endif %}
+        </span>
+      </div>
+    </div>
+    <div class="cw-flex cw-gap-8">
+      {% if may_write %}
+        <form method="post" action="/hosts/{{ host.id }}/scan" class="cw-inline">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-btn primary" data-testid="host-scan-btn">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
+        </form>
+        <form method="post" action="/hosts/{{ host.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this host?">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-btn danger" data-testid="host-delete-btn">{{ icons.svg_icon('trash', 14) }}Remove</button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---- Error banner ---- #}
+  {% if scan_error %}
+  <div class="cw-panel cw-mb-16" style="border:1px solid var(--crit);background:var(--crit-soft)">
+    <div class="cw-flex cw-items-center cw-gap-8 cw-p-12-14">
+      {{ icons.svg_icon('alert', 16) }}
+      <div>
+        <div class="cw-fz-13-5 cw-fw-600" style="color:var(--crit)">Scan failed</div>
+        <div class="mono cw-fz-12-5 cw-mt-4 cw-text-text">{{ scan_error }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {# ---- Host settings ---- #}
+  <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+    <div class="cw-flex cw-items-center cw-gap-8 cw-mb-14">
+      <span class="cw-fz-13-5 cw-fw-600">Host settings</span>
+      <div class="cw-spacer"></div>
+      {% if may_write %}
+      <button class="cw-btn ghost sm" type="button" data-action="toggle-owner" data-testid="host-edit-btn">
+        {{ icons.svg_icon('key', 13) }}<span id="owner-btn-label">Edit</span>
+      </button>
+      {% endif %}
+    </div>
+    <div id="owner-view">
+      <div class="cw-grid-2-16-22">
+        <div>
+          <div class="cw-detail-label">Owner</div>
+          <div class="mono cw-fz-12-5 cw-text-text">{{ host.owner_name or '—' }}</div>
+        </div>
+        <div>
+          <div class="cw-detail-label">Alert threshold</div>
+          <div class="mono cw-fz-12-5 cw-text-text">{{ host.threshold_days or '14' }} days</div>
+        </div>
+        {% if host.owner_email %}
+        <div>
+          <div class="cw-detail-label">Email</div>
+          <div class="mono cw-fz-12-5 cw-text-text">{{ host.owner_email }}</div>
+        </div>
+        {% endif %}
+        {% if host.owner_slack %}
+        <div>
+          <div class="cw-detail-label">Slack</div>
+          <div class="mono cw-fz-12-5 cw-text-text">{{ host.owner_slack }}</div>
+        </div>
+        {% endif %}
+        {% if host.runbook_url %}
+        <div class="cw-col-span-2">
+          <div class="cw-detail-label">Runbook</div>
+          <div class="mono cw-fz-12-5">
+            <a href="{{ host.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host.runbook_url }}</a>
+          </div>
+        </div>
+        {% endif %}
+        {% if host.notes %}
+        <div class="cw-col-span-2">
+          <div class="cw-detail-label">Notes</div>
+          <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host.notes }}</div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+    {% if may_write %}
+    <div id="owner-edit" class="cw-hidden">
+      <form method="post" action="/certificates/{{ host.id }}/owner" class="cw-inline">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-grid-2-16-22">
+          <div>
+            <label class="cw-detail-label">Owner name</label>
+            <input type="text" name="owner_name" class="cw-input cw-fz-12-5" value="{{ host.owner_name or '' }}" placeholder="Team or individual">
+          </div>
+          <div>
+            <label class="cw-detail-label">Owner email</label>
+            <input type="text" name="owner_email" class="cw-input cw-fz-12-5" value="{{ host.owner_email or '' }}" placeholder="ops@example.com">
+          </div>
+          <div>
+            <label class="cw-detail-label">Slack channel</label>
+            <input type="text" name="owner_slack" class="cw-input cw-fz-12-5" value="{{ host.owner_slack or '' }}" placeholder="#alerts">
+          </div>
+          <div>
+            <label class="cw-detail-label">Renewal method</label>
+            <select name="renewal_method" class="cw-input cw-fz-12-5">
+              <option value="" {% if not host.renewal_method %}selected{% endif %}>—</option>
+              <option value="acme" {% if host.renewal_method == 'acme' %}selected{% endif %}>ACME</option>
+              <option value="cert-manager" {% if host.renewal_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
+              <option value="manual" {% if host.renewal_method == 'manual' %}selected{% endif %}>Manual</option>
+            </select>
+          </div>
+          <div class="cw-col-span-2">
+            <label class="cw-detail-label">Runbook URL</label>
+            <input type="text" name="runbook_url" class="cw-input cw-fz-12-5" value="{{ host.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
+          </div>
+        </div>
+        <div class="cw-flex cw-gap-8 cw-mt-10">
+          <button class="cw-btn sm" type="button" data-action="toggle-owner">Cancel</button>
+          <button class="cw-btn primary sm" type="submit" data-testid="host-owner-save-btn">Save</button>
+        </div>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  {# ---- Helpful note ---- #}
+  <div class="cw-panel cw-panel--p-15-18">
+    <div class="cw-flex cw-items-start cw-gap-8">
+      {{ icons.svg_icon('info', 14) }}
+      <div>
+        <div class="cw-fz-13-5 cw-fw-600">Why is this host pending?</div>
+        <div class="cw-fz-12-5 cw-text-text-3 cw-mt-6">
+          No certificate was successfully retrieved from this host/port during the last scan.
+          Common causes: wrong port, host temporarily offline, firewall blocking TLS, or expired/untrusted certificate.
+          Click <strong>Scan now</strong> to retry, or <strong>Remove</strong> if this host should not be monitored.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+function toggleOwner() {
+  var view = document.getElementById('owner-view');
+  var edit = document.getElementById('owner-edit');
+  var label = document.getElementById('owner-btn-label');
+  var hidden = edit.classList.contains('cw-hidden') ||
+               getComputedStyle(edit).display === 'none';
+  if (hidden) {
+    edit.classList.remove('cw-hidden');
+    edit.style.display = 'block';
+    view.style.display = 'none';
+    label.textContent = 'Cancel';
+  } else {
+    edit.classList.add('cw-hidden');
+    edit.style.display = 'none';
+    view.style.display = 'block';
+    label.textContent = 'Edit';
+  }
+}
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-action="toggle-owner"]');
+  if (btn) toggleOwner();
+});
+document.addEventListener('submit', function(e) {
+  var form = e.target;
+  if (form.classList.contains('confirm-form')) {
+    var msg = form.getAttribute('data-confirm') || 'Are you sure?';
+    if (!confirm(msg)) {
+      e.preventDefault();
+    }
+  }
+});
+</script>
+{% endblock %}

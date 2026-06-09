@@ -260,7 +260,7 @@ def test_list_unified_entries_scanned_pending_uploaded(tmp_path, self_signed_lea
     assert uploaded is not None
     assert uploaded["kind"] == "uploaded"
     assert uploaded["source"] == "uploaded"
-    assert uploaded["name"] == cert.subject
+    assert uploaded["name"] == "leaf.example.com"
 
 
 def test_list_unified_entries_page_pagination(tmp_path, self_signed_leaf):

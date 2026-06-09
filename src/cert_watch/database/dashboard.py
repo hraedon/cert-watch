@@ -8,6 +8,7 @@ from pathlib import Path
 from cert_watch.database.connection import _connect, _parse_iso, _row_to_cert
 from cert_watch.database.posture import get_posture_for_cert
 from cert_watch.database.schema import init_schema
+from cert_watch.filters import subject_cn
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
 
@@ -780,7 +781,7 @@ def list_dashboard_grouped_page(
             "san_dns_names": first.get("san_dns_names", []),
             "replaces_cert_id": first.get("replaces_cert_id"),
             "notes": first.get("notes", ""),
-            "name": first["subject"] or first["host"],
+            "name": subject_cn(first["subject"] or "") or first["host"],
             "host": first["host"],
             "host_id": first.get("host_id"),
             "host_count": len(group),
@@ -821,7 +822,7 @@ def list_dashboard_grouped_page(
     # Mark uploaded entries directly
     for u in uploaded_dash:
         u["kind"] = "uploaded"
-        u["name"] = u.get("subject", "")
+        u["name"] = subject_cn(u.get("subject", ""))
         u["last_scanned_at"] = None
         u["scan_status"] = None
         u["scan_error"] = None
@@ -982,7 +983,7 @@ def _build_unified_from_dash(
     if include_uploaded:
         for u in uploaded:
             u["kind"] = "uploaded"
-            u["name"] = u["subject"]
+            u["name"] = subject_cn(u["subject"] or "")
             u["last_scanned_at"] = None
             u["scan_status"] = None
             u["scan_error"] = None
