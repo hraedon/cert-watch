@@ -156,3 +156,232 @@ def test_settings_policy_save(reload_app):
         r = client.post("/settings/policy", data=form_data, follow_redirects=False)
     assert r.status_code == 303
     assert "tab=policy" in r.headers.get("location", "")
+
+
+# ---------- Auth-gating tests (WI-015) ----------
+
+
+def test_api_policy_get_auth_required(reload_app):
+    """GET /api/policy returns 401 when unauthenticated (require_auth dependency)."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/policy")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_policy_put_auth_required(reload_app):
+    """PUT /api/policy returns 401 when unauthenticated (require_admin dependency)."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.put("/api/policy", json={
+            "default_severity": "warning",
+            "rules": [],
+        })
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_policy_violations_json_auth_required(reload_app):
+    """GET /api/reports/policy-violations (JSON) returns 401 when unauthenticated."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/policy-violations")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_policy_violations_csv_auth_required(reload_app):
+    """GET /api/reports/policy-violations?format=csv returns 401 when unauthenticated."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/policy-violations?format=csv")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+# ---------- Role-differentiated auth tests (WI-015) ----------
+
+
+def test_api_policy_get_viewer_can_read(tmp_path):
+    """A viewer-role user can read GET /api/policy (require_auth, not require_admin)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "viewer": {"groups": ["g-viewers"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("viewer_user", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/api/policy")
+    assert r.status_code == 200
+    assert "rules" in r.json()
+
+
+def test_api_policy_put_viewer_forbidden(tmp_path):
+    """A viewer-role user cannot PUT /api/policy (require_admin dependency → 403)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "viewer": {"groups": ["g-viewers"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("viewer_user", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.put("/api/policy", json={
+            "default_severity": "warning",
+            "rules": [],
+        })
+    assert r.status_code == 403
+    assert "admin required" in r.json()["detail"]
+
+
+def test_api_policy_put_admin_allowed(tmp_path):
+    """An admin-role user can PUT /api/policy and the change persists."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("admin_user", groups=["g-admins"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.put("/api/policy", json={
+            "default_severity": "warning",
+            "rules": [{
+                "rule_id": "test_rule",
+                "category": "custom",
+                "severity": "critical",
+                "enabled": True,
+                "parameters": {},
+            }],
+        })
+        assert r.status_code == 200
+
+        # Verify the policy was actually persisted
+        r2 = client.get("/api/policy")
+        assert r2.status_code == 200
+        body = r2.json()
+        assert body["default_severity"] == "warning"
+        assert len(body["rules"]) == 1
+        assert body["rules"][0]["rule_id"] == "test_rule"
+        assert body["rules"][0]["severity"] == "critical"
+
+
+def test_api_policy_violations_viewer_can_read(tmp_path):
+    """A viewer can read GET /api/reports/policy-violations (require_auth, not admin)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "viewer": {"groups": ["g-viewers"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("viewer_user", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/api/reports/policy-violations")
+    assert r.status_code == 200
+    assert "violations" in r.json()
+
+
+def test_api_policy_violations_csv_viewer_can_read(tmp_path):
+    """A viewer-role user can read GET /api/reports/policy-violations?format=csv (require_auth)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "viewer": {"groups": ["g-viewers"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("viewer_user", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/api/reports/policy-violations?format=csv")
+    assert r.status_code == 200
+    assert "text/csv" in r.headers.get("content-type", "")
+
+
+def test_api_policy_put_operator_forbidden(tmp_path):
+    """An operator-role user cannot PUT /api/policy (require_admin → 403)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "operator": {"groups": ["g-operators"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("operator_user", groups=["g-operators"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.put("/api/policy", json={
+            "default_severity": "warning",
+            "rules": [],
+        })
+    assert r.status_code == 403
+    assert "admin required" in r.json()["detail"]

@@ -159,3 +159,72 @@ def test_settings_events_save(reload_app, login_csrf, tmp_path):
     assert "cert_added" in config.enabled_event_types
     assert config.webhook_kind == "discord"
     assert config.rate_limit_per_second == 5
+
+
+# ---------- Auth-gating tests (WI-015) ----------
+
+
+def test_api_events_list_auth_required(reload_app):
+    """GET /api/events returns 401 when unauthenticated (require_auth dependency)."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/events")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_events_stream_auth_required(reload_app):
+    """GET /api/events/stream returns 401 when unauthenticated (require_auth dependency)."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/events/stream")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_events_failed_auth_required(reload_app):
+    """GET /api/events/failed returns 401 when unauthenticated (require_auth dependency)."""
+    app_mod = reload_app(AUTH_PROVIDER="none", CERT_WATCH_ALLOW_UNAUTH="0")
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/events/failed")
+    assert r.status_code == 401
+    assert r.json()["error"] == "unauthenticated"
+
+
+def test_api_events_list_viewer_can_read(tmp_path):
+    """A viewer-role user can read GET /api/events (require_auth, not require_admin)."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "viewer": {"groups": ["g-viewers"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+    token = create_session("viewer_user", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/api/events")
+    assert r.status_code == 200
+
+
+def test_api_events_stream_has_require_auth_dep():
+    """The SSE endpoint uses require_auth (not require_admin), so viewers can connect.
+
+    We verify the dependency directly rather than making a request, because
+    EventSourceResponse keeps the connection open and would hang TestClient.
+    """
+    from cert_watch.routes.api.events import router
+
+    route = next(r for r in router.routes if r.path == "/api/events/stream")
+    dep = route.dependant.dependencies[0]
+    assert dep.call.__name__ == "require_auth"

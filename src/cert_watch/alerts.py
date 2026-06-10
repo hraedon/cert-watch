@@ -461,7 +461,7 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
         return False
 
 
-def send_pagerduty_resolve(
+def send_webhook_resolve(
     cert_id: str,
     alert_type: str,
     threshold_days: int | None,
@@ -472,17 +472,27 @@ def send_pagerduty_resolve(
     subject: str = "",
     alert_created_at: datetime | None = None,
 ) -> bool:
-    """Send a PagerDuty resolve event to auto-close an incident.
+    """Send a resolve event through the appropriate adapter.
 
-    Uses the same ``dedup_key`` as the original trigger so PagerDuty
-    coalesces the resolve with the open incident. Returns True on
-    HTTP 202 (PagerDuty acknowledgement).
+    Dispatches ``build_resolve`` on the adapter matching ``config.kind``.
+    PagerDuty returns True on HTTP 202; Alertmanager and generic return
+    True on 2xx. Returns False if the adapter has no ``build_resolve``.
     """
-    from cert_watch.alert_adapters import PagerDutyAdapter
+    from cert_watch.alert_adapters import get_adapter
 
-    adapter = PagerDutyAdapter()
-    req = adapter.build_resolve(cert_id, alert_type, threshold_days, config, summary=summary)
+    if config.kind not in ("pagerduty", "alertmanager"):
+        return False
+
     try:
+        adapter = get_adapter(config.kind)
+        build_resolve = getattr(adapter, "build_resolve", None)
+        if build_resolve is None:
+            return False
+        req = build_resolve(
+            cert_id, alert_type, threshold_days, config,
+            summary=summary, hostname=hostname, subject=subject,
+            alert_created_at=alert_created_at,
+        )
         resp = ssrf_safe_urlopen(
             req.url,
             data=req.body,
@@ -493,35 +503,74 @@ def send_pagerduty_resolve(
             allowed_subnets=config.allowed_subnets,
         )
         with resp:
-            return resp.status == 202
+            if config.kind == "pagerduty":
+                return resp.status == 202
+            return 200 <= resp.status < 300
+    except SSRFBlockedError as exc:
+        logger.warning(
+            "%s resolve blocked by SSRF policy: %s",
+            config.kind,
+            _sanitize_webhook_error(str(exc), config),
+        )
+        return False
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "pagerduty resolve failed for cert %s: %s",
+            "%s resolve failed for cert %s: %s",
+            config.kind,
             cert_id,
             _sanitize_webhook_error(str(exc), config),
         )
         return False
 
 
-def resolve_pagerduty_for_renewed_cert(
+def send_pagerduty_resolve(
+    cert_id: str,
+    alert_type: str,
+    threshold_days: int | None,
+    config: WebhookConfig,
+    *,
+    summary: str = "",
+) -> bool:
+    """Send a PagerDuty resolve event to auto-close an incident.
+
+    Deprecated: prefer ``send_webhook_resolve``, which dispatches
+    through the adapter registry and also supports Alertmanager.
+    """
+    if config.kind != "pagerduty":
+        return False
+    return send_webhook_resolve(
+        cert_id, alert_type, threshold_days, config, summary=summary,
+    )
+
+
+def resolve_webhook_for_renewed_cert(
     db_path: str | Path,
     old_cert_id: str,
     webhook_config: WebhookConfig | None = None,
+    *,
+    pending_alerts: list | None = None,
 ) -> int:
-    """Resolve all PagerDuty incidents for a cert that has been renewed.
+    """Resolve all open incidents/alerts for a cert that has been renewed.
 
-    Looks up pending alerts for the old cert and sends a resolve event
-    for each unique (alert_type, threshold_days) combination. Returns
-    the number of resolve events sent.
+    Works for PagerDuty and Alertmanager webhook kinds. Looks up pending
+    alerts for the old cert and sends a resolve event for each unique
+    (alert_type, threshold_days) combination. Returns the number of
+    resolve events sent.
 
-    No-ops when ``webhook_config`` is None or ``kind != "pagerduty"``.
+    When *pending_alerts* is provided (a pre-fetched list from
+    :class:`SqliteAlertRepository`), uses that instead of querying the
+    database — necessary when the caller knows the alert rows will be
+    deleted before this function runs (e.g. ``replace_scanned``).
     """
-    if webhook_config is None or webhook_config.kind != "pagerduty":
+    if webhook_config is None or webhook_config.kind not in ("pagerduty", "alertmanager"):
         return 0
-    from cert_watch.database import SqliteAlertRepository
+    if pending_alerts is None:
+        from cert_watch.database import SqliteAlertRepository
 
-    alert_repo = SqliteAlertRepository(db_path)
-    cert_alerts = alert_repo.list_for_cert(old_cert_id)
+        alert_repo = SqliteAlertRepository(db_path)
+        cert_alerts = alert_repo.list_for_cert(old_cert_id)
+    else:
+        cert_alerts = pending_alerts
     seen: set[tuple[str, int | None]] = set()
     resolved = 0
     for alert in cert_alerts:
@@ -529,7 +578,7 @@ def resolve_pagerduty_for_renewed_cert(
         if key in seen:
             continue
         seen.add(key)
-        if send_pagerduty_resolve(
+        if send_webhook_resolve(
             old_cert_id, alert.alert_type, alert.threshold_days,
             webhook_config,
             summary=f"cert-watch: certificate renewed, resolving {alert.alert_type} alert",
@@ -539,6 +588,21 @@ def resolve_pagerduty_for_renewed_cert(
         ):
             resolved += 1
     return resolved
+
+
+def resolve_pagerduty_for_renewed_cert(
+    db_path: str | Path,
+    old_cert_id: str,
+    webhook_config: WebhookConfig | None = None,
+) -> int:
+    """Resolve all PagerDuty incidents for a cert that has been renewed.
+
+    Delegates to ``resolve_webhook_for_renewed_cert``. Kept for backward
+    compatibility with callers that import by the old name.
+    """
+    if webhook_config is not None and webhook_config.kind != "pagerduty":
+        return 0
+    return resolve_webhook_for_renewed_cert(db_path, old_cert_id, webhook_config)
 
 
 ALERT_MAX_RETRIES = 3
@@ -789,41 +853,23 @@ def _send_digest_webhook(
     certs: list[dict],
     webhook_config: WebhookConfig,
 ) -> bool:
-    message, _ = _build_digest_message(certs)
-    sanitized = [
-        {k: v for k, v in c.items() if k not in ("owner_email", "owner_name")}
-        for c in certs
-    ]
-    payload = json.dumps({
-        "alert_type": "expiry_digest",
-        "cert_count": len(certs),
-        "message": message,
-        "certificates": sanitized,
-    })
-    req_headers = {"Content-Type": "application/json", **webhook_config.headers}
-    try:
-        resp = ssrf_safe_urlopen(
-            webhook_config.url,
-            data=payload.encode("utf-8"),
-            timeout=webhook_config.timeout,
-            method="POST",
-            headers=req_headers,
-            allow_private=webhook_config.allow_private,
-            allowed_subnets=webhook_config.allowed_subnets,
-        )
-        with resp:
-            return 200 <= resp.status < 300
-    except SSRFBlockedError as exc:
-        logger.warning(
-            "digest webhook blocked by SSRF policy: %s", exc,
-        )
-        return False
-    except Exception as exc:
-        logger.warning(
-            "digest webhook failed: %s",
-            _sanitize_webhook_error(str(exc), webhook_config),
-        )
-        return False
+    """Dispatch expiry digest through the adapter registry.
+
+    Creates a synthetic ``Alert`` so the digest is formatted correctly for
+    Discord, Teams, PagerDuty, Alertmanager, and Slack (not raw JSON).
+    """
+    from cert_watch.database import Alert
+
+    message, subject = _build_digest_message(certs)
+    alert = Alert(
+        cert_id=f"digest:{len(certs)}",
+        alert_type="expiry_digest",
+        status="pending",
+        message=message,
+        threshold_days=None,
+        subject=subject,
+    )
+    return send_webhook(alert, webhook_config)
 
 
 def send_expiry_digest(

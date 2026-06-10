@@ -7,6 +7,7 @@ integration via ``send_webhook``.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -680,7 +681,11 @@ class TestAlertmanagerAdapter:
         req = adapter.build_resolve("c", "expired", None, config)
         body = json.loads(req.body)
         entry = body["alerts"][0]
-        assert entry["startsAt"] == entry["endsAt"]
+        assert entry["startsAt"] != entry["endsAt"]
+        # startsAt should be slightly before endsAt when created_at is missing
+        starts = datetime.fromisoformat(entry["startsAt"])
+        ends = datetime.fromisoformat(entry["endsAt"])
+        assert starts < ends
 
     def test_build_resolve_labels_fallback_to_cert_id(self):
         adapter = AlertmanagerAdapter()
@@ -690,3 +695,100 @@ class TestAlertmanagerAdapter:
         entry = body["alerts"][0]
         assert entry["labels"]["host"] == "cert-xyz"
         assert entry["labels"]["cert_subject"] == "cert-xyz"
+
+    def test_resolve_labels_match_trigger_labels(self):
+        """Round-trip: trigger and resolve payloads must share labels for correlation."""
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        alert = _alert(
+            cert_id="cert-1",
+            alert_type="expiry_warning",
+            threshold_days=7,
+            hostname="web.example.com",
+            subject="CN=web.example.com",
+        )
+        trigger_req = adapter.build(alert, config)
+        resolve_req = adapter.build_resolve(
+            "cert-1", "expiry_warning", 7, config,
+            hostname="web.example.com", subject="CN=web.example.com",
+        )
+        trigger_labels = json.loads(trigger_req.body)["alerts"][0]["labels"]
+        resolve_labels = json.loads(resolve_req.body)["alerts"][0]["labels"]
+        assert resolve_labels == trigger_labels
+
+    def test_send_webhook_resolve_alertmanager(self):
+        from cert_watch.alerts import send_webhook_resolve
+
+        config = _config(kind="alertmanager")
+        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            ok = send_webhook_resolve(
+                "cert-1", "expiry_warning", 7, config,
+                hostname="web.example.com", subject="CN=web.example.com",
+            )
+        assert ok is True
+        body = json.loads(mock_urlopen.call_args[1]["data"])
+        assert body["alerts"][0]["status"] == "resolved"
+        assert body["alerts"][0]["labels"]["host"] == "web.example.com"
+
+    def test_send_webhook_resolve_alertmanager_non_2xx_is_failure(self):
+        from cert_watch.alerts import send_webhook_resolve
+
+        config = _config(kind="alertmanager")
+        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 500
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            ok = send_webhook_resolve("cert-1", "expired", None, config)
+        assert ok is False
+
+    def test_send_webhook_resolve_no_build_resolve_returns_false(self):
+        from cert_watch.alerts import send_webhook_resolve
+
+        config = _config(kind="discord")
+        ok = send_webhook_resolve("cert-1", "expiry_warning", 7, config)
+        assert ok is False
+
+    def test_resolve_webhook_for_renewed_cert_alertmanager(self, tmp_path):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.database import SqliteAlertRepository, init_schema
+
+        db = tmp_path / "cw_resolve_am.sqlite3"
+        init_schema(db)
+        alert_repo = SqliteAlertRepository(db)
+        alert_repo.create(Alert(
+            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            message="expiring", threshold_days=7,
+        ))
+        alert_repo.create(Alert(
+            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            message="expiring", threshold_days=3,
+        ))
+        config = _config(kind="alertmanager")
+        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+            mock_resp = MagicMock()
+            mock_resp.status = 200
+            mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            mock_urlopen.return_value = mock_resp
+            resolved = resolve_webhook_for_renewed_cert(db, "old-cert-1", config)
+        assert resolved == 2
+
+    def test_resolve_webhook_noops_for_unsupported_kind(self):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+
+        config = _config(kind="discord")
+        resolved = resolve_webhook_for_renewed_cert(None, "cert-1", config)
+        assert resolved == 0
+
+    def test_resolve_webhook_noops_for_none_config(self):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+
+        resolved = resolve_webhook_for_renewed_cert(None, "cert-1", None)
+        assert resolved == 0
