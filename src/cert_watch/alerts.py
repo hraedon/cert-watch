@@ -180,6 +180,27 @@ def evaluate_all_certs(
     # Batch-resolve group recipients for all certs in ≤3 queries
     all_group_recipients = resolve_all_group_recipients(db_path)
 
+    # Role-based alert routing: users in a role get alerts for certs owned by
+    # the role's team email (host.owner_email matches role.email).
+    from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
+
+    role_user_emails: dict[str, list[str]] = {}
+    try:
+        _role_repo = SqliteRoleRepository(db_path)
+        _user_repo = SqliteUserRepository(db_path)
+        _all_users = _user_repo.list_all()
+        for _role in _role_repo.list_all():
+            if _role.email:
+                _users_in_role = [
+                    u for u in _all_users
+                    if u.role_id == _role.id and u.email
+                ]
+                if _users_in_role:
+                    role_user_emails[_role.email.casefold()] = [u.email for u in _users_in_role]
+    except Exception:
+        logger.debug("Role-based alert routing unavailable", exc_info=True)
+        role_user_emails = {}
+
     all_alerts: list[Alert] = []
     for leaf_row in leaves:
         cert = Certificate(
@@ -215,6 +236,13 @@ def evaluate_all_certs(
             oe = owner_info["owner_email"]
             if oe not in merged_extra:
                 merged_extra.append(oe)
+
+        # Add user emails from the role whose email matches the host's owner_email
+        if owner_info and owner_info.get("owner_email"):
+            role_emails = role_user_emails.get(owner_info["owner_email"].casefold(), [])
+            for re in role_emails:
+                if re not in merged_extra:
+                    merged_extra.append(re)
 
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,

@@ -581,6 +581,156 @@ def insights_view(
     )
 
 
+@router.get("/team", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
+    db = _db_path(request)
+    username = request.scope.get("auth_user", "")
+    per_page = 25
+
+    from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
+
+    has_role = False
+    role_name = ""
+    role_email = ""
+
+    try:
+        user_repo = SqliteUserRepository(db)
+        role_repo = SqliteRoleRepository(db)
+        user = user_repo.get_by_username(username) if username else None
+        role = role_repo.get(user.role_id) if user and user.role_id else None
+        has_role = role is not None and role.email
+        role_name = role.name if role else ""
+        role_email = role.email if role else ""
+    except Exception:
+        logger.debug("Team dashboard: user/role lookup failed", exc_info=True)
+        has_role = False
+
+    entries: list[dict] = []
+    stats = {"expired": 0, "critical": 0, "warning": 0, "healthy": 0}
+    total_entries = 0
+    total_pages = 1
+
+    if has_role:
+        with _connect(db) as conn:
+            # Total count for pagination
+            total_row = conn.execute(
+                """SELECT COUNT(*) FROM certificates c
+                   LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
+                   WHERE c.is_leaf = 1 AND LOWER(h.owner_email) = LOWER(?)""",
+                (role_email,),
+            ).fetchone()
+            total_entries = total_row[0] if total_row else 0
+            total_pages = max((total_entries + per_page - 1) // per_page, 1)
+            page = max(1, min(page, total_pages))
+            offset = (page - 1) * per_page
+
+            # Fetch paginated certs with chain info for urgency computation
+            rows = conn.execute(
+                """SELECT c.id, c.subject, c.issuer, c.not_after,
+                          c.hostname, c.port, c.source,
+                          h.owner_email,
+                          (SELECT MIN(julianday(ch.not_after) - julianday('now'))
+                           FROM certificates ch WHERE ch.parent_cert_id = c.id
+                          ) AS min_chain_days,
+                          (SELECT sp.chain_status FROM scan_posture sp
+                           WHERE sp.cert_id = c.id
+                           ORDER BY sp.scanned_at DESC, sp.id DESC LIMIT 1
+                          ) AS chain_status
+                   FROM certificates c
+                   LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
+                   WHERE c.is_leaf = 1 AND LOWER(h.owner_email) = LOWER(?)
+                   ORDER BY c.not_after ASC
+                   LIMIT ? OFFSET ?""",
+                (role_email, per_page, offset),
+            ).fetchall()
+
+            # Stats across ALL team certs (not just current page)
+            stat_rows = conn.execute(
+                """SELECT c.not_after,
+                          (SELECT MIN(julianday(ch.not_after) - julianday('now'))
+                           FROM certificates ch WHERE ch.parent_cert_id = c.id
+                          ) AS min_chain_days,
+                          (SELECT sp.chain_status FROM scan_posture sp
+                           WHERE sp.cert_id = c.id
+                           ORDER BY sp.scanned_at DESC, sp.id DESC LIMIT 1
+                          ) AS chain_status
+                   FROM certificates c
+                   LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
+                   WHERE c.is_leaf = 1 AND LOWER(h.owner_email) = LOWER(?)""",
+                (role_email,),
+            ).fetchall()
+
+        def _urgency(days: int) -> str:
+            if days < 0:
+                return "expired"
+            if days < 7:
+                return "critical"
+            if days < 30:
+                return "warning"
+            return "healthy"
+
+        def _compute_urgency(leaf_days: int, min_chain_days, chain_status_val) -> str:
+            all_days = [leaf_days]
+            if min_chain_days is not None:
+                all_days.append(int(min_chain_days))
+            min_days = min(all_days)
+            u = _urgency(min_days)
+            if chain_status_val in ("incomplete", "invalid") and u == "healthy":
+                u = "warning"
+            return u
+
+        # Compute stats from all team certs
+        for r in stat_rows:
+            na = _parse_iso(r["not_after"])
+            leaf_days = (na - datetime.now(UTC)).days
+            u = _compute_urgency(leaf_days, r["min_chain_days"], r["chain_status"])
+            stats[u] += 1
+
+        # Build page entries
+        from cert_watch.filters import subject_cn
+
+        for r in rows:
+            na = _parse_iso(r["not_after"])
+            leaf_days = (na - datetime.now(UTC)).days
+            u = _compute_urgency(leaf_days, r["min_chain_days"], r["chain_status"])
+            host = f"{r['hostname']}:{r['port']}" if r["hostname"] else ""
+            entries.append({
+                "id": r["id"],
+                "name": subject_cn(r["subject"]),
+                "subject": r["subject"],
+                "issuer": r["issuer"],
+                "not_after": r["not_after"],
+                "days_remaining": leaf_days,
+                "urgency": u,
+                "host": host,
+                "source": r["source"],
+            })
+
+    auth_ctx = get_auth_context(request)
+    csrf_ctx = get_csrf_context(request)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="team_dashboard.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **auth_ctx,
+            **csrf_ctx,
+            "active_page": "team",
+            "has_role": has_role,
+            "role_name": role_name,
+            "role_email": role_email,
+            "entries": entries,
+            "stats": stats,
+            "total_entries": total_entries,
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
+        },
+    )
+
+
 @router.get("/discover", response_class=HTMLResponse)
 def discover_view(request: Request) -> HTMLResponse:
     db = _db_path(request)

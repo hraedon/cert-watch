@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — team dashboard{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+
+{% macro stat_card(tone, icon, label, value, sub) %}
+  <div class="cw-stat">
+    {% if tone == 'default' %}
+      <div class="cw-stat-rail cw-stat-rail-accent"></div>
+    {% elif tone == 'attention' %}
+      <div class="cw-stat-rail cw-stat-rail-crit"></div>
+    {% elif tone == 'warning' %}
+      <div class="cw-stat-rail cw-stat-rail-warn"></div>
+    {% elif tone == 'ok' %}
+      <div class="cw-stat-rail cw-stat-rail-ok"></div>
+    {% endif %}
+    <div class="cw-stat-top {% if tone == 'default' %}cw-stat-top-accent{% elif tone == 'attention' %}cw-stat-top-crit{% elif tone == 'warning' %}cw-stat-top-warn{% elif tone == 'ok' %}cw-stat-top-ok{% endif %}">
+      {{ icons.svg_icon(icon, 15, 1.8) }}
+      <span class="cw-stat-label cw-stat-label-color">{{ label }}</span>
+    </div>
+    <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
+    {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
+  </div>
+{% endmacro %}
+
+{% block content %}
+<div class="cw-page-wrap">
+  <div class="cw-page-head">
+    <div>
+      <h1 data-testid="team-heading">Team Dashboard</h1>
+      <div class="cw-page-head-sub">
+        {% if role_name %}
+          Certificates owned by <strong>{{ role_name }}</strong> ({{ role_email }})
+        {% else %}
+          Your team certificates
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {% if not has_role %}
+  <div class="cw-panel cw-table-wrap">
+    <div class="cw-empty">
+      <div class="cw-empty-icon">{{ icons.svg_icon('users', 20) }}</div>
+      <div class="cw-empty-title">No team assigned</div>
+      <div class="cw-empty-sub">You are not currently assigned to a team. Contact an administrator to be added to a role.</div>
+    </div>
+  </div>
+  {% elif not entries %}
+  <div class="cw-panel cw-table-wrap">
+    <div class="cw-empty">
+      <div class="cw-empty-icon">{{ icons.svg_icon('search', 20) }}</div>
+      <div class="cw-empty-title">No team certificates</div>
+      <div class="cw-empty-sub">No certificates are owned by your team yet.</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="cw-stats cw-mb-18">
+    {{ stat_card('default', 'shield', 'Team certificates', total_entries, '') }}
+    {{ stat_card('attention', 'alert', 'Expired', stats.expired, 'needs attention' if stats.expired else 'none') }}
+    {{ stat_card('warning', 'clock', 'Expiring < 30 days', stats.critical + stats.warning, 'action needed' if (stats.critical + stats.warning) else 'all clear') }}
+    {{ stat_card('ok', 'check-circle', 'Healthy', stats.healthy, 'no action needed') }}
+  </div>
+
+  <div class="cw-panel cw-table-wrap">
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Certificate (CN)</th>
+          <th>Issuer</th>
+          <th>Host</th>
+          <th>Expires</th>
+          <th class="cw-w-120">Status</th>
+          <th class="cw-w-96"></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        {% set urg = e.urgency %}
+        <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}">
+          <td class="cw-td-mw-360">
+            <div class="cw-cert-chips">
+              <span class="cw-host">{{ e.name or '—' }}</span>
+            </div>
+          </td>
+          <td>
+            <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
+            <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
+          </td>
+          <td>
+            <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}{{ e.host or '—' }}</span>
+          </td>
+          <td class="cw-td-minw-150">
+            <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
+            {% if e.days_remaining is not none %}
+              {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+              <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <span class="cw-pill {{ urg }}">
+              <span class="dot"></span>
+              {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
+            </span>
+          </td>
+          <td data-action="stop-propagation">
+            <div class="cw-rowact">
+              <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
+                {{ icons.svg_icon('chevron-right', 14) }}
+              </a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+   </div>
+  {% if total_pages > 1 %}
+  <div class="cw-pagination cw-mt-18">
+    {% if has_prev %}
+      <a href="/team?page={{ page - 1 }}" class="cw-btn sm">&laquo; Prev</a>
+    {% endif %}
+    <span class="cw-muted">Page {{ page }} of {{ total_pages }}</span>
+    {% if has_next %}
+      <a href="/team?page={{ page + 1 }}" class="cw-btn sm">Next &raquo;</a>
+    {% endif %}
+  </div>
+  {% endif %}
+  {% endif %}
+</div>
+{% endblock %}
