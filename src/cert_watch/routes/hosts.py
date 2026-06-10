@@ -16,6 +16,7 @@ from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
+    require_admin_write_form,
     require_auth,
     require_write_form,
 )
@@ -343,6 +344,46 @@ async def update_host_notes(
     )
     logger.info("updated notes for host %s", host_id)
     return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/hosts/{host_id}/expected-issuers")
+async def update_host_expected_issuers(
+    request: Request, host_id: IdParam, expected_issuers: str = Form(""),
+) -> RedirectResponse:
+    """Update the CT expected-issuer allowlist for a host."""
+    write_err = await require_admin_write_form(request)
+    if write_err:
+        return write_err
+    db = _db_path(request)
+    from cert_watch.database import SqliteHostRepository
+
+    repo = SqliteHostRepository(db)
+    host = repo.get(host_id)
+    if host is None:
+        return RedirectResponse(url="/discover?error=host+not+found", status_code=303)
+    # Normalize: comma-separated, stripped
+    normalized = ",".join(
+        i.strip()
+        for i in expected_issuers.split(",")
+        if i.strip()
+    )
+    if len(normalized) > 2000:
+        return RedirectResponse(url="/discover?error=expected+issuers+too+long", status_code=303)
+    repo.set_expected_issuers(host_id, normalized)
+    # Invalidate CT reconciliation cache
+    from cert_watch.ct_monitor import invalidate_ct_cache
+    invalidate_ct_cache()
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.update_expected_issuers",
+        target_type="host",
+        target_id=host_id,
+        detail={"hostname": host.hostname, "expected_issuers": normalized},
+        source_ip=resolve_source_ip(request),
+    )
+    logger.info("updated expected_issuers for host %s", host_id)
+    return RedirectResponse(url="/discover?saved=1", status_code=303)
 
 
 @router.post("/hosts/{host_id}/delete")

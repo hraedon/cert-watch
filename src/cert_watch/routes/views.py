@@ -660,6 +660,24 @@ def discover_view(request: Request) -> HTMLResponse:
     reconciling = start_reconciliation_refresh(db, sorted_domains)
     coverage = round(tracked_count / ct_total * 100) if ct_total > 0 else 0
 
+    # Also get tracked hosts with expected issuers for the allowlist UI
+    tracked_hosts_data: list[dict] = []
+    with _connect(db) as conn:
+        rows = conn.execute(
+            "SELECT id, hostname, port, expected_issuers FROM hosts "
+            "WHERE hostname IS NOT NULL ORDER BY hostname"
+        ).fetchall()
+    for r in rows:
+        raw = r["expected_issuers"] or ""
+        issuers = [i.strip() for i in raw.split(",") if i.strip()] if raw else []
+        tracked_hosts_data.append({
+            "id": r["id"],
+            "hostname": r["hostname"],
+            "port": r["port"],
+            "expected_issuers": issuers,
+            "expected_issuers_str": raw,
+        })
+
     return templates.TemplateResponse(
         request=request,
         name="discover.html",
@@ -677,6 +695,8 @@ def discover_view(request: Request) -> HTMLResponse:
             "private_count": private_count,
             "reconciling": reconciling,
             "reconciled_age": int(reconciled_age) if reconciled_age is not None else None,
+            "tracked_hosts": tracked_hosts_data,
+            **get_csrf_context(request),
         },
     )
 

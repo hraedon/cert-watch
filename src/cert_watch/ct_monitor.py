@@ -36,6 +36,15 @@ def _evict_ct_cache(now: float) -> None:
         for k in sorted_keys[: len(_CT_RECON_CACHE) - _CT_RECON_CACHE_MAX]:
             del _CT_RECON_CACHE[k]
 
+
+def invalidate_ct_cache() -> None:
+    """Clear the CT reconciliation cache.
+
+    Called when expected_issuers or other configuration changes should
+    take effect immediately rather than waiting for the 5-min TTL.
+    """
+    _CT_RECON_CACHE.clear()
+
 # Background-refresh bookkeeping (BC-097): the Discover page must never block on
 # live crt.sh calls in the request path, so stale/missing domains are warmed off
 # the request thread.
@@ -120,6 +129,63 @@ def _get_scanned_issuer(db_path: str | Path, hostname: str) -> str | None:
             (hostname,),
         ).fetchone()
     return row["issuer"] if row else None
+
+
+def _extract_cn(dn: str) -> str:
+    """Extract the CN value from an X.509 distinguished name string.
+
+    Handles both slash-separated (``/CN=R3/O=Let's Encrypt``) and
+    comma-separated (``CN=R3, O=Let's Encrypt, C=US``) DN formats.
+    Returns the full *dn* unchanged if no CN is found.
+    """
+    if not dn:
+        return ""
+    # Slash-separated format (OpenSSL default): /CN=.../O=...
+    # Detect by leading slash
+    if dn.startswith("/"):
+        for part in dn.split("/"):
+            part = part.strip()
+            if part.upper().startswith("CN="):
+                return part[3:].strip()
+    # Comma-separated format: CN=..., O=..., C=...
+    for part in dn.split(","):
+        part = part.strip()
+        if part.upper().startswith("CN="):
+            return part[3:].strip()
+    return dn
+
+
+def _get_expected_issuers(db_path: str | Path, hostname: str) -> list[str]:
+    """Return the expected-issuer CN allowlist for *hostname*'s host record.
+
+    The allowlist is stored as CSV in the ``hosts.expected_issuers`` column.
+    An empty list means no allowlist is configured (fall back to strict match).
+    """
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT expected_issuers FROM hosts WHERE hostname = ? LIMIT 1",
+            (hostname,),
+        ).fetchone()
+    if not row:
+        return []
+    raw = row["expected_issuers"] or ""
+    return [i.strip() for i in raw.split(",") if i.strip()]
+
+
+def _issuer_matches(ct_issuer: str, scanned_issuer: str, expected_issuers: list[str]) -> bool:
+    """Return True if *ct_issuer* is an acceptable issuer for this host.
+
+    Acceptance rules (WI-007):
+    1. If *expected_issuers* is non-empty, match *ct_issuer* CN against it (case-insensitive).
+    2. Otherwise, fall back to strict equality with *scanned_issuer* (case-insensitive).
+    """
+    if expected_issuers:
+        ct_cn = _extract_cn(ct_issuer).strip().lower()
+        allowed = {a.strip().lower() for a in expected_issuers}
+        return ct_cn in allowed
+    # Fallback: compare CNs (not raw DNs) to avoid false-positives when
+    # OpenSSL stores slash-separated DNs but CT returns comma-separated.
+    return _extract_cn(ct_issuer).strip().lower() == _extract_cn(scanned_issuer).strip().lower()
 
 
 def _record_ct_issuer_first_seen(db_path: str | Path, issuer_name: str) -> str | None:
@@ -222,10 +288,11 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
 
     for host in tracked_hostnames:
         scanned_issuer = _get_scanned_issuer(db_path, host)
+        expected_issuers = _get_expected_issuers(db_path, host)
         ct_issuers = ct_issuers_by_host.get(host, set())
         if scanned_issuer and ct_issuers:
             for ct_issuer in ct_issuers:
-                if ct_issuer != scanned_issuer:
+                if not _issuer_matches(ct_issuer, scanned_issuer, expected_issuers):
                     misissued.append({
                         "host": host,
                         "scanned_issuer": scanned_issuer,
