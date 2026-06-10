@@ -57,6 +57,7 @@ class HostEntry:
     renewal_method: str = ""
     runbook_url: str = ""
     notes: str = ""
+    expected_issuers: str = ""
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -442,6 +443,7 @@ class SqliteHostRepository:
         renewal_method: str = "",
         runbook_url: str = "",
         notes: str = "",
+        expected_issuers: str = "",
     ) -> str:
         import sqlite3
         host_id = str(uuid.uuid4())
@@ -451,13 +453,13 @@ class SqliteHostRepository:
                     "INSERT INTO hosts"
                     " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
                     "  owner_name, owner_email, owner_slack, renewal_status,"
-                    "  renewal_method, runbook_url, notes, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "  renewal_method, runbook_url, notes, expected_issuers, added_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         host_id, hostname, port, threshold_days, tags,
                         scan_interval_hours, owner_name, owner_email,
                         owner_slack, renewal_status, renewal_method,
-                        runbook_url, notes, _iso(datetime.now(UTC)),
+                        runbook_url, notes, expected_issuers, _iso(datetime.now(UTC)),
                     ),
                 )
                 conn.commit()
@@ -472,63 +474,10 @@ class SqliteHostRepository:
     def list_all(self) -> list[HostEntry]:
         with _connect(self.db_path) as conn:
             rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
-        return [
-            HostEntry(
-                id=r["id"],
-                hostname=r["hostname"],
-                port=r["port"],
-                threshold_days=dict(r).get("threshold_days"),
-                tags=dict(r).get("tags", ""),
-                scan_interval_hours=dict(r).get("scan_interval_hours"),
-                owner_name=dict(r).get("owner_name", ""),
-                owner_email=dict(r).get("owner_email", ""),
-                owner_slack=dict(r).get("owner_slack", ""),
-                renewal_status=dict(r).get("renewal_status", "pending"),
-                renewal_method=dict(r).get("renewal_method", ""),
-                runbook_url=dict(r).get("runbook_url", ""),
-                notes=dict(r).get("notes", ""),
-                added_at=_parse_iso(r["added_at"]),
-            )
-            for r in rows
-        ]
+        return [self._row_to_host(r) for r in rows]
 
-    def list_page(self, *, offset: int = 0, limit: int = 50) -> list[HostEntry]:
-        """Return a paginated slice of hosts ordered by `added_at`."""
-        with _connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT * FROM hosts ORDER BY added_at LIMIT ? OFFSET ?",
-                (limit, offset),
-            ).fetchall()
-        return [
-            HostEntry(
-                id=r["id"],
-                hostname=r["hostname"],
-                port=r["port"],
-                threshold_days=dict(r).get("threshold_days"),
-                tags=dict(r).get("tags", ""),
-                scan_interval_hours=dict(r).get("scan_interval_hours"),
-                owner_name=dict(r).get("owner_name", ""),
-                owner_email=dict(r).get("owner_email", ""),
-                owner_slack=dict(r).get("owner_slack", ""),
-                renewal_status=dict(r).get("renewal_status", "pending"),
-                renewal_method=dict(r).get("renewal_method", ""),
-                runbook_url=dict(r).get("runbook_url", ""),
-                notes=dict(r).get("notes", ""),
-                added_at=_parse_iso(r["added_at"]),
-            )
-            for r in rows
-        ]
-
-    def count_all(self) -> int:
-        with _connect(self.db_path) as conn:
-            row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
-        return row[0] if row else 0
-
-    def get(self, host_id: str) -> HostEntry | None:
-        with _connect(self.db_path) as conn:
-            r = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
-        if not r:
-            return None
+    @staticmethod
+    def _row_to_host(r) -> HostEntry:
         return HostEntry(
             id=r["id"],
             hostname=r["hostname"],
@@ -543,8 +492,30 @@ class SqliteHostRepository:
             renewal_method=dict(r).get("renewal_method", ""),
             runbook_url=dict(r).get("runbook_url", ""),
             notes=dict(r).get("notes", ""),
+            expected_issuers=dict(r).get("expected_issuers", ""),
             added_at=_parse_iso(r["added_at"]),
         )
+
+    def list_page(self, *, offset: int = 0, limit: int = 50) -> list[HostEntry]:
+        """Return a paginated slice of hosts ordered by `added_at`."""
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM hosts ORDER BY added_at LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+        return [self._row_to_host(r) for r in rows]
+
+    def count_all(self) -> int:
+        with _connect(self.db_path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
+        return row[0] if row else 0
+
+    def get(self, host_id: str) -> HostEntry | None:
+        with _connect(self.db_path) as conn:
+            r = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        if not r:
+            return None
+        return self._row_to_host(r)
 
     def delete(self, host_id: str) -> bool:
         """Delete the host and cascade-delete its scanned certs and alerts."""
@@ -694,6 +665,27 @@ class SqliteHostRepository:
         with _connect(self.db_path) as conn:
             cur = conn.execute(
                 "UPDATE hosts SET notes = ? WHERE id = ?", (notes, host_id)
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    def get_expected_issuers(self, host_id: str) -> list[str]:
+        """Return the expected-issuer CN allowlist for a host (empty list if unset/missing)."""
+        with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT expected_issuers FROM hosts WHERE id = ?", (host_id,)
+            ).fetchone()
+        if not row:
+            return []
+        raw = row["expected_issuers"] or ""
+        return [i.strip() for i in raw.split(",") if i.strip()]
+
+    def set_expected_issuers(self, host_id: str, issuers: str) -> bool:
+        """Set the expected-issuer CN allowlist for a host. Returns False if no such host."""
+        with _connect(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE hosts SET expected_issuers = ? WHERE id = ?",
+                (issuers, host_id),
             )
             conn.commit()
         return cur.rowcount > 0

@@ -75,6 +75,7 @@ CREATE TABLE IF NOT EXISTS hosts (
     renewal_method TEXT NOT NULL DEFAULT '',
     runbook_url TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT '',
+    expected_issuers TEXT NOT NULL DEFAULT '',
     added_at TEXT NOT NULL,
     UNIQUE(hostname, port)
 );
@@ -264,6 +265,11 @@ def ensure_base(db_path: str | Path) -> None:
         if "notes" not in host_cols:
             conn.execute(
                 "ALTER TABLE hosts ADD COLUMN notes"
+                " TEXT NOT NULL DEFAULT ''"
+            )
+        if "expected_issuers" not in host_cols:
+            conn.execute(
+                "ALTER TABLE hosts ADD COLUMN expected_issuers"
                 " TEXT NOT NULL DEFAULT ''"
             )
         sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}

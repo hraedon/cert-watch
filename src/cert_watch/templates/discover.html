@@ -184,6 +184,72 @@
   </div>
   {% endif %}
 
+  {# ---- Expected issuers allowlist (WI-007) ---- #}
+  {% if tracked_hosts and may_write %}
+  <div class="cw-panel cw-mb-18" id="expected-issuers-section">
+    <div class="cw-flex cw-items-center cw-gap-9 cw-p-15-18 cw-panel-hd-pb-13">
+      {{ icons.svg_icon('shield', 15) }}
+      <span class="cw-fz-14 cw-fw-600">Expected Issuers</span>
+      <span class="cw-chip">{{ tracked_hosts | length }}</span>
+      <div class="cw-spacer"></div>
+      <span class="cw-fz-12 cw-text-text-3">per-host issuer allowlists for CT mis-issuance detection</span>
+    </div>
+    <div class="cw-p-15-18">
+      <p class="cw-muted cw-fz-11 cw-mb-12">
+        Leave empty to use the scanned issuer as the only expected issuer (strict match).
+        Enter comma-separated issuer CNs to allow multiple issuers for the same host (e.g., multi-CA rotation like Let's Encrypt R3/R4).
+      </p>
+      {% if request.query_params.saved %}
+      <div class="cw-alert cw-alert--success cw-mb-14">Expected issuers saved.</div>
+      {% endif %}
+      {% if request.query_params.error %}
+      <div class="cw-alert cw-alert--error cw-mb-14">{{ request.query_params.error }}</div>
+      {% endif %}
+      <table class="cw-table">
+        <thead>
+          <tr>
+            <th class="cw-th-pl-20">Host</th>
+            <th>Current allowlist</th>
+            <th>Update allowlist</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in tracked_hosts %}
+          <tr>
+            <td class="cw-td-pl-20">
+              <span class="cw-host cw-fz-13">{{ h.hostname }}:{{ h.port }}</span>
+            </td>
+            <td class="cw-fz-12 cw-text-text-3">
+              {% if h.expected_issuers %}
+                <span class="mono">{{ h.expected_issuers | join(', ') }}</span>
+              {% else %}
+                <span class="cw-muted italic">Match scanned issuer only</span>
+              {% endif %}
+            </td>
+            <td>
+              <form method="post" action="/hosts/{{ h.id }}/expected-issuers" class="cw-flex cw-gap-8 cw-items-center">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <input class="cw-input cw-fz-11-5" type="text" name="expected_issuers"
+                       value="{{ h.expected_issuers_str }}" placeholder="R3, R4, Let's Encrypt Authority X3">
+                <button type="submit" class="cw-btn sm">Save</button>
+              </form>
+            </td>
+            <td class="cw-td-pr-20">
+              {% if h.expected_issuers %}
+              <span class="cw-chip cw-chip-ok">{{ h.expected_issuers | length }} issuers</span>
+              {% else %}
+              <span class="cw-chip">Scanned issuer</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   {# ---- Empty state ---- #}
   {% if not untracked and not misissued %}
     {% if not domains and reconciling %}

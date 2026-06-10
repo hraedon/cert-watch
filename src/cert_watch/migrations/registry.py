@@ -48,6 +48,9 @@ from cert_watch.migrations.m0020_alert_hostname_subject import (
 from cert_watch.migrations.m0021_event_log import (
     upgrade as event_log_upgrade,
 )
+from cert_watch.migrations.m0022_hosts_expected_issuers import (
+    upgrade as hosts_expected_issuers_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -108,4 +111,8 @@ runner.register(
 runner.register(
     "0021", "add event_log table for event streaming (Plan 044)",
     event_log_upgrade,
+)
+runner.register(
+    "0022", "add expected_issuers column to hosts (WI-007)",
+    hosts_expected_issuers_upgrade,
 )

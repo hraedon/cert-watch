@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
-from cert_watch.middleware import require_auth, require_write
+from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
 
@@ -41,6 +41,7 @@ def api_list_hosts(
                     "owner_slack": h.owner_slack,
                     "renewal_status": h.renewal_status,
                     "notes": h.notes,
+                    "expected_issuers": h.expected_issuers,
                     "added_at": h.added_at.isoformat(),
                 }
                 for h in page_hosts
@@ -219,3 +220,75 @@ async def api_set_host_tags(
     from cert_watch.tags import parse_tags
 
     return JSONResponse(content={"id": host_id, "tags": parse_tags(tags)})
+
+
+@router.get("/api/hosts/{host_id}/issuers")
+def api_get_host_issuers(
+    host_id: IdParam, request: Request, _auth: str = Depends(require_auth)
+) -> JSONResponse:
+    """Return the expected-issuer CN allowlist for a host (WI-007)."""
+    db = _db_path(request)
+    repo = SqliteHostRepository(db)
+    host = repo.get(host_id)
+    if host is None:
+        return JSONResponse(content={"error": "host not found"}, status_code=404)
+    issuers = repo.get_expected_issuers(host_id)
+    return JSONResponse(content={"id": host_id, "expected_issuers": issuers})
+
+
+@router.put("/api/hosts/{host_id}/issuers")
+async def api_set_host_issuers(
+    host_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+) -> JSONResponse:
+    """Update the expected-issuer CN allowlist for a host (WI-007).
+
+    Accepts ``{"issuers": ["R3", "R4"]}`` or ``{"issuers": "R3,R4"}``.
+    Admin-gated because mis-configuration suppresses mis-issuance alerts.
+    """
+    db = _db_path(request)
+    repo = SqliteHostRepository(db)
+    host = repo.get(host_id)
+    if host is None:
+        return JSONResponse(content={"error": "host not found"}, status_code=404)
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+
+    raw = body.get("issuers")
+    if isinstance(raw, list):
+        if not all(isinstance(i, str) for i in raw):
+            return JSONResponse(
+                content={"error": "issuers must be a list of strings"}, status_code=400
+            )
+        issuers_list = [i.strip() for i in raw if i.strip()]
+    elif isinstance(raw, str):
+        issuers_list = [i.strip() for i in raw.split(",") if i.strip()]
+    else:
+        return JSONResponse(
+            content={"error": "issuers must be a string or list of strings"}, status_code=400
+        )
+
+    issuers_csv = ",".join(issuers_list)
+    if len(issuers_csv) > 2000:
+        return JSONResponse(
+            content={"error": "expected issuers too long (max 2000 chars)"}, status_code=400
+        )
+    if len(issuers_list) > 50:
+        return JSONResponse(
+            content={"error": "too many issuers (max 50)"}, status_code=400
+        )
+    repo.set_expected_issuers(host_id, issuers_csv)
+    # Invalidate CT reconciliation cache so the change takes effect immediately
+    from cert_watch.ct_monitor import invalidate_ct_cache
+    invalidate_ct_cache()
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.set_expected_issuers",
+        target_type="host",
+        target_id=host_id,
+        detail={"expected_issuers": issuers_list},
+        source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={"id": host_id, "expected_issuers": issuers_list})
