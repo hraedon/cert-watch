@@ -298,6 +298,25 @@ class SqliteAlertRepository(AlertRepository):
             ).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
+    def list_pending_filtered(
+        self,
+        alert_type: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[Alert]:
+        conditions: list[str] = ["status = 'pending'"]
+        params: list = []
+        if alert_type:
+            conditions.append("alert_type = ?")
+            params.append(alert_type)
+        where = " AND ".join(conditions)
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                f"SELECT * FROM alerts WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
+                params + [limit, offset],
+            ).fetchall()
+        return [self._row_to_alert(r) for r in rows]
+
     def mark_sent(self, alert_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(

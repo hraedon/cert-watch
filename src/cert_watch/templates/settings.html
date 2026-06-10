@@ -27,6 +27,8 @@
       <a href="/settings?tab=auth" class="cw-tab {% if tab == 'auth' %}active{% endif %}">Authentication</a>
       <a href="/settings?tab=smtp" class="cw-tab {% if tab == 'smtp' %}active{% endif %}">SMTP</a>
       <a href="/settings?tab=alerts" class="cw-tab {% if tab == 'alerts' %}active{% endif %}">Alerts</a>
+      <a href="/settings/events" class="cw-tab {% if tab == 'events' %}active{% endif %}">Events</a>
+      <a href="/settings?tab=policy" class="cw-tab {% if tab == 'policy' %}active{% endif %}">Policy</a>
       <a href="/settings/roles" class="cw-tab {% if tab == 'roles' %}active{% endif %}">Roles</a>
       <a href="/settings/users" class="cw-tab {% if tab == 'users' %}active{% endif %}">Users</a>
       <a href="/settings?tab=api-keys" class="cw-tab {% if tab == 'api-keys' %}active{% endif %}" data-testid="settings-api-keys-link">API keys</a>
@@ -364,6 +366,97 @@
 
         <button type="submit" class="cw-btn primary">Save alert settings</button>
       </form>
+    </div>
+
+    <!-- Policy tab -->
+    <div class="cw-tab-panel {% if tab == 'policy' %}active{% endif %}" id="tab-policy">
+      {% if policy_set %}
+      <form method="post" action="/settings/policy">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="default_severity" value="{{ policy_set.default_severity }}">
+
+        <div class="cw-mb-16">
+          <h3 class="cw-heading-3">Certificate Policy Rules</h3>
+          <p class="cw-muted">Define compliance rules for certificate posture. Violations of <strong>critical</strong> or <strong>warning</strong> rules generate alerts; <strong>info</strong> rules are advisory only. Env vars always override GUI values.</p>
+        </div>
+
+        <table class="cw-table">
+          <thead>
+            <tr>
+              <th>Rule</th>
+              <th>Enabled</th>
+              <th>Severity</th>
+              <th>Parameters</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for rule in policy_set.rules %}
+            <tr>
+              <td>
+                <input type="hidden" name="rule_id" value="{{ rule.rule_id }}">
+                <input type="hidden" name="category_{{ rule.rule_id }}" value="{{ rule.category }}">
+                <strong>{{ rule.rule_id | replace('_', ' ') | title }}</strong>
+                <div class="cw-muted cw-fz-11">{{ rule.category }}</div>
+              </td>
+              <td>
+                <label class="cw-toggle">
+                  <input type="checkbox" name="enabled_{{ rule.rule_id }}" value="1"
+                         {% if rule.enabled %}checked{% endif %}>
+                  <span class="cw-toggle-slider"></span>
+                </label>
+              </td>
+              <td>
+                <select class="cw-input cw-w-auto" name="severity_{{ rule.rule_id }}">
+                  <option value="critical" {% if rule.severity == 'critical' %}selected{% endif %}>Critical</option>
+                  <option value="warning" {% if rule.severity == 'warning' %}selected{% endif %}>Warning</option>
+                  <option value="info" {% if rule.severity == 'info' %}selected{% endif %}>Info</option>
+                </select>
+              </td>
+              <td>
+                {% if rule.rule_id == 'key_size_rsa' %}
+                  <label class="cw-label cw-fz-11">Min RSA bits</label>
+                  <input class="cw-input cw-w-auto" type="number" name="min_rsa_{{ rule.rule_id }}"
+                         value="{{ rule.parameters.get('min_rsa', 2048) }}" min="1024" step="256">
+                {% elif rule.rule_id == 'key_size_ec' %}
+                  <label class="cw-label cw-fz-11">Allowed curves (comma-separated)</label>
+                  <input class="cw-input" type="text" name="allowed_curves_{{ rule.rule_id }}"
+                         value="{{ rule.parameters.get('allowed_curves', []) | join(', ') }}"
+                         placeholder="secp256r1, secp384r1, secp521r1">
+                {% elif rule.rule_id == 'tls_version' %}
+                  <label class="cw-label cw-fz-11">Min TLS version</label>
+                  <select class="cw-input cw-w-auto" name="min_tls_{{ rule.rule_id }}">
+                    <option value="1.2" {% if rule.parameters.get('min_tls', '1.2') == '1.2' %}selected{% endif %}>TLS 1.2</option>
+                    <option value="1.3" {% if rule.parameters.get('min_tls') == '1.3' %}selected{% endif %}>TLS 1.3</option>
+                  </select>
+                {% elif rule.rule_id == 'validity_max_days' %}
+                  <label class="cw-label cw-fz-11">Max days</label>
+                  <input class="cw-input cw-w-auto" type="number" name="max_days_{{ rule.rule_id }}"
+                         value="{{ rule.parameters.get('max_days', 398) }}" min="30" max="3650">
+                {% elif rule.rule_id == 'issuer_allowlist' %}
+                  <label class="cw-label cw-fz-11">Allowed issuers (comma-separated)</label>
+                  <input class="cw-input" type="text" name="allowed_issuers_{{ rule.rule_id }}"
+                         value="{{ rule.parameters.get('allowed_issuers', []) | join(', ') }}"
+                         placeholder="Let's Encrypt Authority X3, DigiCert">
+                {% else %}
+                  <span class="cw-muted">—</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+
+        <div class="cw-mt-24 cw-flex cw-gap-8">
+          <button type="submit" class="cw-btn primary">Save policy settings</button>
+        </div>
+      </form>
+      {% else %}
+      <p class="cw-muted">No policy rules configured. Save to create defaults.</p>
+      <form method="post" action="/settings/policy">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cw-btn primary">Initialize default policy</button>
+      </form>
+      {% endif %}
     </div>
 
     <!-- Roles tab -->

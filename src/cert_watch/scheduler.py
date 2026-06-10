@@ -256,6 +256,24 @@ def run_scan_now(
                         error_message=getattr(result, "error_message", "unknown"),
                     ),
                 )
+                try:
+                    from cert_watch.events import Event, emit_event
+
+                    emit_event(
+                        Event(
+                            event_type="scan_failed",
+                            timestamp=datetime.now(UTC),
+                            payload={
+                                "hostname": hostname,
+                                "port": port,
+                                "error_message": getattr(result, "error_message", "unknown"),
+                            },
+                            source="scheduler",
+                        ),
+                        db_path,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             continue
 
         if store_fn is not None:

@@ -30,7 +30,7 @@ class PostureResult:
 
 # Worst-grade ordering: higher value = worse grade.
 # Used for grade-drop detection and worst-grade aggregation.
-GRADE_WORST_ORDER: dict[str, int] = {"A+": 0, "A": 0, "B": 1, "C": 2, "F": 3}
+GRADE_WORST_ORDER: dict[str, int] = {"A+": 0, "A": 1, "B": 2, "C": 3, "F": 4}
 
 
 def tls_version_meets_1_2(protocol_version: str | None) -> bool:

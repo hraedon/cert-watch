@@ -45,6 +45,9 @@ from cert_watch.migrations.m0019_users_roles import (
 from cert_watch.migrations.m0020_alert_hostname_subject import (
     upgrade as alert_hostname_subject_upgrade,
 )
+from cert_watch.migrations.m0021_event_log import (
+    upgrade as event_log_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -101,4 +104,8 @@ runner.register(
 runner.register(
     "0020", "add hostname and subject columns to alerts",
     alert_hostname_subject_upgrade,
+)
+runner.register(
+    "0021", "add event_log table for event streaming (Plan 044)",
+    event_log_upgrade,
 )

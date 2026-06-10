@@ -33,7 +33,7 @@ class AlertAdapter(Protocol):
 def _status_color(alert_type: str) -> int:
     if alert_type == "expired":
         return 0xCC0000
-    if alert_type in ("expiry_warning", "drift", "renewal_stalled"):
+    if alert_type in ("expiry_warning", "drift", "renewal_stalled", "policy_violation"):
         return 0xE0A800
     return 0x808080
 
@@ -41,7 +41,7 @@ def _status_color(alert_type: str) -> int:
 def _status_urgency(alert_type: str) -> str:
     if alert_type == "expired":
         return "attention"
-    if alert_type in ("expiry_warning", "renewal_stalled"):
+    if alert_type in ("expiry_warning", "renewal_stalled", "policy_violation"):
         return "warning"
     return "default"
 
@@ -56,6 +56,8 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
     if alert_type == "mis_issuance":
         return "error"
     if alert_type == "renewal_stalled":
+        return "warning"
+    if alert_type == "policy_violation":
         return "warning"
     return "info"
 
@@ -72,6 +74,7 @@ _ALERT_NAMES = {
     "mis_issuance": "CertMisIssued",
     "renewal_stalled": "CertRenewalStalled",
     "scan_failure": "CertScanFailure",
+    "policy_violation": "CertPolicyViolation",
 }
 
 

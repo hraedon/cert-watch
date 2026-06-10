@@ -8,6 +8,7 @@ a ``routes/api/`` package with concern-specific modules:
 - ``alerts`` — alerts list, alert groups CRUD, cert routing
 - ``reports`` — CSV/JSON exports, inventory, expiring, compliance reports
 - ``insights`` — CT reconciliation, pivot entries, trends, calendar, webhook test
+- ``policy`` — policy set CRUD, policy violations export
 
 All modules are aggregated here into a single router so the rest of the app
 continues to mount ``routes.api.router`` unchanged.
@@ -19,9 +20,11 @@ from fastapi import APIRouter
 
 from cert_watch.routes.api.alerts import router as alerts_router
 from cert_watch.routes.api.certificates import router as certificates_router
+from cert_watch.routes.api.events import router as events_router
 from cert_watch.routes.api.hosts import router as hosts_router
 from cert_watch.routes.api.insights import router as insights_router
 from cert_watch.routes.api.keys import router as keys_router
+from cert_watch.routes.api.policy import router as policy_router
 from cert_watch.routes.api.reports import router as reports_router
 
 router = APIRouter()
@@ -34,3 +37,5 @@ router.include_router(alerts_router)
 router.include_router(reports_router)
 router.include_router(insights_router)
 router.include_router(keys_router)
+router.include_router(events_router)
+router.include_router(policy_router)
