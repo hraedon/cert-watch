@@ -15,8 +15,9 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
 .DESCRIPTION
     Creates the data directory, a virtualenv, installs cert-watch into it, and
     generates persistent signing keys (so sessions survive restarts/recycles).
-    It does NOT configure IIS itself -- see deploy\iis\README.md for the site,
-    binding, and app-pool steps. Re-running is safe: existing secrets are kept.
+    When -ConfigureIIS is passed, the script also creates/updates the IIS site,
+    app pool, web.config, and TLS binding. Re-running is safe: existing secrets
+    are kept and IIS steps are idempotent.
 
     When the detected Python is user-scoped (the default with the Python Install
     Manager), the script copies it to a shared location under InstallDir so the
@@ -28,15 +29,34 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
     Default: C:\ProgramData\cert-watch
 
 .PARAMETER AppPool
-    Optional IIS application pool name (e.g. "cert-watch"). When given, the pool
-    identity ("IIS AppPool\<name>") is granted modify on the data dir, read on
-    the secrets dir, and execute on the shared Python install.
+    IIS application pool name. Default: cert-watch
+    The pool identity ("IIS AppPool\<name>") is granted modify on the data dir,
+    read on the secrets dir, and execute on the shared Python install.
+
+.PARAMETER ConfigureIIS
+    When passed, the script creates/updates the IIS site, app pool, web.config,
+    and TLS binding. Omit to skip IIS setup.
+
+.PARAMETER SitePath
+    Physical path for the IIS site (where web.config lives).
+    Default: C:\inetpub\cert-watch
+
+.PARAMETER HostName
+    Hostname for the HTTPS binding. Default: empty (any hostname).
+
+.PARAMETER TlsCertThumbprint
+    Thumbprint of the TLS certificate to bind to the HTTPS endpoint.
+    When omitted, the binding is created without a certificate (a warning is
+    written).
 
 .PARAMETER WithAuthExtras
     Also install the LDAP + OAuth optional dependencies.
 
 .EXAMPLE
-    powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -AppPool cert-watch -WithAuthExtras
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -WithAuthExtras
+
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -TlsCertThumbprint "ABCDEF123456..."
 
 .NOTES
     This script is not signed. If your execution policy blocks unsigned scripts,
@@ -46,7 +66,11 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
 [CmdletBinding()]
 param(
     [string]$InstallDir = "C:\ProgramData\cert-watch",
-    [string]$AppPool,
+    [string]$AppPool = "cert-watch",
+    [switch]$ConfigureIIS,
+    [string]$SitePath = "C:\inetpub\cert-watch",
+    [string]$HostName = "",
+    [string]$TlsCertThumbprint = "",
     [switch]$WithAuthExtras
 )
 
@@ -244,26 +268,154 @@ foreach ($name in @("auth_secret", "csrf_secret")) {
 Write-Host "Securing $secrets ..."
 icacls $secrets /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" | Out-Null  # Administrators, SYSTEM
 
-if ($AppPool) {
-    $identity = "IIS AppPool\$AppPool"
-    Write-Host "Granting $identity access (data: modify, secrets: read, python: read+execute) ..."
-    icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
-    icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
-    # The shared Python install lives under InstallDir, which already has
-    # modify access.  Explicitly set RX on the python subdir to ensure
-    # execute is inherited even if the parent's modify ACE is tightened later.
-    if (Test-Path $sharedPyDir) {
-        icacls $sharedPyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+$identity = "IIS AppPool\$AppPool"
+Write-Host "Granting $identity access (data: modify, secrets: read, python: read+execute) ..."
+icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
+icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
+# The shared Python install lives under InstallDir, which already has
+# modify access.  Explicitly set RX on the python subdir to ensure
+# execute is inherited even if the parent's modify ACE is tightened later.
+if (Test-Path $sharedPyDir) {
+    icacls $sharedPyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+}
+
+$script:iisActuallyConfigured = $false
+
+# --- IIS configuration ---
+if ($ConfigureIIS) {
+    Write-Host ""
+    Write-Host "Configuring IIS ..."
+
+    # Check prerequisites
+    if (-not (Get-Module -ListAvailable WebAdministration -ErrorAction SilentlyContinue)) {
+        Write-Host "  [skip] WebAdministration module not available; skipping IIS config."
+        Write-Host "  See deploy\iis\README.md for manual IIS setup."
+    } else {
+        Import-Module WebAdministration
+
+        # 1. Create site directory and web.config
+        if (-not (Test-Path $SitePath)) {
+            Write-Host "  Creating site directory $SitePath ..."
+            New-Item -ItemType Directory -Force -Path $SitePath | Out-Null
+        } else {
+            Write-Host "  Site directory exists: $SitePath"
+        }
+
+        $webConfigSrc = Join-Path $repoRoot "deploy\iis\web.config"
+        $webConfigDst = Join-Path $SitePath "web.config"
+        Write-Host "  Copying web.config ..."
+        Copy-Item $webConfigSrc $webConfigDst -Force
+
+        # Update paths in web.config to reflect InstallDir
+        $defaultDir = "C:\ProgramData\cert-watch"
+        $wcContent = Get-Content $webConfigDst -Raw
+        if ($InstallDir -ne $defaultDir) {
+            $wcContent = $wcContent.Replace($defaultDir, $InstallDir)
+        }
+        # Validate the result is well-formed XML before writing
+        try {
+            $null = [xml]$wcContent
+        } catch {
+            throw "web.config rewrite produced invalid XML"
+        }
+        # Write without BOM (Set-Content -Encoding UTF8 emits BOM on PS 5.1)
+        [System.IO.File]::WriteAllText($webConfigDst, $wcContent, (New-Object System.Text.UTF8Encoding $false))
+        Write-Host "    Updated paths to $InstallDir"
+
+        # 2. Unlock handlers section
+        Write-Host "  Unlocking system.webServer/handlers ..."
+        & "$env:windir\system32\inetsrv\appcmd.exe" unlock config -section:system.webServer/handlers
+        if ($LASTEXITCODE -ne 0) {
+            throw "Failed to unlock system.webServer/handlers. Run manually: appcmd unlock config -section:system.webServer/handlers"
+        }
+
+        # 3. Create app pool
+        $poolPath = "IIS:\AppPools\$AppPool"
+        $existingPool = Get-Item $poolPath -ErrorAction SilentlyContinue
+        if (-not $existingPool) {
+            Write-Host "  Creating app pool `"$AppPool`" ..."
+            New-Item $poolPath | Out-Null
+        } else {
+            Write-Host "  App pool `"$AppPool`" already exists."
+        }
+        Set-ItemProperty $poolPath -Name managedRuntimeVersion -Value ""
+        Set-ItemProperty $poolPath -Name startMode -Value "AlwaysRunning"
+        Set-ItemProperty $poolPath -Name processModel.idleTimeout -Value "00:00:00"
+        Set-ItemProperty $poolPath -Name recycling.periodicRestart.time -Value "00:00:00"
+        Write-Host "    App pool configured (No Managed Code, AlwaysRunning, no idle timeout, no periodic restart)."
+
+        # 4. Create IIS site
+        $siteName = "cert-watch"
+        $sitePathIIS = "IIS:\Sites\$siteName"
+        $existingSite = Get-Item $sitePathIIS -ErrorAction SilentlyContinue
+        if (-not $existingSite) {
+            Write-Host "  Creating IIS site `"$siteName`" ..."
+            $bindingInfo = "*:443:$HostName"
+            New-Item $sitePathIIS -bindings @{protocol="https"; bindingInformation=$bindingInfo} -physicalPath $SitePath | Out-Null
+            Set-ItemProperty $sitePathIIS -Name applicationPool -Value $AppPool
+        } else {
+            Write-Host "  IIS site `"$siteName`" already exists."
+            # Ensure pool and path are up to date
+            Set-ItemProperty $sitePathIIS -Name applicationPool -Value $AppPool
+            Set-ItemProperty $sitePathIIS -Name physicalPath -Value $SitePath
+        }
+
+        # 5. TLS cert binding (idempotent: delete first, then add, then verify)
+        if ($TlsCertThumbprint) {
+            Write-Host "  Binding TLS certificate $TlsCertThumbprint ..."
+            $bindHost = "0.0.0.0"
+            if ($HostName) {
+                $bindHost = $HostName
+            }
+            $bindPort = "443"
+            $appId = "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
+            # Remove any existing binding first (ignore errors)
+            if ($HostName) {
+                & netsh http delete sslcert hostnameport="$HostName`:$bindPort" 2>$null
+            } else {
+                & netsh http delete sslcert ipport="$bindHost`:$bindPort" 2>$null
+            }
+            # Add the binding
+            if ($HostName) {
+                & netsh http add sslcert hostnameport="$HostName`:$bindPort" certhash="$TlsCertThumbprint" appid="$appId"
+            } else {
+                & netsh http add sslcert ipport="$bindHost`:$bindPort" certhash="$TlsCertThumbprint" appid="$appId"
+            }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "    [warn] netsh add sslcert returned exit code $LASTEXITCODE"
+            } else {
+                # Verify the binding
+                if ($HostName) {
+                    & netsh http show sslcert hostnameport="$HostName`:$bindPort"
+                } else {
+                    & netsh http show sslcert ipport="$bindHost`:$bindPort"
+                }
+                Write-Host "    TLS certificate bound."
+            }
+        } else {
+            Write-Host "  [warn] No -TlsCertThumbprint provided. HTTPS binding exists but no certificate is assigned."
+            Write-Host ('         Assign a certificate via IIS Manager or re-run with -TlsCertThumbprint ' + '.')
+        }
+
+        # 6. Grant app pool identity read access to site path
+        Write-Host "  Granting $identity read access to $SitePath ..."
+        icacls $SitePath /grant "${identity}:(OI)(CI)R" | Out-Null
+
+        $script:iisActuallyConfigured = $true
     }
 }
 
 Write-Host ""
 Write-Host "Done. cert-watch installed to $venv"
 Write-Host "Data dir: $InstallDir   Secrets: $secrets"
-Write-Host ""
-Write-Host "Next: configure IIS -- see deploy\iis\README.md"
-Write-Host "  HttpPlatformHandler: copy deploy\iis\web.config into the site path."
-Write-Host "  Reverse proxy:       run as a service + deploy\iis\web.config.reverse-proxy."
+if ($script:iisActuallyConfigured) {
+    Write-Host "IIS site: $SitePath   App pool: $AppPool"
+    if ($HostName) {
+        Write-Host "Browse: https://$HostName/"
+    } else {
+        Write-Host "Browse: https://<hostname>/"
+    }
+}
 Write-Host ""
 Write-Host "On first run (behind IIS, TRUST_PROXY=1) cert-watch auto-provisions an"
 Write-Host "admin. Get the one-time password from:"

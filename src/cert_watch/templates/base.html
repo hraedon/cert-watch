@@ -31,6 +31,9 @@
         <a href="/scan-history" data-testid="nav-scans" {% if active_page == 'scans' %}class="active"{% endif %}>Scan history</a>
         <a href="/insights" data-testid="nav-insights" {% if active_page == 'insights' %}class="active"{% endif %}>Insights</a>
         <a href="/discover" data-testid="nav-discover" {% if active_page == 'discover' %}class="active"{% endif %}>Discover</a>
+        {% if auth_user %}
+        <a href="/team" data-testid="nav-team" {% if active_page == 'team' %}class="active"{% endif %}>Team</a>
+        {% endif %}
         <a href="/audit" data-testid="nav-audit" {% if active_page == 'audit' %}class="active"{% endif %}>Audit log</a>
         {% if is_admin %}
         <a href="/settings" data-testid="nav-settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
