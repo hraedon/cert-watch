@@ -798,15 +798,14 @@ async def require_admin_form(request: Request) -> RedirectResponse | None:
     # ``admin_users`` list is ignored. Without a role map we fall back to
     # the legacy list (and an unset/empty list leaves the route open, the
     # documented backward-compat contract).
+    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
     if role_map:
-        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
         if ctx is not None and ctx.is_admin:
             return None
         return RedirectResponse(
             url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
             status_code=303,
         )
-    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
     admin_ok = ctx is not None and ctx.is_admin
     if not admin_ok:
         admin_list = getattr(settings, "admin_users", None) if settings else None
@@ -879,8 +878,8 @@ async def require_admin_write_form(request: Request) -> RedirectResponse | None:
     # ``admin_users`` list is ignored. Without a role map we fall back to
     # the legacy list (and an unset/empty list leaves the route open, the
     # documented backward-compat contract).
+    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
     if role_map:
-        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
         if ctx is None or not ctx.is_admin:
             return RedirectResponse(
                 url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
@@ -888,7 +887,6 @@ async def require_admin_write_form(request: Request) -> RedirectResponse | None:
             )
     else:
         # Legacy fallback: settings.admin_users list (no role map → RBAC off)
-        ctx: AuthContext | None = getattr(request.state, "auth_context", None)
         admin_ok = ctx is not None and ctx.is_admin
         if not admin_ok:
             admin_list = getattr(settings, "admin_users", None) if settings else None

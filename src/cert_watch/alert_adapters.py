@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -52,6 +53,8 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
         if threshold_days is not None and threshold_days <= 3:
             return "error"
         return "warning"
+    if alert_type == "mis_issuance":
+        return "error"
     if alert_type == "renewal_stalled":
         return "warning"
     return "info"
@@ -60,6 +63,20 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
 def _pd_dedup_key(cert_id: str, alert_type: str, threshold_days: int | None) -> str:
     raw = f"{cert_id}:{alert_type}:{threshold_days}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
+
+
+_ALERT_NAMES = {
+    "expired": "CertExpired",
+    "expiry_warning": "CertExpiry",
+    "drift": "CertDrift",
+    "mis_issuance": "CertMisIssued",
+    "renewal_stalled": "CertRenewalStalled",
+    "scan_failure": "CertScanFailure",
+}
+
+
+def _alertname(alert_type: str) -> str:
+    return _ALERT_NAMES.get(alert_type, "CertAlert")
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +261,99 @@ class PagerDutyAdapter:
         )
 
 
+def _slack_color(alert_type: str) -> str:
+    if alert_type == "expired":
+        return "danger"
+    if alert_type in ("expiry_warning", "renewal_stalled"):
+        return "warning"
+    return "good"
+
+
+class SlackAdapter:
+    kind = "slack"
+
+    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
+        color = _slack_color(alert.alert_type)
+        threshold_str = f"{alert.threshold_days}d" if alert.threshold_days is not None else "—"
+        fields = [
+            {"title": "Expires", "value": threshold_str, "short": True},
+            {"title": "Urgency", "value": alert.alert_type, "short": True},
+        ]
+        if alert.cert_id:
+            fields.append({"title": "Cert ID", "value": str(alert.cert_id), "short": False})
+        attachment = {
+            "color": color,
+            "title": f"cert-watch: {alert.alert_type.replace('_', ' ').title()}",
+            "text": alert.message,
+            "fields": fields,
+            "footer": "cert-watch",
+        }
+        payload = json.dumps({"attachments": [attachment]})
+        headers = {"Content-Type": "application/json", **config.headers}
+        return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
+
+
+class AlertmanagerAdapter:
+    kind = "alertmanager"
+
+    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
+        now = datetime.now(UTC).isoformat()
+        alert_entry = {
+            "status": "firing",
+            "labels": {
+                "alertname": _alertname(alert.alert_type),
+                "host": alert.hostname or str(alert.cert_id),
+                "cert_subject": alert.subject or str(alert.cert_id),
+                "urgency": alert.alert_type,
+            },
+            "annotations": {
+                "summary": alert.message,
+                "expires": str(alert.threshold_days) if alert.threshold_days is not None else "",
+            },
+            "startsAt": now,
+            "generatorURL": config.url,
+        }
+        payload = json.dumps({"alerts": [alert_entry]})
+        headers = {"Content-Type": "application/json", **config.headers}
+        return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
+
+    def build_resolve(
+        self,
+        cert_id: str,
+        alert_type: str,
+        threshold_days: int | None,
+        config: WebhookConfig,
+        summary: str = "",
+        hostname: str = "",
+        subject: str = "",
+        alert_created_at: datetime | None = None,
+    ) -> AlertRequest:
+        if not summary:
+            summary = f"cert-watch: certificate {cert_id} renewed, {alert_type} resolved"
+        now = datetime.now(UTC)
+        starts_at = (alert_created_at or now).isoformat()
+        ends_at = now.isoformat()
+        alert_entry = {
+            "status": "resolved",
+            "labels": {
+                "alertname": _alertname(alert_type),
+                "host": hostname or str(cert_id),
+                "cert_subject": subject or str(cert_id),
+                "urgency": alert_type,
+            },
+            "annotations": {
+                "summary": summary,
+                "expires": str(threshold_days) if threshold_days is not None else "",
+            },
+            "startsAt": starts_at,
+            "endsAt": ends_at,
+            "generatorURL": config.url,
+        }
+        payload = json.dumps({"alerts": [alert_entry]})
+        headers = {"Content-Type": "application/json", **config.headers}
+        return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
+
+
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
@@ -253,6 +363,8 @@ _ADAPTERS: dict[str, AlertAdapter] = {
     "discord": DiscordAdapter(),
     "teams": TeamsAdapter(),
     "pagerduty": PagerDutyAdapter(),
+    "slack": SlackAdapter(),
+    "alertmanager": AlertmanagerAdapter(),
 }
 
 

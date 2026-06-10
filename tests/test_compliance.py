@@ -171,6 +171,136 @@ class TestComplianceAggregation:
         assert m.pct == 30.0
 
 
+def _seed_fleet_with_revocation(db_path: str | Path) -> list[str]:
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import init_schema, store_scan_posture
+    from tests._helpers import seed_certificate
+
+    init_schema(db_path)
+    cert_ids = []
+    now = datetime.now(UTC)
+
+    entries = [
+        ("rev-host-a.example.com", 443, "A",
+         [{"check": "ocsp_endpoint", "status": "pass",
+           "message": "OCSP responder reachable at http://ocsp.test"},
+          {"check": "crl_endpoint", "status": "pass",
+           "message": "CRL endpoint reachable at http://crl.test/ca.crl"}],
+         "TLSv1.3", True, 365),
+        ("rev-host-b.example.com", 443, "A",
+         [{"check": "ocsp_endpoint", "status": "warn",
+           "message": "OCSP responder unreachable at http://ocsp.test"},
+          {"check": "crl_endpoint", "status": "pass",
+           "message": "CRL endpoint reachable at http://crl.test/ca.crl"}],
+         "TLSv1.2", True, 200),
+        ("rev-host-c.example.com", 443, "B",
+         [{"check": "ocsp_endpoint", "status": "warn",
+           "message": "OCSP responder unreachable"},
+          {"check": "crl_endpoint", "status": "warn",
+           "message": "CRL endpoint unreachable"}],
+         "TLSv1.2", False, 90),
+    ]
+
+    for hostname, port, grade, findings, proto, hsts_val, days_valid in entries:
+        cid = f"cert-{hostname.split('.')[0]}"
+        cert = Certificate(
+            subject=f"CN={hostname}",
+            issuer="CN=Test CA",
+            not_before=now - timedelta(days=30),
+            not_after=now + timedelta(days=days_valid),
+            san_dns_names=[],
+            fingerprint_sha256=cid.replace("cert-", "fp-"),
+            raw_der=b"\x00",
+            is_leaf=True,
+            notes="",
+            source="scanned",
+        )
+        seed_certificate(
+            db_path, cert,
+            cert_id=cid,
+            hostname=hostname,
+            port=port,
+            source="scanned",
+            chain_valid=True,
+        )
+        store_scan_posture(
+            db_path, cid, hostname, port, grade, findings,
+            protocol_version=proto, hsts=hsts_val,
+        )
+        cert_ids.append(cid)
+    return cert_ids
+
+
+class TestRevocationMetric:
+    def test_revocation_metric_with_data(self, tmp_path):
+        db = tmp_path / "test.sqlite3"
+        _seed_fleet_with_revocation(str(db))
+        report = build_compliance_report(str(db), signing_key="key")
+        metrics = {m.label: m for m in report.compliance_metrics}
+        revoc = metrics["Revocation endpoint reachable"]
+        assert revoc.collected is True
+        assert revoc.total == 3
+        assert revoc.passing == 2
+
+    def test_revocation_metric_not_collected(self, tmp_path):
+        db = tmp_path / "test.sqlite3"
+        _seed_fleet(str(db))
+        report = build_compliance_report(str(db), signing_key="key")
+        metrics = {m.label: m for m in report.compliance_metrics}
+        revoc = metrics["Revocation endpoint reachable"]
+        assert revoc.collected is False
+        assert revoc.display == "Not collected"
+
+    def test_revocation_metric_all_unreachable(self, tmp_path):
+        from datetime import UTC, datetime, timedelta
+
+        from cert_watch.certificate_model import Certificate
+        from cert_watch.database import init_schema, store_scan_posture
+        from tests._helpers import seed_certificate
+
+        db = tmp_path / "test.sqlite3"
+        init_schema(str(db))
+        now = datetime.now(UTC)
+        findings = [
+            {"check": "ocsp_endpoint", "status": "warn",
+             "message": "OCSP responder unreachable"},
+            {"check": "crl_endpoint", "status": "warn",
+             "message": "CRL endpoint unreachable"},
+        ]
+        cert = Certificate(
+            subject="CN=bad.example.com", issuer="CN=Test CA",
+            not_before=now - timedelta(days=30),
+            not_after=now + timedelta(days=100),
+            san_dns_names=[], fingerprint_sha256="fp-bad",
+            raw_der=b"\x00", is_leaf=True, notes="", source="scanned",
+        )
+        seed_certificate(str(db), cert, cert_id="cert-bad",
+                         hostname="bad.example.com", port=443,
+                         source="scanned", chain_valid=True)
+        store_scan_posture(str(db), "cert-bad", "bad.example.com", 443,
+                           "B", findings, protocol_version="TLSv1.2", hsts=False)
+        report = build_compliance_report(str(db), signing_key="key")
+        metrics = {m.label: m for m in report.compliance_metrics}
+        revoc = metrics["Revocation endpoint reachable"]
+        assert revoc.collected is True
+        assert revoc.total == 1
+        assert revoc.passing == 0
+
+    def test_revocation_metric_in_dict_and_csv(self, tmp_path):
+        db = tmp_path / "test.sqlite3"
+        _seed_fleet_with_revocation(str(db))
+        report = build_compliance_report(str(db), signing_key="key")
+        d = report_to_dict(report)
+        labels = [m["label"] for m in d["compliance_metrics"]]
+        assert "Revocation endpoint reachable" in labels
+
+        rows = report_to_csv_rows(report)
+        flat = [cell for row in rows for cell in row]
+        assert "Revocation endpoint reachable" in flat
+
+
 class TestSigning:
     def test_sign_and_verify_roundtrip(self):
         report = ComplianceReport(
@@ -295,8 +425,8 @@ class TestComplianceRoutes:
         data = r.json()
         assert data["total_certs"] == 5
         assert data["fleet_grade"] == "F"
-        # SHA-1, strong key, TLS, HSTS, plus the CAA "Not collected" row.
-        assert len(data["compliance_metrics"]) == 5
+        # SHA-1, strong key, TLS, HSTS, CAA, plus revocation-endpoint metric.
+        assert len(data["compliance_metrics"]) == 6
 
     def test_compliance_csv(self, reload_app):
         app_mod = reload_app()

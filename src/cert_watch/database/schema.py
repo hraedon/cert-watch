@@ -47,7 +47,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     extra_recipients TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     sent_at TEXT,
-    error_message TEXT
+    error_message TEXT,
+    hostname TEXT NOT NULL DEFAULT '',
+    subject TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS scan_history (

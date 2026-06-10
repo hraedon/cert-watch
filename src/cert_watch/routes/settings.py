@@ -10,6 +10,7 @@ import os
 import re
 import ssl
 from pathlib import Path
+from urllib.parse import quote
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -17,8 +18,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.auth import NoAuthProvider
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
+from cert_watch.database.api_keys import ApiKeyEntry
 from cert_watch.middleware import (
     get_auth_context,
     get_csrf_context,
@@ -63,29 +67,32 @@ def _local_admin_configured(request: Request) -> bool:
     return bool(kv_get(db, "local_admin_user"))
 
 
-def _require_admin(request: Request) -> RedirectResponse | JSONResponse | None:
-    """Return redirect to /login if not authenticated, 403 if not admin, or None if OK.
-
-    Uses AuthContext.is_admin (RBAC-aware) when available, falling back to the
-    legacy settings.admin_users list for backward compatibility.
-    """
-    from cert_watch.auth import NoAuthProvider
+def _require_admin(request: Request) -> RedirectResponse | None:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
-        return None  # No auth configured — allow access
+        return None
     user = request.scope.get("auth_user")
     if not user:
         return RedirectResponse(url="/login", status_code=303)
-    # RBAC-aware check: AuthContext is set by the auth middleware pipeline
-    ctx = getattr(request.state, "auth_context", None)
-    if ctx is not None and ctx.is_admin:
-        return None
-    # Legacy fallback: settings.admin_users list
     settings = getattr(request.app.state, "settings", None)
-    if settings and settings.admin_users and user not in settings.admin_users:
-        return JSONResponse(
-            content={"error": "forbidden: admin access required"},
-            status_code=403,
+    role_map = getattr(settings, "role_map", {}) if settings else {}
+    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+    if role_map:
+        if ctx is not None and ctx.is_admin:
+            return None
+        return RedirectResponse(
+            url=f"/settings?error={quote('admin required')}",
+            status_code=303,
+        )
+    admin_ok = ctx is not None and ctx.is_admin
+    if not admin_ok:
+        admin_list = getattr(settings, "admin_users", None) if settings else None
+        if not admin_list or user in admin_list:
+            admin_ok = True
+    if not admin_ok:
+        return RedirectResponse(
+            url=f"/settings?error={quote('admin required')}",
+            status_code=303,
         )
     return None
 
@@ -231,7 +238,7 @@ def settings_page(
         ldap_role_map = {}
 
     # BC-136: API keys as a settings tab — preload data when active
-    api_keys_data: list[dict] = []
+    api_keys_data: list[ApiKeyEntry] = []
     if tab == "api-keys":
         from cert_watch.database import SqliteApiKeyRepository
         api_keys_data = SqliteApiKeyRepository(db).list_keys()
@@ -1094,7 +1101,7 @@ async def test_smtp_connection(
 
 
 @router.get("/settings/roles", response_class=HTMLResponse, response_model=None)
-def roles_page(request: Request) -> HTMLResponse | RedirectResponse | JSONResponse:
+def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
         return redirect_resp
@@ -1162,7 +1169,7 @@ async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
 
 
 @router.get("/settings/users", response_class=HTMLResponse, response_model=None)
-def users_page(request: Request) -> HTMLResponse | RedirectResponse | JSONResponse:
+def users_page(request: Request) -> HTMLResponse | RedirectResponse:
     redirect_resp = _require_admin(request)
     if redirect_resp:
         return redirect_resp

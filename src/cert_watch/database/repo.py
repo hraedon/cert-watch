@@ -25,6 +25,8 @@ class Alert:
     sent_at: datetime | None = None
     error_message: str | None = None
     extra_recipients: list[str] = field(default_factory=list)
+    hostname: str = ""
+    subject: str = ""
 
 
 @dataclass
@@ -255,8 +257,9 @@ class SqliteAlertRepository(AlertRepository):
                 """
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
-                 extra_recipients, created_at, sent_at, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 extra_recipients, created_at, sent_at, error_message,
+                 hostname, subject)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     alert_id,
@@ -269,6 +272,8 @@ class SqliteAlertRepository(AlertRepository):
                     _iso(alert.created_at),
                     _iso(alert.sent_at) if alert.sent_at else None,
                     alert.error_message,
+                    alert.hostname,
+                    alert.subject,
                 ),
             )
             conn.commit()
@@ -328,6 +333,8 @@ class SqliteAlertRepository(AlertRepository):
             sent_at=_parse_iso(row["sent_at"]) if row["sent_at"] else None,
             error_message=row["error_message"],
             extra_recipients=extra_recipients,
+            hostname=row["hostname"] if "hostname" in row_dict else "",
+            subject=row["subject"] if "subject" in row_dict else "",
         )
 
 

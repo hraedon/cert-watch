@@ -56,6 +56,7 @@ def evaluate_thresholds(
     cooldown_hours: int = 24,
     owner_info: dict | None = None,
     extra_recipients: list[str] | None = None,
+    hostname: str = "",
 ) -> list[Alert]:
     """
     Create pending alerts for thresholds the cert has now crossed, skipping any
@@ -137,6 +138,8 @@ def evaluate_thresholds(
                         else []
                     )
                 ),
+                hostname=hostname,
+                subject=cert.subject,
             )
             alert_id = alert_repo.create(alert)
             alert.id = alert_id
@@ -215,6 +218,7 @@ def evaluate_all_certs(
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
             owner_info=owner_info, extra_recipients=merged_extra or None,
+            hostname=leaf_row["hostname"] or "",
         )
         all_alerts.extend(alerts)
     return all_alerts
@@ -286,6 +290,8 @@ def evaluate_renewal_window(
             extra_recipients=(
                 [owner["owner_email"]] if owner.get("owner_email") else []
             ),
+            hostname=leaf["hostname"] or "",
+            subject=leaf["subject"] or "",
         )
         alert.id = alert_repo.create(alert)
         created.append(alert)
@@ -461,6 +467,9 @@ def send_pagerduty_resolve(
     config: WebhookConfig,
     *,
     summary: str = "",
+    hostname: str = "",
+    subject: str = "",
+    alert_created_at: datetime | None = None,
 ) -> bool:
     """Send a PagerDuty resolve event to auto-close an incident.
 
@@ -523,6 +532,9 @@ def resolve_pagerduty_for_renewed_cert(
             old_cert_id, alert.alert_type, alert.threshold_days,
             webhook_config,
             summary=f"cert-watch: certificate renewed, resolving {alert.alert_type} alert",
+            hostname=alert.hostname,
+            subject=alert.subject,
+            alert_created_at=alert.created_at,
         ):
             resolved += 1
     return resolved

@@ -2,6 +2,10 @@
 
 **Created:** 2026-06-05
 **Status:** proposed
+**Code alias:** Commits `380c1a9` and follow-ups implemented the foundation of
+this plan but labelled it "Plan 040" in code comments, migrations, and test
+headers. `plans/040-ct-log-monitoring.md` is an unrelated plan (CT monitoring).
+The "Plan 040" references in source map here.
 **Depends on:** claim extraction (done — `oauth_provider.py` populates
 `AuthResult.roles`/`groups`; LDAP populates `groups`).
 **Relates to:** Plan 034 (E2E validates this), BC-136.

@@ -268,3 +268,142 @@ def test_api_ct_reconciliation_missing_domain(reload_app):
         r = client.get("/api/ct/reconciliation")
     assert r.status_code == 400
     assert "domain" in r.json()["error"]
+
+
+def _add_scanned_cert(db, hostname, issuer, fingerprint):
+    import uuid
+    from datetime import UTC, datetime
+
+    from cert_watch.database import _connect
+    cert_id = str(uuid.uuid4())
+    now = datetime.now(UTC).isoformat()
+    with _connect(db) as conn:
+        conn.execute(
+            """INSERT INTO certificates
+            (id, hostname, port, source, is_leaf, issuer, fingerprint_sha256,
+             updated_at, subject, not_before, not_after, san_dns_names,
+             raw_der, created_at)
+            VALUES (?, ?, 443, 'scanned', 1, ?, ?, ?, '', ?, ?, '', x'', ?)""",
+            (cert_id, hostname, issuer, fingerprint, now, now, now, now),
+        )
+        conn.commit()
+    return cert_id
+
+
+def test_ct_monitor_creates_misissuance_alert(tmp_path):
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.repo import SqliteAlertRepository
+    SqliteHostRepository(db).add("www.example.com", 443)
+    _add_scanned_cert(db, "www.example.com", "Trusted CA", "fp-known-aaa")
+
+    mock_ct_entry = MagicMock()
+    mock_ct_entry.common_name = "www.example.com"
+    mock_ct_entry.name_value = "www.example.com"
+    mock_ct_entry.issuer_name = "Malicious CA"
+    mock_ct_entry.serial_number = "evil-serial"
+
+    with patch(
+        "cert_watch.ct_monitor.query_ct_log",
+        return_value=[mock_ct_entry],
+    ):
+        result = run_ct_monitor(db)
+
+    assert result["misissued"] >= 1
+    assert result["alerts_created"] >= 1
+
+    repo = SqliteAlertRepository(db)
+    alerts = repo.list_pending()
+    mis_alerts = [a for a in alerts if a.alert_type == "mis_issuance"]
+    assert len(mis_alerts) == 1
+    assert "Malicious CA" in mis_alerts[0].message
+    assert "Trusted CA" in mis_alerts[0].message
+
+
+def test_ct_monitor_no_alert_when_no_misissuance(tmp_path):
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.repo import SqliteAlertRepository
+    SqliteHostRepository(db).add("clean.example.com", 443)
+    _add_scanned_cert(db, "clean.example.com", "Trusted CA", "fp-clean-bbb")
+
+    mock_ct_entry = MagicMock()
+    mock_ct_entry.common_name = "clean.example.com"
+    mock_ct_entry.name_value = "clean.example.com"
+    mock_ct_entry.issuer_name = "Trusted CA"
+    mock_ct_entry.serial_number = "sn-clean"
+
+    from unittest.mock import patch
+
+    from cert_watch.ct_monitor import _get_scanned_issuer
+    scanned_issuer = _get_scanned_issuer(db, "clean.example.com")
+    assert scanned_issuer is not None
+    mock_ct_entry.issuer_name = scanned_issuer
+
+    with patch(
+        "cert_watch.ct_monitor.query_ct_log",
+        return_value=[mock_ct_entry],
+    ):
+        result = run_ct_monitor(db)
+
+    assert result["misissued"] == 0
+    assert result["alerts_created"] == 0
+
+    repo = SqliteAlertRepository(db)
+    alerts = repo.list_pending()
+    mis_alerts = [a for a in alerts if a.alert_type == "mis_issuance"]
+    assert len(mis_alerts) == 0
+
+
+def test_ct_monitor_misissuance_dedup(tmp_path):
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.repo import SqliteAlertRepository
+    SqliteHostRepository(db).add("dup.example.com", 443)
+    _add_scanned_cert(db, "dup.example.com", "Good CA", "fp-dup-ccc")
+
+    mock_ct_entry = MagicMock()
+    mock_ct_entry.common_name = "dup.example.com"
+    mock_ct_entry.name_value = "dup.example.com"
+    mock_ct_entry.issuer_name = "Bad CA"
+    mock_ct_entry.serial_number = "evil-dup"
+
+    with patch(
+        "cert_watch.ct_monitor.query_ct_log",
+        return_value=[mock_ct_entry],
+    ):
+        result1 = run_ct_monitor(db)
+        result2 = run_ct_monitor(db)
+
+    assert result1["alerts_created"] >= 1
+    assert result2["alerts_created"] == 0
+
+    repo = SqliteAlertRepository(db)
+    alerts = repo.list_pending()
+    mis_alerts = [a for a in alerts if a.alert_type == "mis_issuance"]
+    assert len(mis_alerts) == 1
+
+
+def test_ct_monitor_misissuance_no_tracked_cert(tmp_path):
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    from cert_watch.database import SqliteHostRepository
+    SqliteHostRepository(db).add("untracked.example.com", 443)
+
+    mock_ct_entry = MagicMock()
+    mock_ct_entry.common_name = "untracked.example.com"
+    mock_ct_entry.name_value = "untracked.example.com"
+    mock_ct_entry.issuer_name = "Some CA"
+    mock_ct_entry.serial_number = "sn-unt"
+
+    with patch(
+        "cert_watch.ct_monitor.query_ct_log",
+        return_value=[mock_ct_entry],
+    ):
+        result = run_ct_monitor(db)
+
+    assert result["misissued"] == 0
+    assert result["alerts_created"] == 0
