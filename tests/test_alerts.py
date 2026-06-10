@@ -572,3 +572,242 @@ def test_send_expiry_digest_respects_30_day_window(tmp_path):
         mock_urlopen.return_value = mock_resp
         result = send_expiry_digest(db, None, webhook)
     assert result is True
+
+
+# ---------- send_expiry_digest owner-scoped (WI-A.2) ----------
+
+
+def _seed_owner_host(db_path, hostname, owner_email, port=443):
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.schema import init_schema
+
+    init_schema(db_path)
+    SqliteHostRepository(db_path).add(hostname, port, owner_email=owner_email)
+
+
+def test_expiry_digest_owner_scoped(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
+    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
+    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
+    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test", recipients=["admin@example.com"],
+    )
+
+    sent: list = []
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
+        result = send_expiry_digest(db, config)
+
+    assert result is True
+    assert len(sent) == 3
+
+    global_msg = sent[0]
+    assert "admin@example.com" in global_msg["To"]
+    body = global_msg.get_content()
+    assert "cert-a" in body
+    assert "cert-b" in body
+
+    owner_msgs = sorted(sent[1:], key=lambda m: str(m["To"]))
+    alice_msg = owner_msgs[0]
+    assert "alice@example.com" in alice_msg["To"]
+    alice_body = alice_msg.get_content()
+    assert "cert-a" in alice_body
+    assert "cert-b" not in alice_body
+
+    bob_msg = owner_msgs[1]
+    assert "bob@example.com" in bob_msg["To"]
+    bob_body = bob_msg.get_content()
+    assert "cert-b" in bob_body
+    assert "cert-a" not in bob_body
+
+
+def test_expiry_digest_owner_in_global_recipients(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
+    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
+    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
+    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test",
+        recipients=["admin@example.com", "alice@example.com"],
+    )
+
+    sent: list = []
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
+        result = send_expiry_digest(db, config)
+
+    assert result is True
+    assert len(sent) == 2
+
+    global_msg = sent[0]
+    assert "alice@example.com" in global_msg["To"]
+    assert "admin@example.com" in global_msg["To"]
+    body = global_msg.get_content()
+    assert "cert-a" in body
+    assert "cert-b" in body
+
+    bob_msg = sent[1]
+    assert "bob@example.com" in bob_msg["To"]
+    bob_body = bob_msg.get_content()
+    assert "cert-b" in bob_body
+    assert "cert-a" not in bob_body
+
+
+def test_expiry_digest_no_owners_backward_compat(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, subject="CN=cert-a", hostname="h1.example.com", not_after=soon)
+    _insert_cert(db, subject="CN=cert-b", hostname="h2.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test", recipients=["admin@example.com"],
+    )
+
+    sent: list = []
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
+        result = send_expiry_digest(db, config)
+
+    assert result is True
+    assert len(sent) == 1
+    body = sent[0].get_content()
+    assert "cert-a" in body
+    assert "cert-b" in body
+    assert "admin@example.com" in sent[0]["To"]
+
+
+def test_expiry_digest_mixed_case_email_preserves_original(tmp_path):
+    """WI-A.2: mixed-case owner_email must be used verbatim in the To header."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "mixed.example.com", "Alice@Example.COM")
+    _insert_cert(db, subject="CN=cert-mixed", hostname="mixed.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test", recipients=["admin@example.com"],
+    )
+
+    sent: list = []
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
+        result = send_expiry_digest(db, config)
+
+    assert result is True
+    owner_msg = sent[1]
+    assert "Alice@Example.COM" in owner_msg["To"]
+
+
+def test_expiry_digest_partial_smtp_failure_returns_false(tmp_path):
+    """WI-A.2: global send succeeds but owner send raises → function returns False."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "host-p.example.com", "owner@example.com")
+    _insert_cert(db, subject="CN=cert-p", hostname="host-p.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test", recipients=["admin@example.com"],
+    )
+
+    call_count = 0
+
+    def _send(msg):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None
+        raise Exception("owner send failed")
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = _send
+        result = send_expiry_digest(db, config)
+
+    assert result is False
+
+
+def test_expiry_digest_webhook_strips_owner_email_pii(tmp_path):
+    """WI-A.2: webhook payload must not contain owner_email PII."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "pii.example.com", "secret@example.com")
+    _insert_cert(
+        db, subject="CN=cert-pii", hostname="pii.example.com",
+        port=443, not_after=soon,
+    )
+
+    webhook = WebhookConfig(url="https://hooks.test/hook")
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = send_expiry_digest(db, None, webhook)
+
+    assert result is True
+    call_kwargs = mock_urlopen.call_args
+    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    assert "secret@example.com" not in body
+    assert "pii.example.com" in body

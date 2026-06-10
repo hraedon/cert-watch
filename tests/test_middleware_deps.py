@@ -808,3 +808,48 @@ async def test_require_admin_write_form_all_pass(tmp_path):
     request.scope["app"] = app
     assert await require_admin_write_form(request) is None
 
+
+# ── get_auth_context: is_admin ─────────────────────────────────────────────
+
+
+def test_get_auth_context_admin_is_admin_true(tmp_path):
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import get_auth_context
+
+    request = _make_request()
+    request.scope["auth_user"] = "alice"
+    request.state.auth_context = AuthContext.from_roles("alice", ["admin"])
+    ctx = get_auth_context(request)
+    assert ctx["is_admin"] is True
+
+
+def test_get_auth_context_viewer_is_admin_false(tmp_path):
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import get_auth_context
+
+    request = _make_request()
+    request.scope["auth_user"] = "bob"
+    request.state.auth_context = AuthContext.from_roles("bob", ["viewer"])
+    ctx = get_auth_context(request)
+    assert ctx["is_admin"] is False
+
+
+def test_get_auth_context_operator_is_admin_false(tmp_path):
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import get_auth_context
+
+    request = _make_request()
+    request.scope["auth_user"] = "ops"
+    request.state.auth_context = AuthContext.from_roles("ops", ["operator"])
+    ctx = get_auth_context(request)
+    assert ctx["is_admin"] is False
+
+
+def test_get_auth_context_no_auth_context_is_admin_true(tmp_path):
+    from cert_watch.middleware import get_auth_context
+
+    request = _make_request()
+    request.scope["auth_user"] = ""
+    ctx = get_auth_context(request)
+    assert ctx["is_admin"] is True
+
