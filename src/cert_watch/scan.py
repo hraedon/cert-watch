@@ -357,8 +357,9 @@ def store_scanned(
                     exc_info=True,
                 )
         posture_grade = ""
+        original_findings: list[dict] = []
         try:
-            posture_grade = _evaluate_and_store_posture(
+            posture_grade, original_findings = _evaluate_and_store_posture(
                 repo_path_or_repo, leaf_id, entry,
                 check_revocation=check_revocation,
                 allow_private=allow_private,
@@ -367,6 +368,76 @@ def store_scanned(
         except Exception:  # noqa: BLE001
             logger.debug(
                 "posture evaluation skipped for %s:%s", entry.host, entry.port,
+                exc_info=True,
+            )
+        # Read previous grade BEFORE any policy override writes, so the
+        # posture_changed event compares against the correct baseline.
+        previous_grade: str | None = None
+        try:
+            from cert_watch.database.connection import _connect as _prev_conn
+
+            with _prev_conn(repo_path_or_repo) as _pc:
+                _prev = _pc.execute(
+                    "SELECT grade FROM scan_posture WHERE cert_id = ?",
+                    (leaf_id,),
+                ).fetchone()
+            if _prev:
+                previous_grade = _prev["grade"]
+        except Exception:  # noqa: BLE001
+            logger.debug("previous grade read skipped for %s:%s", entry.host, entry.port)
+        try:
+            from cert_watch.policy import apply_policy_overrides, evaluate_policy, load_policy_set
+            ruleset = load_policy_set(str(repo_path_or_repo))
+            violations = evaluate_policy(
+                cert=entry.leaf,
+                chain_status=None,
+                chain_incomplete=entry.chain_incomplete,
+                protocol_version=entry.protocol_version or None,
+                hsts=entry.hsts,
+                ocsp_stapling=None,
+                ruleset=ruleset,
+            )
+            if violations:
+                overridden = apply_policy_overrides(posture_grade, violations)
+                if overridden != posture_grade:
+                    posture_grade = overridden
+                    try:
+                        from cert_watch.database.queries import store_scan_posture
+
+                        # Preserve the original findings from the posture evaluation
+                        # rather than wiping them with an empty list (C3).
+                        store_scan_posture(
+                            db_path=repo_path_or_repo,
+                            cert_id=leaf_id,
+                            hostname=entry.host,
+                            port=entry.port,
+                            grade=overridden,
+                            findings=original_findings,
+                            protocol_version=entry.protocol_version,
+                            ocsp_stapling=None,
+                            hsts=entry.hsts,
+                            must_staple=False,
+                            verify_requested=entry.verify_requested,
+                            chain_incomplete=entry.chain_incomplete,
+                            chain_status=None,
+                            scanned_at=None,
+                        )
+                    except Exception:  # noqa: BLE001
+                        logger.debug(
+                            "policy grade override write failed for %s:%s",
+                            entry.host, entry.port, exc_info=True,
+                        )
+                from cert_watch.alerts import evaluate_policy_alerts
+                evaluate_policy_alerts(
+                    cert_id=leaf_id,
+                    hostname=entry.host,
+                    violations=violations,
+                    db_path=str(repo_path_or_repo),
+                    subject=entry.leaf.subject,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "policy evaluation skipped for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
         try:
@@ -422,6 +493,50 @@ def store_scanned(
                 "cert_history write failed for %s:%s", entry.host, entry.port,
                 exc_info=True,
             )
+        try:
+            from cert_watch.events import Event, emit_event
+
+            evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
+            emit_event(
+                Event(
+                    event_type=evt_type,
+                    timestamp=datetime.now(UTC),
+                    payload={
+                        "cert_id": leaf_id,
+                        "hostname": entry.host,
+                        "port": entry.port,
+                        "replaced_cert_id": replaced_cert_id,
+                    },
+                    source="scan",
+                ),
+                repo_path_or_repo,
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("event emit skipped for %s:%s", entry.host, entry.port, exc_info=True)
+        try:
+            if posture_grade and previous_grade is not None and previous_grade != posture_grade:
+                from cert_watch.events import Event, emit_event
+
+                emit_event(
+                    Event(
+                        event_type="posture_changed",
+                        timestamp=datetime.now(UTC),
+                        payload={
+                            "cert_id": leaf_id,
+                            "hostname": entry.host,
+                            "port": entry.port,
+                            "old_grade": previous_grade,
+                            "new_grade": posture_grade,
+                        },
+                        source="scan",
+                    ),
+                    repo_path_or_repo,
+                )
+        except Exception:  # noqa: BLE001
+            logger.debug(
+                "posture_changed event skipped for %s:%s",
+                entry.host, entry.port, exc_info=True,
+            )
         return leaf_id
 
     repo = repo_path_or_repo
@@ -439,8 +554,8 @@ def _evaluate_and_store_posture(
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> str:
-    """Evaluate TLS posture and store the result. Returns the grade string."""
+) -> tuple[str, list[dict]]:
+    """Evaluate TLS posture and store the result. Returns (grade, findings)."""
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import Certificate as _Cert
     from cert_watch.database import SqliteTrustAnchorRepository
@@ -505,7 +620,7 @@ def _evaluate_and_store_posture(
         caa_records=caa_records,
         scanned_at=_iso(entry.scanned_at),
     )
-    return result.grade
+    return result.grade, typing.cast("list[dict]", result.findings)
 
 
 async def scan_host_async(

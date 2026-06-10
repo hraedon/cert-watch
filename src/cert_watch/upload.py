@@ -139,4 +139,18 @@ def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
             repo_path, source="uploaded", parent_cert_id=leaf_id
         )
         chain_repo.add(chain_cert)
+    try:
+        from cert_watch.events import Event, emit_event
+
+        emit_event(
+            Event(
+                event_type="cert_added",
+                timestamp=datetime.now(UTC),
+                payload={"cert_id": leaf_id, "source": "upload"},
+                source="upload",
+            ),
+            repo_path,
+        )
+    except Exception:  # noqa: BLE001
+        pass
     return leaf_id

@@ -545,6 +545,59 @@ ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
 
 
+def evaluate_policy_alerts(
+    cert_id: str,
+    hostname: str,
+    violations: list,
+    db_path: str | Path,
+    *,
+    subject: str = "",
+) -> list[Alert]:
+    """Create pending alerts for critical or warning policy violations.
+
+    Info-level violations are recorded but do not generate alerts.
+    Returns the list of created Alert objects.
+
+    Deduplication: before creating a new alert for a (cert_id, rule_id)
+    pair, check whether a pending ``policy_violation`` alert already exists
+    for the same cert and rule_id. Only create a new alert if no matching
+    pending alert is found (mirrors the cooldown logic in
+    ``evaluate_thresholds``).
+    """
+    from cert_watch.database import SqliteAlertRepository
+
+    alert_repo = SqliteAlertRepository(db_path)
+    existing = alert_repo.list_for_cert(cert_id)
+    existing_rule_ids: set[str] = set()
+    for a in existing:
+        if a.alert_type == "policy_violation" and a.status == "pending":
+            for v in violations:
+                marker = f"[{v.rule_id}]"
+                if marker in a.message:
+                    existing_rule_ids.add(v.rule_id)
+                    break
+    created: list[Alert] = []
+    for v in violations:
+        if v.severity not in ("critical", "warning"):
+            continue
+        if v.rule_id in existing_rule_ids:
+            continue
+        alert = Alert(
+            cert_id=cert_id,
+            alert_type="policy_violation",
+            status="pending",
+            message=(
+                f"Policy violation ({v.severity}) [{v.rule_id}]: {v.message} "
+                f"Remediation: {v.remediation}"
+            ),
+            hostname=hostname,
+            subject=subject,
+        )
+        alert.id = alert_repo.create(alert)
+        created.append(alert)
+    return created
+
+
 def resolve_all_group_recipients(
     db_path: str | Path,
 ) -> dict[str, list[str]]:

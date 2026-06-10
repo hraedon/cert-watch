@@ -1135,7 +1135,7 @@ def test_evaluate_and_store_posture_caa_exception(monkeypatch, tmp_path, self_si
         lambda *a, **kw: (_ for _ in ()).throw(OSError("dns timeout")),
     )
 
-    grade = _evaluate_and_store_posture(db, "cert-id", entry)
+    grade, findings = _evaluate_and_store_posture(db, "cert-id", entry)
     assert grade == "A"
 
 
@@ -1162,7 +1162,7 @@ def test_evaluate_and_store_posture_caa_value_error(monkeypatch, tmp_path, self_
         lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad domain")),
     )
 
-    grade = _evaluate_and_store_posture(db, "cert-id", entry)
+    grade, findings = _evaluate_and_store_posture(db, "cert-id", entry)
     assert grade == "B"
 
 

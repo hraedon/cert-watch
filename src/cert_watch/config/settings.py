@@ -45,6 +45,7 @@ class Settings:
     history_retention_days: int = 365
     alert_retention_days: int = 90
     drift_alerts: bool = True
+    event_retention_days: int = 30
     renewal_window_days: int = 30
     check_revocation: bool = False
     scan_timeout: float = 10.0
@@ -140,6 +141,10 @@ class Settings:
             os.environ.get("CERT_WATCH_ALERT_RETENTION_DAYS", "90"), 90,
             "CERT_WATCH_ALERT_RETENTION_DAYS",
         )
+        event_retention_days = _parse_int(
+            os.environ.get("CERT_WATCH_EVENT_RETENTION_DAYS", "30"), 30,
+            "CERT_WATCH_EVENT_RETENTION_DAYS",
+        )
 
         return cls(
             db_path=data_dir / "cert-watch.sqlite3",
@@ -161,6 +166,7 @@ class Settings:
             audit_retention_days=audit_retention_days,
             history_retention_days=history_retention_days,
             alert_retention_days=alert_retention_days,
+            event_retention_days=event_retention_days,
             drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
             renewal_window_days=renewal_window_days,
             check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",

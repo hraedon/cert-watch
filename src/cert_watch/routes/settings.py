@@ -243,6 +243,11 @@ def settings_page(
         from cert_watch.database import SqliteApiKeyRepository
         api_keys_data = SqliteApiKeyRepository(db).list_keys()
 
+    policy_set = None
+    if tab == "policy":
+        from cert_watch.policy import load_policy_set
+        policy_set = load_policy_set(str(db))
+
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -261,6 +266,7 @@ def settings_page(
             "env_hash_override": env_hash_override,
             "ldap_role_map": ldap_role_map,
             "api_keys": api_keys_data,
+            "policy_set": policy_set,
             "active_page": "settings",
             **auth_ctx,
             **ctx,
@@ -1283,3 +1289,180 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
 def _get_auth_ctx(request: Request) -> dict:
     from cert_watch.middleware import get_auth_context
     return get_auth_context(request)
+
+
+# ---------- Policy settings (Plan 042 / WI-4/WI-5) ----------
+
+
+@router.post("/settings/policy")
+async def save_policy_settings(request: Request) -> RedirectResponse:
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
+    from cert_watch.middleware import check_csrf
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/settings?tab=policy&error={csrf_err}", status_code=303)
+
+    from cert_watch.policy import PolicyRule, PolicySet, save_policy_set
+
+    db = _db_path(request)
+    form = await request.form()
+
+    default_severity = str(form.get("default_severity") or "warning")
+    rule_ids = form.getlist("rule_id")
+    rules: list[PolicyRule] = []
+    for rid in rule_ids:
+        rid = str(rid)
+        category = str(form.get(f"category_{rid}", "custom"))
+        severity = str(form.get(f"severity_{rid}", default_severity))
+        enabled = form.get(f"enabled_{rid}") == "1"
+        parameters: dict = {}
+        min_rsa_raw = form.get(f"min_rsa_{rid}")
+        if min_rsa_raw is not None:
+            with contextlib.suppress(ValueError):
+                parameters["min_rsa"] = int(str(min_rsa_raw))
+        max_days_raw = form.get(f"max_days_{rid}")
+        if max_days_raw is not None:
+            with contextlib.suppress(ValueError):
+                parameters["max_days"] = int(str(max_days_raw))
+        min_tls_raw = form.get(f"min_tls_{rid}")
+        if min_tls_raw is not None:
+            parameters["min_tls"] = str(min_tls_raw)
+        allowed_issuers_raw = form.get(f"allowed_issuers_{rid}")
+        if allowed_issuers_raw is not None:
+            val = str(allowed_issuers_raw).strip()
+            parameters["allowed_issuers"] = (
+                [i.strip() for i in val.split(",") if i.strip()]
+                if val else []
+            )
+        allowed_curves_raw = form.get(f"allowed_curves_{rid}")
+        if allowed_curves_raw is not None:
+            val = str(allowed_curves_raw).strip()
+            parameters["allowed_curves"] = (
+                [c.strip() for c in val.split(",") if c.strip()]
+                if val else []
+            )
+        rules.append(PolicyRule(
+            rule_id=rid,
+            category=category,
+            severity=severity,
+            enabled=enabled,
+            parameters=parameters,
+        ))
+
+    ruleset = PolicySet(rules=rules, default_severity=default_severity)
+    save_policy_set(str(db), ruleset)
+
+    from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+    record_audit(
+        str(db),
+        actor=resolve_actor(request),
+        action="policy.update",
+        target_type="policy_set",
+        target_id="policy_set",
+        detail={"rule_count": len(rules), "default_severity": default_severity},
+        source_ip=resolve_source_ip(request),
+    )
+
+    return RedirectResponse(url="/settings?tab=policy&saved=1", status_code=303)
+
+
+# ---------- Event streaming config (Plan 044) ----------
+
+
+@router.get("/settings/events", response_class=HTMLResponse, response_model=None)
+def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
+    admin_err = _require_admin(request)
+    if admin_err:
+        return admin_err
+    db = _db_path(request)
+    from cert_watch.events import ALL_EVENT_TYPES, load_event_config
+
+    config = load_event_config(db)
+    ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="settings_events.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            "config": config,
+            "all_event_types": ALL_EVENT_TYPES,
+            "active_page": "settings",
+            **auth_ctx,
+            **ctx,
+        },
+    )
+
+
+@router.post("/settings/events")
+async def save_settings_events(request: Request) -> RedirectResponse:
+    admin_err = await require_admin_form(request)
+    if admin_err:
+        return admin_err
+    from cert_watch.middleware import check_csrf
+
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/settings/events?error={csrf_err}", status_code=303)
+
+    db = _db_path(request)
+    from cert_watch.events import EventStreamConfig, save_event_config
+
+    form = await request.form()
+    enabled: list[str] = []
+    for et in form.getlist("enabled_event_types"):
+        if isinstance(et, str) and et:
+            enabled.append(et)
+    if not enabled:
+        from cert_watch.events import ALL_EVENT_TYPES
+        enabled = list(ALL_EVENT_TYPES)
+    webhook_url = str(form.get("webhook_url") or "").strip() or None
+    webhook_kind = str(form.get("webhook_kind") or "generic").strip()
+    pagerduty_routing_key = str(form.get("pagerduty_routing_key") or "").strip()
+    if webhook_url:
+        from cert_watch.http_client import validate_webhook_url
+        settings = getattr(request.app.state, "settings", None)
+        err = validate_webhook_url(
+            webhook_url,
+            allow_private=settings.allow_private if settings else True,
+            allowed_subnets=settings.allowed_subnets if settings else (),
+        )
+        if err:
+            return RedirectResponse(
+                url=f"/settings/events?error={quote('Invalid webhook URL: ' + err)}",
+                status_code=303,
+            )
+    try:
+        rl_raw = form.get("rate_limit_per_second") or 100
+        rate_limit = int(rl_raw) if isinstance(rl_raw, (str, int)) else 100
+    except (ValueError, TypeError):
+        rate_limit = 100
+    config = EventStreamConfig(
+        enabled_event_types=enabled,
+        webhook_url=webhook_url,
+        webhook_kind=webhook_kind,
+        pagerduty_routing_key=pagerduty_routing_key,
+        rate_limit_per_second=rate_limit,
+    )
+    save_event_config(db, config)
+
+    from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+
+    record_audit(
+        str(db),
+        actor=resolve_actor(request),
+        action="settings.events",
+        target_type="event_stream_config",
+        target_id="event_stream_config",
+        detail={
+            "enabled_event_types": enabled,
+            "webhook_kind": webhook_kind,
+            "webhook_url_set": bool(webhook_url),
+            "pagerduty_routing_key_set": bool(pagerduty_routing_key),
+            "rate_limit_per_second": rate_limit,
+        },
+        source_ip=resolve_source_ip(request),
+    )
+    return RedirectResponse(url="/settings/events?saved=1", status_code=303)

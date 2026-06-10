@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — event streaming{% endblock %}
+
+{% block content %}
+<div class="cw-page--constrained">
+  <div class="cw-page-head">
+    <div>
+      <h1 data-testid="events-heading">Event streaming</h1>
+      <div class="cw-page-head-sub">Configure event sinks for real-time webhook delivery.</div>
+    </div>
+  </div>
+
+  {% if saved %}
+    <div class="cw-alert cw-alert--success cw-mb-14">Settings saved successfully.</div>
+  {% endif %}
+  {% if error %}
+    <div class="cw-alert cw-alert--error cw-mb-14">{{ error }}</div>
+  {% endif %}
+
+  <form method="post" action="/settings/events" class="cw-panel cw-mb-18">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+    <h3 class="cw-set-title cw-mb-16">Enabled event types</h3>
+    <div class="cw-field cw-mb-16">
+      {% for et in all_event_types %}
+      <label class="cw-checkbox-label cw-mr-12">
+        <input type="checkbox" name="enabled_event_types" value="{{ et }}"
+               {% if et in config.enabled_event_types %}checked{% endif %}
+               data-testid="event-type-{{ et }}">
+        <code>{{ et }}</code>
+      </label>
+      {% endfor %}
+    </div>
+
+    <h3 class="cw-set-title cw-mb-16">Webhook sink</h3>
+    <div class="cw-field cw-mb-12">
+      <label class="cw-label" for="webhook_url">Webhook URL</label>
+      <input class="cw-input" type="url" id="webhook_url" name="webhook_url"
+             value="{{ config.webhook_url or '' }}"
+             placeholder="https://hooks.example.com/cert-watch"
+             data-testid="events-webhook-url">
+    </div>
+    <div class="cw-field cw-mb-12">
+      <label class="cw-label" for="webhook_kind">Adapter kind</label>
+      <select class="cw-input cw-w-auto" id="webhook_kind" name="webhook_kind"
+              data-testid="events-webhook-kind">
+        <option value="generic" {% if config.webhook_kind == 'generic' %}selected{% endif %}>Generic</option>
+        <option value="discord" {% if config.webhook_kind == 'discord' %}selected{% endif %}>Discord</option>
+        <option value="teams" {% if config.webhook_kind == 'teams' %}selected{% endif %}>Teams</option>
+        <option value="slack" {% if config.webhook_kind == 'slack' %}selected{% endif %}>Slack</option>
+        <option value="pagerduty" {% if config.webhook_kind == 'pagerduty' %}selected{% endif %}>PagerDuty</option>
+        <option value="alertmanager" {% if config.webhook_kind == 'alertmanager' %}selected{% endif %}>Alertmanager</option>
+      </select>
+    </div>
+    <div class="cw-field cw-mb-12" id="pagerduty-key-field">
+      <label class="cw-label" for="pagerduty_routing_key">PagerDuty routing key</label>
+      <input class="cw-input" type="password" id="pagerduty_routing_key" name="pagerduty_routing_key"
+             value="{{ config.pagerduty_routing_key or '' }}"
+             placeholder="Events API v2 integration routing key"
+             data-testid="events-pagerduty-routing-key">
+      <div class="cw-muted cw-fz-11 cw-mt-3">Required when webhook kind is PagerDuty.</div>
+    </div>
+    <div class="cw-field cw-mb-16">
+      <label class="cw-label" for="rate_limit_per_second">Rate limit (events/sec)</label>
+      <input class="cw-input cw-w-auto" type="number" id="rate_limit_per_second"
+             name="rate_limit_per_second" value="{{ config.rate_limit_per_second }}"
+             min="1" max="1000" data-testid="events-rate-limit">
+    </div>
+
+    <button type="submit" class="cw-btn primary" data-testid="events-save-btn">Save</button>
+  </form>
+</div>
+{% endblock %}

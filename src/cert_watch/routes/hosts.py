@@ -137,6 +137,11 @@ async def add_host(
                 error_message=result.error_message,
             ),
         )
+        try:
+            from cert_watch.events import emit_scan_failed
+            emit_scan_failed(db, hostname, p, result.error_message, source="scan")
+        except Exception:  # noqa: BLE001
+            pass
         logger.warning(
             "added host %s:%d but scan failed: %s",
             hostname, p, result.error_message,
@@ -294,6 +299,11 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
                     error_message=result.error_message,
                 ),
             )
+            try:
+                from cert_watch.events import emit_scan_failed
+                emit_scan_failed(db, hostname, port, result.error_message, source="scan")
+            except Exception:  # noqa: BLE001
+                pass
         imported += 1
     if errors and imported == 0:
         logger.warning("CSV import failed: %s", errors[:3])
@@ -398,6 +408,11 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                         status="failure", error_message=result.error_message,
                     ),
                 )
+                try:
+                    from cert_watch.events import emit_scan_failed
+                    emit_scan_failed(db, h.hostname, h.port, result.error_message, source="scan")
+                except Exception:  # noqa: BLE001
+                    pass
                 failures += 1
             else:
                 async with _store_sem:
@@ -500,6 +515,11 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
             error_message=result.error_message,
         ),
     )
+    try:
+        from cert_watch.events import emit_scan_failed
+        emit_scan_failed(db, host.hostname, host.port, result.error_message, source="manual")
+    except Exception:  # noqa: BLE001
+        pass
     logger.warning(
         "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
     )
