@@ -1,7 +1,13 @@
 # Plan 041 — Auto-Discovery / Cloud Inventory Sync
 
-**Status:** proposed 2026-06-06
+**Status:** declined 2026-06-10
 **Author:** Opus 4.8 (portfolio review)
+**Declination rationale:** Contradicts `docs/positioning.md` — cloud API
+discovery introduces external SaaS dependencies the positioning explicitly
+declines. Exceptions retained: `static` file source (air-gap-friendly) and
+k8s Ingress discovery (inside the trust boundary, self-hosted). If k8s
+discovery is built, ensure the `DiscoverySource` seam remains modular so
+future cloud ingest sources could slot in without rearchitecting.
 **Strategic role:** Eliminate the toil of keeping the cert-watch inventory in sync with live infrastructure. The repository pattern already supports abstract sources; this plan adds a `DiscoverySource` seam.
 
 ## Why now

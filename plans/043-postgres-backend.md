@@ -1,7 +1,11 @@
 # Plan 043 — Postgres Backend (BC-031)
 
-**Status:** proposed 2026-06-06
+**Status:** deferred 2026-06-10
 **Author:** Opus 4.8 (portfolio review)
+**Deferral rationale:** Single-file SQLite is a feature for the SMB
+self-hosted positioning. Nothing on the current roadmap needs multi-writer
+or concurrent access. Revisit at a concrete scale signal (e.g., a customer
+whose fleet size or query pattern exceeds SQLite's practical limits).
 **Strategic role:** The biggest remaining structural blocker for horizontal scaling. The repository pattern is already in place; this plan adds a `Postgres` implementation of the repositories.
 
 ## Why now
