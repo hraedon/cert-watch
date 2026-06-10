@@ -9,6 +9,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
+from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 
 from cert_watch.events import get_events, get_failed_deliveries
@@ -77,7 +78,11 @@ async def api_event_stream(
                     }
             await asyncio.sleep(3)
 
-    return EventSourceResponse(_generate())
+    return EventSourceResponse(
+        _generate(),
+        ping=15,
+        ping_message_factory=lambda: ServerSentEvent(comment="ping"),
+    )
 
 
 @router.get("/api/events/failed")

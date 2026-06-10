@@ -14,8 +14,9 @@ from cert_watch.middleware import require_admin_write, require_auth
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,
+    acquire_policy_lock,
     load_policy_set,
-    save_policy_set,
+    save_policy_set_locked,
 )
 from cert_watch.routes._deps import _csv_safe, _db_path
 
@@ -122,7 +123,19 @@ async def api_put_policy(
         ))
 
     ruleset = PolicySet(rules=rules, default_severity=default_sev)
-    save_policy_set(str(db), ruleset)
+
+    # Merge incoming rules into the current policy under the write lock (WI-017).
+    # This prevents two concurrent PUTs from losing one writer's changes.
+    with acquire_policy_lock():
+        current = load_policy_set(str(db))
+        current_by_id = {r.rule_id: r for r in current.rules}
+        for r in ruleset.rules:
+            current_by_id[r.rule_id] = r
+        merged = PolicySet(
+            rules=list(current_by_id.values()),
+            default_severity=ruleset.default_severity,
+        )
+        save_policy_set_locked(str(db), merged)
 
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 
@@ -132,13 +145,13 @@ async def api_put_policy(
         action="policy.update",
         target_type="policy_set",
         target_id="policy_set",
-        detail={"rule_count": len(rules), "default_severity": default_sev},
+        detail={"rule_count": len(merged.rules), "default_severity": default_sev},
         source_ip=resolve_source_ip(request),
     )
 
     return JSONResponse(content={
-        "default_severity": ruleset.default_severity,
-        "rules": [_rule_json(r) for r in ruleset.rules],
+        "default_severity": merged.default_severity,
+        "rules": [_rule_json(r) for r in merged.rules],
     })
 
 

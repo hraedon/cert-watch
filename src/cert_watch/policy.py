@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.kv_store import kv_get, kv_set
-from cert_watch.posture import GRADE_WORST_ORDER
+from cert_watch.posture import GRADE_WORST_ORDER, Finding
 
 logger = logging.getLogger("cert_watch.policy")
 
@@ -18,6 +19,24 @@ _POLICY_KV_KEY = "policy_set"
 _ALLOWED_EC_CURVES = ["secp256r1", "secp384r1", "secp521r1"]
 
 _ALLOWED_SEVERITIES = {"critical", "warning", "info"}
+
+# Mapping from policy rule_id → posture Finding.check name for checks that
+# overlap.  When posture already flagged the issue (status != "pass"), the
+# policy violation is redundant (WI-014: avoid double-penalization).
+_POLICY_TO_POSTURE_CHECK: dict[str, str] = {
+    "key_size_rsa": "rsa_key_size",
+    "key_size_ec": "ecdsa_curve",
+    "hash_algorithm": "sha1_signature",
+    "chain_completeness": "chain_completeness",
+    "tls_version": "tls_version",
+    "self_signed": "self_signed",
+    "ocsp_must_staple": "ocsp_must_staple",
+    "hsts_required": "hsts",
+    "validity_max_days": "long_validity",
+}
+
+# Module-level lock for serialising policy writes (WI-017).
+_policy_lock = threading.RLock()
 
 
 @dataclass
@@ -274,6 +293,7 @@ def evaluate_policy(
     hsts: bool | None,
     ocsp_stapling: bool | None,
     ruleset: PolicySet,
+    posture_findings: list[Finding] | None = None,
 ) -> list[PolicyViolation]:
     violations: list[PolicyViolation] = []
 
@@ -296,8 +316,22 @@ def evaluate_policy(
             "Rescan the host or re-upload the certificate",
         )]
 
+    # Build a set of posture check names that already flagged a problem,
+    # so we can skip the corresponding policy rule (WI-014).
+    # Only suppress on "warn" or "fail" — "info" findings are informational
+    # and should not block a policy rule from firing.
+    already_flagged: set[str] = set()
+    if posture_findings:
+        for f in posture_findings:
+            if f.status in ("warn", "fail"):
+                already_flagged.add(f.check)
+
     for rule in ruleset.rules:
         if not rule.enabled:
+            continue
+        # Skip rule if posture already covers the same check (WI-014).
+        posture_check = _POLICY_TO_POSTURE_CHECK.get(rule.rule_id)
+        if posture_check and posture_check in already_flagged:
             continue
         vs = _evaluate_rule(
             rule, cert, x509_cert,
@@ -381,4 +415,33 @@ def load_policy_set(db_path: str) -> PolicySet:
 
 
 def save_policy_set(db_path: str, ruleset: PolicySet) -> None:
+    with _policy_lock:
+        kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+
+
+def save_policy_set_locked(db_path: str, ruleset: PolicySet) -> None:
+    """Save a policy set while holding the write lock.
+
+    Use this when the caller needs to guarantee that the save is serialised
+    with other locked writes (e.g. the PUT handler's read-modify-write).
+    The lock is already held by the caller via :func:`acquire_policy_lock`.
+    """
     kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+
+
+class acquire_policy_lock:
+    """Context manager that holds the policy write lock (WI-017).
+
+    Usage::
+
+        with acquire_policy_lock():
+            current = load_policy_set(db)
+            # ... merge / modify ...
+            save_policy_set_locked(db, updated)
+    """
+
+    def __enter__(self) -> None:
+        _policy_lock.acquire()
+
+    def __exit__(self, *exc: Any) -> None:
+        _policy_lock.release()
