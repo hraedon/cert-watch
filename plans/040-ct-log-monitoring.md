@@ -1,7 +1,22 @@
 # Plan 040 — CT Log Monitoring (Auto-Ingest)
 
-**Status:** proposed 2026-06-06
+**Status:** deferred 2026-06-10
 **Author:** Opus 4.8 (portfolio review)
+**Deferral rationale:** The crt.sh daily pull provides adequate mis-issuance
+detection and coverage-gap analysis for the SMB self-hosted positioning.
+Daily MTTD is within the SLA window regulated businesses actually require;
+sub-hour detection is an enterprise differentiator, not an SMB need.
+Revisit when a customer or auditor specifically requires real-time CT
+monitoring.
+
+**Architecture-forwards note (2026-06-10):** The current module boundary
+(`ct_lookup.py` = data source, `ct_monitor.py` = orchestration + alerts)
+is forwards-compatible with this plan. When un-deferred, extract the
+mis-issuance detection logic from `ct_reconciliation()` into a
+source-agnostic function that accepts cert entries from either crt.sh
+or RFC 6962 `get-entries`. The alert pipeline (`create_ct_misissuance_alert`,
+`evaluate_thresholds`) and scheduler callback (`ct_fn`) stay unchanged.
+Do not couple new streaming infrastructure to the crt.sh query path.
 **Strategic role:** Catch shadow certificates and unauthorized issuance in near-real-time, before the next scheduled scan. Fills the biggest unimplemented gap in the codebase (`ct_monitor.py` at 0% coverage).
 
 ## Why now
