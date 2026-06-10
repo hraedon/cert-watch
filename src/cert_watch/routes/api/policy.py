@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.database import SqliteAlertRepository
-from cert_watch.middleware import require_admin, require_auth
+from cert_watch.middleware import require_admin_write, require_auth
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,
@@ -48,7 +48,7 @@ def api_get_policy(
 
 @router.put("/api/policy")
 async def api_put_policy(
-    request: Request, _auth: str = Depends(require_admin)
+    request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     try:
         body = await request.json()

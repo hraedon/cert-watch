@@ -633,7 +633,7 @@ async def test_require_admin_form_no_auth_returns_none():
     from cert_watch.middleware import require_admin_form
 
     request = _admin_request("/settings/roles", auth_provider=NoAuthProvider())
-    assert await require_admin_form(request) is None
+    assert require_admin_form(request) is None
 
 
 @pytest.mark.anyio
@@ -649,7 +649,7 @@ async def test_require_admin_form_no_session_redirects_to_login(tmp_path):
     app = type("App", (), {"state": type("State", (), {"auth_provider": _Provider()})()})()
     request = _admin_request("/settings/roles", auth_provider=_Provider())
     request.scope["app"] = app
-    response = await require_admin_form(request)
+    response = require_admin_form(request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
@@ -682,7 +682,7 @@ async def test_require_admin_form_non_admin_redirects_with_error(tmp_path):
         groups=["g-others"],
     )
     request.scope["app"] = app
-    response = await require_admin_form(request)
+    response = require_admin_form(request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert "error=admin" in response.headers["location"]
@@ -718,7 +718,7 @@ async def test_require_admin_form_rbac_admin_allowed(tmp_path):
     from cert_watch.auth.rbac import AuthContext
 
     request.state.auth_context = AuthContext.from_roles("alice", ["admin"])
-    assert await require_admin_form(request) is None
+    assert require_admin_form(request) is None
 
 
 @pytest.mark.anyio
@@ -744,7 +744,7 @@ async def test_require_admin_form_legacy_admin_users_fallback(tmp_path):
         username="alice",
     )
     request.scope["app"] = app
-    assert await require_admin_form(request) is None
+    assert require_admin_form(request) is None
 
 
 @pytest.mark.anyio

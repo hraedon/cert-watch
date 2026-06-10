@@ -18,8 +18,6 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.auth import NoAuthProvider
-from cert_watch.auth.rbac import AuthContext
 from cert_watch.config import SENSITIVE_SETTING_KEYS, Settings
 from cert_watch.database import kv_all, kv_set, kv_set_secret
 from cert_watch.database.api_keys import ApiKeyEntry
@@ -65,36 +63,6 @@ def _local_admin_configured(request: Request) -> bool:
 
     db = _db_path(request)
     return bool(kv_get(db, "local_admin_user"))
-
-
-def _require_admin(request: Request) -> RedirectResponse | None:
-    auth = getattr(request.app.state, "auth_provider", None)
-    if auth is None or isinstance(auth, NoAuthProvider):
-        return None
-    user = request.scope.get("auth_user")
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
-    settings = getattr(request.app.state, "settings", None)
-    role_map = getattr(settings, "role_map", {}) if settings else {}
-    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-    if role_map:
-        if ctx is not None and ctx.is_admin:
-            return None
-        return RedirectResponse(
-            url=f"/settings?error={quote('admin required')}",
-            status_code=303,
-        )
-    admin_ok = ctx is not None and ctx.is_admin
-    if not admin_ok:
-        admin_list = getattr(settings, "admin_users", None) if settings else None
-        if not admin_list or user in admin_list:
-            admin_ok = True
-    if not admin_ok:
-        return RedirectResponse(
-            url=f"/settings?error={quote('admin required')}",
-            status_code=303,
-        )
-    return None
 
 
 # ---------- Auth config keys and their env var names ----------
@@ -202,7 +170,7 @@ def settings_page(
     error: str | None = None,
     password_changed: str | None = None,
 ) -> HTMLResponse | RedirectResponse:
-    redirect_resp = _require_admin(request)
+    redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
     db = _db_path(request)
@@ -305,9 +273,9 @@ def _render_api_keys(
     )
 
 
-@router.get("/settings/api-keys", response_class=HTMLResponse, response_model=None)
+@router.get("/settings/api-keys", response_model=None)
 def api_keys_page(request: Request) -> RedirectResponse:
-    redirect_resp = _require_admin(request)
+    redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
     return RedirectResponse(url="/settings?tab=api-keys", status_code=303)
@@ -317,7 +285,7 @@ def api_keys_page(request: Request) -> RedirectResponse:
 async def api_keys_create(
     request: Request,
 ) -> HTMLResponse | RedirectResponse | JSONResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
@@ -355,7 +323,7 @@ async def api_keys_create(
 async def api_keys_revoke(
     key_id: IdParam, request: Request
 ) -> RedirectResponse | HTMLResponse | JSONResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
@@ -394,7 +362,7 @@ async def _save_config_section(
                  that are non-blank are stored encrypted (BC-082).
     *rebuild*  – when True, ``_rebuild_settings`` is called after saving.
     """
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
 
@@ -469,7 +437,7 @@ async def save_alert_config(request: Request) -> RedirectResponse:
 
 @router.post("/settings/change-password")
 async def change_local_admin_password(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1108,7 +1076,7 @@ async def test_smtp_connection(
 
 @router.get("/settings/roles", response_class=HTMLResponse, response_model=None)
 def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
-    redirect_resp = _require_admin(request)
+    redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
     from cert_watch.database import SqliteRoleRepository
@@ -1125,7 +1093,7 @@ def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
             "auth": {}, "smtp": {}, "alert": {},
             "env_overrides": {},
             "active_page": "settings",
-            **_get_auth_ctx(request),
+            **get_auth_context(request),
             **get_csrf_context(request),
         },
     )
@@ -1133,7 +1101,7 @@ def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 @router.post("/settings/roles")
 async def create_role(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1157,7 +1125,7 @@ async def create_role(request: Request) -> RedirectResponse:
 
 @router.post("/settings/roles/{role_id}/delete")
 async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1176,7 +1144,7 @@ async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
 
 @router.get("/settings/users", response_class=HTMLResponse, response_model=None)
 def users_page(request: Request) -> HTMLResponse | RedirectResponse:
-    redirect_resp = _require_admin(request)
+    redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
     from cert_watch.database import SqliteRoleRepository, SqliteUserRepository
@@ -1195,7 +1163,7 @@ def users_page(request: Request) -> HTMLResponse | RedirectResponse:
             "auth": {}, "smtp": {}, "alert": {},
             "env_overrides": {},
             "active_page": "settings",
-            **_get_auth_ctx(request),
+            **get_auth_context(request),
             **get_csrf_context(request),
         },
     )
@@ -1203,7 +1171,7 @@ def users_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 @router.post("/settings/users")
 async def create_user(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1240,7 +1208,7 @@ async def create_user(request: Request) -> RedirectResponse:
 
 @router.post("/settings/users/{user_id}/delete")
 async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1259,7 +1227,7 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
 
 @router.post("/settings/ldap-role-map")
 async def save_ldap_role_map(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1286,17 +1254,12 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/settings?tab=auth&saved=1", status_code=303)
 
 
-def _get_auth_ctx(request: Request) -> dict:
-    from cert_watch.middleware import get_auth_context
-    return get_auth_context(request)
-
-
 # ---------- Policy settings (Plan 042 / WI-4/WI-5) ----------
 
 
 @router.post("/settings/policy")
 async def save_policy_settings(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf
@@ -1373,7 +1336,7 @@ async def save_policy_settings(request: Request) -> RedirectResponse:
 
 @router.get("/settings/events", response_class=HTMLResponse, response_model=None)
 def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
-    admin_err = _require_admin(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     db = _db_path(request)
@@ -1398,7 +1361,7 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 @router.post("/settings/events")
 async def save_settings_events(request: Request) -> RedirectResponse:
-    admin_err = await require_admin_form(request)
+    admin_err = require_admin_form(request)
     if admin_err:
         return admin_err
     from cert_watch.middleware import check_csrf

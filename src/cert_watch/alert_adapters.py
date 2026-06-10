@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
@@ -236,7 +236,11 @@ class PagerDutyAdapter:
         alert_type: str,
         threshold_days: int | None,
         config: WebhookConfig,
+        *,
         summary: str = "",
+        hostname: str = "",
+        subject: str = "",
+        alert_created_at: datetime | None = None,
     ) -> AlertRequest:
         dedup_key = _pd_dedup_key(cert_id, alert_type, threshold_days)
         if not summary:
@@ -326,6 +330,7 @@ class AlertmanagerAdapter:
         alert_type: str,
         threshold_days: int | None,
         config: WebhookConfig,
+        *,
         summary: str = "",
         hostname: str = "",
         subject: str = "",
@@ -334,7 +339,10 @@ class AlertmanagerAdapter:
         if not summary:
             summary = f"cert-watch: certificate {cert_id} renewed, {alert_type} resolved"
         now = datetime.now(UTC)
-        starts_at = (alert_created_at or now).isoformat()
+        if alert_created_at is not None:
+            starts_at = alert_created_at.isoformat()
+        else:
+            starts_at = (now - timedelta(milliseconds=1)).isoformat()
         ends_at = now.isoformat()
         alert_entry = {
             "status": "resolved",

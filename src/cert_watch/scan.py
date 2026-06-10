@@ -319,8 +319,9 @@ def store_scanned(
     avoid accumulation on repeated scans. Also evaluates and stores TLS posture.
     See AC-07.
 
-    When ``webhook_config`` is a ``WebhookConfig`` with ``kind="pagerduty"``,
-    sends resolve events for any open PagerDuty incidents on the replaced cert.
+    When ``webhook_config`` is a ``WebhookConfig`` with ``kind="pagerduty"``
+    or ``kind="alertmanager"``, sends resolve events for any open incidents
+    on the replaced cert.
     """
     if isinstance(repo_path_or_repo, str | Path):
         init_schema(repo_path_or_repo)
@@ -329,6 +330,29 @@ def store_scanned(
                 "stored scan for %s:%s with incomplete chain (openssl degraded)",
                 entry.host, entry.port,
             )
+        # Capture pending alerts BEFORE replace_scanned deletes them (BC-160).
+        pending_for_resolve: list | None = None
+        old_leaf_id_for_resolve: str | None = None
+        if webhook_config is not None:
+            try:
+                from cert_watch.alerts import WebhookConfig
+                if isinstance(webhook_config, WebhookConfig):
+                    from cert_watch.database import SqliteAlertRepository
+                    from cert_watch.database.connection import _connect
+                    with _connect(repo_path_or_repo) as conn:
+                        row = conn.execute(
+                            "SELECT id FROM certificates"
+                            " WHERE hostname = ? AND port = ? AND is_leaf = 1",
+                            (entry.host, entry.port),
+                        ).fetchone()
+                    if row:
+                        old_leaf_id_for_resolve = row["id"]
+                        pending_for_resolve = SqliteAlertRepository(
+                            repo_path_or_repo
+                        ).list_for_cert(old_leaf_id_for_resolve)
+            except Exception:  # noqa: BLE001
+                logger.debug("pre-fetch alerts for resolve failed", exc_info=True)
+
         leaf_id, replaced_cert_id = replace_scanned(
             repo_path_or_repo,
             hostname=entry.host,
@@ -339,20 +363,21 @@ def store_scanned(
         )
         if replaced_cert_id and webhook_config is not None:
             try:
-                from cert_watch.alerts import WebhookConfig, resolve_pagerduty_for_renewed_cert
+                from cert_watch.alerts import WebhookConfig, resolve_webhook_for_renewed_cert
                 if not isinstance(webhook_config, WebhookConfig):
                     raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
-                resolved = resolve_pagerduty_for_renewed_cert(
+                resolved = resolve_webhook_for_renewed_cert(
                     repo_path_or_repo, replaced_cert_id, webhook_config,
+                    pending_alerts=pending_for_resolve,
                 )
                 if resolved:
                     logger.info(
-                        "resolved %d pagerduty incident(s) for replaced cert %s",
+                        "resolved %d webhook incident(s) for replaced cert %s",
                         resolved, replaced_cert_id,
                     )
             except Exception:  # noqa: BLE001
-                logger.debug(
-                    "pagerduty resolve skipped for %s:%s",
+                logger.warning(
+                    "webhook resolve failed for %s:%s",
                     entry.host, entry.port,
                     exc_info=True,
                 )

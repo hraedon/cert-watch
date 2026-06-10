@@ -63,6 +63,16 @@ def replace_scanned(
                 "SELECT * FROM certificates WHERE id = ?", (replaces_id,)
             ).fetchone()
 
+        # Collect all old cert IDs (leaves + chain children) BEFORE deleting
+        # them, so we can clean up their alerts.
+        old_all_ids = [
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchall()
+        ]
+
         for old_id in old_leaves:
             conn.execute(
                 "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
@@ -71,13 +81,6 @@ def replace_scanned(
             "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
             (hostname, port),
         )
-        old_all_ids = [
-            row["id"]
-            for row in conn.execute(
-                "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
-                (hostname, port),
-            ).fetchall()
-        ]
         if old_all_ids:
             ph = ",".join("?" * len(old_all_ids))
             conn.execute(

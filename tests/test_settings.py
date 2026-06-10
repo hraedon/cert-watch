@@ -1644,7 +1644,7 @@ def test_der_chain_to_ca_dicts_no_ca_certs(self_signed_leaf):
     assert _der_chain_to_ca_dicts([self_signed_leaf.der]) is None
 
 
-# ---------- _require_admin auth paths ----------
+# ---------- Settings admin auth paths ----------
 
 
 def test_require_admin_no_auth_provider(reload_app):
@@ -1664,13 +1664,14 @@ def test_require_admin_unauthenticated_redirects_with_auth(reload_app, tmp_path,
     assert "/login" in r.headers["location"]
 
 
-def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monkeypatch):
+@pytest.mark.anyio
+async def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monkeypatch):
     from unittest.mock import MagicMock
 
     from cert_watch.auth import _CompositeProvider
     from cert_watch.auth.local_admin import LocalAdminProvider
     from cert_watch.config import Settings
-    from cert_watch.routes.settings import _require_admin
+    from cert_watch.middleware import require_admin_form
 
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
@@ -1699,7 +1700,7 @@ def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monkeypatc
         "session": {},
     }
     req = Request(scope)
-    result = _require_admin(req)
+    result = require_admin_form(req)
     assert result is not None
     assert result.status_code == 303
 

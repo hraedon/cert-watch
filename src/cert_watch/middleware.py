@@ -780,7 +780,7 @@ def _admin_redirect_target(request: Request) -> str:
     return "/"
 
 
-async def require_admin_form(request: Request) -> RedirectResponse | None:
+def require_admin_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: admin-only check (no CSRF), return redirect on failure.
 
     Use this when a handler still needs manual CSRF handling (e.g. to

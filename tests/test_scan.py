@@ -889,7 +889,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
 
     mock_resolve = MagicMock(return_value=1)
     monkeypatch.setattr(
-        "cert_watch.alerts.resolve_pagerduty_for_renewed_cert",
+        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
         mock_resolve,
     )
 
@@ -898,7 +898,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
     mock_resolve.assert_called_once()
 
 
-def test_store_scanned_pagerduty_resolve_exception(monkeypatch, tmp_path, self_signed_leaf):
+def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_signed_leaf):
     from cert_watch.alerts import WebhookConfig
     db = tmp_path / "cw.sqlite3"
     leaf = parse_certificate(self_signed_leaf.der)
@@ -927,12 +927,152 @@ def test_store_scanned_pagerduty_resolve_exception(monkeypatch, tmp_path, self_s
         routing_key="rk1",
     )
     monkeypatch.setattr(
-        "cert_watch.alerts.resolve_pagerduty_for_renewed_cert",
+        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("pd down")),
     )
 
     leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
     assert leaf_id == "leaf-id-1"
+
+
+def test_store_scanned_alertmanager_resolve_end_to_end(
+    monkeypatch, tmp_path, self_signed_leaf,
+):
+    """Alertmanager resolve is called through the full scan path on renewal.
+
+    Uses real replace_scanned so the pre-fetch-before-delete ordering is
+    actually exercised (the resolve must see alerts that replace_scanned
+    will delete).
+    """
+    import json
+
+    from cert_watch.alerts import WebhookConfig
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    from cert_watch.database.cert_ops import replace_scanned
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    # First insert: use real replace_scanned to get a real cert ID
+    first_leaf_id, _ = replace_scanned(
+        db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
+    )
+
+    # Seed a pending alert for the old cert
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_leaf_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+
+    # Verify the alert exists before the second scan
+    assert len(alert_repo.list_for_cert(first_leaf_id)) == 1
+
+    # Don't mock replace_scanned — let the real code run so pre-fetch is exercised
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://am.example.com/api/v1/alerts",
+        kind="alertmanager",
+    )
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
+        # New leaf has a different ID than the first insert
+        assert leaf_id != first_leaf_id
+
+        # Exactly one resolve request was sent for the unique alert
+        assert mock_urlopen.call_count == 1
+        call_kwargs = mock_urlopen.call_args[1]
+        payload = json.loads(call_kwargs["data"])
+        assert payload["alerts"][0]["status"] == "resolved"
+        assert payload["alerts"][0]["labels"]["alertname"] == "CertExpiry"
+        assert payload["alerts"][0]["labels"]["host"] == "x"
+
+        # Verify the old cert's alerts were deleted by replace_scanned
+        assert len(alert_repo.list_for_cert(first_leaf_id)) == 0
+
+
+def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
+    monkeypatch, tmp_path, self_signed_leaf,
+):
+    """An Alertmanager resolve failure must not block the scan pipeline."""
+    from cert_watch.alerts import WebhookConfig
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    from cert_watch.database.cert_ops import replace_scanned
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    # First insert
+    first_leaf_id, _ = replace_scanned(
+        db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
+    )
+
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_leaf_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: "A",
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://am.example.com/api/v1/alerts",
+        kind="alertmanager",
+    )
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 500
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
+        assert leaf_id != first_leaf_id
 
 
 def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_signed_leaf):
