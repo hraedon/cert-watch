@@ -537,6 +537,90 @@ def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
     assert result is True
 
 
+def test_send_expiry_digest_discord_adapter_format(tmp_path):
+    """WI-011: digest webhook to kind='discord' uses Discord embed format."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, subject="CN=discord-test", hostname="d.example.com",
+                 port=443, not_after=soon)
+    webhook = WebhookConfig(url="https://hooks.discord.test/webhook", kind="discord")
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
+    call_kwargs = mock_urlopen.call_args
+    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    payload = json.loads(body)
+    assert "embeds" in payload
+    assert payload["embeds"][0]["title"] == "cert-watch: Expiry Digest"
+
+
+def test_send_expiry_digest_alertmanager_adapter_format(tmp_path):
+    """WI-011: digest webhook to kind='alertmanager' uses Alertmanager alert format."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, subject="CN=am-test", hostname="am.example.com",
+                 port=443, not_after=soon)
+    webhook = WebhookConfig(url="https://am.example.com/api/v1/alerts", kind="alertmanager")
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
+    call_kwargs = mock_urlopen.call_args
+    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    payload = json.loads(body)
+    assert "alerts" in payload
+    assert payload["alerts"][0]["labels"]["alertname"] == "CertAlert"
+
+
+def test_send_expiry_digest_generic_adapter_format(tmp_path):
+    """WI-011: digest webhook to kind='generic' still uses plain JSON payload."""
+    import json
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, subject="CN=generic-test", hostname="g.example.com",
+                 port=443, not_after=soon)
+    webhook = WebhookConfig(url="https://hooks.test/hook", kind="generic")
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+        result = send_expiry_digest(db, None, webhook)
+    assert result is True
+    call_kwargs = mock_urlopen.call_args
+    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
+    if isinstance(body, bytes):
+        body = body.decode("utf-8")
+    payload = json.loads(body)
+    assert payload["alert_type"] == "expiry_digest"
+    assert "message" in payload
+
+
 def test_send_expiry_digest_smtp_failure_returns_false(tmp_path):
     from datetime import UTC, datetime, timedelta
 

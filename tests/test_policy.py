@@ -8,16 +8,20 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.database.kv_store import kv_get, kv_set
 from cert_watch.database.schema import init_schema
 from cert_watch.policy import (
+    _POLICY_TO_POSTURE_CHECK,
+    PolicyRule,
     PolicySet,
     PolicyViolation,
     _deserialize_policy_set,
     _extract_cn_from_name,
     _tls_meets_min,
+    acquire_policy_lock,
     apply_policy_overrides,
     default_policy_set,
     evaluate_policy,
     load_policy_set,
     save_policy_set,
+    save_policy_set_locked,
 )
 
 
@@ -857,3 +861,417 @@ class TestWellConfiguredCertNoViolations:
             ruleset=ps,
         )
         assert len(vs) == 0
+
+
+# ---------- WI-014: Policy + posture double-penalization ----------
+
+
+def _enabled_ruleset(*rule_ids: str) -> PolicySet:
+    """Return a PolicySet with only the named rules enabled."""
+    ps = _all_disabled_ruleset()
+    for r in ps.rules:
+        if r.rule_id in rule_ids:
+            r.enabled = True
+    return ps
+
+
+class TestPostureDeduplication:
+    """WI-014: When posture already flagged an issue, policy should not duplicate it."""
+
+    def test_rsa_key_size_deduplicated(self):
+        """RSA 1024: posture fails, policy key_size_rsa enabled → only one finding."""
+        from cert_watch.posture import Finding
+
+        der = _weak_rsa_cert_der(1024)
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="rsa_key_size", status="fail", message="RSA key size 1024 < 2048 bits"),
+        ]
+
+        rs = _enabled_ruleset("key_size_rsa")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0  # skipped because posture already flagged it
+
+        # Without posture findings, the policy violation fires normally.
+        vs2 = evaluate_policy(cert, None, False, None, None, None, rs)
+        assert len(vs2) == 1
+        assert vs2[0].rule_id == "key_size_rsa"
+
+    def test_sha1_deduplicated(self):
+        """SHA-1: posture fails, policy hash_algorithm enabled → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="sha1_signature", status="fail", message="SHA-1 signature algorithm"),
+        ]
+
+        rs = _enabled_ruleset("hash_algorithm")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0  # skipped
+
+    def test_tls_version_deduplicated(self):
+        """TLS 1.0: posture warns, policy tls_version enabled → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="tls_version", status="warn", message="TLS TLSv1.0 offered"),
+        ]
+
+        rs = _enabled_ruleset("tls_version")
+        vs = evaluate_policy(
+            cert, None, False, "TLSv1.0", None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0
+
+    def test_chain_completeness_deduplicated(self):
+        """Incomplete chain: posture warns, policy chain_completeness → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="chain_completeness", status="warn", message="Incomplete chain"),
+        ]
+
+        rs = _enabled_ruleset("chain_completeness")
+        vs = evaluate_policy(
+            cert, "incomplete", False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0
+
+    def test_self_signed_deduplicated(self):
+        """Self-signed: posture warns, policy self_signed → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _self_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="self_signed", status="warn", message="Self-signed certificate"),
+        ]
+
+        rs = _enabled_ruleset("self_signed")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0
+
+    def test_hsts_pass_not_deduplicated(self):
+        """HSTS posture status='pass' should NOT block policy hsts_required."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="hsts", status="pass", message="No HSTS header detected"),
+        ]
+
+        rs = _enabled_ruleset("hsts_required")
+        vs = evaluate_policy(
+            cert, None, False, None, False, None, rs,
+            posture_findings=posture_findings,
+        )
+        # Posture said "pass" so policy rule is NOT deduplicated — it still fires.
+        assert len(vs) == 1
+        assert vs[0].rule_id == "hsts_required"
+
+    def test_hsts_fail_deduplicated(self):
+        """HSTS: posture finding status='warn', policy hsts_required → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="hsts", status="warn", message="HSTS header missing"),
+        ]
+
+        rs = _enabled_ruleset("hsts_required")
+        vs = evaluate_policy(
+            cert, None, False, None, False, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0
+
+    def test_policy_only_rule_not_deduplicated(self):
+        """issuer_allowlist has no posture counterpart → always fires."""
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        rs = _enabled_ruleset("issuer_allowlist")
+        for r in rs.rules:
+            if r.rule_id == "issuer_allowlist":
+                r.parameters["allowed_issuers"] = ["Other CA"]
+
+        posture_findings = [
+            Finding(check="rsa_key_size", status="fail", message="weak key"),
+        ]
+
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 1
+        assert vs[0].rule_id == "issuer_allowlist"
+
+    def test_validity_max_days_deduplicated(self):
+        """Long validity: posture warns, policy validity_max_days → deduplicated."""
+        from cert_watch.posture import Finding
+
+        der = _long_validity_cert_der(400)
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(
+                check="long_validity", status="warn",
+                message="Validity 401 days exceeds 398-day limit",
+            ),
+        ]
+
+        rs = _enabled_ruleset("validity_max_days")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 0
+
+    def test_sans_required_not_deduplicated(self):
+        """sans_required has no posture counterpart → always fires."""
+        from cert_watch.posture import Finding
+
+        der = _self_signed_cert_der()  # no SANs
+        cert = _cert_from_der(der)
+
+        rs = _enabled_ruleset("sans_required")
+        posture_findings = [
+            Finding(check="self_signed", status="warn", message="self-signed"),
+        ]
+
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        assert len(vs) == 1
+        assert vs[0].rule_id == "sans_required"
+
+    def test_no_posture_findings_fires_normally(self):
+        """When posture_findings is None or empty, all enabled rules fire."""
+        der = _weak_rsa_cert_der(1024)
+        cert = _cert_from_der(der)
+
+        rs = _enabled_ruleset("key_size_rsa")
+
+        vs = evaluate_policy(cert, None, False, None, None, None, rs, posture_findings=None)
+        assert len(vs) == 1
+
+        vs2 = evaluate_policy(cert, None, False, None, None, None, rs, posture_findings=[])
+        assert len(vs2) == 1
+
+    def test_posture_pass_status_not_deduplicated(self):
+        """A posture finding with status='pass' should NOT block the policy rule."""
+        from cert_watch.posture import Finding
+
+        der = _weak_rsa_cert_der(1024)
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(check="rsa_key_size", status="pass", message="RSA 2048 bits"),
+        ]
+
+        rs = _enabled_ruleset("key_size_rsa")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        # Posture said "pass" so policy rule still fires.
+        assert len(vs) == 1
+
+    def test_info_status_does_not_suppress_policy(self):
+        """A posture finding with status='info' should NOT block the policy rule.
+
+        Info findings are informational (e.g., OCSP Must-Staple not present)
+        and should not prevent a policy rule from flagging the same check.
+        """
+        from cert_watch.posture import Finding
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+
+        posture_findings = [
+            Finding(
+                check="ocsp_must_staple", status="info",
+                message="OCSP Must-Staple not required",
+            ),
+        ]
+
+        rs = _enabled_ruleset("ocsp_must_staple")
+        vs = evaluate_policy(
+            cert, None, False, None, None, None, rs,
+            posture_findings=posture_findings,
+        )
+        # Info status should not suppress the policy rule.
+        assert len(vs) == 1
+
+    def test_mapping_completeness(self):
+        """Every overlapping rule_id maps to a valid posture check name."""
+        for rule_id, check_name in _POLICY_TO_POSTURE_CHECK.items():
+            assert isinstance(check_name, str), f"{rule_id} maps to non-string"
+            assert len(check_name) > 0, f"{rule_id} maps to empty string"
+
+
+# ---------- WI-017: Concurrent PUT /api/policy race condition ----------
+
+
+class TestPolicyWriteLock:
+    """WI-017: Serialised policy writes prevent lost updates."""
+
+    def test_lock_prevents_interleaved_writes(self, tmp_path):
+        """Two concurrent saves don't lose one writer's data."""
+        import threading
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+
+        ps = default_policy_set()
+        save_policy_set(db, ps)
+
+        errors: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def writer_a() -> None:
+            try:
+                barrier.wait(timeout=5)
+                with acquire_policy_lock():
+                    current = load_policy_set(db)
+                    current.rules.append(PolicyRule(
+                        rule_id="rule_a", category="custom",
+                        severity="warning", enabled=True,
+                    ))
+                    save_policy_set_locked(db, current)
+            except Exception as e:
+                errors.append(f"writer_a: {e}")
+
+        def writer_b() -> None:
+            try:
+                barrier.wait(timeout=5)
+                with acquire_policy_lock():
+                    current = load_policy_set(db)
+                    current.rules.append(PolicyRule(
+                        rule_id="rule_b", category="custom",
+                        severity="info", enabled=True,
+                    ))
+                    save_policy_set_locked(db, current)
+            except Exception as e:
+                errors.append(f"writer_b: {e}")
+
+        t1 = threading.Thread(target=writer_a)
+        t2 = threading.Thread(target=writer_b)
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert errors == [], f"writer errors: {errors}"
+
+        final = load_policy_set(db)
+        rule_ids = [r.rule_id for r in final.rules]
+        assert "rule_a" in rule_ids, f"rule_a missing from {rule_ids}"
+        assert "rule_b" in rule_ids, f"rule_b missing from {rule_ids}"
+
+    def test_save_policy_set_acquires_lock(self, tmp_path):
+        """save_policy_set() itself holds the module-level lock."""
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+
+        ps = default_policy_set()
+        save_policy_set(db, ps)
+        loaded = load_policy_set(db)
+        assert len(loaded.rules) == 11
+
+    def test_lock_does_not_block_reads(self, tmp_path):
+        """GET (load_policy_set) should not be blocked by the write lock."""
+        import threading
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+        ps = default_policy_set()
+        save_policy_set(db, ps)
+
+        read_result: list[str] = []
+        read_done = threading.Event()
+
+        def reader() -> None:
+            loaded = load_policy_set(db)
+            read_result.append(f"read {len(loaded.rules)} rules")
+            read_done.set()
+
+        with acquire_policy_lock():
+            t = threading.Thread(target=reader)
+            t.start()
+            read_done.wait(timeout=3)
+
+        t.join(timeout=5)
+        assert len(read_result) == 1
+        assert "11 rules" in read_result[0]
+
+    def test_concurrent_read_modify_write_serialized(self, tmp_path):
+        """Two concurrent read-modify-writes serialize (no data loss)."""
+        import threading
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+
+        ps1 = PolicySet(rules=[
+            PolicyRule(rule_id="base", category="custom", severity="warning", enabled=False),
+        ])
+        save_policy_set(db, ps1)
+
+        errors: list[str] = []
+        barrier = threading.Barrier(2)
+
+        def writer(rule_id: str, severity: str) -> None:
+            try:
+                barrier.wait(timeout=5)
+                with acquire_policy_lock():
+                    current = load_policy_set(db)
+                    current.rules.append(PolicyRule(
+                        rule_id=rule_id, category="custom",
+                        severity=severity, enabled=True,
+                    ))
+                    save_policy_set_locked(db, current)
+            except Exception as e:
+                errors.append(f"{rule_id}: {e}")
+
+        t1 = threading.Thread(target=writer, args=("rule_x", "critical"))
+        t2 = threading.Thread(target=writer, args=("rule_y", "info"))
+        t1.start()
+        t2.start()
+        t1.join(timeout=10)
+        t2.join(timeout=10)
+
+        assert errors == [], f"errors: {errors}"
+        final = load_policy_set(db)
+        rule_ids = [r.rule_id for r in final.rules]
+        assert "rule_x" in rule_ids
+        assert "rule_y" in rule_ids
+        assert "base" in rule_ids

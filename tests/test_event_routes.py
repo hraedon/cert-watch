@@ -228,3 +228,22 @@ def test_api_events_stream_has_require_auth_dep():
     route = next(r for r in router.routes if r.path == "/api/events/stream")
     dep = route.dependant.dependencies[0]
     assert dep.call.__name__ == "require_auth"
+
+
+def test_api_events_stream_has_ping_configured():
+    """The SSE endpoint configures a 15-second ping comment to keep proxies alive."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from cert_watch.routes.api.events import api_event_stream
+
+    request = MagicMock()
+    request.is_disconnected = AsyncMock(return_value=True)
+    import asyncio
+
+    resp = asyncio.run(api_event_stream(request, _auth=""))
+    assert resp.ping_interval == 15
+    assert resp.ping_message_factory is not None
+    # Verify the factory produces a comment-only SSE event
+    evt = resp.ping_message_factory()
+    assert evt.comment == "ping"
+    assert evt.event is None

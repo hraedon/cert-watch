@@ -261,7 +261,11 @@ def test_api_policy_put_viewer_forbidden(tmp_path):
 
 
 def test_api_policy_put_admin_allowed(tmp_path):
-    """An admin-role user can PUT /api/policy and the change persists."""
+    """An admin-role user can PUT /api/policy and the change persists.
+
+    WI-017: PUT now merges incoming rules with existing rules by rule_id,
+    so the test_rule is added to the default 11 rules (→ 12 total).
+    """
     from cert_watch.app import create_app
     from cert_watch.auth import SESSION_COOKIE, create_session
     from cert_watch.config import Settings
@@ -293,14 +297,16 @@ def test_api_policy_put_admin_allowed(tmp_path):
         })
         assert r.status_code == 200
 
-        # Verify the policy was actually persisted
+        # Verify the policy was actually persisted (merge: default 11 + 1 new = 12)
         r2 = client.get("/api/policy")
         assert r2.status_code == 200
         body = r2.json()
         assert body["default_severity"] == "warning"
-        assert len(body["rules"]) == 1
-        assert body["rules"][0]["rule_id"] == "test_rule"
-        assert body["rules"][0]["severity"] == "critical"
+        rule_ids = [r["rule_id"] for r in body["rules"]]
+        assert "test_rule" in rule_ids
+        test_rule = next(r for r in body["rules"] if r["rule_id"] == "test_rule")
+        assert test_rule["severity"] == "critical"
+        assert test_rule["enabled"] is True
 
 
 def test_api_policy_violations_viewer_can_read(tmp_path):

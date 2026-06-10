@@ -412,7 +412,21 @@ def store_scanned(
             logger.debug("previous grade read skipped for %s:%s", entry.host, entry.port)
         try:
             from cert_watch.policy import apply_policy_overrides, evaluate_policy, load_policy_set
+            from cert_watch.posture import Finding as _Finding
             ruleset = load_policy_set(str(repo_path_or_repo))
+            # Reconstruct Finding objects from the stored dicts so
+            # evaluate_policy can skip rules that posture already flagged (WI-014).
+            posture_finding_objs: list[_Finding] | None = None
+            if original_findings:
+                posture_finding_objs = [
+                    _Finding(
+                        check=f["check"],
+                        status=f["status"],
+                        message=f.get("message", ""),
+                    )
+                    for f in original_findings
+                    if isinstance(f, dict) and "check" in f and "status" in f
+                ]
             violations = evaluate_policy(
                 cert=entry.leaf,
                 chain_status=None,
@@ -421,6 +435,7 @@ def store_scanned(
                 hsts=entry.hsts,
                 ocsp_stapling=None,
                 ruleset=ruleset,
+                posture_findings=posture_finding_objs,
             )
             if violations:
                 overridden = apply_policy_overrides(posture_grade, violations)
