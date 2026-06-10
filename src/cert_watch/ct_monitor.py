@@ -111,18 +111,15 @@ class ReconciliationResult:
     first_seen_by_issuer: dict[str, str] = field(default_factory=dict)
 
 
-def _get_scanned_issuer_serial(db_path: str | Path, hostname: str) -> tuple[str, str] | None:
-    """Return (issuer, fingerprint_sha256) of the latest scanned leaf for hostname."""
+def _get_scanned_issuer(db_path: str | Path, hostname: str) -> str | None:
     with _connect(db_path) as conn:
         row = conn.execute(
-            """SELECT c.issuer, c.fingerprint_sha256 FROM certificates c
+            """SELECT c.issuer FROM certificates c
             WHERE c.hostname = ? AND c.is_leaf = 1 AND c.source = 'scanned'
             ORDER BY c.updated_at DESC LIMIT 1""",
             (hostname,),
         ).fetchone()
-    if row:
-        return row["issuer"], row["fingerprint_sha256"]
-    return None
+    return row["issuer"] if row else None
 
 
 def _record_ct_issuer_first_seen(db_path: str | Path, issuer_name: str) -> str | None:
@@ -132,19 +129,18 @@ def _record_ct_issuer_first_seen(db_path: str | Path, issuer_name: str) -> str |
     from cert_watch.database.connection import _iso
 
     with _connect(db_path) as conn:
+        now_str = _iso(datetime.now(UTC))
+        conn.execute(
+            "INSERT INTO ct_issuer_first_seen (issuer_name, first_seen_at) "
+            "VALUES (?, ?) ON CONFLICT (issuer_name) DO NOTHING",
+            (issuer_name, now_str),
+        )
+        conn.commit()
         row = conn.execute(
             "SELECT first_seen_at FROM ct_issuer_first_seen WHERE issuer_name = ?",
             (issuer_name,),
         ).fetchone()
-        if row:
-            return row["first_seen_at"]
-        now_str = _iso(datetime.now(UTC))
-        conn.execute(
-            "INSERT INTO ct_issuer_first_seen (issuer_name, first_seen_at) VALUES (?, ?)",
-            (issuer_name, now_str),
-        )
-        conn.commit()
-        return now_str
+        return row["first_seen_at"] if row else None
 
 
 def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
@@ -214,35 +210,27 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
     # BC-151: mis-issuance detection + first-seen capture
     misissued: list[dict] = []
     first_seen_by_issuer: dict[str, str] = {}
-    ct_issuers_by_host: dict[str, set[tuple[str, str]]] = {}
+    ct_issuers_by_host: dict[str, set[str]] = {}
     for entry in result:
         for name in entry.name_value.split("\n"):
             name = name.strip()
             if name and (name == domain or name.endswith("." + domain)):
-                ct_issuers_by_host.setdefault(name, set()).add(
-                    (entry.issuer_name, entry.serial_number)
-                )
+                ct_issuers_by_host.setdefault(name, set()).add(entry.issuer_name)
         cn = entry.common_name
         if cn and (cn == domain or cn.endswith("." + domain)):
-            ct_issuers_by_host.setdefault(cn, set()).add(
-                (entry.issuer_name, entry.serial_number)
-            )
+            ct_issuers_by_host.setdefault(cn, set()).add(entry.issuer_name)
 
     for host in tracked_hostnames:
-        scanned = _get_scanned_issuer_serial(db_path, host)
+        scanned_issuer = _get_scanned_issuer(db_path, host)
         ct_issuers = ct_issuers_by_host.get(host, set())
-        if scanned and ct_issuers:
-            scanned_issuer, scanned_serial = scanned
-            for ct_issuer, ct_serial in ct_issuers:
-                if ct_issuer != scanned_issuer or ct_serial != scanned_serial:
+        if scanned_issuer and ct_issuers:
+            for ct_issuer in ct_issuers:
+                if ct_issuer != scanned_issuer:
                     misissued.append({
                         "host": host,
                         "scanned_issuer": scanned_issuer,
                         "ct_issuer": ct_issuer,
-                        "scanned_serial": scanned_serial,
-                        "ct_serial": ct_serial,
                     })
-                # Record first-seen for this issuer
                 if ct_issuer not in first_seen_by_issuer:
                     first_seen = _record_ct_issuer_first_seen(db_path, ct_issuer)
                     if first_seen:
@@ -263,10 +251,84 @@ def ct_reconciliation(db_path: str | Path, domain: str) -> ReconciliationResult:
     return recon
 
 
+def _extract_parent_domains(hostnames: list[str]) -> set[str]:
+    domains: set[str] = set()
+    for h in hostnames:
+        parts = h.split(".")
+        if len(parts) >= 2:
+            domains.add(".".join(parts[-2:]))
+    return domains
+
+
+def _get_scanned_cert_id(db_path: str | Path, hostname: str) -> str:
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT id FROM certificates
+               WHERE hostname = ? AND is_leaf = 1 AND source = 'scanned'
+               ORDER BY updated_at DESC LIMIT 1""",
+            (hostname,),
+        ).fetchone()
+    return row["id"] if row else ""
+
+
+def _has_pending_misissuance_alert(db_path: str | Path, cert_id: str) -> bool:
+    if not cert_id:
+        return False
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            """SELECT 1 FROM alerts
+               WHERE cert_id = ? AND alert_type = 'mis_issuance'
+                 AND status = 'pending' LIMIT 1""",
+            (cert_id,),
+        ).fetchone()
+    return row is not None
+
+
+def create_ct_misissuance_alert(
+    db_path: str | Path,
+    misissued_entry: dict,
+    domain: str,
+) -> str | None:
+    from cert_watch.database.repo import Alert, SqliteAlertRepository
+
+    host = misissued_entry["host"]
+    scanned_issuer = misissued_entry["scanned_issuer"]
+    ct_issuer = misissued_entry["ct_issuer"]
+
+    cert_id = _get_scanned_cert_id(db_path, host)
+    if _has_pending_misissuance_alert(db_path, cert_id):
+        return None
+
+    message = (
+        f"{host} — CT mis-issuance detected: expected issuer '{scanned_issuer}', "
+        f"found '{ct_issuer}' in CT logs (domain={domain})"
+    )
+
+    subject = ""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT subject FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+        if row:
+            subject = row["subject"] or ""
+
+    alert = Alert(
+        cert_id=cert_id,
+        alert_type="mis_issuance",
+        status="pending",
+        message=message,
+        hostname=host,
+        subject=subject,
+    )
+    alert_repo = SqliteAlertRepository(db_path)
+    return alert_repo.create(alert)
+
+
 def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
     """Query CT logs for all tracked host domains and report new findings.
 
-    Returns {"checked": N, "new": M, "errors": E}.
+    Also runs CT reconciliation per parent domain to detect mis-issuance
+    and creates alerts for any mismatched issuers.
+
+    Returns {"checked": N, "new": M, "errors": E, "misissued": M, "alerts_created": A}.
     """
     init_schema(db_path)
     with _connect(db_path) as conn:
@@ -274,12 +336,13 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
             "SELECT DISTINCT hostname FROM hosts WHERE hostname IS NOT NULL"
         ).fetchall()
 
+    hostnames = [row["hostname"] for row in rows]
+
     checked = 0
     new = 0
     errors = 0
     known_serial_issuer: set[tuple[str, str]] = set()
-    for row in rows:
-        hostname = row["hostname"]
+    for hostname in hostnames:
         checked += 1
         result = query_ct_log(hostname)
         if isinstance(result, str):
@@ -295,9 +358,33 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
                     "CT monitor: new certificate found for %s — CN=%s issuer=%s serial=%s",
                     hostname, entry.common_name, entry.issuer_name, entry.serial_number,
                 )
-    if new > 0:
+
+    misissued_count = 0
+    alerts_created = 0
+    domains = _extract_parent_domains(hostnames)
+    for domain in sorted(domains):
+        try:
+            recon = ct_reconciliation(db_path, domain)
+        except Exception:
+            logger.warning("CT reconciliation failed for %s", domain, exc_info=True)
+            continue
+        for mi in recon.misissued:
+            misissued_count += 1
+            alert_id = create_ct_misissuance_alert(db_path, mi, domain)
+            if alert_id:
+                alerts_created += 1
+                logger.warning(
+                    "CT mis-issuance alert: %s — expected issuer '%s', found '%s' (domain=%s)",
+                    mi["host"], mi["scanned_issuer"], mi["ct_issuer"], domain,
+                )
+
+    if new > 0 or alerts_created > 0:
         logger.info(
-            "CT monitor complete: %d checked, %d new certificates, %d errors",
-            checked, new, errors,
+            "CT monitor complete: %d checked, %d new, %d errors, "
+            "%d misissued, %d alerts created",
+            checked, new, errors, misissued_count, alerts_created,
         )
-    return {"checked": checked, "new": new, "errors": errors}
+    return {
+        "checked": checked, "new": new, "errors": errors,
+        "misissued": misissued_count, "alerts_created": alerts_created,
+    }

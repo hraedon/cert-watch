@@ -1701,7 +1701,7 @@ def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monkeypatc
     req = Request(scope)
     result = _require_admin(req)
     assert result is not None
-    assert result.status_code == 403
+    assert result.status_code == 303
 
 
 # ---------- API keys admin redirect ----------

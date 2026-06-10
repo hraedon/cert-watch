@@ -13,12 +13,15 @@ import pytest
 
 from cert_watch.alert_adapters import (
     _PAGERDUTY_EVENTS_URL,
+    AlertmanagerAdapter,
     DiscordAdapter,
     GenericAdapter,
     PagerDutyAdapter,
+    SlackAdapter,
     TeamsAdapter,
     _pd_dedup_key,
     _pd_severity,
+    _slack_color,
     _status_color,
     _status_urgency,
     get_adapter,
@@ -32,6 +35,8 @@ def _alert(
     threshold_days: int = 7,
     cert_id: str = "cert-abc123",
     message: str = "Certificate 'web.example.com' expires in 5 days.",
+    hostname: str = "",
+    subject: str = "",
 ) -> Alert:
     return Alert(
         cert_id=cert_id,
@@ -39,6 +44,8 @@ def _alert(
         status="pending",
         message=message,
         threshold_days=threshold_days,
+        hostname=hostname,
+        subject=subject,
     )
 
 
@@ -280,14 +287,17 @@ class TestPagerDutyAdapter:
 
 
 class TestGetAdapter:
-    @pytest.mark.parametrize("kind", ["generic", "discord", "teams", "pagerduty"])
+    @pytest.mark.parametrize(
+        "kind",
+        ["generic", "discord", "teams", "pagerduty", "slack", "alertmanager"],
+    )
     def test_known_kinds(self, kind):
         adapter = get_adapter(kind)
         assert adapter.kind == kind
 
     def test_unknown_kind_raises(self):
         with pytest.raises(ValueError, match="unknown alert adapter kind"):
-            get_adapter("slack")
+            get_adapter("unknown_channel")
 
 
 # ---------------------------------------------------------------------------
@@ -502,3 +512,181 @@ class TestPagerDutyResolve:
 
         resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
+
+
+# ---------------------------------------------------------------------------
+# Slack adapter
+# ---------------------------------------------------------------------------
+
+
+class TestSlackAdapter:
+    def test_attachments_payload(self):
+        adapter = SlackAdapter()
+        alert = _alert()
+        config = _config(kind="slack")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        assert "attachments" in body
+        assert len(body["attachments"]) == 1
+        att = body["attachments"][0]
+        assert att["footer"] == "cert-watch"
+        assert att["text"] == alert.message
+
+    def test_expired_color_danger(self):
+        assert _slack_color("expired") == "danger"
+
+    def test_expiry_warning_color_warning(self):
+        assert _slack_color("expiry_warning") == "warning"
+
+    def test_renewal_stalled_color_warning(self):
+        assert _slack_color("renewal_stalled") == "warning"
+
+    def test_default_color_good(self):
+        assert _slack_color("scan_failure") == "good"
+
+    def test_fields_include_expires_and_urgency(self):
+        adapter = SlackAdapter()
+        alert = _alert(threshold_days=7)
+        config = _config(kind="slack")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        fields = body["attachments"][0]["fields"]
+        expires_field = next(f for f in fields if f["title"] == "Expires")
+        urgency_field = next(f for f in fields if f["title"] == "Urgency")
+        assert expires_field["value"] == "7d"
+        assert urgency_field["value"] == "expiry_warning"
+
+    def test_null_threshold_shows_dash(self):
+        adapter = SlackAdapter()
+        alert = _alert(threshold_days=None)
+        config = _config(kind="slack")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        fields = body["attachments"][0]["fields"]
+        expires_field = next(f for f in fields if f["title"] == "Expires")
+        assert expires_field["value"] == "—"
+
+    def test_custom_headers_merged(self):
+        adapter = SlackAdapter()
+        config = _config(kind="slack", headers={"X-Custom": "yes"})
+        alert = _alert()
+        req = adapter.build(alert, config)
+        assert req.headers["X-Custom"] == "yes"
+        assert req.headers["Content-Type"] == "application/json"
+
+
+# ---------------------------------------------------------------------------
+# Alertmanager adapter
+# ---------------------------------------------------------------------------
+
+
+class TestAlertmanagerAdapter:
+    def test_firing_payload(self):
+        adapter = AlertmanagerAdapter()
+        alert = _alert(hostname="web.example.com", subject="CN=web.example.com")
+        config = _config(kind="alertmanager")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        assert "alerts" in body
+        assert len(body["alerts"]) == 1
+        entry = body["alerts"][0]
+        assert entry["status"] == "firing"
+        assert entry["labels"]["alertname"] == "CertExpiry"
+        assert entry["labels"]["host"] == "web.example.com"
+        assert entry["labels"]["cert_subject"] == "CN=web.example.com"
+        assert entry["labels"]["urgency"] == "expiry_warning"
+        assert entry["annotations"]["summary"] == alert.message
+        assert entry["generatorURL"] == config.url
+
+    def test_url_uses_config_url(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager", url="https://am.example.com/api/v1/alerts")
+        alert = _alert()
+        req = adapter.build(alert, config)
+        assert req.url == "https://am.example.com/api/v1/alerts"
+
+    def test_threshold_days_in_annotations(self):
+        adapter = AlertmanagerAdapter()
+        alert = _alert(threshold_days=3)
+        config = _config(kind="alertmanager")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        assert body["alerts"][0]["annotations"]["expires"] == "3"
+
+    def test_null_threshold_expires_empty(self):
+        adapter = AlertmanagerAdapter()
+        alert = _alert(threshold_days=None)
+        config = _config(kind="alertmanager")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        assert body["alerts"][0]["annotations"]["expires"] == ""
+
+    def test_labels_fallback_to_cert_id_when_empty(self):
+        adapter = AlertmanagerAdapter()
+        alert = _alert()
+        config = _config(kind="alertmanager")
+        req = adapter.build(alert, config)
+        body = json.loads(req.body)
+        entry = body["alerts"][0]
+        assert entry["labels"]["host"] == "cert-abc123"
+        assert entry["labels"]["cert_subject"] == "cert-abc123"
+
+    def test_build_resolve_payload(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        req = adapter.build_resolve(
+            "cert-1", "expiry_warning", 7, config,
+            hostname="web.example.com", subject="CN=web.example.com",
+        )
+        body = json.loads(req.body)
+        entry = body["alerts"][0]
+        assert entry["status"] == "resolved"
+        assert entry["labels"]["alertname"] == "CertExpiry"
+        assert entry["labels"]["host"] == "web.example.com"
+        assert entry["labels"]["cert_subject"] == "CN=web.example.com"
+        assert "renewed" in entry["annotations"]["summary"]
+
+    def test_build_resolve_custom_summary(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        req = adapter.build_resolve("c", "expired", None, config, summary="Custom resolve msg")
+        body = json.loads(req.body)
+        assert body["alerts"][0]["annotations"]["summary"] == "Custom resolve msg"
+
+    def test_build_resolve_null_threshold(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        req = adapter.build_resolve("c", "expired", None, config)
+        body = json.loads(req.body)
+        assert body["alerts"][0]["annotations"]["expires"] == ""
+
+    def test_build_resolve_starts_at_from_created_at(self):
+        from datetime import UTC, datetime
+
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        created = datetime(2025, 1, 15, 10, 30, 0, tzinfo=UTC)
+        req = adapter.build_resolve(
+            "cert-1", "expiry_warning", 7, config, alert_created_at=created,
+        )
+        body = json.loads(req.body)
+        entry = body["alerts"][0]
+        assert entry["startsAt"] == "2025-01-15T10:30:00+00:00"
+        assert entry["endsAt"] != entry["startsAt"]
+
+    def test_build_resolve_starts_at_defaults_to_now(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        req = adapter.build_resolve("c", "expired", None, config)
+        body = json.loads(req.body)
+        entry = body["alerts"][0]
+        assert entry["startsAt"] == entry["endsAt"]
+
+    def test_build_resolve_labels_fallback_to_cert_id(self):
+        adapter = AlertmanagerAdapter()
+        config = _config(kind="alertmanager")
+        req = adapter.build_resolve("cert-xyz", "expired", None, config)
+        body = json.loads(req.body)
+        entry = body["alerts"][0]
+        assert entry["labels"]["host"] == "cert-xyz"
+        assert entry["labels"]["cert_subject"] == "cert-xyz"

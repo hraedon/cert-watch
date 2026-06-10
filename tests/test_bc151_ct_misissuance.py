@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from cert_watch.certificate_model import Certificate
 from cert_watch.ct_monitor import (
     ReconciliationResult,
-    _get_scanned_issuer_serial,
+    _get_scanned_issuer,
     _record_ct_issuer_first_seen,
 )
 from cert_watch.database import init_schema, replace_scanned
@@ -34,7 +34,7 @@ def test_record_ct_issuer_first_seen(tmp_path):
     assert ts2 == ts
 
 
-def test_get_scanned_issuer_serial(tmp_path):
+def test_get_scanned_issuer(tmp_path):
     db = tmp_path / "test.db"
     init_schema(db)
     now = datetime.now(UTC)
@@ -48,10 +48,9 @@ def test_get_scanned_issuer_serial(tmp_path):
         raw_der=b"\x30" + b"\x00" * 63,
     )
     replace_scanned(db, "example.com", 443, cert, [], True)
-    result = _get_scanned_issuer_serial(db, "example.com")
+    result = _get_scanned_issuer(db, "example.com")
     assert result is not None
-    assert result[0] == "Test CA"
-    assert result[1] == "a" * 64
+    assert result == "Test CA"
 
 
 def test_reconciliation_result_has_misissued_field():

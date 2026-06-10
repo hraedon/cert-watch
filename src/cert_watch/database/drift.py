@@ -222,12 +222,20 @@ def create_drift_alert(
     summary = _drift_summary(events)
     message = f"{hostname}:{port} — {summary}"
 
+    subject = ""
+    with _connect(db_path) as conn:
+        row = conn.execute("SELECT subject FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+        if row:
+            subject = row["subject"] or ""
+
     alert = Alert(
         cert_id=cert_id,
         alert_type="drift",
         status="pending",
         message=message,
         extra_recipients=extra_recipients or [],
+        hostname=hostname,
+        subject=subject,
     )
     alert_repo = SqliteAlertRepository(db_path)
     return alert_repo.create(alert)

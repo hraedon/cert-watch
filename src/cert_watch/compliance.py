@@ -328,6 +328,8 @@ def build_compliance_report(
     hsts_total = 0
     caa_ok = 0
     caa_total = 0
+    revoc_ok = 0
+    revoc_total = 0
 
     for r in rows:
         cid = r.get("id", "")
@@ -367,17 +369,29 @@ def build_compliance_report(
             if caa_present:
                 caa_ok += 1
 
+        revoc_findings = [
+            f for f in findings
+            if f.get("check") in ("ocsp_endpoint", "crl_endpoint")
+        ]
+        if revoc_findings:
+            revoc_total += 1
+            if any(f.get("status") == "pass" for f in revoc_findings):
+                revoc_ok += 1
+
     metrics = [
         ComplianceMetric("No SHA-1 signature (SHA-256+)", sha1_ok, sha1_total),
         ComplianceMetric("Strong key (RSA >= 2048 or ECDSA)", strong_key_ok, strong_key_total),
         ComplianceMetric("TLS >= 1.2 at last scan", tls_ok, tls_total),
         ComplianceMetric("HSTS present (port 443)", hsts_ok, hsts_total),
-        # CAA is now stored per scan (BC-121). Only show a collected metric when
-        # at least one scan has CAA data; otherwise fall back to "Not collected".
         ComplianceMetric(
             "CAA present for domain",
             caa_ok, caa_total,
             collected=caa_total > 0,
+        ),
+        ComplianceMetric(
+            "Revocation endpoint reachable",
+            revoc_ok, revoc_total,
+            collected=revoc_total > 0,
         ),
     ]
 
