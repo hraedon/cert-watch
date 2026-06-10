@@ -28,7 +28,22 @@ jobs:
         # `-n0` overrides the addopts default (`-n auto`): the E2E suite drives a
         # single app instance on a fixed port and is not parallel-safe. Visual
         # tests run in their own (non-blocking) job below.
-        run: .venv/bin/pytest -m "e2e and not visual" tests/e2e -q --no-cov -n0
+        # Excludes integration-marked LDAP E2E (separate job below).
+        run: .venv/bin/pytest -m "e2e and not visual and not integration" tests/e2e -q --no-cov -n0
+
+  ldap-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - run: uv venv
+      - run: uv pip install -e ".[dev,e2e,auth]"
+      - name: Install Playwright browsers + OS deps
+        run: .venv/bin/playwright install --with-deps chromium
+      - name: Run LDAP E2E tests (Samba-AD container)
+        run: .venv/bin/pytest -m "e2e and integration" tests/e2e/test_ldap_login.py -q --no-cov -n0
 
   visual:
     runs-on: ubuntu-latest

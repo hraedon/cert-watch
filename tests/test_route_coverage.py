@@ -1255,3 +1255,202 @@ def test_api_audit_page_minimum(reload_app):
     assert r.status_code == 200
     data = r.json()
     assert data["pagination"]["page"] == 1
+
+
+# ── WI-A.1: Role-differentiated UI ──────────────────────────────────────────
+
+
+def test_no_auth_dashboard_shows_all_controls(tmp_path, reload_app):
+    app_mod = reload_app()
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert r.status_code == 200
+    assert "Add host" in r.text
+    assert "nav-settings" in r.text
+
+
+def test_viewer_dashboard_hides_controls_when_rbac(tmp_path):
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={"admin": {"groups": ["g-admins"]}},
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+
+    token = create_session("viewer", groups=["g-viewers"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/")
+    assert r.status_code == 200
+    html = r.text
+    assert "Add host" not in html
+    assert "nav-settings" not in html
+
+
+def test_operator_dashboard_has_write_but_no_settings(tmp_path):
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={
+            "admin": {"groups": ["g-admins"]},
+            "operator": {"groups": ["g-operators"]},
+        },
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+
+    token = create_session("operator", groups=["g-operators"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/")
+    assert r.status_code == 200
+    assert "Add host" in r.text
+    assert "nav-settings" not in r.text
+
+
+def test_admin_dashboard_has_mutating_controls_when_rbac(tmp_path):
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    s = Settings(
+        db_path=tmp_path / "db.sqlite3",
+        data_dir=tmp_path,
+        role_map={"admin": {"groups": ["g-admins"]}},
+    )
+
+    class _Provider:
+        provider_name = "mock"
+
+    app = create_app(auth_provider=_Provider(), settings=s)
+
+    from cert_watch.auth import SESSION_COOKIE, create_session
+
+    token = create_session("admin", groups=["g-admins"])
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/")
+    assert r.status_code == 200
+    assert "Add host" in r.text
+    assert "nav-settings" in r.text
+
+
+def test_no_auth_settings_nav_visible(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert r.status_code == 200
+    assert "nav-settings" in r.text
+
+
+def test_viewer_alerts_no_settings_link(reload_app, tmp_path):
+    import pathlib
+
+    from jinja2 import Environment, FileSystemLoader
+
+    from cert_watch.filters import register_filters as rf
+
+    tpl_dir = pathlib.Path(__file__).parent.parent / "src" / "cert_watch" / "templates"
+    env = Environment(loader=FileSystemLoader(str(tpl_dir)), autoescape=True)
+    rf(type("T", (), {"env": env})())
+
+    _req = type("R", (), {"state": type("S", (), {"csp_nonce": "n"})()})()
+
+    tpl = env.get_template("base.html")
+    html = tpl.render(
+        is_admin=False,
+        auth_user="viewer",
+        may_write=False,
+        csrf_token="x",
+        version="0.0",
+        commit="abc",
+        active_page="alerts",
+        request=_req,
+    )
+    assert "nav-settings" not in html
+
+    html2 = tpl.render(
+        is_admin=True,
+        auth_user="admin",
+        may_write=True,
+        csrf_token="x",
+        version="0.0",
+        commit="abc",
+        active_page="alerts",
+        request=_req,
+    )
+    assert "nav-settings" in html2
+
+
+def test_viewer_alerts_no_alert_settings_link(reload_app, tmp_path):
+    import pathlib
+
+    from jinja2 import Environment, FileSystemLoader
+
+    from cert_watch.filters import register_filters as rf
+
+    tpl_dir = pathlib.Path(__file__).parent.parent / "src" / "cert_watch" / "templates"
+    env = Environment(loader=FileSystemLoader(str(tpl_dir)), autoescape=True)
+    rf(type("T", (), {"env": env})())
+
+    _req = type("R", (), {"state": type("S", (), {"csp_nonce": "n"})()})()
+    _counts = {"all": 0, "unread": 0, "critical": 0, "warning": 0}
+
+    tpl = env.get_template("alerts.html")
+
+    html = tpl.render(
+        is_admin=False,
+        auth_user="viewer",
+        may_write=False,
+        csrf_token="x",
+        version="0.0",
+        commit="abc",
+        active_page="alerts",
+        alerts=[],
+        alert_counts=_counts,
+        alert_channels=[],
+        filter_type="all",
+        page=1,
+        total_pages=1,
+        has_prev=False,
+        has_next=False,
+        request=_req,
+    )
+    assert "Alert settings" not in html
+
+    html2 = tpl.render(
+        is_admin=True,
+        auth_user="admin",
+        may_write=True,
+        csrf_token="x",
+        version="0.0",
+        commit="abc",
+        active_page="alerts",
+        alerts=[],
+        alert_counts=_counts,
+        alert_channels=[],
+        filter_type="all",
+        page=1,
+        total_pages=1,
+        has_prev=False,
+        has_next=False,
+        request=_req,
+    )
+    assert "Alert settings" in html2

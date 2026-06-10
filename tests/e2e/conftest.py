@@ -39,8 +39,8 @@ def cert_watch_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]
     proc = subprocess.Popen(
         [sys.executable, "-m", "cert_watch"],
         env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     base = f"http://127.0.0.1:{port}"
     try:

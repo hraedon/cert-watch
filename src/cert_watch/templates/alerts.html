@@ -12,7 +12,9 @@
       <div class="cw-page-head-sub">Expiry &amp; scan notifications sent via email and webhook.</div>
     </div>
     <div class="cw-flex cw-gap-8">
+      {% if is_admin %}
       <a href="/settings?tab=alerts" class="cw-btn ghost sm">{{ icons.svg_icon('cog', 12) }}Alert settings</a>
+      {% endif %}
     </div>
   </div>
 

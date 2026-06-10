@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import smtplib
@@ -639,14 +640,149 @@ def resolve_group_recipients(
     return out
 
 
+def _build_digest_message(certs: list[dict], *, owner_name: str | None = None) -> tuple[str, str]:
+    lines = [
+        f"[cert-watch] Expiry Digest — {len(certs)} certificate(s) expiring within 30 days",
+        "",
+    ]
+    if owner_name:
+        lines.insert(1, "You are receiving this digest as the owner of the following certificates.")
+        lines.insert(2, "")
+    for cert in certs:
+        host = f"{cert['hostname']}:{cert['port']}" if cert["hostname"] else "(uploaded)"
+        status = "EXPIRED" if cert["days_remaining"] < 0 else f"{cert['days_remaining']}d remaining"
+        lines.append(f"  - {cert['subject']} ({host}) — {status} — expires {cert['not_after']}")
+    message = "\n".join(lines)
+    subject = f"[cert-watch] Expiry Digest: {len(certs)} cert(s) expiring soon"
+    return message, subject
+
+
+def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
+    try:
+        if config.smtp_port == 465:
+            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
+                config.smtp_host, config.smtp_port, timeout=15,
+            )
+        else:
+            s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
+        if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
+            logger.warning(
+                "digest email aborted: STARTTLS not supported by %s:%s",
+                config.smtp_host, config.smtp_port,
+            )
+            with contextlib.suppress(Exception):
+                s.quit()
+            return None
+        if config.smtp_user:
+            s.login(config.smtp_user, config.smtp_password)
+        return s
+    except Exception as exc:
+        logger.warning(
+            "SMTP connect failed: %s",
+            _sanitize_smtp_error(str(exc), config),
+        )
+        return None
+
+
+def _build_digest_email(
+    certs: list[dict],
+    recipients: list[str],
+    from_addr: str,
+    *,
+    owner_name: str | None = None,
+) -> EmailMessage:
+    message, subject = _build_digest_message(certs, owner_name=owner_name)
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = from_addr
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(message)
+    return msg
+
+
+def _send_digest_smtp(
+    certs: list[dict],
+    recipients: list[str],
+    config: AlertConfig,
+    *,
+    owner_name: str | None = None,
+    _conn: smtplib.SMTP | smtplib.SMTP_SSL | None = None,
+) -> bool:
+    msg = _build_digest_email(certs, recipients, config.from_addr, owner_name=owner_name)
+    if _conn is not None:
+        try:
+            _conn.send_message(msg)
+            return True
+        except Exception as exc:
+            logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
+            return False
+    for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+        try:
+            conn = _open_smtp_connection(config)
+            if conn is None:
+                continue
+            try:
+                conn.send_message(msg)
+                return True
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.quit()
+        except Exception as exc:
+            logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
+    return False
+
+
+def _send_digest_webhook(
+    certs: list[dict],
+    webhook_config: WebhookConfig,
+) -> bool:
+    message, _ = _build_digest_message(certs)
+    sanitized = [
+        {k: v for k, v in c.items() if k not in ("owner_email", "owner_name")}
+        for c in certs
+    ]
+    payload = json.dumps({
+        "alert_type": "expiry_digest",
+        "cert_count": len(certs),
+        "message": message,
+        "certificates": sanitized,
+    })
+    req_headers = {"Content-Type": "application/json", **webhook_config.headers}
+    try:
+        resp = ssrf_safe_urlopen(
+            webhook_config.url,
+            data=payload.encode("utf-8"),
+            timeout=webhook_config.timeout,
+            method="POST",
+            headers=req_headers,
+            allow_private=webhook_config.allow_private,
+            allowed_subnets=webhook_config.allowed_subnets,
+        )
+        with resp:
+            return 200 <= resp.status < 300
+    except SSRFBlockedError as exc:
+        logger.warning(
+            "digest webhook blocked by SSRF policy: %s", exc,
+        )
+        return False
+    except Exception as exc:
+        logger.warning(
+            "digest webhook failed: %s",
+            _sanitize_webhook_error(str(exc), webhook_config),
+        )
+        return False
+
+
 def send_expiry_digest(
     db_path: str | Path,
     config: AlertConfig | None,
     webhook_config: WebhookConfig | None = None,
 ) -> bool:
-    """Send a single digest email summarizing all certificates expiring within 30 days.
+    """Send expiry digest: one per owner (their certs only) + one global (all certs).
 
-    Returns True if the digest was delivered successfully.
+    Owners identified via host owner_email. If an owner is also in config.recipients
+    they receive only the global digest (no duplicate). Returns True only when all
+    deliveries succeeded; False on total or partial failure.
     """
     from cert_watch.database import _connect, _parse_iso
 
@@ -655,7 +791,10 @@ def send_expiry_digest(
 
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM certificates WHERE is_leaf = 1 ORDER BY not_after"
+            "SELECT c.*, h.owner_email, h.owner_name "
+            "FROM certificates c "
+            "LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port "
+            "WHERE c.is_leaf = 1 ORDER BY c.not_after"
         ).fetchall()
 
     now = datetime.now(UTC)
@@ -670,84 +809,104 @@ def send_expiry_digest(
                 "port": r["port"] or 443,
                 "not_after": r["not_after"],
                 "days_remaining": days,
+                "owner_email": dict(r).get("owner_email") or "",
+                "owner_name": dict(r).get("owner_name") or "",
             })
 
     if not expiring:
-        return True  # nothing to report
+        return True
 
-    # Build digest message
-    lines = [
-        f"[cert-watch] Expiry Digest — {len(expiring)} certificate(s) expiring within 30 days",
-        "",
-    ]
-    for cert in expiring:
-        host = f"{cert['hostname']}:{cert['port']}" if cert["hostname"] else "(uploaded)"
-        status = "EXPIRED" if cert["days_remaining"] < 0 else f"{cert['days_remaining']}d remaining"
-        lines.append(f"  - {cert['subject']} ({host}) — {status} — expires {cert['not_after']}")
-
-    message = "\n".join(lines)
-
-    # Send via email
+    global_recipients_cf: set[str] = set()
+    global_recipients_original: list[str] = []
     if config is not None:
-        try:
-            msg = EmailMessage()
-            msg["Subject"] = f"[cert-watch] Expiry Digest: {len(expiring)} cert(s) expiring soon"
-            msg["From"] = config.from_addr
-            msg["To"] = ", ".join(config.recipients)
-            msg.set_content(message)
-            if config.smtp_port == 465:
-                s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
-                    config.smtp_host, config.smtp_port, timeout=15,
-                )
-            else:
-                s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
-            with s:
-                if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
-                    logger.warning(
-                        "digest email aborted: STARTTLS not supported by %s:%s; "
-                        "refusing to send credentials in cleartext",
-                        config.smtp_host, config.smtp_port,
-                    )
-                    return False
-                if config.smtp_user:
-                    s.login(config.smtp_user, config.smtp_password)
-                s.send_message(msg)
-            return True
-        except Exception as exc:
-            logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
+        seen: set[str] = set()
+        for r in config.recipients:
+            cf = r.casefold()
+            if cf not in seen:
+                seen.add(cf)
+                global_recipients_original.append(r)
+        global_recipients_cf = seen
 
-    # Send via webhook
-    if webhook_config is not None:
-        payload = json.dumps({
-            "alert_type": "expiry_digest",
-            "cert_count": len(expiring),
-            "message": message,
-            "certificates": expiring,
-        })
-        req_headers = {"Content-Type": "application/json", **webhook_config.headers}
-        try:
-            resp = ssrf_safe_urlopen(
-                webhook_config.url,
-                data=payload.encode("utf-8"),
-                timeout=webhook_config.timeout,
-                method="POST",
-                headers=req_headers,
-                allow_private=webhook_config.allow_private,
-                allowed_subnets=webhook_config.allowed_subnets,
-            )
-            with resp:
-                return 200 <= resp.status < 300
-        except SSRFBlockedError as exc:
-            logger.warning(
-                "digest webhook blocked by SSRF policy: %s", exc,
-            )
-            return False
-        except Exception as exc:
-            logger.warning(
-                "digest webhook failed: %s",
-                _sanitize_webhook_error(str(exc), webhook_config),
-            )
-            return False
+    original_emails: dict[str, str] = {}
+    owner_names: dict[str, str] = {}
+    for cert in expiring:
+        oe = cert["owner_email"]
+        if oe:
+            cf = oe.casefold()
+            original_emails.setdefault(cf, oe)
+            on = cert.get("owner_name", "")
+            if on and cf not in owner_names:
+                owner_names[cf] = on
+
+    owner_certs: dict[str, list[dict]] = {}
+    for cert in expiring:
+        oe = cert["owner_email"]
+        cf = oe.casefold() if oe else ""
+        if cf and cf not in global_recipients_cf:
+            owner_certs.setdefault(cf, []).append(cert)
+
+    any_smtp_success = False
+    any_smtp_failure = False
+
+    if config is not None:
+        smtp_conn = _open_smtp_connection(config)
+        if smtp_conn is not None:
+            try:
+                if global_recipients_cf:
+                    msg = _build_digest_email(
+                        expiring, global_recipients_original, config.from_addr,
+                    )
+                    try:
+                        smtp_conn.send_message(msg)
+                        any_smtp_success = True
+                    except Exception as exc:
+                        logger.warning(
+                            "global digest failed: %s",
+                            _sanitize_smtp_error(str(exc), config),
+                        )
+                        any_smtp_failure = True
+                for cf_email, certs in owner_certs.items():
+                    original = original_emails.get(cf_email, cf_email)
+                    oname = owner_names.get(cf_email)
+                    msg = _build_digest_email(
+                        certs, [original], config.from_addr, owner_name=oname,
+                    )
+                    try:
+                        smtp_conn.send_message(msg)
+                        any_smtp_success = True
+                    except Exception as exc:
+                        logger.warning(
+                            "owner digest for %s failed: %s",
+                            original,
+                            _sanitize_smtp_error(str(exc), config),
+                        )
+                        any_smtp_failure = True
+            finally:
+                with contextlib.suppress(Exception):
+                    smtp_conn.quit()
+        else:
+            if global_recipients_cf:
+                if _send_digest_smtp(
+                    expiring, global_recipients_original, config,
+                ):
+                    any_smtp_success = True
+                else:
+                    any_smtp_failure = True
+            for cf_email, certs in owner_certs.items():
+                original = original_emails.get(cf_email, cf_email)
+                oname = owner_names.get(cf_email)
+                if _send_digest_smtp(
+                    certs, [original], config, owner_name=oname,
+                ):
+                    any_smtp_success = True
+                else:
+                    any_smtp_failure = True
+
+    if any_smtp_success and not any_smtp_failure:
+        return True
+
+    if not any_smtp_success and webhook_config is not None:
+        return _send_digest_webhook(expiring, webhook_config)
 
     return False
 
