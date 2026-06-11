@@ -131,9 +131,9 @@
             <p class="cw-muted cw-fz-11 cw-mb-12">
               Map Active Directory groups to cert-watch roles. Members of the mapped groups receive the corresponding role.
             </p>
-            <!-- No <form> element here: this block sits inside the /settings/auth
-                 form, and a nested <form> tag is dropped by the HTML parser —
-                 its </form> then closes the auth form early, orphaning the OAuth
+            <!-- No form element here (WI-027): this block sits inside the
+                 /settings/auth form, and browsers drop a nested form open tag —
+                 its close tag then ends the auth form early, orphaning the OAuth
                  fields and the auth save button. Inputs are associated with the
                  #ldap-role-map-form element (a sibling of the auth form, below)
                  via the form attribute instead. -->
