@@ -126,8 +126,9 @@ def _run_cycle(
     *,
     ct_fn: Callable[[], dict] | None = None,
     maintenance_fn: Callable[[], None] | None = None,
+    digest_fn: Callable[[], dict] | None = None,
 ) -> None:
-    """Run one scan → CT → alert → maintenance cycle.
+    """Run one scan → CT → alert → digest → maintenance cycle.
 
     Each stage is isolated: a failure in any one is logged and swallowed so the
     remaining stages still run and the scheduler thread survives to the next day.
@@ -150,6 +151,12 @@ def _run_cycle(
         logger.info("scheduled alerts completed")
     except Exception:  # noqa: BLE001
         logger.exception("scheduler alert_fn failed")
+    if digest_fn is not None:
+        try:
+            digest_fn()
+            logger.info("scheduled digest completed")
+        except Exception:  # noqa: BLE001
+            logger.exception("scheduler digest_fn failed")
     if maintenance_fn is not None:
         try:
             maintenance_fn()
@@ -163,6 +170,7 @@ def start_scheduler(
     *,
     ct_fn: Callable[[], dict] | None = None,
     maintenance_fn: Callable[[], None] | None = None,
+    digest_fn: Callable[[], dict] | None = None,
     hour: int = 6,
     minute: int = 0,
     db_path: str | Path | None = None,
@@ -193,7 +201,8 @@ def start_scheduler(
                     if _scheduler_stop.wait(timeout=wait):
                         return
                 _run_cycle(
-                    scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn
+                    scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn,
+                    digest_fn=digest_fn,
                 )
 
         _scheduler_stop.clear()
@@ -289,12 +298,73 @@ def run_scan_now(
                 ScanHistory(hostname=hostname, port=port, status="success"),
             )
 
+    _check_renewal_overdue(db_path, hosts)
+
     alert_counts = alert_fn() or {"sent": 0, "failed": 0}
     return {
         "scanned": scanned,
         "alerts_sent": int(alert_counts.get("sent", 0)),
         "failures": failures + int(alert_counts.get("failed", 0)),
     }
+
+
+def _check_renewal_overdue(
+    db_path: str | Path | None,
+    hosts: list[tuple[str, int]],
+) -> None:
+    if db_path is None:
+        return
+    try:
+        import json as _json
+
+        from cert_watch.database.connection import _connect as _conn
+        from cert_watch.events import Event, emit_event
+        from cert_watch.renewal_analytics import detect_renewal_overdue
+
+        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+        already_emitted: set[tuple[str, str]] = set()
+        with _conn(db_path) as conn:
+            rows = conn.execute(
+                """SELECT payload FROM event_log
+                   WHERE event_type = 'renewal_overdue'
+                   AND created_at > ?""",
+                (cutoff,),
+            ).fetchall()
+        for r in rows:
+            try:
+                p = _json.loads(r["payload"])
+                already_emitted.add((p["hostname"], p["cert_fingerprint"]))
+            except (KeyError, _json.JSONDecodeError):
+                pass
+
+        seen: set[str] = set()
+        for hostname, _port in hosts:
+            if hostname in seen:
+                continue
+            seen.add(hostname)
+            signal = detect_renewal_overdue(db_path, hostname)
+            if signal is not None:
+                if (signal.hostname, signal.cert_fingerprint) in already_emitted:
+                    continue
+                emit_event(
+                    Event(
+                        event_type="renewal_overdue",
+                        timestamp=datetime.now(UTC),
+                        payload={
+                            "hostname": signal.hostname,
+                            "cert_fingerprint": signal.cert_fingerprint,
+                            "days_remaining": signal.days_remaining,
+                            "expected_renewal_at_days": signal.expected_renewal_at_days,
+                            "days_overdue": signal.days_overdue,
+                            "confidence": signal.confidence,
+                        },
+                        source="scheduler",
+                    ),
+                    db_path,
+                )
+                already_emitted.add((signal.hostname, signal.cert_fingerprint))
+    except Exception:  # noqa: BLE001
+        logger.exception("renewal overdue check failed")
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:

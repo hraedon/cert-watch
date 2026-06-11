@@ -6,6 +6,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
@@ -52,6 +53,8 @@ class PolicyRule:
 class PolicySet:
     rules: list[PolicyRule] = field(default_factory=list)
     default_severity: str = "warning"
+    name: str = ""
+    version: str = ""
 
 
 @dataclass
@@ -60,6 +63,7 @@ class PolicyViolation:
     severity: str
     message: str
     remediation: str
+    grade_affecting: bool = True
 
 
 def default_policy_set() -> PolicySet:
@@ -282,6 +286,35 @@ def _evaluate_rule(
             )]
         return []
 
+    if rid.startswith("sc081_validity_"):
+        if chain_status != "public":
+            return []
+        milestone_date_str = params.get("milestone_date", "")
+        max_days = params.get("max_days", 0)
+        if not milestone_date_str:
+            return []
+        try:
+            milestone_date = datetime.fromisoformat(milestone_date_str)
+        except (ValueError, TypeError):
+            return []
+        nb = cert.not_before
+        if nb.tzinfo is not None and milestone_date.tzinfo is None:
+            milestone_date = milestone_date.replace(tzinfo=UTC)
+        elif nb.tzinfo is None and milestone_date.tzinfo is not None:
+            milestone_date = milestone_date.replace(tzinfo=None)
+        if nb < milestone_date:
+            return []
+        validity_days = (cert.not_after - cert.not_before).days
+        if validity_days > max_days:
+            return [PolicyViolation(
+                rid, sev,
+                f"SC-081: Certificate validity {validity_days} days exceeds "
+                f"{max_days}-day limit for certs issued after {milestone_date_str}",
+                f"Reissue certificate with validity period of {max_days} days or less",
+                grade_affecting=False,
+            )]
+        return []
+
     return []
 
 
@@ -348,9 +381,10 @@ _F_GRADE_ORDINAL = GRADE_WORST_ORDER["F"]
 
 
 def apply_policy_overrides(grade: str, violations: list[PolicyViolation]) -> str:
-    if any(v.severity == "critical" for v in violations):
+    grade_vs = [v for v in violations if v.grade_affecting]
+    if any(v.severity == "critical" for v in grade_vs):
         return "F"
-    if any(v.severity == "warning" for v in violations):
+    if any(v.severity == "warning" for v in grade_vs):
         current = GRADE_WORST_ORDER.get(grade, _F_GRADE_ORDINAL)
         if current < _C_GRADE_ORDINAL:
             return "C"
@@ -358,7 +392,7 @@ def apply_policy_overrides(grade: str, violations: list[PolicyViolation]) -> str
 
 
 def _serialize_policy_set(ruleset: PolicySet) -> str:
-    data = {
+    data: dict[str, Any] = {
         "default_severity": ruleset.default_severity,
         "rules": [
             {
@@ -371,6 +405,10 @@ def _serialize_policy_set(ruleset: PolicySet) -> str:
             for r in ruleset.rules
         ],
     }
+    if ruleset.name:
+        data["name"] = ruleset.name
+    if ruleset.version:
+        data["version"] = ruleset.version
     return json.dumps(data)
 
 
@@ -380,6 +418,8 @@ def _deserialize_policy_set(raw: str) -> PolicySet:
     default_sev = data.get("default_severity", "warning")
     if default_sev not in _ALLOWED_SEVERITIES:
         default_sev = "warning"
+    name = data.get("name", "")
+    version = data.get("version", "")
     rules: list[PolicyRule] = []
     for r in rules_data:
         if not isinstance(r, dict):
@@ -400,7 +440,7 @@ def _deserialize_policy_set(raw: str) -> PolicySet:
             enabled=bool(enabled),
             parameters=params,
         ))
-    return PolicySet(rules=rules, default_severity=default_sev)
+    return PolicySet(rules=rules, default_severity=default_sev, name=name, version=version)
 
 
 def load_policy_set(db_path: str) -> PolicySet:

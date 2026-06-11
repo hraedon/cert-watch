@@ -970,3 +970,22 @@ def compliance_report_view(
             "tag": tag,
         },
     )
+
+
+@router.get("/readiness", response_class=HTMLResponse)
+def readiness_report_view(request: Request) -> HTMLResponse:
+    from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
+
+    db = _db_path(request)
+    report = build_readiness_report(db)
+    return templates.TemplateResponse(
+        request=request,
+        name="readiness.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            **get_csrf_context(request),
+            "active_page": "insights",
+            "report": readiness_report_to_dict(report),
+        },
+    )

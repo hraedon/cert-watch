@@ -24,6 +24,7 @@ ALL_EVENT_TYPES = (
     "scan_failed",
     "policy_violation",
     "alert_acknowledged",
+    "renewal_overdue",
 )
 
 ALL_SOURCES = ("scan", "upload", "ct", "manual", "scheduler")
