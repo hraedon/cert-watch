@@ -47,17 +47,27 @@ class ReadinessReport:
     workload_forecast: WorkloadForecast | None = None
 
 
-def _get_chain_status(db_path: str | Path, hostname: str) -> str | None:
-    init_schema(db_path)
+_UNSET = object()
+
+
+def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str, str | None]:
+    if not hostnames:
+        return {}
+    placeholders = ",".join("?" * len(hostnames))
     with _connect(db_path) as conn:
-        row = conn.execute(
-            """SELECT sp.chain_status FROM scan_posture sp
-               JOIN certificates c ON c.id = sp.cert_id
-               WHERE c.hostname = ? AND c.is_leaf = 1
-               ORDER BY sp.scanned_at DESC LIMIT 1""",
-            (hostname,),
-        ).fetchone()
-    return row["chain_status"] if row else None
+        rows = conn.execute(
+            f"""SELECT c.hostname, sp.chain_status FROM scan_posture sp
+                JOIN certificates c ON c.id = sp.cert_id
+                WHERE c.is_leaf = 1 AND c.hostname IN ({placeholders})
+                ORDER BY sp.scanned_at DESC""",
+            hostnames,
+        ).fetchall()
+    result: dict[str, object] = {hn: _UNSET for hn in hostnames}
+    for row in rows:
+        hn = row["hostname"]
+        if hn in result and result[hn] is _UNSET:
+            result[hn] = row["chain_status"]
+    return {hn: (None if v is _UNSET else v) for hn, v in result.items()}
 
 
 def _compute_margins(
@@ -149,9 +159,7 @@ def build_readiness_report(db_path: str | Path) -> ReadinessReport:
     fleet = compute_fleet_analytics(db_path)
 
     hostnames = [a.hostname for a in fleet]
-    chain_statuses: dict[str, str | None] = {}
-    for hn in hostnames:
-        chain_statuses[hn] = _get_chain_status(db_path, hn)
+    chain_statuses = _batch_chain_statuses(db_path, hostnames)
 
     public_hosts: list[HostReadiness] = []
     private_hosts: list[HostReadiness] = []

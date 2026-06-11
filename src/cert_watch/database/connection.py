@@ -12,6 +12,12 @@ from typing import Any
 from cert_watch.certificate_model import Certificate
 
 _conn_local = threading.local()
+_write_lock = threading.Lock()
+
+
+def get_write_lock() -> threading.Lock:
+    """Return the module-level write lock for cross-thread SQLite coordination."""
+    return _write_lock
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
@@ -77,7 +83,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA busy_timeout=15000")
     cache[path_str] = conn
     if current_stat:
         meta[path_str] = (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime)

@@ -189,7 +189,9 @@ def evaluate_all_certs(
             }
 
         leaves = conn.execute(
-            "SELECT * FROM certificates WHERE is_leaf = 1"
+            "SELECT id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, hostname, port "
+            "FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
     # Batch-resolve group recipients for all certs in ≤3 queries
@@ -229,7 +231,7 @@ def evaluate_all_certs(
                 else []
             ),
             fingerprint_sha256=leaf_row["fingerprint_sha256"],
-            raw_der=bytes(leaf_row["raw_der"]),
+            raw_der=b"",
             is_leaf=True,
         )
         custom = None
@@ -301,7 +303,10 @@ def evaluate_renewal_window(
                 "owner_name": dict(row).get("owner_name", ""),
                 "owner_email": dict(row).get("owner_email", ""),
             }
-        leaves = conn.execute("SELECT * FROM certificates WHERE is_leaf = 1").fetchall()
+        leaves = conn.execute(
+            "SELECT id, subject, hostname, port, not_after "
+            "FROM certificates WHERE is_leaf = 1"
+        ).fetchall()
 
     created: list[Alert] = []
     for leaf in leaves:
@@ -933,7 +938,8 @@ def send_expiry_digest(
 
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT c.*, h.owner_email, h.owner_name "
+            "SELECT c.id, c.subject, c.hostname, c.port, c.not_after, "
+            "h.owner_email, h.owner_name "
             "FROM certificates c "
             "LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port "
             "WHERE c.is_leaf = 1 ORDER BY c.not_after"

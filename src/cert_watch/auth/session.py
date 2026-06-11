@@ -118,7 +118,7 @@ def _sign_state(
     state: str, security: SecurityContext | None = None, nonce: str | None = None
 ) -> str:
     payload = f"{state}:{nonce}" if nonce else state
-    sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
     return f"{payload}:{sig}"
 
 
@@ -141,7 +141,7 @@ def _verify_state(
         state = ":".join(parts[:-2])
         expected = hmac.new(
             _key(security).encode(), f"{state}:{nonce}".encode(), hashlib.sha256
-        ).hexdigest()[:32]
+        ).hexdigest()[:64]
         if hmac.compare_digest(sig, expected):
             return state, nonce
     # Fallback: legacy format state:sig
@@ -150,14 +150,14 @@ def _verify_state(
     sig = token[last_colon + 1:]
     expected = hmac.new(
         _key(security).encode(), state.encode(), hashlib.sha256
-    ).hexdigest()[:32]
+    ).hexdigest()[:64]
     if hmac.compare_digest(sig, expected):
         return state, None
     return None
 
 
 def _sign_session(data: str, security: SecurityContext | None = None) -> str:
-    sig = hmac.new(_key(security).encode(), data.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(_key(security).encode(), data.encode(), hashlib.sha256).hexdigest()[:64]
     return f"{data}:{sig}"
 
 
@@ -181,8 +181,10 @@ def create_session(
     *email* is the user's contact email (Plan 040).
     """
     payload = f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
+    encoded_groups = _encode_list(groups)
+    encoded_roles = _encode_list(roles)
     if groups or roles or email:
-        payload += f":{_encode_list(groups)}:{_encode_list(roles)}"
+        payload += f":{encoded_groups}:{encoded_roles}"
         if email:
             payload += f":{email}"
     token = _sign_session(payload, security)
@@ -190,12 +192,33 @@ def create_session(
     # browser per-cookie limit, which silently drops it → post-login redirect
     # loop. The login path already trims claims to the role map; warn loudly if
     # a token still lands near the limit so the cause is diagnosable from logs.
-    if len(token) > _MAX_SAFE_SESSION_BYTES:
+    if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
+        # Try progressively trimming groups until it fits (or we run out).
+        # More aggressive: drop groups entirely, then roles, before erroring.
+        trimmed_groups = (groups or [])[:]
+        while trimmed_groups and len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
+            trimmed_groups.pop()
+            test_payload = (
+                f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
+                f":{_encode_list(trimmed_groups)}:{encoded_roles}"
+            )
+            if email:
+                test_payload += f":{email}"
+            token = _sign_session(test_payload, security)
+        if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
+            # Still too long without any groups — try stripping roles too
+            test_payload = (
+                f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
+                f"::{encoded_roles}"
+            )
+            if email:
+                test_payload += f":{email}"
+            token = _sign_session(test_payload, security)
         logger.warning(
             "session token for %s is %d bytes, near the ~4KB browser cookie limit; "
             "the cookie may be dropped (login loop). A large IdP group list is the "
             "usual cause — scope CERT_WATCH_ROLE_MAP to fewer groups.",
-            username, len(token),
+            username, len(token.encode()),
         )
     return token
 
@@ -216,9 +239,13 @@ def decode_session(
         return None
     payload = token[:last_colon]
     sig = token[last_colon + 1 :]
-    expected = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    key = _key(security).encode()
+    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]
     if not hmac.compare_digest(sig, expected):
-        return None
+        # Legacy fallback: tokens created before the truncation change use 32-char sigs
+        expected_legacy = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:32]
+        if not hmac.compare_digest(sig, expected_legacy):
+            return None
     parts = payload.split(":")
     if len(parts) < 3:
         return None

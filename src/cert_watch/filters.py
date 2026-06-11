@@ -61,6 +61,27 @@ def compute_urgency(days_remaining: int | None) -> str:
     return "healthy"
 
 
+def compute_urgency_with_chain(
+    leaf_days: int,
+    min_chain_days: int | None = None,
+    chain_status_val: str | None = None,
+) -> str:
+    """Compute urgency considering chain child expiry and chain status.
+
+    Takes the minimum of leaf_days and min_chain_days (if present),
+    then downgrades "healthy" to "warning" when chain_status is
+    "incomplete" or "invalid".
+    """
+    all_days = [leaf_days]
+    if min_chain_days is not None:
+        all_days.append(int(min_chain_days))
+    min_days = min(all_days)
+    u = compute_urgency(min_days)
+    if chain_status_val in ("incomplete", "invalid") and u == "healthy":
+        u = "warning"
+    return u
+
+
 def relative_short(days: int) -> str:
     """Short relative time string: 'in 4 days', '3 days ago', 'in 2 months'."""
     if days == 0:

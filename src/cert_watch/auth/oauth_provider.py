@@ -447,8 +447,6 @@ def _validate_claims_manual(
     claims: dict, expected_issuer: str, expected_audience: str, nonce: str | None,
 ) -> None:
     """Manual OIDC claim validation for environments without authlib.oidc.core."""
-    import time
-
     iss = claims.get("iss", "").rstrip("/")
     if iss != expected_issuer:
         raise ValueError(f"issuer mismatch: {iss} != {expected_issuer}")
@@ -457,7 +455,7 @@ def _validate_claims_manual(
     if expected_audience not in aud_list:
         raise ValueError(f"audience mismatch: {aud} does not contain {expected_audience}")
     exp = claims.get("exp")
-    if exp and exp < time.time() - 120:
+    if exp and exp < time.time():
         raise ValueError("ID token has expired")
     if nonce and claims.get("nonce") != nonce:
         raise ValueError("nonce mismatch")

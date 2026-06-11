@@ -9,7 +9,7 @@ import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from cert_watch.database.connection import _connect
@@ -314,7 +314,7 @@ def purge_old_events(db_path: str | Path, retention_days: int) -> int:
     """Delete event_log entries older than *retention_days*. Returns count deleted."""
     if retention_days <= 0:
         return 0
-    cutoff = (datetime.now(UTC) - __import__("datetime").timedelta(days=retention_days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
     with _connect(db_path) as conn:
         count = conn.execute(
             "SELECT COUNT(*) FROM event_log WHERE created_at < ?", (cutoff,)

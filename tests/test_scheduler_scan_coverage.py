@@ -461,3 +461,67 @@ def test_scan_error_reason_variants():
     assert _scan_error_reason("something else") == "unknown"
     assert _scan_error_reason(None) == "unknown"
     assert _scan_error_reason("") == "unknown"
+
+
+# ---------- cycle overlap protection (WI-022) ----------
+
+
+def test_cycle_lock_prevents_concurrent_acquire():
+    from cert_watch.scheduler import _cycle_lock
+
+    assert _cycle_lock.acquire(blocking=False)
+    assert not _cycle_lock.acquire(blocking=False)
+    _cycle_lock.release()
+
+
+def test_cycle_lock_available_after_release():
+    from cert_watch.scheduler import _cycle_lock
+
+    _cycle_lock.acquire(blocking=False)
+    _cycle_lock.release()
+    assert _cycle_lock.acquire(blocking=False)
+    _cycle_lock.release()
+
+
+def test_stop_scheduler_does_not_release_external_lock():
+    from cert_watch.scheduler import _cycle_lock, stop_scheduler
+
+    _cycle_lock.acquire(blocking=False)
+    assert _cycle_lock.locked()
+
+    stop_scheduler()
+
+    assert _cycle_lock.locked()
+    _cycle_lock.release()
+
+
+def test_loop_skips_cycle_when_lock_held():
+    from cert_watch.scheduler import _cycle_lock, _run_cycle
+
+    _cycle_lock.acquire(blocking=False)
+
+    ran = []
+    if _cycle_lock.acquire(blocking=False):
+        try:
+            _run_cycle(lambda: ran.append("scan") or {}, lambda: ran.append("alert") or {})
+        finally:
+            _cycle_lock.release()
+    else:
+        ran.append("skipped")
+
+    assert ran == ["skipped"]
+    _cycle_lock.release()
+
+
+def test_loop_runs_cycle_when_lock_free():
+    from cert_watch.scheduler import _cycle_lock, _run_cycle
+
+    ran = []
+    if _cycle_lock.acquire(blocking=False):
+        try:
+            _run_cycle(lambda: ran.append("scan") or {}, lambda: ran.append("alert") or {})
+        finally:
+            _cycle_lock.release()
+
+    assert ran == ["scan", "alert"]
+    assert not _cycle_lock.locked()

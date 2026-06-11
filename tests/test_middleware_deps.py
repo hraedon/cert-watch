@@ -177,11 +177,10 @@ async def test_require_write_valid():
 
     token = create_session("alice")
     provider = _MockProvider()
-    sid = "session-abc"
-    csrf = make_csrf_token(sid)
+    csrf = make_csrf_token(token)
     request = _make_request(
         auth_provider=provider,
-        cookies={SESSION_COOKIE: token, "cw_sid": sid},
+        cookies={SESSION_COOKIE: token},
         headers={"x-csrf-token": csrf},
     )
     result = await require_write(request)
@@ -412,11 +411,11 @@ async def test_require_write_form_rbac_operator_allowed(tmp_path):
     from cert_watch.middleware import make_csrf_token, require_write_form
 
     app, Provider = _app_with_role_map(tmp_path)
-    sid = "sid-ops"
+    session_token = create_session("alice")
     request = _make_request(
         auth_provider=Provider(),
-        cookies={SESSION_COOKIE: create_session("alice"), "cw_sid": sid},
-        headers={"x-csrf-token": make_csrf_token(sid)},
+        cookies={SESSION_COOKIE: session_token},
+        headers={"x-csrf-token": make_csrf_token(session_token)},
     )
     request.scope["app"] = app
     request.scope["auth_user"] = "alice"
@@ -453,11 +452,11 @@ async def test_require_write_rbac_operator_allowed(tmp_path):
     from cert_watch.middleware import make_csrf_token
 
     app, Provider = _app_with_role_map(tmp_path)
-    sid = "sid-ops"
+    session_token = create_session("alice", groups=["g-ops"])
     request = _make_request(
         auth_provider=Provider(),
-        cookies={SESSION_COOKIE: create_session("alice", groups=["g-ops"]), "cw_sid": sid},
-        headers={"x-csrf-token": make_csrf_token(sid)},
+        cookies={SESSION_COOKIE: session_token},
+        headers={"x-csrf-token": make_csrf_token(session_token)},
     )
     request.scope["app"] = app
     # require_auth + require_write should succeed without raising
@@ -783,6 +782,7 @@ async def test_require_admin_write_form_csrf_failure(tmp_path):
 @pytest.mark.anyio
 async def test_require_admin_write_form_all_pass(tmp_path):
     """All three checks pass → returns None."""
+    from cert_watch.auth import SESSION_COOKIE, create_session
     from cert_watch.config import Settings
     from cert_watch.middleware import make_csrf_token, require_admin_write_form
 
@@ -797,14 +797,14 @@ async def test_require_admin_write_form_all_pass(tmp_path):
     app = type("App", (), {
         "state": type("State", (), {"auth_provider": _Provider(), "settings": settings})(),
     })()
-    sid = "sid-for-csrf"
-    request = _admin_request(
-        "/settings/roles",
+    session_token = create_session("alice")
+    request = _make_request(
         auth_provider=_Provider(),
-        username="alice",
-        cookies={"cw_sid": sid},
-        headers={"x-csrf-token": make_csrf_token(sid)},
+        cookies={SESSION_COOKIE: session_token},
+        headers={"x-csrf-token": make_csrf_token(session_token)},
     )
+    request.scope["path"] = "/settings/roles"
+    request.scope["auth_user"] = "alice"
     request.scope["app"] = app
     assert await require_admin_write_form(request) is None
 

@@ -49,12 +49,13 @@ def healthz(request: Request) -> dict:
 
 
 @router.get("/readyz")
-def readyz(request: Request) -> dict:
-    """Readiness probe — DB reachable and scheduler healthy."""
+def readyz(request: Request):
+    """Readiness probe — DB reachable, writable, and scheduler healthy."""
     db = _db_path(request)
     checks: dict[str, str] = {}
     ok = True
     # DB connectivity + last scan (targeted query, no full table load)
+    db_reachable = False
     try:
         with _connect(db) as conn:
             conn.execute("SELECT 1")
@@ -63,6 +64,7 @@ def readyz(request: Request) -> dict:
                 "ORDER BY scanned_at DESC LIMIT 1"
             ).fetchone()
         checks["database"] = "ok"
+        db_reachable = True
         if scan_row:
             checks["last_scan"] = scan_row["scanned_at"]
             checks["last_scan_status"] = scan_row["status"]
@@ -71,6 +73,26 @@ def readyz(request: Request) -> dict:
     except Exception:
         checks["database"] = "error"
         ok = False
+    # DB write capability (only if the DB is reachable)
+    if db_reachable:
+        try:
+            with _connect(db) as conn:
+                conn.execute(
+                    "UPDATE kv_store SET value = ? WHERE key = '_heartbeat'",
+                    (datetime.now(UTC).isoformat(),),
+                )
+                if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO kv_store (key, value) VALUES ('_heartbeat', ?)",
+                        (datetime.now(UTC).isoformat(),),
+                    )
+                conn.commit()
+            checks["db_write"] = "ok"
+        except Exception:
+            return JSONResponse(
+                {"status": "error", "reason": "database not writable"},
+                status_code=503,
+            )
     # Scheduler
     from cert_watch.scheduler import _scheduler_thread
     if _scheduler_thread is not None and _scheduler_thread.is_alive():
@@ -611,6 +633,8 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
     total_pages = 1
 
     if has_role:
+        from cert_watch.filters import compute_urgency_with_chain
+
         with _connect(db) as conn:
             # Total count for pagination
             total_row = conn.execute(
@@ -660,30 +684,11 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
                 (role_email,),
             ).fetchall()
 
-        def _urgency(days: int) -> str:
-            if days < 0:
-                return "expired"
-            if days < 7:
-                return "critical"
-            if days < 30:
-                return "warning"
-            return "healthy"
-
-        def _compute_urgency(leaf_days: int, min_chain_days, chain_status_val) -> str:
-            all_days = [leaf_days]
-            if min_chain_days is not None:
-                all_days.append(int(min_chain_days))
-            min_days = min(all_days)
-            u = _urgency(min_days)
-            if chain_status_val in ("incomplete", "invalid") and u == "healthy":
-                u = "warning"
-            return u
-
         # Compute stats from all team certs
         for r in stat_rows:
             na = _parse_iso(r["not_after"])
             leaf_days = (na - datetime.now(UTC)).days
-            u = _compute_urgency(leaf_days, r["min_chain_days"], r["chain_status"])
+            u = compute_urgency_with_chain(leaf_days, r["min_chain_days"], r["chain_status"])
             stats[u] += 1
 
         # Build page entries
@@ -692,7 +697,7 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
         for r in rows:
             na = _parse_iso(r["not_after"])
             leaf_days = (na - datetime.now(UTC)).days
-            u = _compute_urgency(leaf_days, r["min_chain_days"], r["chain_status"])
+            u = compute_urgency_with_chain(leaf_days, r["min_chain_days"], r["chain_status"])
             host = f"{r['hostname']}:{r['port']}" if r["hostname"] else ""
             entries.append({
                 "id": r["id"],
@@ -768,10 +773,13 @@ def discover_view(request: Request) -> HTMLResponse:
         ).fetchall()
 
     base_domains: set[str] = set()
+    _MULTI_PART_TLDS = {".co.uk", ".org.uk", ".co.jp", ".com.au", ".co.nz", ".net.au"}
     for r in rows:
         host = r["hostname"]
         parts = host.split(".")
-        if len(parts) >= 2:
+        if len(parts) >= 3 and (".".join(parts[-2:])).lower() in _MULTI_PART_TLDS:
+            base_domains.add(".".join(parts[-3:]))
+        elif len(parts) >= 2:
             base_domains.add(".".join(parts[-2:]))
 
     sorted_domains = sorted(base_domains)

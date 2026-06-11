@@ -32,7 +32,7 @@ from cert_watch.database.cert_ops import (
     get_renewal_history,
     replace_scanned,
 )
-from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert
+from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert, get_write_lock
 
 # Dashboard
 from cert_watch.database.dashboard import (
@@ -164,6 +164,7 @@ __all__ = [
     "_iso",
     "_parse_iso",
     "_row_to_cert",
+    "get_write_lock",
     # repo
     "Alert",
     "AlertGroup",

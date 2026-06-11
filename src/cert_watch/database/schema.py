@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
+import threading
 from pathlib import Path
 
 _BASE_TABLES = """
@@ -203,6 +204,7 @@ CREATE INDEX IF NOT EXISTS idx_session_versions_username
 """
 
 _initialized_paths: set[str] = set()
+_init_lock = threading.Lock()
 
 
 def ensure_base(db_path: str | Path) -> None:
@@ -321,8 +323,10 @@ def init_schema(db_path: str | Path) -> None:
     then applies any pending numbered migrations via the migration runner.
     """
     path_str = str(Path(db_path).resolve())
-    if path_str in _initialized_paths:
-        return
+    with _init_lock:
+        if path_str in _initialized_paths:
+            return
+        _initialized_paths.add(path_str)
 
     ensure_base(db_path)
 
@@ -331,4 +335,3 @@ def init_schema(db_path: str | Path) -> None:
     from cert_watch.migrations.runner import run_pending_migrations
 
     run_pending_migrations(db_path, backup=True)
-    _initialized_paths.add(path_str)
