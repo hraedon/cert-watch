@@ -393,3 +393,90 @@ def test_re_encrypt_skips_undecryptable(tmp_path):
     assert count == 0
 
     assert kv_get(db, "smtp_password", encryption_key=good_key) == "hunter2"
+
+
+# --- WI-024: connection lifetime ---------------------------------------------
+
+
+def test_thread_exit_closes_cached_connection(tmp_path):
+    """A dying thread must close its cached connection even when something
+    else still references it (the WI-024 leak: stranded connections kept
+    -wal/-shm handles open until GC noticed)."""
+    import gc
+    import sqlite3
+    import threading
+
+    import pytest
+
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    captured = {}
+
+    def work():
+        conn = _connect(db)
+        conn.execute("SELECT 1")
+        captured["conn"] = conn
+
+    t = threading.Thread(target=work)
+    t.start()
+    t.join()
+    del t
+    gc.collect()  # 3.14: thread-local teardown can route through cyclic GC
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured["conn"].execute("SELECT 1")
+
+
+def test_connection_cache_evicts_oldest(tmp_path):
+    """The per-thread cache is bounded: opening more than the cap closes the
+    oldest connection instead of accumulating handles for the thread's life."""
+    import sqlite3
+
+    import pytest
+
+    from cert_watch.database.connection import (
+        _MAX_CACHED_CONNECTIONS,
+        _connect,
+        _thread_cache,
+        close_connections,
+    )
+
+    close_connections()  # isolate from connections cached by earlier tests
+    conns = []
+    for i in range(_MAX_CACHED_CONNECTIONS + 1):
+        db = tmp_path / f"cw-{i}.sqlite3"
+        init_schema(db)
+        conns.append(_connect(db))
+
+    assert len(_thread_cache().connections) <= _MAX_CACHED_CONNECTIONS
+    with pytest.raises(sqlite3.ProgrammingError):
+        conns[0].execute("SELECT 1")  # evicted + closed
+    conns[-1].execute("SELECT 1")  # newest still live
+    close_connections()
+
+
+def test_ct_refresh_worker_closes_connections(tmp_path, monkeypatch):
+    """_refresh_worker threads are short-lived: they must release their cached
+    connection explicitly rather than stranding it (WI-024)."""
+    import sqlite3
+
+    import pytest
+
+    from cert_watch import ct_monitor
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    captured = {}
+
+    def fake_reconciliation(db_path, domain):
+        captured["conn"] = _connect(db_path)
+        captured["conn"].execute("SELECT 1")
+
+    monkeypatch.setattr(ct_monitor, "ct_reconciliation", fake_reconciliation)
+    ct_monitor._refresh_worker(db, ["example.com"])
+
+    with pytest.raises(sqlite3.ProgrammingError):
+        captured["conn"].execute("SELECT 1")

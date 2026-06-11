@@ -5,6 +5,14 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Connection leak from short-lived threads** (WI-024): the per-thread SQLite
+  connection cache stranded open connections (and their `-wal`/`-shm` file
+  handles) when a thread exited — CT refresh workers and idled-out request
+  worker threads being the repeat offenders, and the mechanism behind the
+  v0.7.3 `-wal` handle leak seen on Windows. The cache now lives in a holder
+  that closes its connections deterministically at thread exit, the per-thread
+  cache is capped (oldest evicted + closed), and the CT refresh worker releases
+  its connection explicitly. Three mutation-verified regression tests.
 - **Auth settings tab was inert in real browsers** (WI-027): the LDAP
   role-mapping `<form>` was nested inside the `/settings/auth` form. Browsers
   drop nested form tags, so the inner `</form>` closed the auth form early —

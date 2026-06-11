@@ -17,6 +17,7 @@ from pathlib import Path
 
 from cert_watch.ct_lookup import query_ct_log
 from cert_watch.database import _connect, init_schema
+from cert_watch.database.connection import close_connections
 
 logger = logging.getLogger("cert_watch.ct_monitor")
 
@@ -69,14 +70,19 @@ def peek_reconciliation(
 
 
 def _refresh_worker(db_path: str | Path, domains: list[str]) -> None:
-    for d in domains:
-        try:
-            ct_reconciliation(db_path, d)  # populates _CT_RECON_CACHE
-        except Exception:
-            logger.warning("CT reconciliation refresh failed for %s", d, exc_info=True)
-        finally:
-            with _CT_REFRESH_LOCK:
-                _CT_REFRESH_INFLIGHT.discard(f"{db_path}:{d}")
+    try:
+        for d in domains:
+            try:
+                ct_reconciliation(db_path, d)  # populates _CT_RECON_CACHE
+            except Exception:
+                logger.warning("CT reconciliation refresh failed for %s", d, exc_info=True)
+            finally:
+                with _CT_REFRESH_LOCK:
+                    _CT_REFRESH_INFLIGHT.discard(f"{db_path}:{d}")
+    finally:
+        # WI-024: this thread is short-lived — release its cached connection
+        # (and the -wal/-shm handles) instead of stranding it until GC.
+        close_connections()
 
 
 def start_reconciliation_refresh(db_path: str | Path, domains: list[str]) -> bool:
