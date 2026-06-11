@@ -14,32 +14,75 @@ from cert_watch.certificate_model import Certificate
 _conn_local = threading.local()
 _write_lock = threading.Lock()
 
+# Per-thread cache cap (WI-024). Production touches one or two database
+# paths per thread, so eviction never fires there; long-lived worker
+# threads in the test suite see a fresh tmp_path per test and would
+# otherwise accumulate one open connection (and its -wal/-shm handles)
+# per test for the life of the worker. Eviction closes the oldest entry,
+# so the cap must stay comfortably above the number of *distinct* db
+# paths a single call stack can have open at once.
+_MAX_CACHED_CONNECTIONS = 8
+
 
 def get_write_lock() -> threading.Lock:
     """Return the module-level write lock for cross-thread SQLite coordination."""
     return _write_lock
 
 
+class _ThreadConnections:
+    """Per-thread connection cache that closes its connections when dropped.
+
+    The instance lives in ``_conn_local``, so when its owning thread exits the
+    thread-local storage releases the last reference and ``__del__`` closes
+    every cached connection immediately (refcount, not cyclic GC — the holder
+    keeps no back-references that could form a cycle). This is the WI-024 fix:
+    short-lived threads (CT refresh workers, idled-out anyio workers) used to
+    strand open connections — and their -wal/-shm file handles — until the
+    garbage collector got around to them.
+    """
+
+    __slots__ = ("connections", "meta")
+
+    def __init__(self) -> None:
+        self.connections: dict[str, sqlite3.Connection] = {}
+        self.meta: dict[str, tuple[int, int, float]] = {}
+
+    def close_all(self) -> None:
+        for conn in self.connections.values():
+            with contextlib.suppress(sqlite3.Error):
+                conn.close()
+        self.connections.clear()
+        self.meta.clear()
+
+    def __del__(self) -> None:
+        self.close_all()
+
+
+def _thread_cache() -> _ThreadConnections:
+    holder = getattr(_conn_local, "holder", None)
+    if holder is None:
+        holder = _ThreadConnections()
+        _conn_local.holder = holder
+    return holder
+
+
 def _connect(db_path: str | Path) -> sqlite3.Connection:
     """Return a cached connection for the current thread.
 
-    Reuses one connection per (thread, db_path) pair. WAL mode and
-    busy_timeout are set once on first connect; they persist in the
-    database file and connection respectively.
+    Reuses one connection per (thread, db_path) pair, capped at
+    ``_MAX_CACHED_CONNECTIONS`` per thread (oldest evicted + closed). WAL
+    mode and busy_timeout are set once on first connect; they persist in
+    the database file and connection respectively.
 
     Detects external database file replacement (e.g. restore from backup)
     by comparing inode, size, and mtime. Stale connections are discarded
-    automatically.
+    automatically. Connections are closed deterministically when their
+    thread exits (see ``_ThreadConnections``).
     """
     path_str = str(db_path)
-    cache = getattr(_conn_local, "connections", None)
-    if cache is None:
-        cache = {}
-        _conn_local.connections = cache
-    meta = getattr(_conn_local, "connection_meta", None)
-    if meta is None:
-        meta = {}
-        _conn_local.connection_meta = meta
+    holder = _thread_cache()
+    cache = holder.connections
+    meta = holder.meta
 
     conn = cache.get(path_str)
     current_stat = None
@@ -80,6 +123,12 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
         cache.pop(path_str, None)
         meta.pop(path_str, None)
 
+    while len(cache) >= _MAX_CACHED_CONNECTIONS:
+        oldest = next(iter(cache))
+        with contextlib.suppress(sqlite3.Error):
+            cache.pop(oldest).close()
+        meta.pop(oldest, None)
+
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -99,16 +148,14 @@ def close_connections() -> None:
     or replace the database file from *within the same process* — e.g. a restore
     that swaps in a backup — must release the handles first. This is the in-process
     equivalent of stopping the service in the documented restore runbook.
+
+    Worker threads that touch the database and then exit should call this in a
+    ``finally`` block for prompt release; ``_ThreadConnections.__del__`` is the
+    safety net for threads that don't.
     """
-    cache = getattr(_conn_local, "connections", None)
-    if cache:
-        for conn in cache.values():
-            with contextlib.suppress(sqlite3.Error):
-                conn.close()
-        cache.clear()
-    meta = getattr(_conn_local, "connection_meta", None)
-    if meta:
-        meta.clear()
+    holder = getattr(_conn_local, "holder", None)
+    if holder is not None:
+        holder.close_all()
 
 
 def _iso(dt: datetime) -> str:
