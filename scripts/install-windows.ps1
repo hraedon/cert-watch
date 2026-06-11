@@ -269,14 +269,39 @@ Write-Host "Securing $secrets ..."
 icacls $secrets /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" | Out-Null  # Administrators, SYSTEM
 
 $identity = "IIS AppPool\$AppPool"
-Write-Host "Granting $identity access (data: modify, secrets: read, python: read+execute) ..."
-icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
-icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
-# The shared Python install lives under InstallDir, which already has
-# modify access.  Explicitly set RX on the python subdir to ensure
-# execute is inherited even if the parent's modify ACE is tightened later.
-if (Test-Path $sharedPyDir) {
-    icacls $sharedPyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+
+function Test-AccountResolves {
+    param([string]$Account)
+    try {
+        $null = (New-Object System.Security.Principal.NTAccount($Account)).Translate(
+            [System.Security.Principal.SecurityIdentifier])
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Grant-AppPoolAcls {
+    Write-Host "Granting $identity access (data: modify, secrets: read, python: read+execute) ..."
+    icacls $InstallDir /grant:r "${identity}:(OI)(CI)M" | Out-Null
+    icacls $secrets    /grant   "${identity}:(OI)(CI)R" | Out-Null
+    # The shared Python install lives under InstallDir, which already has
+    # modify access.  Explicitly set RX on the python subdir to ensure
+    # execute is inherited even if the parent's modify ACE is tightened later.
+    if (Test-Path $sharedPyDir) {
+        icacls $sharedPyDir /grant "${identity}:(OI)(CI)RX" | Out-Null
+    }
+}
+
+# App-pool virtual accounts ("IIS AppPool\<name>") only exist once the pool
+# does. Grant now if the pool is already there (upgrade-in-place); otherwise
+# -ConfigureIIS grants right after creating the pool. A plain venv install
+# (CI smoke, dev box) skips the grant — icacls would fail with "No mapping
+# between account names and security IDs" and poison the script's exit code.
+if (Test-AccountResolves $identity) {
+    Grant-AppPoolAcls
+} elseif (-not $ConfigureIIS) {
+    Write-Host "App pool `"$AppPool`" does not exist; skipping ACL grant (re-run with -ConfigureIIS for IIS hosting)."
 }
 
 $script:iisActuallyConfigured = $false
@@ -343,6 +368,10 @@ if ($ConfigureIIS) {
         Set-ItemProperty $poolPath -Name processModel.idleTimeout -Value "00:00:00"
         Set-ItemProperty $poolPath -Name recycling.periodicRestart.time -Value "00:00:00"
         Write-Host "    App pool configured (No Managed Code, AlwaysRunning, no idle timeout, no periodic restart)."
+
+        # The pool (and its virtual account) now exists — apply the data/
+        # secrets/python ACLs that were skipped earlier if it was missing.
+        Grant-AppPoolAcls
 
         # 4. Create IIS site
         $siteName = "cert-watch"
