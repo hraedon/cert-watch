@@ -529,7 +529,7 @@ src/cert_watch/
   upload.py            Certificate file upload/parse
   templates/           Jinja2 HTML templates
   static/              CSS
-tests/                 pytest suite (715 unit tests)
+tests/                 pytest suite (unit + e2e; count grows — run `pytest --co -q` for the current number)
 docs/spec/             Work-item specs (one per FR)
 deploy/
   k8s/                 Kustomize manifests

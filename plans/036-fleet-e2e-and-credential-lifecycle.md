@@ -3,7 +3,7 @@
 **Created:** 2026-06-05
 **Status:** proposed
 **Builds on:** Plan 034 (E2E), the Vault provisioning + LDAP harness proven in the
-2026-06-05 session (see `HANDOFF.md`), `deploy/vault/`.
+2026-06-05 session (see `docs/archive/2026-06-05-ldap-e2e-handoff.md`), `deploy/vault/`.
 
 ---
 
@@ -29,7 +29,7 @@ tokens.
 ## What already exists (don't rebuild)
 
 - A working, manual LDAP runthrough harness (launch env + Playwright script in
-  `HANDOFF.md`), proven against real lab AD over LDAPS.
+  `docs/archive/2026-06-05-ldap-e2e-handoff.md`), proven against real lab AD over LDAPS.
 - Vault provisioned: policies `cert-watch-{setup,app,e2e-runner,totp-mcp}`,
   AppRoles `cert-watch-e2e` / `cert-watch-totp-mcp`, **kubernetes auth** (role
   `cert-watch` → SA `cert-watch/cert-watch`), TOTP broker. k8s-auth login already
@@ -139,4 +139,4 @@ skill + broker make the cheap tiers self-sufficient.
 
 ## Dependencies
 - Plan 035 (RBAC) for admin-vs-read-only assertions in the runthrough.
-- `HANDOFF.md` for the exact working launch/runthrough this generalizes.
+- `docs/archive/2026-06-05-ldap-e2e-handoff.md` for the exact working launch/runthrough this generalizes.

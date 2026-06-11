@@ -1,6 +1,11 @@
-# cert-watch — Session Handoff (2026-06-05, updated)
+# cert-watch — Session Handoff (2026-06-05) — ARCHIVED
 
-Resume doc for the agentic-LDAP-E2E work. Read this first.
+> **ARCHIVED 2026-06-11.** Historical snapshot of the LDAP-E2E session state.
+> Everything narrative here is overtaken: the three LDAP bug fixes, plans
+> 034/035, and `deploy/vault/` are long committed; RBAC shipped (Plans 040/047);
+> the suite is ~1900 tests. Do **not** use this as a resume doc — orient via
+> `AGENTS.md`. The lab coordinates (AD/Vault layout, LDAPS launch recipe,
+> runthrough script) remain valid as reference, which is why the file is kept.
 
 ---
 
