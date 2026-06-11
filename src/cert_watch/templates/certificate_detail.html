@@ -44,8 +44,8 @@
       </div>
     </div>
     <div class="cw-flex cw-gap-8">
-      {% if may_write and hostname %}
-        <form method="post" action="/hosts/{{ cert_id }}/scan" class="cw-inline">
+      {% if may_write and host_id %}
+        <form method="post" action="/hosts/{{ host_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="cw-btn primary" data-testid="cert-scan-btn">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
         </form>

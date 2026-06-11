@@ -131,22 +131,26 @@
             <p class="cw-muted cw-fz-11 cw-mb-12">
               Map Active Directory groups to cert-watch roles. Members of the mapped groups receive the corresponding role.
             </p>
-            <form method="post" action="/settings/ldap-role-map">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-              {% if roles %}
-                {% for r in roles %}
-                <div class="cw-field cw-mb-12">
-                  <label class="cw-label" for="role_map_{{ r.id }}">{{ r.name }} groups (comma-separated DNs)</label>
-                  <input class="cw-input" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
-                         value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join(', ') }}"
-                         placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
-                </div>
-                {% endfor %}
-                <button type="submit" class="cw-btn primary">Save role mapping</button>
-              {% else %}
-                <p class="cw-muted">Create roles in the <a href="/settings/roles">Roles</a> tab first.</p>
-              {% endif %}
-            </form>
+            <!-- No <form> element here: this block sits inside the /settings/auth
+                 form, and a nested <form> tag is dropped by the HTML parser —
+                 its </form> then closes the auth form early, orphaning the OAuth
+                 fields and the auth save button. Inputs are associated with the
+                 #ldap-role-map-form element (a sibling of the auth form, below)
+                 via the form attribute instead. -->
+            {% if roles %}
+              {% for r in roles %}
+              <div class="cw-field cw-mb-12">
+                <label class="cw-label" for="role_map_{{ r.id }}">{{ r.name }} groups (comma-separated DNs)</label>
+                <input class="cw-input" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
+                       form="ldap-role-map-form"
+                       value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join(', ') }}"
+                       placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
+              </div>
+              {% endfor %}
+              <button type="submit" class="cw-btn primary" form="ldap-role-map-form">Save role mapping</button>
+            {% else %}
+              <p class="cw-muted">Create roles in the <a href="/settings/roles">Roles</a> tab first.</p>
+            {% endif %}
           </div>
 
           <div id="ldap-tofu-panel" class="cw-panel cw-mt-16 cw-hidden">
@@ -224,6 +228,13 @@
         <div class="cw-mt-24 cw-flex cw-gap-8">
           <button type="submit" class="cw-btn primary">Save authentication settings</button>
         </div>
+      </form>
+
+      <!-- Owner of the role_map_* inputs rendered inside the auth form above
+           (associated via the form attribute) — must stay a sibling of that
+           form, never a child. -->
+      <form method="post" action="/settings/ldap-role-map" id="ldap-role-map-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
       </form>
 
       {% if local_admin_configured %}
