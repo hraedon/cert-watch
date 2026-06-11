@@ -8,29 +8,56 @@
    before first paint to avoid a flash. See README "Theme toggle".
    ============================================================ */
 
+/* ---------- FONTS (self-hosted; OFL — see static/fonts/) ---------- */
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/static/fonts/ibm-plex-mono-latin-600.woff2") format("woff2");
+}
+
 /* ---------- TOKENS ---------- */
 :root,
 :root[data-theme="dark"] {
   --font-sans: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, Courier New, monospace;
 
-  --bg: #0c0e12;
-  --bg-soft: #0f1217;
-  --panel: #14171d;
-  --panel-2: #191d25;
-  --panel-3: #1f242e;
-  --inset: #0e1116;
-  --border: #232934;
-  --border-2: #2d3440;
+  --bg: #0d0f11;
+  --bg-soft: #101316;
+  --panel: #14171a;
+  --panel-2: #1a1e22;
+  --panel-3: #20252b;
+  --inset: #0f1114;
+  --border: #24292f;
+  --border-2: #2e353c;
 
-  --text: #e9ecf2;
-  --text-2: #a3acbc;
-  --text-3: #69727f;
+  --text: #e8ebee;
+  --text-2: #a4adb6;
+  --text-3: #6a737d;
 
-  --accent: #7c8cff;
-  --accent-2: #a78bfa;
-  --accent-soft: rgba(124, 140, 255, 0.15);
-  --accent-line: rgba(124, 140, 255, 0.4);
+  --accent: #6ca0dc;
+  --accent-2: #6ca0dc;
+  --accent-soft: rgba(108, 160, 220, 0.13);
+  --accent-line: rgba(108, 160, 220, 0.4);
+
+  /* chrome-strength button (replaces gradient/indigo primary) */
+  --btn-strong-bg: #e8ebee;
+  --btn-strong-text: #14171a;
 
   --ok: #34d399;      --ok-soft: rgba(52, 211, 153, 0.14);
   --warn: #fbbf24;    --warn-soft: rgba(251, 191, 36, 0.15);
@@ -71,23 +98,26 @@
 }
 
 :root[data-theme="light"] {
-  --bg: #f3f4f7;
-  --bg-soft: #eceef2;
+  --bg: #f4f4f5;
+  --bg-soft: #ededee;
   --panel: #ffffff;
-  --panel-2: #fafbfc;
-  --panel-3: #f2f4f7;
-  --inset: #f6f7f9;
-  --border: #e5e8ed;
-  --border-2: #d6dae1;
+  --panel-2: #fafafa;
+  --panel-3: #f1f2f3;
+  --inset: #f6f6f7;
+  --border: #e4e6e8;
+  --border-2: #d4d8db;
 
-  --text: #181c24;
-  --text-2: #58616f;
-  --text-3: #8b94a3;
+  --text: #1a1d20;
+  --text-2: #595f66;
+  --text-3: #8a9199;
 
-  --accent: #5868f0;
-  --accent-2: #7c5cf0;
-  --accent-soft: rgba(88, 104, 240, 0.10);
-  --accent-line: rgba(88, 104, 240, 0.35);
+  --accent: #2f6da8;
+  --accent-2: #2f6da8;
+  --accent-soft: rgba(47, 109, 168, 0.10);
+  --accent-line: rgba(47, 109, 168, 0.35);
+
+  --btn-strong-bg: #1a1d20;
+  --btn-strong-text: #ffffff;
 
   --ok: #15a34a;      --ok-soft: rgba(21, 163, 74, 0.10);
   --warn: #c2740a;    --warn-soft: rgba(194, 116, 10, 0.11);
@@ -132,9 +162,9 @@ body {
 .cw-wordmark:hover { text-decoration: none; color: inherit; }
 .cw-mark {
   width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: center; color: #fff;
-  background: linear-gradient(150deg, var(--accent), var(--accent-2));
-  box-shadow: 0 2px 8px var(--accent-soft);
+  display: flex; align-items: center; justify-content: center; color: var(--accent);
+  background: var(--inset);
+  border: 1px solid var(--border-2);
 }
 .cw-name { font-size: 16px; font-weight: 600; letter-spacing: -.3px; }
 .cw-ver {
@@ -161,10 +191,10 @@ body {
 }
 .cw-btn:hover { background: var(--panel-3); border-color: var(--text-3); }
 .cw-btn.primary {
-  background: var(--accent); border-color: transparent; color: #fff;
-  box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 4px 14px var(--accent-soft);
+  background: var(--btn-strong-bg); border-color: transparent; color: var(--btn-strong-text);
 }
-.cw-btn.primary:hover { filter: brightness(1.06); }
+.cw-btn.primary:hover { filter: brightness(0.92); }
+:root[data-theme="dark"] .cw-btn.primary:hover { filter: brightness(1.1); }
 .cw-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); padding: 6px 9px; }
 .cw-btn.ghost:hover { background: var(--panel-2); color: var(--text); }
 .cw-btn.sm { padding: 5px 10px; font-size: 12px; }
@@ -196,39 +226,50 @@ body {
 /* ---------- PAGE WRAPPER ---------- */
 .cw-page-wrap { padding: 22px 26px; }
 
-/* ---------- STAT CARDS ---------- */
-.cw-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
-.cw-stats.cw-stats-3 { grid-template-columns: repeat(3, 1fr); }
-.cw-stat { position: relative; overflow: hidden; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 15px 16px 14px; }
-.cw-stat-rail { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; }
-.cw-stat-top { display: flex; align-items: center; gap: 8px; }
-.cw-stat-label { font-size: var(--fs-xs); font-weight: 500; color: var(--text-2); }
-.cw-stat-val { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -1px; margin-top: 8px; line-height: 1; }
-.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 7px; }
-
-/* ---------- STATUS PILL ---------- */
-.cw-pill {
-  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font-size: 11.5px; font-weight: 600; padding: 3px 9px 3px 7px; border-radius: 999px;
-  border: 1px solid transparent; line-height: 1.4;
+/* ---------- STAT STRIP ----------
+   One bordered instrument strip, hairline dividers between cells —
+   replaces the four floating color-railed cards. Same template markup. */
+.cw-stats {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 0;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  overflow: hidden;
 }
-.cw-pill .dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 auto; }
-.cw-pill.expired  { color: var(--expired); background: var(--expired-soft); border-color: color-mix(in srgb, var(--expired) 28%, transparent); }
+.cw-stats.cw-stats-3 { grid-template-columns: repeat(3, 1fr); }
+.cw-stat { position: relative; overflow: hidden; padding: 13px 18px 12px; border-left: 1px solid var(--border); }
+.cw-stat:first-child { border-left: none; }
+.cw-stat-rail { display: none; }
+.cw-stat-top { display: flex; align-items: center; gap: 7px; }
+.cw-stat-top svg { width: 13px; height: 13px; opacity: .85; }
+.cw-stat-label {
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+  color: var(--text-3); text-transform: uppercase; letter-spacing: .07em;
+}
+.cw-stat-val { font-family: var(--font-mono); font-size: 24px; font-weight: 600; letter-spacing: -.5px; margin-top: 7px; line-height: 1; font-variant-numeric: tabular-nums; }
+.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
+
+/* ---------- STATUS (dot + colored text — was a rounded pill) ---------- */
+.cw-pill {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 600; padding: 2px 0; border-radius: 0;
+  border: none; line-height: 1.4; letter-spacing: .01em;
+}
+.cw-pill .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; }
+.cw-pill.expired  { color: var(--expired); }
 .cw-pill.expired .dot  { background: var(--expired); }
-.cw-pill.critical { color: var(--crit); background: var(--crit-soft); border-color: color-mix(in srgb, var(--crit) 28%, transparent); }
+.cw-pill.critical { color: var(--crit); }
 .cw-pill.critical .dot { background: var(--crit); }
-.cw-pill.warning  { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 28%, transparent); }
+.cw-pill.warning  { color: var(--warn); }
 .cw-pill.warning .dot  { background: var(--warn); }
-.cw-pill.healthy  { color: var(--ok); background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 26%, transparent); }
+.cw-pill.healthy  { color: var(--ok); }
 .cw-pill.healthy .dot  { background: var(--ok); }
-.cw-pill.gray     { color: var(--text-3); background: var(--panel-2); border-color: var(--border); }
+.cw-pill.gray     { color: var(--text-3); }
 .cw-pill.gray .dot     { background: var(--text-3); }
 
 /* ---------- CHIPS (SANs, source, etc.) ---------- */
 .cw-chip {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500;
-  padding: 2px 8px; border-radius: var(--radius-sm); border: 1px solid var(--border-2);
-  color: var(--text-2); background: var(--panel-2); font-family: var(--font-mono); white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 450;
+  padding: 1.5px 7px; border-radius: 4px; border: 1px solid var(--border);
+  color: var(--text-2); background: transparent; font-family: var(--font-mono); white-space: nowrap;
 }
 .cw-chip.san { background: var(--inset); }
 .cw-chip.more { color: var(--text-3); }
@@ -241,13 +282,13 @@ body {
 .cw-table-wrap { overflow: hidden; }
 .cw-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .cw-table th {
-  text-align: left; font-size: 11px; font-weight: 600; color: var(--text-3);
-  letter-spacing: .04em; text-transform: uppercase; padding: 14px 14px 10px;
+  text-align: left; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; color: var(--text-3);
+  letter-spacing: .07em; text-transform: uppercase; padding: 12px 14px 9px;
   border-bottom: 1px solid var(--border); white-space: nowrap; user-select: none;
 }
 .cw-table th.sortable { cursor: pointer; }
 .cw-table th.sortable:hover { color: var(--text-2); }
-.cw-table td { padding: 13px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+.cw-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; }
 .cw-table tr:last-child td { border-bottom: none; }
 .cw-table tbody tr { transition: background .1s; }
 .cw-table tbody tr:hover { background: var(--row-hover); }
@@ -308,19 +349,21 @@ body {
   font-size: 13px;
 }
 
-/* ---------- HEALTH BANNER ---------- */
+/* ---------- HEALTH BANNER ----------
+   Quiet status strip: neutral surface, the dot carries the tone.
+   Degraded states keep a tinted background so they still interrupt. */
 .cw-health-banner {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 26px;
+  padding: 6px 26px;
   border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: 12px;
+  font-weight: 450;
 }
 .cw-health-banner.cw-health-ok {
-  background: var(--ok-soft);
-  color: var(--ok);
+  background: var(--bg-soft);
+  color: var(--text-3);
 }
 .cw-health-banner.cw-health-warning {
   background: var(--warn-soft);
@@ -434,8 +477,8 @@ body {
 .cw-btn--expand { flex: 1; justify-content: center; }
 
 .cw-gap-4, .cw-gap-5, .cw-gap-6    { gap: var(--space-1); }
-.cw-gap-7, .cw-gap-8, .cw-gap-10   { gap: var(--space-2); }
-.cw-gap-12, .cw-gap-16            { gap: var(--space-3); }
+.cw-gap-7, .cw-gap-8, .cw-gap-9, .cw-gap-10 { gap: var(--space-2); }
+.cw-gap-12, .cw-gap-14, .cw-gap-16 { gap: var(--space-3); }
 .cw-flex-1 { flex: 1; }
 .cw-justify-center { justify-content: center; }
 .cw-items-center { align-items: center; }
@@ -527,7 +570,7 @@ body {
 .cw-stat-val-ok       { color: var(--ok); }
 .cw-stat-val-accent   { color: var(--text); } /* fallback alias */
 
-.cw-stat-label-color  { color: var(--text-2); }
+.cw-stat-label-color  { color: var(--text-3); }
 
 /* ---- CHIP TONE VARIANTS ---- */
 .cw-chip-public {
@@ -745,9 +788,9 @@ body {
   width: 40px; height: 40px; border-radius: 10px;
   margin: 0 auto 12px;
   display: flex; align-items: center; justify-content: center;
-  color: #fff;
-  background: linear-gradient(150deg, var(--accent), var(--accent-2));
-  box-shadow: 0 2px 8px var(--accent-soft);
+  color: var(--accent);
+  background: var(--inset);
+  border: 1px solid var(--border-2);
 }
 .cw-login-error {
   padding: 10px 14px;
@@ -1074,7 +1117,7 @@ body {
 .cw-testres.err { color: var(--crit); }
 
 /* ---------- Segmented control (alerts filter) ---------- */
-.cw-segmented { display: flex; gap: 0; border: 1px solid var(--border-2); border-radius: var(--radius); overflow: hidden; }
+.cw-segmented { display: inline-flex; gap: 0; border: 1px solid var(--border-2); border-radius: var(--radius); overflow: hidden; }
 .cw-segment { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 13px; font-weight: 500; color: var(--text-2); text-decoration: none; background: var(--panel); border-right: 1px solid var(--border-2); transition: background .12s, color .12s; }
 .cw-segment:last-child { border-right: none; }
 .cw-segment:hover { background: var(--panel-2); color: var(--text); }
@@ -1088,6 +1131,10 @@ body {
 /* ---------- Responsive layout ---------- */
 @media (max-width: 960px) {
   .cw-layout-16-1 { grid-template-columns: 1fr; }
+  .cw-stats { grid-template-columns: repeat(2, 1fr); }
+  .cw-stats .cw-stat { border-top: 1px solid var(--border); }
+  .cw-stats .cw-stat:nth-child(-n+2) { border-top: none; }
+  .cw-stats .cw-stat:nth-child(odd) { border-left: none; }
   .cw-stats-3 { grid-template-columns: 1fr; }
   .cw-field-row { grid-template-columns: 1fr; }
   .cw-grid-2-16-22 { grid-template-columns: 1fr; }

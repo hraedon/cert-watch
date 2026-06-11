@@ -84,8 +84,8 @@
   {# ---- Stat cards ---- #}
   <div class="cw-stats cw-mb-18">
     {{ stat_card('default', 'shield', 'Tracked certificates', total_entries, '') }}
-    {{ stat_card('attention', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
-    {{ stat_card('warning', 'clock', 'Expiring ≤ 14 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
+    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
+    {{ stat_card('warning' if (ns.critical + ns.warning) else 'neutral', 'clock', 'Expiring ≤ 14 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
     {{ stat_card('ok', 'check-circle', 'Healthy', ns.healthy, 'no action needed') }}
   </div>
 
@@ -175,7 +175,7 @@
               <div class="cw-cert-chips">
                 <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
                 <span class="cw-host">{{ e.name or '—' }}</span>
-                <span class="cw-chip cw-chip-hosts">{{ e.host_count }} hosts</span>
+                <span class="cw-chip cw-chip-hosts">{{ e.host_count }} host{{ 's' if e.host_count != 1 else '' }}</span>
               </div>
               <div class="cw-metarow cw-mt-7">
                 {% if e.renewal_method %}
@@ -218,7 +218,7 @@
               {% if e.days_remaining is not none %}
                 {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
-                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
               {% if e.days_remaining is not none %}
                 {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
@@ -261,7 +261,7 @@
                   {% if h.scan_status == 'failure' %}
                     <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
                   {% elif h.last_scanned_at %}
-                    <span class="cw-text-text-3 cw-fz-11-5">scanned {{ h.last_scanned_at[:16] }}</span>
+                    <span class="cw-text-text-3 cw-fz-11-5">scanned {{ h.last_scanned_at[:16] | replace('T', ' ') }}</span>
                   {% endif %}
                   {% if h.owner_name %}
                     <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
@@ -361,7 +361,7 @@
               {% if e.days_remaining is not none %}
                 {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
-                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
               {% if e.days_remaining is not none %}
                 {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}

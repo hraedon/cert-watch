@@ -22,7 +22,7 @@
       <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
         <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
         <span class="mono cw-fz-12-5 cw-text-text-3">
-          {% if scan_status == 'failure' %}Last scan failed{% elif scan_at %}Last scanned {{ scan_at[:16] }}{% else %}No scan recorded{% endif %}
+          {% if scan_status == 'failure' %}Last scan failed{% elif scan_at %}Last scanned {{ scan_at[:16] | replace('T', ' ') }}{% else %}No scan recorded{% endif %}
         </span>
       </div>
     </div>

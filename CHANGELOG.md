@@ -2,6 +2,72 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [0.8.0] — 2026-06-11
+
+Two things land together: the Plan 047 capability wave (RBAC management, policy
+engine, CT mis-issuance closure, SC-081 readiness) and a full UI restyle with a
+batch of user-visible defect fixes found by reviewing every page with seeded
+data.
+
+### Added
+- **RBAC management UI + owner-aware alerting** (Plan 040 foundation, Plan 047
+  WS-A; BC-160): roles/users settings pages, owner-aware alert digests, team
+  dashboard (`/team`), and authenticated E2E flows.
+- **Policy engine** (`policy.py`) with violation alerts and an event model
+  (`events.py`) + streaming API (Plan 047 WS-C).
+- **CT mis-issuance detection** with per-host expected-issuer allowlists
+  (BC-151, WI-007).
+- **SC-081 readiness report** (`/readiness`): milestone timeline (200d/100d/47d),
+  renewal workload forecast, and per-host margin classification.
+- **Lifetime-relative alert thresholds** (Plan 048 WI-1.1): certificates with
+  ≤90-day lifetimes alert on percentage of lifetime remaining instead of fixed
+  day counts — a 30-day warning is meaningless for a 47-day cert.
+- **Renewal analytics + overdue detection** (Plan 048): per-host lifetime and
+  cadence inference, renewal-overdue events with dedup, opt-in SC-081 policy
+  pack, weekly digest.
+- **IIS install automation** — `install-windows.ps1` configures IIS serving
+  (HttpPlatformHandler, web.config, 443 binding) behind a flag (BC-157).
+- **Populated-dashboard visual baseline.** `tests/e2e/_seed.py` seeds a
+  deterministic five-cert demo estate (expired/critical/warning/healthy)
+  directly through the upload store; `test_dashboard_populated_visual`
+  baselines the dashboard *with rows* — the previous baselines were
+  empty-state only, which is exactly where this release's UI bugs hid.
+- **Vendored IBM Plex Mono** (woff2, OFL license included) — self-hosted under
+  `static/fonts/`, so air-gapped/IIS deployments are unaffected.
+
+### Changed
+- **Full UI restyle** ("instrument panel, not SaaS dashboard"): flat
+  steel-blue accent replaces the indigo→violet gradient; primary buttons are
+  high-contrast neutral; the four stat cards become a single hairline-divided
+  stat strip; status pills become dot + colored text; chips quieted; health
+  banner is a slim neutral strip (degraded states still tint); tables tighter
+  with mono uppercase headers; light theme aligned. Templates keep all
+  `data-testid` hooks — no selector or route changes.
+
+### Fixed
+- **User-visible copy/rendering defects** (2026-06-11 UI review): "1 hosts"
+  pluralization; missing `cw-gap-9`/`cw-gap-14` utility classes collapsing
+  header spacing ("Expiry calendarby time period"); redundant day-count prefix
+  on expired rows ("4078expired 11 years ago"); raw ISO `T` timestamps in
+  alerts, audit, scan history, host detail, and dashboard; zero counts
+  rendered in alarm red; double page-title on the readiness report; settings
+  panel missing padding; alerts segmented control stretching full-width.
+- **samba-container LDAP e2e fixture** raised `NameError` on contact (class
+  body self-assignment) and asserted login-rejection copy the app never
+  emits — broken on arrival, fixed before first CI execution.
+- SMTP double-send; Alertmanager resolve handling; policy route auth;
+  alert-deletion ordering; StartTLS TOFU CA capture; LDAP settings form key
+  (WI-008/-011/-014/-015/-016/-017).
+
+### Internal
+- `scan.py` decomposition (BC-161), dashboard SQL hardening (BC-162),
+  coverage raised on security-critical modules (BC-155), admin route
+  consolidation, UUID validation, CSP `report-uri`.
+- **AGENTS.md:** UI definition-of-done checklist (every item cites a bug that
+  shipped), verification rituals (prove a test can fail; skipped is
+  invisible; state what was not verified), and the list of decisions agents
+  must surface to the human.
+
 ## [0.7.3] — 2026-06-08
 
 Windows: fix a SQLite connection-handle leak that could block an in-process database file replace (e.g. restore). Found by running the suite on Windows + Python 3.14.

@@ -94,7 +94,7 @@
             <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
             {% if e.days_remaining is not none %}
               {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
-              <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | abs | int if e.days_remaining < 0 else '' }}{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
+              <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
             {% endif %}
           </td>
           <td>

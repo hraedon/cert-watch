@@ -14,6 +14,7 @@ import os
 import subprocess
 import tempfile
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -139,14 +140,16 @@ def samba_ldap_e2e():
         if not _wait_ldap(ldap_port):
             raise RuntimeError(f"LDAP on port {ldap_port} never became ready")
 
-        class _Fixture:
-            ldap_port = ldap_port
-            base_dn = base_dn
-            bind_dn = bind_dn
-            admin_password = adminpass
-            ldap_uri = f"ldap://127.0.0.1:{ldap_port}"
-
-        yield _Fixture()
+        # NB: a plain class body can't self-assign from enclosing-function
+        # locals (`ldap_port = ldap_port` raises NameError — class scopes skip
+        # the function scope on the RHS), so build the fixture object instead.
+        yield SimpleNamespace(
+            ldap_port=ldap_port,
+            base_dn=base_dn,
+            bind_dn=bind_dn,
+            admin_password=adminpass,
+            ldap_uri=f"ldap://127.0.0.1:{ldap_port}",
+        )
     finally:
         _stop_container(c_id)
 
@@ -208,4 +211,6 @@ def test_user_not_in_group_rejected(
     page.get_by_test_id("login-username").fill("cw-outcast")
     page.get_by_test_id("login-password").fill(samba_ldap_e2e.admin_password)
     page.get_by_test_id("login-submit-btn").click()
-    expect(page.locator("body")).to_contain_text("access denied", timeout=5000)
+    expect(page.locator("body")).to_contain_text(
+        "user not found or not in required group(s)", timeout=5000
+    )
