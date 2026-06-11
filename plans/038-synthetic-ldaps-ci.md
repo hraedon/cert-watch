@@ -40,7 +40,7 @@ bugs — and catch the next one in this class.
   tools"); default `addopts` exclude it, so it won't slow the main unit job.
 - `LDAPAuthProvider` is fully parameterized (server URL, CA, filters, groups), so
   it can be pointed at a container with no production changes.
-- The working launch/runthrough recipe in `HANDOFF.md` to mirror at app level.
+- The working launch/runthrough recipe in `docs/archive/2026-06-05-ldap-e2e-handoff.md` to mirror at app level.
 
 ## The fidelity decision (important — drives server choice)
 
@@ -133,7 +133,7 @@ gate stays on the unit job.) Add a small `integration` extra for
 - **Docker-in-CI** — GH-hosted `ubuntu-latest` has Docker; self-hosted runners may
   not. The skip-when-no-Docker guard keeps local dev unblocked; CI must have it.
 - **Don't let this replace the real-AD tier** — synthetic ≠ Hraedon AD. It won't
-  catch lab-specific PKI (the stale-root issue in HANDOFF), referral chasing, or
+  catch lab-specific PKI (the stale-root issue in the archived 2026-06-05 handoff), referral chasing, or
   Entra. This **demotes** the real-AD run from "only safety net" to "fidelity
   backstop" (Plan 036), it does not retire it.
 - **Keep the fast unit job fast** — integration is a separate job/marker; the

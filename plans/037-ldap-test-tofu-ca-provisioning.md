@@ -4,7 +4,7 @@
 **Status:** proposed
 **Builds on:** the `/settings/test-ldap` handler (`src/cert_watch/routes/settings.py`),
 the three LDAPS auth fixes from the 2026-06-05 session, and the manual
-openssl-`s_client`-+-bundle dance recorded in `HANDOFF.md`.
+openssl-`s_client`-+-bundle dance recorded in `docs/archive/2026-06-05-ldap-e2e-handoff.md`.
 
 ---
 
@@ -91,7 +91,7 @@ could present their own CA. Mitigations, surfaced in the UI, not hidden:
   trail of the pin.
 - **Out (this plan):** auto-pinning without a click; periodic CA rotation/renewal
   tracking; fetching the CA from AD's `cACertificate`/CDP (the directory-published
-  bundle is a separate, stale-PKI rabbit hole — see HANDOFF "CA" note); doing the
+  bundle is a separate, stale-PKI rabbit hole — see the archived 2026-06-05 handoff "CA" note); doing the
   same for SMTP STARTTLS (could reuse the pattern later).
 
 ## Slices

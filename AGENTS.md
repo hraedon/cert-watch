@@ -10,7 +10,7 @@ When tagging a release, update `pyproject.toml` version and `src/cert_watch/_ver
 
 ## Why this project exists
 
-cert-watch is a "traditional"-build comparison point for [software-factory-2](https://github.com/hraedon/software-factory-2). Same MVP spec; hand-rolled (or single-shot agent-built) instead of factory-orchestrated. The repo at `hraedon/cert-watch-factory-failed` is the prior factory attempt — kept for comparison, not for reuse.
+All-in-one, self-hosted certificate-lifecycle observability for SMBs — live scanning + offline upload, chain validation, posture grading, CT reconciliation, directory auth, audit log — maintained as software people run (it is deployed in production). See `docs/positioning.md` for the full identity and landscape. Historical note: it began as a "traditional"-build comparison point for [software-factory-2](https://github.com/hraedon/software-factory-2) (same MVP spec, hand-/single-agent-built; the prior factory attempt is at `hraedon/cert-watch-factory-failed`) — that origin is documented, but it is no longer what the tool is for.
 
 ## Orient
 
@@ -143,7 +143,7 @@ agent-notes breadcrumb sync --from-files breadcrumbs/active --path /projects/cer
 agent-notes breadcrumb sync --path /projects/cert-watch --create-missing-vocab   # default dir covers resolved/
 ```
 
-**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the agent-notes DB into [`OPEN_BREADCRUMBS.txt`](OPEN_BREADCRUMBS.txt) (regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). For the live view query the DB directly (commands above). Resolved breadcrumbs live in the DB and under `breadcrumbs/resolved/` as history.
+**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the agent-notes DB into `OPEN_WORK_ITEMS.txt` (gitignored, local-only; regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). **Treat the export as stale until you regenerate it** — the generated timestamp is in its header. For the live view query the DB directly (commands above). Resolved breadcrumbs live in the DB and under `breadcrumbs/resolved/` as history.
 
 SSRF/scan policy is `CERT_WATCH_ALLOWED_SUBNETS` (BC-080): a CIDR allowlist scoping which **private** ranges are scannable (public always allowed; loopback/link-local/metadata always blocked). The global `allow_private` default was deliberately **not** flipped (breaks internal-monitoring on upgrade for low payoff — the scan reads cert metadata, not bodies/creds).
 
