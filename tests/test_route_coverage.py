@@ -935,7 +935,6 @@ def test_update_owner_via_certificate(reload_app, tmp_path, leaf_pem_file):
     assert r.status_code == 200
     assert "Alice" in r.text
     assert "alice@example.com" in r.text
-    assert "#ops" in r.text
     assert "ACME" in r.text
     assert "https://wiki.example.com/renewal" in r.text
 

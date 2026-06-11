@@ -69,6 +69,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 ).fetchone()
             csrf_ctx = get_csrf_context(request)
             auth_ctx = get_auth_context(request)
+            settings = getattr(request.app.state, "settings", None)
+            slack_configured = (
+                getattr(settings, "webhook_kind", "") == "slack" if settings else False
+            )
             return templates.TemplateResponse(
                 request=request,
                 name="host_detail.html",
@@ -82,6 +86,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                     "active_page": "dashboard",
                     "version": __version__,
                     "commit": __commit__,
+                    "slack_configured": slack_configured,
                 },
             )
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -336,6 +341,11 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     auth_ctx = get_auth_context(request)
     from datetime import UTC, datetime
 
+    settings = getattr(request.app.state, "settings", None)
+    slack_configured = (
+        getattr(settings, "webhook_kind", "") == "slack" if settings else False
+    )
+
     return templates.TemplateResponse(
         request=request,
         name="certificate_detail.html",
@@ -369,6 +379,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "now": datetime.now(UTC),
             "posture": posture_data,
             "drift_events": drift_events,
+            "slack_configured": slack_configured,
             **csrf_ctx,
         },
     )
