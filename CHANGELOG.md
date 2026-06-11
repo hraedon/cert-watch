@@ -2,7 +2,12 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [0.8.1] — 2026-06-11
+
+Defect release: every fix found by the post-0.8.0 adversarial UI review,
+plus the WI-024 connection-lifetime fix. **If you run 0.8.0, upgrade** —
+the settings auth tab is inert there (WI-027) and saving a role mapping
+silently wipes OAuth settings.
 
 ### Fixed
 - **Connection leak from short-lived threads** (WI-024): the per-thread SQLite
