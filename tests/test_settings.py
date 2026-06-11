@@ -2005,3 +2005,72 @@ def test_save_auth_config_rebuild_failure(reload_app, tmp_path, monkeypatch):
             follow_redirects=False,
         )
     assert r.status_code == 303
+
+
+# ---------- Form structure (WI-027) ----------
+
+
+def _max_form_nesting_depth(html: str) -> int:
+    """Walk <form>/</form> tokens and return the maximum nesting depth.
+
+    Browsers drop a <form> start tag that appears inside an open form, so the
+    inner form's </form> closes the OUTER form early — orphaning every later
+    field and submit button. Depth must never exceed 1.
+    """
+    import re
+
+    # HTML comments can legitimately mention form tags; only real markup counts.
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    depth = 0
+    max_depth = 0
+    for m in re.finditer(r"</?form\b", html):
+        if m.group(0) == "<form":
+            depth += 1
+            max_depth = max(max_depth, depth)
+        else:
+            depth -= 1
+    assert depth == 0, "unbalanced <form> tags"
+    return max_depth
+
+
+def test_auth_tab_has_no_nested_forms(reload_app, tmp_path):
+    """WI-027 regression: the ldap-role-map form was nested inside the auth
+    form, which in a real browser killed the auth save button, prevented role
+    mappings from ever saving, and wiped OAuth kv keys on 'Save role mapping'.
+    """
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema
+    from cert_watch.database.users_roles import Role, SqliteRoleRepository
+
+    init_schema(db)
+    # A role must exist for the role_map_* inputs to render at all.
+    role_id = SqliteRoleRepository(db).add(Role(name="Platform", email="p@example.com"))
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/settings?tab=auth")
+    assert r.status_code == 200
+    assert _max_form_nesting_depth(r.text) == 1
+    # The role-map inputs/button live inside the auth form's markup but must
+    # belong to the sibling form via the form attribute.
+    assert 'id="ldap-role-map-form"' in r.text
+    assert f'name="role_map_{role_id}" form="ldap-role-map-form"' in r.text or (
+        f'name="role_map_{role_id}"' in r.text and 'form="ldap-role-map-form"' in r.text
+    )
+
+
+def test_no_nested_forms_on_any_settings_tab(reload_app, tmp_path):
+    """Form-nesting sweep across all settings tabs (same parser hazard)."""
+    app_mod = reload_app()
+    from cert_watch.database import init_schema
+
+    init_schema(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        for tab in ("auth", "smtp", "alerts", "policy", "api-keys"):
+            r = client.get(f"/settings?tab={tab}")
+            assert r.status_code == 200
+            assert _max_form_nesting_depth(r.text) == 1, f"nested form on tab={tab}"
+        for page in ("/settings/roles", "/settings/users", "/settings/events"):
+            r = client.get(page)
+            assert r.status_code == 200
+            assert _max_form_nesting_depth(r.text) == 1, f"nested form on {page}"

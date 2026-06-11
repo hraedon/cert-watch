@@ -1137,6 +1137,66 @@ def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
     assert r.headers["location"] == "/"
 
 
+def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_file):
+    """WI-028 regression: a trust_anchors row must not 500 the dashboard.
+
+    _build_dashboard_rows feeds raw trust_anchors rows to _row_to_cert, which
+    reads certificate-only columns (is_leaf). With one anchor present, '/' and
+    every non-pivot view crashed with IndexError.
+    """
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import SqliteTrustAnchorRepository, init_schema
+    from cert_watch.upload import upload_certificate
+
+    init_schema(db)
+    entry = upload_certificate(chain_pem_file)
+    root_cert = entry.chain[-1] if entry.chain else entry.leaf
+    SqliteTrustAnchorRepository(db).add(root_cert)
+    store_uploaded(entry, db)
+    with TestClient(app_mod.app) as client:
+        for url in ("/", "/?q=chain-leaf", "/?view=expiry"):
+            r = client.get(url)
+            assert r.status_code == 200, f"{url} -> {r.status_code}"
+        r = client.get("/")
+    assert "Trust anchors" in r.text  # anchor panel renders alongside the rows
+
+
+def test_certificate_detail_scan_form_posts_host_id(reload_app, tmp_path, self_signed_leaf):
+    """WI-029 regression: the 'Scan now' form must target the host id.
+
+    It posted /hosts/{cert_id}/scan, and scan_host_now resolves strictly by
+    hosts.id — so the button always redirected to 'host not found'.
+    """
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteCertificateRepository, init_schema
+    from cert_watch.database.repo import SqliteHostRepository
+
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("leaf.example.com", 443)
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="CN=leaf.example.com",
+        issuer="CN=Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        raw_der=self_signed_leaf.der,
+    )
+    repo = SqliteCertificateRepository(
+        db, source="scanned", hostname="leaf.example.com", port=443
+    )
+    cert_id = repo.add(cert)
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert f'action="/hosts/{host_id}/scan"' in r.text
+    assert f'action="/hosts/{cert_id}/scan"' not in r.text
+
+
 # ---------- audit page ----------
 
 

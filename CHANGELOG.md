@@ -2,6 +2,30 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+- **Auth settings tab was inert in real browsers** (WI-027): the LDAP
+  role-mapping `<form>` was nested inside the `/settings/auth` form. Browsers
+  drop nested form tags, so the inner `</form>` closed the auth form early —
+  the "Save authentication settings" button did nothing, role mappings could
+  never be saved, and clicking "Save role mapping" silently wiped the OAuth
+  kv settings. The role-map inputs now associate with a sibling form via the
+  HTML `form` attribute; a form-nesting regression test sweeps every settings
+  page.
+- **A single trust anchor 500'd the entire dashboard** (WI-028):
+  `_build_dashboard_rows` fed raw `trust_anchors` rows (no `is_leaf` column)
+  to `_row_to_cert`. Anchors are now converted tolerantly; regression test
+  seeds an anchor and renders `/`.
+- **"Scan now" on certificate detail always failed with "host not found"**
+  (WI-029): the form posted the certificate UUID to `/hosts/{host_id}/scan`,
+  which resolves strictly by host id. It now posts `host_id` and the button
+  hides when the cert has no host record.
+- Compliance report tolerates posture findings without a `message` key
+  instead of raising `KeyError`.
+- Refreshed the `api-keys` visual baseline left stale by the 0.8.0 inline
+  api-keys restyle (the e2e suite was not run with that change).
+
 ## [0.8.0] — 2026-06-11
 
 Two things land together: the Plan 047 capability wave (RBAC management, policy

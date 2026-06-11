@@ -425,7 +425,7 @@ def build_compliance_report(
             _findings = p.get("findings")
             findings = _findings if _findings is not None else []
             entry.findings = [
-                f["message"] for f in findings if f.get("status") == "fail"
+                f.get("message", "") for f in findings if f.get("status") == "fail"
             ]
             if entry.findings:
                 failed.append(entry)

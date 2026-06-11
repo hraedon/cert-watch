@@ -53,7 +53,9 @@ def _build_dashboard_rows(
     """Build rich dashboard rows from raw certificate and anchor rows."""
     from cert_watch.cert_chain import chain_status
 
-    anchors = [_row_to_cert(r) for r in anchor_rows]
+    # anchor_rows come from trust_anchors, which lacks the certificate-only
+    # columns (is_leaf, source, notes) that _row_to_cert reads — default them.
+    anchors = [_row_to_cert({**dict(r), "is_leaf": 0}) for r in anchor_rows]
 
     leaf_rows: list[dict] = []
     children_by_leaf: dict[str, list[dict]] = {}
