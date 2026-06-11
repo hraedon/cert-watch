@@ -581,7 +581,7 @@
       {% endif %}
 
       {% if new_token %}
-      <div class="cw-panel cw-mb-18" data-testid="api-key-new">
+      <div class="cw-panel cw-panel--p-15-18 cw-mb-18" data-testid="api-key-new">
         <div class="cw-fw-600 cw-mb-8">New key “{{ new_name }}” created</div>
         <p class="cw-muted cw-mb-8">
           Copy it now — this is the only time the token is shown. It is stored only as a hash.
@@ -593,7 +593,7 @@
 
       {# ---- Create ---- #}
       <form method="post" action="/settings/api-keys"
-            class="cw-panel cw-mb-18 cw-flex cw-wrap cw-items-end cw-gap-12">
+            class="cw-panel cw-panel--p-15-18 cw-mb-18 cw-flex cw-wrap cw-items-end cw-gap-12">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <label class="cw-field">
           <span class="cw-label">Name</span>

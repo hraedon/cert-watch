@@ -115,10 +115,12 @@
             <label class="cw-detail-label">Owner email</label>
             <input type="text" name="owner_email" class="cw-input cw-fz-12-5" value="{{ host.owner_email or '' }}" placeholder="ops@example.com">
           </div>
+          {% if slack_configured %}
           <div>
             <label class="cw-detail-label">Slack channel</label>
             <input type="text" name="owner_slack" class="cw-input cw-fz-12-5" value="{{ host.owner_slack or '' }}" placeholder="#alerts">
           </div>
+          {% endif %}
           <div>
             <label class="cw-detail-label">Renewal method</label>
             <select name="renewal_method" class="cw-input cw-fz-12-5">
