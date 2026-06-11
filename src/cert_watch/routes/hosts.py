@@ -430,9 +430,12 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
     )
     scanned = 0
     failures = 0
-    for h in hosts:
-        try:
-            result = await scan_host_async(
+
+    sem = asyncio.Semaphore(10)
+
+    async def _limited_scan(h):
+        async with sem:
+            return h, await scan_host_async(
                 h.hostname,
                 h.port,
                 timeout=s.scan_timeout,
@@ -441,6 +444,9 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                 allowed_subnets=s.allowed_subnets,
                 dns_servers=s.dns_servers,
             )
+
+    for h, result in await asyncio.gather(*[_limited_scan(h) for h in hosts]):
+        try:
             if isinstance(result, ScanError):
                 record_scan_history(
                     db,

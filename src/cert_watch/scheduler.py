@@ -118,6 +118,7 @@ def get_hosts_due_for_scan(db_path: str | Path) -> list[tuple[str, int]]:
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
+_cycle_lock = threading.Lock()
 
 
 def _run_cycle(
@@ -200,10 +201,16 @@ def start_scheduler(
                 else:
                     if _scheduler_stop.wait(timeout=wait):
                         return
-                _run_cycle(
-                    scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn,
-                    digest_fn=digest_fn,
-                )
+                if not _cycle_lock.acquire(blocking=False):
+                    logger.warning("skipping scheduled cycle; previous cycle still running")
+                    continue
+                try:
+                    _run_cycle(
+                        scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn,
+                        digest_fn=digest_fn,
+                    )
+                finally:
+                    _cycle_lock.release()
 
         _scheduler_stop.clear()
         _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
@@ -213,7 +220,7 @@ def start_scheduler(
 def stop_scheduler() -> None:
     _scheduler_stop.set()
     if _scheduler_thread is not None:
-        _scheduler_thread.join(timeout=2)
+        _scheduler_thread.join(timeout=30)
 
 
 def run_scan_now(

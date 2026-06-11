@@ -302,6 +302,269 @@ def _scan_host_via_openssl(
     )
 
 
+def _stage_resolve_pending_alerts(
+    repo_path: str | Path,
+    entry: ScannedEntry,
+    webhook_config: object | None,
+) -> tuple[list | None, str | None]:
+    """Capture pending alerts BEFORE replace_scanned deletes them (BC-160)."""
+    pending: list | None = None
+    old_leaf_id: str | None = None
+    if webhook_config is None:
+        return None, None
+    from cert_watch.alerts import WebhookConfig
+    if not isinstance(webhook_config, WebhookConfig):
+        return None, None
+    from cert_watch.database import SqliteAlertRepository
+    from cert_watch.database.connection import _connect
+    with _connect(repo_path) as conn:
+        row = conn.execute(
+            "SELECT id FROM certificates"
+            " WHERE hostname = ? AND port = ? AND is_leaf = 1",
+            (entry.host, entry.port),
+        ).fetchone()
+    if row:
+        old_leaf_id = row["id"]
+        pending = SqliteAlertRepository(repo_path).list_for_cert(old_leaf_id)
+    return pending, old_leaf_id
+
+
+def _stage_replace(
+    repo_path: str | Path,
+    entry: ScannedEntry,
+) -> tuple[str, str | None]:
+    """Persist leaf + chain, removing previous certs for the same (hostname, port)."""
+    return replace_scanned(
+        repo_path,
+        hostname=entry.host,
+        port=entry.port,
+        leaf=entry.leaf,
+        chain=entry.chain,
+        chain_valid=None,
+    )
+
+
+def _stage_webhook_resolve(
+    repo_path: str | Path,
+    entry: ScannedEntry,
+    replaced_cert_id: str | None,
+    webhook_config: object | None,
+    pending_for_resolve: list | None,
+) -> None:
+    """Send resolve events for open incidents on the replaced cert."""
+    if not replaced_cert_id or webhook_config is None:
+        return
+    from cert_watch.alerts import WebhookConfig, resolve_webhook_for_renewed_cert
+    if not isinstance(webhook_config, WebhookConfig):
+        raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
+    resolved = resolve_webhook_for_renewed_cert(
+        repo_path, replaced_cert_id, webhook_config,
+        pending_alerts=pending_for_resolve,
+    )
+    if resolved:
+        logger.info(
+            "resolved %d webhook incident(s) for replaced cert %s",
+            resolved, replaced_cert_id,
+        )
+
+
+def _stage_posture(
+    repo_path: str | Path,
+    leaf_id: str,
+    entry: ScannedEntry,
+    *,
+    check_revocation: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> tuple[str, list[dict], str | None]:
+    """Evaluate TLS posture and store the result. Returns (grade, findings, chain_status)."""
+    return _evaluate_and_store_posture(
+        repo_path, leaf_id, entry,
+        check_revocation=check_revocation,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+    )
+
+
+def _stage_previous_grade(
+    repo_path: str | Path,
+    leaf_id: str,
+) -> str | None:
+    """Read previous posture grade before any policy override writes."""
+    from cert_watch.database.connection import _connect as _prev_conn
+    with _prev_conn(repo_path) as _pc:
+        _prev = _pc.execute(
+            "SELECT grade FROM scan_posture WHERE cert_id = ?",
+            (leaf_id,),
+        ).fetchone()
+    return _prev["grade"] if _prev else None
+
+
+def _stage_policy(
+    repo_path: str | Path,
+    leaf_id: str,
+    entry: ScannedEntry,
+    posture_grade: str,
+    original_findings: list[dict],
+    stored_chain_status: str | None,
+) -> str:
+    """Evaluate policy overrides and fire policy violation alerts.
+
+    Returns the (possibly updated) grade.
+    """
+    from cert_watch.policy import apply_policy_overrides, evaluate_policy, load_policy_set
+    from cert_watch.posture import Finding as _Finding
+    ruleset = load_policy_set(str(repo_path))
+    posture_finding_objs: list[_Finding] | None = None
+    if original_findings:
+        posture_finding_objs = [
+            _Finding(
+                check=f["check"],
+                status=f["status"],
+                message=f.get("message", ""),
+            )
+            for f in original_findings
+            if isinstance(f, dict) and "check" in f and "status" in f
+        ]
+    violations = evaluate_policy(
+        cert=entry.leaf,
+        chain_status=stored_chain_status,
+        chain_incomplete=entry.chain_incomplete,
+        protocol_version=entry.protocol_version or None,
+        hsts=entry.hsts,
+        ocsp_stapling=None,
+        ruleset=ruleset,
+        posture_findings=posture_finding_objs,
+    )
+    if violations:
+        overridden = apply_policy_overrides(posture_grade, violations)
+        if overridden != posture_grade:
+            posture_grade = overridden
+            from cert_watch.database.queries import store_scan_posture
+            store_scan_posture(
+                db_path=repo_path,
+                cert_id=leaf_id,
+                hostname=entry.host,
+                port=entry.port,
+                grade=overridden,
+                findings=original_findings,
+                protocol_version=entry.protocol_version,
+                ocsp_stapling=None,
+                hsts=entry.hsts,
+                must_staple=False,
+                verify_requested=entry.verify_requested,
+                chain_incomplete=entry.chain_incomplete,
+                chain_status=stored_chain_status,
+                scanned_at=None,
+            )
+        from cert_watch.alerts import evaluate_policy_alerts
+        evaluate_policy_alerts(
+            cert_id=leaf_id,
+            hostname=entry.host,
+            violations=violations,
+            db_path=str(repo_path),
+            subject=entry.leaf.subject,
+        )
+    return posture_grade
+
+
+def _stage_drift(
+    repo_path: str | Path,
+    leaf_id: str,
+    entry: ScannedEntry,
+    posture_grade: str,
+    drift_alerts: bool,
+) -> None:
+    """Detect drift from previous cert and optionally create alerts."""
+    from cert_watch.database.queries import (
+        _extract_key_algo,
+        _extract_sig_algo,
+        create_drift_alert,
+        detect_drift,
+    )
+    key_algo = _extract_key_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
+    sig_algo = _extract_sig_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
+    drift_events = detect_drift(
+        repo_path,
+        hostname=entry.host,
+        port=entry.port,
+        new_leaf=entry.leaf,
+        posture_grade=posture_grade,
+        protocol_version=entry.protocol_version,
+        key_algo=key_algo,
+        sig_algo=sig_algo,
+    )
+    if drift_events and drift_alerts:
+        create_drift_alert(
+            repo_path,
+            cert_id=leaf_id,
+            hostname=entry.host,
+            port=entry.port,
+            events=drift_events,
+        )
+
+
+def _stage_history(
+    repo_path: str | Path,
+    entry: ScannedEntry,
+    posture_grade: str,
+) -> None:
+    """Record cert history entry."""
+    from cert_watch.database.queries import record_cert_history
+    record_cert_history(
+        repo_path,
+        hostname=entry.host,
+        port=entry.port,
+        leaf=entry.leaf,
+        posture_grade=posture_grade,
+        protocol_version=entry.protocol_version,
+    )
+
+
+def _stage_events(
+    repo_path: str | Path,
+    leaf_id: str,
+    entry: ScannedEntry,
+    replaced_cert_id: str | None,
+    posture_grade: str,
+    previous_grade: str | None,
+) -> None:
+    """Emit cert_added/cert_renewed and posture_changed events."""
+    from cert_watch.events import Event, emit_event
+
+    evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
+    emit_event(
+        Event(
+            event_type=evt_type,
+            timestamp=datetime.now(UTC),
+            payload={
+                "cert_id": leaf_id,
+                "hostname": entry.host,
+                "port": entry.port,
+                "replaced_cert_id": replaced_cert_id,
+            },
+            source="scan",
+        ),
+        repo_path,
+    )
+    if posture_grade and previous_grade is not None and previous_grade != posture_grade:
+        emit_event(
+            Event(
+                event_type="posture_changed",
+                timestamp=datetime.now(UTC),
+                payload={
+                    "cert_id": leaf_id,
+                    "hostname": entry.host,
+                    "port": entry.port,
+                    "old_grade": previous_grade,
+                    "new_grade": posture_grade,
+                },
+                source="scan",
+            ),
+            repo_path,
+        )
+
+
 def store_scanned(
     entry: ScannedEntry,
     repo_path_or_repo,
@@ -330,254 +593,90 @@ def store_scanned(
                 "stored scan for %s:%s with incomplete chain (openssl degraded)",
                 entry.host, entry.port,
             )
-        # Capture pending alerts BEFORE replace_scanned deletes them (BC-160).
-        pending_for_resolve: list | None = None
-        old_leaf_id_for_resolve: str | None = None
-        if webhook_config is not None:
-            try:
-                from cert_watch.alerts import WebhookConfig
-                if isinstance(webhook_config, WebhookConfig):
-                    from cert_watch.database import SqliteAlertRepository
-                    from cert_watch.database.connection import _connect
-                    with _connect(repo_path_or_repo) as conn:
-                        row = conn.execute(
-                            "SELECT id FROM certificates"
-                            " WHERE hostname = ? AND port = ? AND is_leaf = 1",
-                            (entry.host, entry.port),
-                        ).fetchone()
-                    if row:
-                        old_leaf_id_for_resolve = row["id"]
-                        pending_for_resolve = SqliteAlertRepository(
-                            repo_path_or_repo
-                        ).list_for_cert(old_leaf_id_for_resolve)
-            except Exception:  # noqa: BLE001
-                logger.debug("pre-fetch alerts for resolve failed", exc_info=True)
 
-        leaf_id, replaced_cert_id = replace_scanned(
-            repo_path_or_repo,
-            hostname=entry.host,
-            port=entry.port,
-            leaf=entry.leaf,
-            chain=entry.chain,
-            chain_valid=None,
-        )
-        if replaced_cert_id and webhook_config is not None:
+        # --- Stage sequencer: each stage is independently caught and tagged ---
+
+        def _stage(name: str, fn, *args, **kwargs):
+            """Run a stage; on failure log with stage name and re-raise."""
             try:
-                from cert_watch.alerts import WebhookConfig, resolve_webhook_for_renewed_cert
-                if not isinstance(webhook_config, WebhookConfig):
-                    raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
-                resolved = resolve_webhook_for_renewed_cert(
-                    repo_path_or_repo, replaced_cert_id, webhook_config,
-                    pending_alerts=pending_for_resolve,
-                )
-                if resolved:
-                    logger.info(
-                        "resolved %d webhook incident(s) for replaced cert %s",
-                        resolved, replaced_cert_id,
-                    )
-            except Exception:  # noqa: BLE001
+                return fn(*args, **kwargs)
+            except Exception:
                 logger.warning(
-                    "webhook resolve failed for %s:%s",
-                    entry.host, entry.port,
+                    "store_scanned [%s] failed for %s:%s",
+                    name, entry.host, entry.port,
                     exc_info=True,
                 )
-        posture_grade = ""
+                raise
+
+        pending_for_resolve: list | None = None
+        leaf_id: str = ""
+        replaced_cert_id: str | None = None
+        posture_grade: str = ""
         original_findings: list[dict] = []
         stored_chain_status: str | None = None
+        previous_grade: str | None = None
+
+        with contextlib.suppress(Exception):
+            pending_for_resolve, _ = _stage(
+                "resolve_pending_alerts",
+                _stage_resolve_pending_alerts,
+                repo_path_or_repo, entry, webhook_config,
+            )
+
         try:
-            posture_grade, original_findings, stored_chain_status = _evaluate_and_store_posture(
-                repo_path_or_repo, leaf_id, entry,
+            leaf_id, replaced_cert_id = _stage(
+                "replace", _stage_replace, repo_path_or_repo, entry,
+            )
+        except Exception:
+            return ""
+
+        with contextlib.suppress(Exception):
+            _stage(
+                "webhook_resolve",
+                _stage_webhook_resolve,
+                repo_path_or_repo, entry, replaced_cert_id,
+                webhook_config, pending_for_resolve,
+            )
+
+        with contextlib.suppress(Exception):
+            posture_grade, original_findings, stored_chain_status = _stage(
+                "posture", _stage_posture, repo_path_or_repo, leaf_id, entry,
                 check_revocation=check_revocation,
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
             )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "posture evaluation skipped for %s:%s", entry.host, entry.port,
-                exc_info=True,
-            )
-        # Read previous grade BEFORE any policy override writes, so the
-        # posture_changed event compares against the correct baseline.
-        previous_grade: str | None = None
-        try:
-            from cert_watch.database.connection import _connect as _prev_conn
 
-            with _prev_conn(repo_path_or_repo) as _pc:
-                _prev = _pc.execute(
-                    "SELECT grade FROM scan_posture WHERE cert_id = ?",
-                    (leaf_id,),
-                ).fetchone()
-            if _prev:
-                previous_grade = _prev["grade"]
-        except Exception:  # noqa: BLE001
-            logger.debug("previous grade read skipped for %s:%s", entry.host, entry.port)
-        try:
-            from cert_watch.policy import apply_policy_overrides, evaluate_policy, load_policy_set
-            from cert_watch.posture import Finding as _Finding
-            ruleset = load_policy_set(str(repo_path_or_repo))
-            # Reconstruct Finding objects from the stored dicts so
-            # evaluate_policy can skip rules that posture already flagged (WI-014).
-            posture_finding_objs: list[_Finding] | None = None
-            if original_findings:
-                posture_finding_objs = [
-                    _Finding(
-                        check=f["check"],
-                        status=f["status"],
-                        message=f.get("message", ""),
-                    )
-                    for f in original_findings
-                    if isinstance(f, dict) and "check" in f and "status" in f
-                ]
-            violations = evaluate_policy(
-                cert=entry.leaf,
-                chain_status=stored_chain_status,
-                chain_incomplete=entry.chain_incomplete,
-                protocol_version=entry.protocol_version or None,
-                hsts=entry.hsts,
-                ocsp_stapling=None,
-                ruleset=ruleset,
-                posture_findings=posture_finding_objs,
+        with contextlib.suppress(Exception):
+            previous_grade = _stage(
+                "previous_grade", _stage_previous_grade, repo_path_or_repo, leaf_id,
             )
-            if violations:
-                overridden = apply_policy_overrides(posture_grade, violations)
-                if overridden != posture_grade:
-                    posture_grade = overridden
-                    try:
-                        from cert_watch.database.queries import store_scan_posture
 
-                        # Preserve the original findings from the posture evaluation
-                        # rather than wiping them with an empty list (C3).
-                        store_scan_posture(
-                            db_path=repo_path_or_repo,
-                            cert_id=leaf_id,
-                            hostname=entry.host,
-                            port=entry.port,
-                            grade=overridden,
-                            findings=original_findings,
-                            protocol_version=entry.protocol_version,
-                            ocsp_stapling=None,
-                            hsts=entry.hsts,
-                            must_staple=False,
-                            verify_requested=entry.verify_requested,
-                            chain_incomplete=entry.chain_incomplete,
-                            chain_status=stored_chain_status,
-                            scanned_at=None,
-                        )
-                    except Exception:  # noqa: BLE001
-                        logger.debug(
-                            "policy grade override write failed for %s:%s",
-                            entry.host, entry.port, exc_info=True,
-                        )
-                from cert_watch.alerts import evaluate_policy_alerts
-                evaluate_policy_alerts(
-                    cert_id=leaf_id,
-                    hostname=entry.host,
-                    violations=violations,
-                    db_path=str(repo_path_or_repo),
-                    subject=entry.leaf.subject,
-                )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "policy evaluation skipped for %s:%s", entry.host, entry.port,
-                exc_info=True,
+        with contextlib.suppress(Exception):
+            posture_grade = _stage(
+                "policy", _stage_policy,
+                repo_path_or_repo, leaf_id, entry,
+                posture_grade, original_findings, stored_chain_status,
             )
-        try:
-            from cert_watch.database.queries import (
-                _extract_key_algo,
-                _extract_sig_algo,
-                create_drift_alert,
-                detect_drift,
-            )
-            key_algo = _extract_key_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
-            sig_algo = _extract_sig_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
-            drift_events = detect_drift(
-                repo_path_or_repo,
-                hostname=entry.host,
-                port=entry.port,
-                new_leaf=entry.leaf,
-                posture_grade=posture_grade,
-                protocol_version=entry.protocol_version,
-                key_algo=key_algo,
-                sig_algo=sig_algo,
-            )
-            if drift_events and drift_alerts:
-                try:
-                    create_drift_alert(
-                        repo_path_or_repo,
-                        cert_id=leaf_id,
-                        hostname=entry.host,
-                        port=entry.port,
-                        events=drift_events,
-                    )
-                except Exception:  # noqa: BLE001
-                    logger.debug(
-                        "drift alert creation skipped for %s:%s", entry.host, entry.port,
-                        exc_info=True,
-                    )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "drift detection failed for %s:%s", entry.host, entry.port,
-                exc_info=True,
-            )
-        try:
-            from cert_watch.database.queries import record_cert_history
-            record_cert_history(
-                repo_path_or_repo,
-                hostname=entry.host,
-                port=entry.port,
-                leaf=entry.leaf,
-                posture_grade=posture_grade,
-                protocol_version=entry.protocol_version,
-            )
-        except Exception:  # noqa: BLE001
-            logger.warning(
-                "cert_history write failed for %s:%s", entry.host, entry.port,
-                exc_info=True,
-            )
-        try:
-            from cert_watch.events import Event, emit_event
 
-            evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
-            emit_event(
-                Event(
-                    event_type=evt_type,
-                    timestamp=datetime.now(UTC),
-                    payload={
-                        "cert_id": leaf_id,
-                        "hostname": entry.host,
-                        "port": entry.port,
-                        "replaced_cert_id": replaced_cert_id,
-                    },
-                    source="scan",
-                ),
-                repo_path_or_repo,
+        with contextlib.suppress(Exception):
+            _stage(
+                "drift", _stage_drift,
+                repo_path_or_repo, leaf_id, entry, posture_grade, drift_alerts,
             )
-        except Exception:  # noqa: BLE001
-            logger.debug("event emit skipped for %s:%s", entry.host, entry.port, exc_info=True)
-        try:
-            if posture_grade and previous_grade is not None and previous_grade != posture_grade:
-                from cert_watch.events import Event, emit_event
 
-                emit_event(
-                    Event(
-                        event_type="posture_changed",
-                        timestamp=datetime.now(UTC),
-                        payload={
-                            "cert_id": leaf_id,
-                            "hostname": entry.host,
-                            "port": entry.port,
-                            "old_grade": previous_grade,
-                            "new_grade": posture_grade,
-                        },
-                        source="scan",
-                    ),
-                    repo_path_or_repo,
-                )
-        except Exception:  # noqa: BLE001
-            logger.debug(
-                "posture_changed event skipped for %s:%s",
-                entry.host, entry.port, exc_info=True,
+        with contextlib.suppress(Exception):
+            _stage(
+                "history", _stage_history,
+                repo_path_or_repo, entry, posture_grade,
             )
+
+        with contextlib.suppress(Exception):
+            _stage(
+                "events", _stage_events,
+                repo_path_or_repo, leaf_id, entry,
+                replaced_cert_id, posture_grade, previous_grade,
+            )
+
         return leaf_id
 
     repo = repo_path_or_repo

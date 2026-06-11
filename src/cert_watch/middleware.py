@@ -70,20 +70,22 @@ def _request_db_path(request: Request) -> str | None:
 
 def make_csrf_token(session_id: str, security: SecurityContext | None = None) -> str:
     payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
-    sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
     return f"{payload}:{sig}"
 
 
 def validate_csrf_token(
     token: str, session_id: str, security: SecurityContext | None = None
 ) -> bool:
-    parts = token.split(":")
+    # rsplit: the session_id (cw_auth) contains colons, so split from the
+    # right to extract the trailing timestamp and HMAC signature.
+    parts = token.rsplit(":", 2)
     if len(parts) != 3:
         return False
     ts_str, sig = parts[1], parts[2]
     payload = f"{session_id}:{ts_str}"
     key = _csrf_key(security).encode()
-    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:16]
+    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:32]
     if not hmac.compare_digest(sig, expected):
         return False
     try:
@@ -101,6 +103,20 @@ def get_session_id(request: Request) -> str:
     if scope_sid:
         return scope_sid
     return secrets.token_hex(16)
+
+
+def get_session_token(request: Request) -> str:
+    """Return the ``cw_auth`` session cookie value for CSRF binding.
+
+    The ``cw_auth`` cookie carries the HMAC-signed session token — binding
+    the CSRF token to it (rather than ``cw_sid``) prevents subdomain
+    cookie injection from forging CSRF tokens.  Falls back to ``get_session_id``
+    when no session cookie is present (unauthenticated requests).
+    """
+    auth_token = request.cookies.get(SESSION_COOKIE, "")
+    if auth_token:
+        return auth_token
+    return get_session_id(request)
 
 
 # ---------- Rate limiting (SQLite-backed sliding window, BC-049) ----------
@@ -256,6 +272,9 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
         except (sqlite3.Error, OSError):
             # WARNING, not DEBUG (BC-078): a silent DB-error fallback degrades
             # rate limiting to per-process counters without anyone noticing.
+            # This is fail-open (degraded rather than denied) — crashing the
+            # whole app over a rate-limit DB error is worse than temporarily
+            # losing cross-worker limit enforcement.
             logger.warning(
                 "rate limit DB error, falling back to per-process in-memory limiting",
                 exc_info=True,
@@ -310,6 +329,12 @@ async def check_csrf(request: Request) -> str | None:
     Skipped when CERT_WATCH_CSRF_DISABLED=1 (for testing).
     """
     if os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
+        # DEPRECATED: this env var will be removed in a future version.
+        # Disabling CSRF globally weakens form-POST protection on all routes.
+        logger.critical(
+            "CERT_WATCH_CSRF_DISABLED=1 — CSRF protection is globally disabled. "
+            "This is deprecated and will be removed in a future release."
+        )
         return None
     token = request.headers.get("x-csrf-token") or ""
     if not token:
@@ -321,7 +346,7 @@ async def check_csrf(request: Request) -> str | None:
             pass
     if not token:
         return "missing CSRF token"
-    session_id = request.cookies.get("cw_sid", "")
+    session_id = get_session_token(request)
     if not validate_csrf_token(token, session_id, _request_security(request)):
         return "invalid or expired CSRF token"
     return None
@@ -383,8 +408,8 @@ def get_auth_context(request: Request) -> dict:
 
 def get_csrf_context(request: Request) -> dict:
     """Return template context dict with CSRF token for the current session."""
-    session_id = get_session_id(request)
-    token = make_csrf_token(session_id, _request_security(request))
+    session_token = get_session_token(request)
+    token = make_csrf_token(session_token, _request_security(request))
     return {"csrf_token": token}
 
 

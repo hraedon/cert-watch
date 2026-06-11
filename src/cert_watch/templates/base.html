@@ -215,6 +215,8 @@
         if (typeof toggleHostNotes === 'function') toggleHostNotes();
       } else if (action === 'save-host-notes') {
         if (typeof saveHostNotes === 'function') saveHostNotes();
+      } else if (action === 'print') {
+        window.print();
       }
     });
     document.addEventListener('change', function(e) {

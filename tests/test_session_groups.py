@@ -98,17 +98,20 @@ def test_claims_filtering_is_behaviour_preserving():
 
 
 def test_full_memberof_overflows_but_filtered_token_fits():
-    """The regression: the unfiltered token blows the cookie limit; the
-    filtered one stays well under it and still authenticates."""
+    """create_session auto-truncates groups to stay under the cookie limit.
+    The claims_for_session path (used at login) additionally filters to
+    role-map-relevant groups so RBAC still works."""
     from cert_watch.auth.rbac import claims_for_session
     from cert_watch.auth.session import _MAX_SAFE_SESSION_BYTES
 
     overflowing = create_session("carol", groups=_MANY_GROUPS, roles=[])
-    assert len(overflowing) > _MAX_SAFE_SESSION_BYTES  # would be dropped by the browser
+    # After Plan-048/BC-081 hardening, create_session itself trims the groups
+    # list when the token would exceed the browser cookie limit.
+    assert len(overflowing.encode()) <= _MAX_SAFE_SESSION_BYTES
 
     g, r = claims_for_session(_MANY_GROUPS, [], _ROLE_MAP)
     fitted = create_session("carol", groups=g, roles=r)
-    assert len(fitted) < _MAX_SAFE_SESSION_BYTES
+    assert len(fitted.encode()) <= _MAX_SAFE_SESSION_BYTES
     info = decode_session(fitted)
     assert info is not None
     assert info.groups == ["CN=cert-watch-admins,OU=Groups,DC=ad,DC=hraedon,DC=com"]

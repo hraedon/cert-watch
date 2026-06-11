@@ -19,6 +19,7 @@ from cert_watch.config import Settings
 from cert_watch.database import (
     SqliteAlertRepository,
     SqliteHostRepository,
+    get_write_lock,
     init_schema,
     kv_get,
 )
@@ -178,6 +179,8 @@ async def lifespan(app: FastAPI):
         base = Settings.from_env()
         security = _resolve_security(base)
         encryption_key = derive_encryption_key(security.signing_key)
+        # Schema MUST exist before any kv_store read; init_schema is idempotent.
+        init_schema(base.db_path)
         try:
             s = Settings.from_env_with_kv(base.db_path, encryption_key)
         except Exception:
@@ -192,9 +195,9 @@ async def lifespan(app: FastAPI):
         security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
         set_signing_key(security.signing_key)
         set_csrf_secret(security.csrf_secret)
+        init_schema(s.db_path)
 
     _setup_logging(log_format=s.log_format)
-    init_schema(s.db_path)
     _init_rate_db(s.db_path)
 
     auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider()
@@ -290,29 +293,30 @@ async def lifespan(app: FastAPI):
     webhook_cfg = s.build_webhook_config()
 
     def _scan_all() -> dict:
-        host_repo = SqliteHostRepository(s.db_path)
-        hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
-        return run_scan_now(
-            scan_fn=lambda host, port: scan_host(
-                host, port, verify=s.tls_verify, timeout=s.scan_timeout,
-                retries=s.scan_retries, allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                dns_servers=s.dns_servers,
-            ),
-            alert_fn=lambda: {"sent": 0, "failed": 0},
-            db_path=s.db_path,
-            host_provider=lambda: hosts,
-            store_fn=lambda r: store_scanned(
-                r, s.db_path,  # type: ignore[arg-type]
-                drift_alerts=s.drift_alerts,
-                check_revocation=s.check_revocation,
-                allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                webhook_config=webhook_cfg,
-            ),
-        )
+        with get_write_lock():
+            host_repo = SqliteHostRepository(s.db_path)
+            hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
+            return run_scan_now(
+                scan_fn=lambda host, port: scan_host(
+                    host, port, verify=s.tls_verify, timeout=s.scan_timeout,
+                    retries=s.scan_retries, allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    dns_servers=s.dns_servers,
+                ),
+                alert_fn=lambda: {"sent": 0, "failed": 0},
+                db_path=s.db_path,
+                host_provider=lambda: hosts,
+                store_fn=lambda r: store_scanned(
+                    r, s.db_path,  # type: ignore[arg-type]
+                    drift_alerts=s.drift_alerts,
+                    check_revocation=s.check_revocation,
+                    allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    webhook_config=webhook_cfg,
+                ),
+            )
 
-    _weekly_digest_day: int = 0
+    _weekly_digest_day: int = -1
 
     def _alerts() -> dict:
         from cert_watch.alerts import (
@@ -406,10 +410,10 @@ def create_app(
 
     # Register middleware (order matters: last registered = first executed)
     application.middleware("http")(security_headers_middleware)
-    application.middleware("http")(rate_limit_headers_middleware)
     application.middleware("http")(csrf_session_middleware)
     application.middleware("http")(setup_redirect_middleware)
     application.middleware("http")(auth_middleware)
+    application.middleware("http")(rate_limit_headers_middleware)
     # Outermost (runs first): issue the per-request CSP nonce into scope state
     # before any other middleware/endpoint, so the template context processor and
     # security_headers_middleware share it (BC-075).

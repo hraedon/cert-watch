@@ -136,8 +136,9 @@ def _canonical_json(report: ComplianceReport) -> bytes:
 def sign_report(report: ComplianceReport, signing_key: str) -> None:
     canonical = _canonical_json(report)
     report.content_sha256 = hashlib.sha256(canonical).hexdigest()
+    derived_key = hmac.new(signing_key.encode(), b"compliance-report", hashlib.sha256).hexdigest()
     report.signature = hmac.new(
-        signing_key.encode(), canonical, hashlib.sha256
+        derived_key.encode(), canonical, hashlib.sha256
     ).hexdigest()
 
 
@@ -188,8 +189,9 @@ def verify_report_signature(
     )
     canonical = _canonical_json(rebuilt)
     expected_hash = hashlib.sha256(canonical).hexdigest()
+    derived_key = hmac.new(signing_key.encode(), b"compliance-report", hashlib.sha256).hexdigest()
     expected_sig = hmac.new(
-        signing_key.encode(), canonical, hashlib.sha256
+        derived_key.encode(), canonical, hashlib.sha256
     ).hexdigest()
     if expected_hash != content_sha256:
         return False, f"content hash mismatch: expected {expected_hash}, got {content_sha256}"
