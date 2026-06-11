@@ -82,7 +82,7 @@
             <div class="cw-status-dot cw-dot-color" style="--dot-color:{{ dot_color }}">
               <span class="cw-status-dot__mark"></span>{{ a.status }}
             </div>
-            <div class="mono cw-fz-11 cw-text-text-3 cw-mt-4">{{ a.created_at[:16] if a.created_at else '' }}</div>
+            <div class="mono cw-fz-11 cw-text-text-3 cw-mt-4">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</div>
             {% if not a.read %}
             <button class="cw-btn ghost sm cw-mt-6" data-action="mark-read" data-alert-id="{{ a.id }}">
               {{ icons.svg_icon('check', 10) }}Mark read

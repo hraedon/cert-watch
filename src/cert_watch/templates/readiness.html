@@ -12,7 +12,7 @@
   .rdy-class-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
 .rdy-header { margin-bottom: 24px; }
-.rdy-header h1 { margin: 0 0 4px 0; font-size: 22px; }
+.rdy-header .rdy-h2 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; }
 .rdy-header .rdy-sub { font-size: 13px; opacity: 0.7; }
 .rdy-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
 .rdy-stat-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
@@ -61,7 +61,7 @@
   </div>
 
   <div class="rdy-header">
-    <h1>SC-081 Milestone Timeline</h1>
+    <h2 class="rdy-h2">Milestone timeline</h2>
     <div class="rdy-sub">Maximum public-trust certificate validity reducing over time. Generated {{ report.generated_at[:19] }} UTC</div>
   </div>
 

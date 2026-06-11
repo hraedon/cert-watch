@@ -44,6 +44,54 @@ excludes e2e (opt-in marker), so UI redesigns can drift from the e2e selectors
 without local feedback — CI's `e2e.yml` catches it, but only after push. A local
 pass keeps that loop short. (Requires the `[e2e]` extra + `playwright install`.)
 
+### UI definition of done (the embarrassment checklist)
+
+Every item below is a bug class that **actually shipped to production** and
+survived a green test suite until the 2026-06-11 UI review caught it by
+looking. Before calling UI work done:
+
+- **View every changed page populated AND empty, dark AND light.** The visual
+  baselines were empty-state-only for months; every rendered-row bug slipped
+  through that hole. `tests/e2e/_seed.py` seeds a deterministic demo estate
+  (also runnable standalone: `.venv/bin/python tests/e2e/_seed.py <data_dir>`),
+  and `test_dashboard_populated_visual` baselines the populated dashboard.
+- **Read the words on the screen.** Shipped examples: "4078expired 11 years
+  ago" (redundant day-count prefix), "1 hosts" (no pluralization), raw ISO
+  timestamps with the `T` separator shown to users.
+- **Zero is not an alarm.** A count of 0 failures/expired renders neutral, not
+  red ("Failures **0**" in crit-red shipped).
+- **A utility class that isn't in tokens.css silently does nothing.** Grep
+  before using one — `cw-gap-9`/`cw-gap-14` were referenced for months while
+  undefined, collapsing gaps to zero ("Expiry calendarby time period").
+- **Color budget:** status colors (ok/warn/crit/expired) are reserved for
+  status. Chrome stays neutral; the accent is for links/focus/active only.
+
+### Verification rituals (apply beyond UI)
+
+- **A test you have never seen fail is a rumor.** When adding a meaningful
+  test, break the code once and watch it catch. The samba-container LDAP e2e
+  tests were merged 2026-06-10 with a fixture that raised `NameError` on
+  contact and an assertion on copy the app never emits — broken on arrival,
+  never executed by their author. The dedicated `ldap-e2e` CI job would have
+  caught this on first push; it sat undetected only because the commits were
+  in an unpushed local backlog. Run new tests before merging, and push so the
+  gates that exist can fire. (Real-AD coverage is separate and predates this:
+  `scripts/e2e/ad-login-remote.sh` drives the deployed Windows/IIS instance.)
+- **Skipped is invisible.** Check the skip count in test output, not just the
+  failure count. Docker-dependent tests skip silently where docker is missing;
+  if a test matters, make sure some environment provably *runs* it.
+- **At session end, state what you did NOT verify** — explicitly, in the
+  summary. Vacuous green comes from nobody asking.
+
+### Decisions that must be surfaced to the human
+
+Implementation tactics are the agent's call. These are **not** — flag them
+before acting, even mid-task: new runtime dependencies; schema changes;
+anything touching auth/session/CSRF defaults or other security posture;
+changes to public API shapes or URLs; deleting user-facing features; version
+bumps/releases. (Rationale: these are the decisions with consequences the
+repo's tests cannot see, and the human is accountable for them.)
+
 **Interactive UI validation (Playwright MCP).** Separate from the e2e *test*
 suite, a `playwright` MCP server is wired up for ad-hoc, agent-driven UI checks —
 navigate the running app, click through flows, take screenshots — without writing

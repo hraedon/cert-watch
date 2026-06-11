@@ -26,7 +26,7 @@
     {% set ns.total_failures = ns.total_failures + b.failures %}
   {% endfor %}
   {% if batches %}
-    {% set ns.last_batch_time = batches[0].scanned_at[:16] if batches[0].scanned_at else '—' %}
+    {% set ns.last_batch_time = batches[0].scanned_at[:16] | replace('T', ' ') if batches[0].scanned_at else '—' %}
     {% set ns.last_batch_status = batches[0].result %}
   {% endif %}
 
@@ -44,8 +44,8 @@
     </div>
     <div class="cw-stat">
       <div class="cw-stat-rail cw-stat-rail-crit"></div>
-      <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Failures</span></div>
-      <div class="cw-stat-val cw-stat-val-crit">{{ ns.total_failures }}</div>
+      <div class="cw-stat-top {% if ns.total_failures %}cw-stat-top-crit{% endif %}">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Failures</span></div>
+      <div class="cw-stat-val {% if ns.total_failures %}cw-stat-val-crit{% else %}cw-stat-val-default{% endif %}">{{ ns.total_failures }}</div>
     </div>
   </div>
 
@@ -58,7 +58,7 @@
           <div class="cw-flex cw-justify-between cw-items-start cw-gap-10">
             <div class="cw-flex cw-flex-col cw-gap-6">
               <div class="cw-flex cw-items-center cw-gap-8 cw-wrap">
-                <span class="mono cw-fz-12-5 cw-text-text">{{ b.scanned_at[:16] if b.scanned_at else '—' }}</span>
+                <span class="mono cw-fz-12-5 cw-text-text">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</span>
                 <span class="cw-chip">{{ icons.svg_icon('refresh', 11, 1.6) }}{{ b.trigger }}</span>
                 <span class="cw-pill {% if b.result == 'failure' %}critical{% elif b.result == 'partial' %}warning{% else %}healthy{% endif %}">
                   <span class="dot"></span>

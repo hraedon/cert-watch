@@ -97,3 +97,70 @@ def test_page_visual(
     # Settle async chrome (health banner poll) before the shot.
     page.wait_for_timeout(400)
     assert_snapshot(page, name=f"{name}.png", mask_elements=_MASKS)
+
+
+# ---------------------------------------------------------------------------
+# Populated-dashboard baseline (2026-06-11 review): the empty-state shots
+# above cannot catch bugs that only render on rows — wrong plurals, broken
+# relative-time strings, chip/pill regressions. Seed a fixed demo estate and
+# baseline the dashboard with data in it.
+#
+# The seed uses fixed day-offsets, so stat counts, status pills, urgency-bar
+# widths, and row order are deterministic. Rendered dates and "in N days"
+# strings are NOT (they move with the wall clock), so the expiry column is
+# masked alongside the standard volatile chrome.
+# ---------------------------------------------------------------------------
+
+_POPULATED_MASKS = [*_MASKS, "td.cw-td-minw-150"]
+
+
+@pytest.fixture(scope="module")
+def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    from _seed import seed_demo_certs
+
+    data_dir: Path = tmp_path_factory.mktemp("cw-visual-populated")
+    port = _free_port()
+    env = {
+        **os.environ,
+        "CERT_WATCH_DATA_DIR": str(data_dir),
+        "CERT_WATCH_PORT": str(port),
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+    }
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    base = f"http://127.0.0.1:{port}"
+    for _ in range(80):
+        try:
+            with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            time.sleep(0.1)
+    else:
+        proc.kill()
+        raise RuntimeError("populated visual server did not become ready")
+    try:
+        seed_demo_certs(data_dir)
+        yield base
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+@pytest.mark.visual
+def test_dashboard_populated_visual(
+    page: Page, populated_server: str, assert_snapshot
+) -> None:
+    page.goto(populated_server)
+    expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
+    # All five seeded rows rendered before the shot.
+    expect(page.locator("tbody tr")).to_have_count(5)
+    page.wait_for_timeout(400)
+    assert_snapshot(
+        page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS
+    )

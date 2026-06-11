@@ -8,6 +8,7 @@ __pycache__/
 dist/
 build/
 .coverage
+coverage.json
 *.sqlite3
 htmlcov/
 plans/design/
