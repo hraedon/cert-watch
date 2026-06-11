@@ -104,6 +104,14 @@ def _pin_url(url: str, pinned_ip: str) -> tuple[str, str, str]:
     return pinned, hostname, host_header
 
 
+class _PinnedRequest(urllib.request.Request):
+    """Request subclass declaring the SSRF pinning attributes that
+    ``_PinnedHTTPSHandler`` reads back via ``getattr``."""
+
+    _pinned_ip: str | None
+    _pinned_hostname: str | None
+
+
 class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
     """HTTPS handler that connects to the pinned IP with SNI = original hostname.
 
@@ -221,7 +229,7 @@ def ssrf_safe_urlopen(
     https_handler = _PinnedHTTPSHandler()
     opener = urllib.request.build_opener(redirect_handler, https_handler)
 
-    req = urllib.request.Request(pinned_url, data=data, method=method)
+    req = _PinnedRequest(pinned_url, data=data, method=method)
     req.add_unredirected_header("Host", host_header)
     req._pinned_ip = pinned_ip
     req._pinned_hostname = original_hostname

@@ -94,7 +94,8 @@ def test_page_visual(
     page.goto(f"{visual_server}{path}")
     if heading:
         expect(page.get_by_test_id(heading)).to_be_visible()
-    # Settle async chrome (health banner poll) before the shot.
+    # Settle async chrome (health banner poll) and webfonts before the shot.
+    page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(page, name=f"{name}.png", mask_elements=_MASKS)
 
@@ -160,6 +161,7 @@ def test_dashboard_populated_visual(
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # All five seeded rows rendered before the shot.
     expect(page.locator("tbody tr")).to_have_count(5)
+    page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(
         page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS

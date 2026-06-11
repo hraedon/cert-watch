@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-# Pinned digest at 2026-06-03 (python:3.13-slim)
-FROM python:3.13-slim@sha256:b04b5d7233d2ad9c379e22ea8927cd1378cd15c60d4ef876c065b25ea8fb3bf3 AS builder
+# Pinned digest at 2026-06-11 (python:3.13-slim)
+FROM python:3.13-slim@sha256:c8c127005665ea0ab700577dca2b412d3c32d844cc3916886042b432f5848121 AS builder
 
 ARG GIT_TAG=0.5.0
 ARG GIT_COMMIT=unknown
@@ -21,13 +21,20 @@ RUN uv pip install --no-deps . --python /build/.venv/bin/python
 # Fix shebangs so scripts point to the runtime venv path (/opt/venv)
 RUN sed -i 's|/build/.venv/bin/python|/opt/venv/bin/python|g' /build/.venv/bin/*
 
-# Pinned digest at 2026-06-03 (python:3.13-slim)
-FROM python:3.13-slim@sha256:b04b5d7233d2ad9c379e22ea8927cd1378cd15c60d4ef876c065b25ea8fb3bf3 AS runtime
+# Pinned digest at 2026-06-11 (python:3.13-slim)
+FROM python:3.13-slim@sha256:c8c127005665ea0ab700577dca2b412d3c32d844cc3916886042b432f5848121 AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     CERT_WATCH_DATA_DIR=/var/lib/cert-watch
+
+# Debian security patches newer than the pinned base digest — the trivy
+# release gate fails on fixed-status HIGH/CRITICAL CVEs (e.g. libssl) faster
+# than upstream rebuilds python:slim.
+RUN apt-get update \
+    && apt-get upgrade -y \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd -r cw && useradd -r -g cw -d /var/lib/cert-watch cw \
     && mkdir -p /var/lib/cert-watch && chown -R cw:cw /var/lib/cert-watch
