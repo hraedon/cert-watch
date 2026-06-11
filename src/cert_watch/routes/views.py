@@ -620,7 +620,7 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
         role_repo = SqliteRoleRepository(db)
         user = user_repo.get_by_username(username) if username else None
         role = role_repo.get(user.role_id) if user and user.role_id else None
-        has_role = role is not None and role.email
+        has_role = role is not None and bool(role.email)
         role_name = role.name if role else ""
         role_email = role.email if role else ""
     except Exception:

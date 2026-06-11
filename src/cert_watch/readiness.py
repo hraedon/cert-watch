@@ -6,12 +6,20 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TypedDict
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
 from cert_watch.renewal_analytics import HostRenewalAnalytics, compute_fleet_analytics
 
-SC081_MILESTONES = [
+
+class _Milestone(TypedDict):
+    label: str
+    max_days: int
+    date: str
+
+
+SC081_MILESTONES: list[_Milestone] = [
     {"label": "200d", "max_days": 200, "date": "2026-03-15"},
     {"label": "100d", "max_days": 100, "date": "2027-03-15"},
     {"label": "47d", "max_days": 47, "date": "2029-03-15"},
@@ -47,8 +55,6 @@ class ReadinessReport:
     workload_forecast: WorkloadForecast | None = None
 
 
-_UNSET = object()
-
 
 def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str, str | None]:
     if not hostnames:
@@ -62,12 +68,17 @@ def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str
                 ORDER BY sp.scanned_at DESC""",
             hostnames,
         ).fetchall()
-    result: dict[str, object] = {hn: _UNSET for hn in hostnames}
+    # First (latest) row wins, even when its chain_status is NULL — a `seen`
+    # set rather than a sentinel value keeps NULL from looking like "no row"
+    # (the NULL-collision bug this replaced).
+    result: dict[str, str | None] = dict.fromkeys(hostnames)
+    seen: set[str] = set()
     for row in rows:
         hn = row["hostname"]
-        if hn in result and result[hn] is _UNSET:
+        if hn in result and hn not in seen:
             result[hn] = row["chain_status"]
-    return {hn: (None if v is _UNSET else v) for hn, v in result.items()}
+            seen.add(hn)
+    return result
 
 
 def _compute_margins(
