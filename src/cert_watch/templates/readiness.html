@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — SC-081 readiness report{% endblock %}
+
+{% block head %}
+<style>
+@media print {
+  .cw-topbar, .cw-page-head, .no-print { display: none !important; }
+  .cw-page { padding: 0 !important; }
+  body { background: #fff !important; color: #000 !important; }
+  .cw-panel { border: 1px solid #ccc !important; break-inside: avoid; }
+  .rdy-risk-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .rdy-class-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+.rdy-header { margin-bottom: 24px; }
+.rdy-header h1 { margin: 0 0 4px 0; font-size: 22px; }
+.rdy-header .rdy-sub { font-size: 13px; opacity: 0.7; }
+.rdy-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
+.rdy-stat-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
+.rdy-stat-box .val { font-size: 28px; font-weight: 700; font-family: monospace; }
+.rdy-stat-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.rdy-section { margin-bottom: 24px; }
+.rdy-section h2 { font-size: 16px; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.rdy-timeline { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.rdy-milestone { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); min-width: 120px; }
+.rdy-milestone .ms-label { font-size: 18px; font-weight: 700; font-family: monospace; }
+.rdy-milestone .ms-date { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.rdy-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rdy-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); font-weight: 600; font-size: 11.5px; opacity: 0.7; }
+.rdy-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.rdy-table tr:last-child td { border-bottom: none; }
+.rdy-class-chip { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
+.rdy-class-chip.auto { background: var(--ok); color: #fff; }
+.rdy-class-chip.manual { background: var(--warn); color: #fff; }
+.rdy-class-chip.unknown { background: var(--border); color: #333; }
+.rdy-risk-chip { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
+.rdy-risk-chip.late { background: var(--crit); color: #fff; }
+.rdy-risk-chip.ok { background: var(--ok); color: #fff; }
+.rdy-risk-chip.na { opacity: 0.4; }
+.rdy-forecast { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.rdy-forecast-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
+.rdy-forecast-box .val { font-size: 24px; font-weight: 700; font-family: monospace; }
+.rdy-forecast-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
+.rdy-private-note { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background: rgba(128,128,128,0.05); margin-bottom: 16px; font-size: 13px; }
+.rdy-actions { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+.rdy-empty { padding: 12px 0; font-size: 13px; opacity: 0.5; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="cw-page-wrap">
+  <div class="cw-page-head">
+    <div>
+      <h1 data-testid="readiness-heading">SC-081 Readiness Report</h1>
+      <div class="cw-page-head-sub">Milestone timeline and per-host readiness for shortened certificate lifetimes.</div>
+    </div>
+    <div class="cw-seg no-print">
+      <a href="/readiness" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">Refresh</a>
+      <a href="/api/readiness.json" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">JSON</a>
+      <button class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px" data-action="print">Print / PDF</button>
+    </div>
+  </div>
+
+  <div class="rdy-header">
+    <h1>SC-081 Milestone Timeline</h1>
+    <div class="rdy-sub">Maximum public-trust certificate validity reducing over time. Generated {{ report.generated_at[:19] }} UTC</div>
+  </div>
+
+  <div class="rdy-timeline">
+    {% for ms in report.milestones %}
+    <div class="rdy-milestone">
+      <div class="ms-label">{{ ms.label }}</div>
+      <div class="ms-date">Effective {{ ms.date }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="cw-panel cw-p-16-18">
+    <div class="rdy-stats">
+      <div class="rdy-stat-box">
+        <div class="val">{{ report.total_hosts }}</div>
+        <div class="label">Total hosts</div>
+      </div>
+      <div class="rdy-stat-box">
+        <div class="val">{{ report.public_trust_hosts }}</div>
+        <div class="label">Public-trust hosts</div>
+      </div>
+      <div class="rdy-stat-box">
+        <div class="val">{{ report.private_ca_hosts }}</div>
+        <div class="label">Private-CA hosts</div>
+      </div>
+    </div>
+  </div>
+
+  {% if report.workload_forecast %}
+  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
+    <div class="rdy-section">
+      <h2>Workload Forecast</h2>
+      <p style="font-size:13px;margin:0 0 12px 0;opacity:0.7">
+        Estimated renewal operations per month across your public-trust estate at each milestone.
+      </p>
+      <div class="rdy-forecast">
+        <div class="rdy-forecast-box">
+          <div class="val">{{ report.workload_forecast.current_renewals_per_month }}</div>
+          <div class="label">Current (per month)</div>
+        </div>
+        <div class="rdy-forecast-box">
+          <div class="val">{{ report.workload_forecast.at_100d_renewals_per_month }}</div>
+          <div class="label">At 100-day max</div>
+        </div>
+        <div class="rdy-forecast-box">
+          <div class="val">{{ report.workload_forecast.at_47d_renewals_per_month }}</div>
+          <div class="label">At 47-day max</div>
+        </div>
+      </div>
+      {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
+        {% if host_list %}
+        <div style="margin-top:8px;font-size:12.5px">
+          <strong>{{ ms_label }} risk:</strong> {{ host_list | join(', ') }}
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
+    <div class="rdy-section">
+      <h2>Public-Trust Host Readiness</h2>
+      {% if report.hosts %}
+      <table class="rdy-table">
+        <thead>
+          <tr>
+            <th>Host</th>
+            <th>Classification</th>
+            <th>Lead Time</th>
+            <th>Lifetime</th>
+            {% for ms in report.milestones %}
+            <th>{{ ms.label }} margin</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in report.hosts %}
+          <tr>
+            <td class="mono">{{ h.hostname }}</td>
+            <td>
+              {% if h.classification == 'likely-automated' %}
+              <span class="rdy-class-chip auto">Automated</span>
+              {% elif h.classification == 'manual' %}
+              <span class="rdy-class-chip manual">Manual</span>
+              {% else %}
+              <span class="rdy-class-chip unknown">Unknown</span>
+              {% endif %}
+            </td>
+            <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+            <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+            {% for m in h.margins %}
+            <td>
+              {% if m.margin_days is not none %}
+                {% if m.renew_late %}
+                <span class="rdy-risk-chip late">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
+                {% else %}
+                <span class="rdy-risk-chip ok">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
+                {% endif %}
+              {% elif m.renew_late %}
+                <span class="rdy-risk-chip late">At risk</span>
+              {% else %}
+                <span class="rdy-risk-chip na">&mdash;</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="rdy-empty">No public-trust hosts found.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if report.private_hosts %}
+  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
+    <div class="rdy-section">
+      <h2>Private-CA Hosts</h2>
+      <div class="rdy-private-note">
+        These hosts use private certificate authorities. SC-081 does not bind them, but they are listed for awareness.
+      </div>
+      <table class="rdy-table">
+        <thead>
+          <tr>
+            <th>Host</th>
+            <th>Classification</th>
+            <th>Lead Time</th>
+            <th>Lifetime</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for h in report.private_hosts %}
+          <tr>
+            <td class="mono">{{ h.hostname }}</td>
+            <td>
+              {% if h.classification == 'likely-automated' %}
+              <span class="rdy-class-chip auto">Automated</span>
+              {% elif h.classification == 'manual' %}
+              <span class="rdy-class-chip manual">Manual</span>
+              {% else %}
+              <span class="rdy-class-chip unknown">Unknown</span>
+              {% endif %}
+            </td>
+            <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+            <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+document.querySelector('[data-action="print"]')?.addEventListener('click', function() { window.print(); });
+</script>
+{% endblock %}

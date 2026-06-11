@@ -13,6 +13,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.compliance import build_compliance_report, report_to_csv_rows, report_to_dict
 from cert_watch.database import list_dashboard_rows
 from cert_watch.middleware import require_auth
+from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _csv_safe, _db_path
 from cert_watch.routes.api._shared import compliance_signing_key
 
@@ -232,4 +233,16 @@ def api_compliance_report_csv(
         content=output.getvalue(),
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=compliance-report.csv"},
+    )
+
+
+@router.get("/api/readiness.json")
+def api_readiness_report_json(
+    request: Request, _auth: str = Depends(require_auth)
+) -> JSONResponse:
+    db = _db_path(request)
+    report = build_readiness_report(db)
+    return JSONResponse(
+        content=readiness_report_to_dict(report),
+        headers={"Content-Disposition": "attachment; filename=readiness-report.json"},
     )

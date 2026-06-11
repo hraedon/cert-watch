@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import smtplib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -20,6 +21,23 @@ logger = logging.getLogger("cert_watch.alerts")
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 CHAIN_THRESHOLDS = (30, 14, 7)
+SHORT_CERT_LIFETIME_DAYS = 90
+SHORT_LIFETIME_LEAF_PCT = (50, 25, 10)
+SHORT_LIFETIME_CHAIN_PCT = (50, 25, 10)
+
+
+def effective_thresholds(
+    cert: Certificate,
+    *,
+    custom_thresholds: tuple[int, ...] | None = None,
+) -> tuple[int, ...]:
+    if custom_thresholds is not None:
+        return custom_thresholds
+    validity_days = (cert.not_after - cert.not_before).days
+    if validity_days <= SHORT_CERT_LIFETIME_DAYS:
+        pcts = SHORT_LIFETIME_LEAF_PCT if cert.is_leaf else SHORT_LIFETIME_CHAIN_PCT
+        return tuple(math.ceil(validity_days * p / 100) for p in pcts)
+    return LEAF_THRESHOLDS if cert.is_leaf else CHAIN_THRESHOLDS
 
 
 @dataclass
@@ -79,10 +97,7 @@ def evaluate_thresholds(
     owner_info["owner_email"] is used (backward-compatible behavior).
     """
     days = cert.days_until_expiry()
-    if custom_thresholds is not None:
-        thresholds = custom_thresholds
-    else:
-        thresholds = LEAF_THRESHOLDS if cert.is_leaf else CHAIN_THRESHOLDS
+    thresholds = effective_thresholds(cert, custom_thresholds=custom_thresholds)
     cid = cert_id or cert.fingerprint_sha256
     now = datetime.now(UTC)
 

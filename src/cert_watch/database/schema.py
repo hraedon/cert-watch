@@ -162,7 +162,8 @@ CREATE TABLE IF NOT EXISTS cert_history (
     posture_grade TEXT,
     protocol_version TEXT,
     san_count INTEGER,
-    scanned_at TEXT NOT NULL
+    scanned_at TEXT NOT NULL,
+    not_before TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_versions (

@@ -266,8 +266,9 @@ def record_cert_history(
         conn.execute(
             """INSERT INTO cert_history
             (id, hostname, port, fingerprint_sha256, issuer, not_after,
-             key_algo, sig_algo, posture_grade, protocol_version, san_count, scanned_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+             key_algo, sig_algo, posture_grade, protocol_version, san_count,
+             scanned_at, not_before)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 row_id,
                 hostname,
@@ -281,6 +282,7 @@ def record_cert_history(
                 protocol_version,
                 len(leaf.san_dns_names),
                 scanned_at,
+                _iso(leaf.not_before),
             ),
         )
         conn.commit()

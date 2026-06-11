@@ -312,6 +312,8 @@ async def lifespan(app: FastAPI):
             ),
         )
 
+    _weekly_digest_day: int = 0
+
     def _alerts() -> dict:
         from cert_watch.alerts import (
             evaluate_all_certs,
@@ -327,6 +329,24 @@ async def lifespan(app: FastAPI):
         evaluate_all_certs(s.db_path, repo)
         evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
         return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
+
+    def _weekly_digest() -> None:
+        from cert_watch.digest import send_renewal_digest
+
+        send_renewal_digest(s.db_path, alert_cfg, webhook_cfg, days=7)
+
+    def _maybe_run_weekly_digest() -> dict:
+        import datetime as _dt
+
+        nonlocal _weekly_digest_day
+        today = _dt.datetime.now(_dt.UTC).weekday()
+        if today != _weekly_digest_day:
+            _weekly_digest_day = today
+            try:
+                _weekly_digest()
+            except Exception:
+                logger.exception("weekly renewal digest failed")
+        return {"sent": 0, "failed": 0}
 
     def _ct_check() -> dict:
         """Scheduled CT monitoring: query crt.sh for every tracked host domain."""
@@ -353,6 +373,7 @@ async def lifespan(app: FastAPI):
         alert_fn=_alerts,
         ct_fn=_ct_check,
         maintenance_fn=_maintenance,
+        digest_fn=_maybe_run_weekly_digest,
         hour=s.sched_hour,
         minute=s.sched_min,
         db_path=s.db_path,

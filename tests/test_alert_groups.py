@@ -35,7 +35,7 @@ def _make_cert(
     cert = Certificate(
         subject=subject,
         issuer="CN=issuer",
-        not_before=datetime.now(UTC),
+        not_before=datetime.now(UTC) - timedelta(days=360),
         not_after=not_after or (datetime.now(UTC) + timedelta(days=5)),
         san_dns_names=["test.example.com"],
         fingerprint_sha256=fingerprint,
@@ -268,7 +268,7 @@ class TestAlertGroupRouting:
         cert = Certificate(
             subject="CN=test",
             issuer="CN=issuer",
-            not_before=datetime.now(UTC),
+            not_before=datetime.now(UTC) - timedelta(days=360),
             not_after=datetime.now(UTC) + timedelta(days=5),
             san_dns_names=["test.example.com"],
             fingerprint_sha256="bb" * 32,

@@ -41,6 +41,7 @@ def _make_cert(
     key: rsa.RSAPrivateKey | None = None,
     days_valid: int = 365,
     san_dns: list[str] | None = None,
+    not_before_days_ago: int = 1,
 ) -> GeneratedCert:
     key = key or _make_key()
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)])
@@ -53,7 +54,7 @@ def _make_cert(
         .issuer_name(issuer)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
+        .not_valid_before(datetime.now(UTC) - timedelta(days=not_before_days_ago))
         .not_valid_after(datetime.now(UTC) + timedelta(days=days_valid))
     )
     if san_dns:
@@ -78,7 +79,12 @@ def self_signed_leaf() -> GeneratedCert:
 
 @pytest.fixture(scope="session")
 def expiring_soon_leaf() -> GeneratedCert:
-    return _make_cert("expiring.example.com", days_valid=5, san_dns=["expiring.example.com"])
+    return _make_cert(
+        "expiring.example.com",
+        days_valid=5,
+        not_before_days_ago=360,
+        san_dns=["expiring.example.com"],
+    )
 
 
 @pytest.fixture(scope="session")

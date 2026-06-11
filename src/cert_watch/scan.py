@@ -383,8 +383,9 @@ def store_scanned(
                 )
         posture_grade = ""
         original_findings: list[dict] = []
+        stored_chain_status: str | None = None
         try:
-            posture_grade, original_findings = _evaluate_and_store_posture(
+            posture_grade, original_findings, stored_chain_status = _evaluate_and_store_posture(
                 repo_path_or_repo, leaf_id, entry,
                 check_revocation=check_revocation,
                 allow_private=allow_private,
@@ -429,7 +430,7 @@ def store_scanned(
                 ]
             violations = evaluate_policy(
                 cert=entry.leaf,
-                chain_status=None,
+                chain_status=stored_chain_status,
                 chain_incomplete=entry.chain_incomplete,
                 protocol_version=entry.protocol_version or None,
                 hsts=entry.hsts,
@@ -459,7 +460,7 @@ def store_scanned(
                             must_staple=False,
                             verify_requested=entry.verify_requested,
                             chain_incomplete=entry.chain_incomplete,
-                            chain_status=None,
+                            chain_status=stored_chain_status,
                             scanned_at=None,
                         )
                     except Exception:  # noqa: BLE001
@@ -594,7 +595,7 @@ def _evaluate_and_store_posture(
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> tuple[str, list[dict]]:
+) -> tuple[str, list[dict], str | None]:
     """Evaluate TLS posture and store the result. Returns (grade, findings)."""
     from cert_watch.cert_chain import chain_status
     from cert_watch.certificate_model import Certificate as _Cert
@@ -628,6 +629,17 @@ def _evaluate_and_store_posture(
         except (OSError, ValueError):
             caa_present = None
 
+    scan_interval_days: int | None = None
+    if entry.host:
+        from cert_watch.database.connection import _connect
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
+                (entry.host, entry.port),
+            ).fetchone()
+        if row and row["scan_interval_hours"] is not None:
+            scan_interval_days = max(row["scan_interval_hours"] // 24, 1)
+
     result = evaluate_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
@@ -638,6 +650,7 @@ def _evaluate_and_store_posture(
         port=entry.port,
         caa_present=caa_present,
         caa_records=caa_records,
+        scan_interval_days=scan_interval_days,
         allow_private=allow_private,
         allowed_subnets=allowed_subnets,
     )
@@ -660,7 +673,7 @@ def _evaluate_and_store_posture(
         caa_records=caa_records,
         scanned_at=_iso(entry.scanned_at),
     )
-    return result.grade, typing.cast("list[dict]", result.findings)
+    return result.grade, typing.cast("list[dict]", result.findings), cs
 
 
 async def scan_host_async(

@@ -234,6 +234,7 @@ def evaluate_posture(
     caa_present: bool | None = None,
     caa_records: list[str] | None = None,
     *,
+    scan_interval_days: int | None = None,
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
 ) -> PostureResult:
@@ -449,6 +450,22 @@ def evaluate_posture(
         findings.extend(revocation_findings)
         # Unreachable OCSP/CRL is a warning, not a grade penalty
         # (the cert itself may be fine; the responder may be down)
+
+    # Scan-cadence guidance (WI-3.2 / Plan 048)
+    if scan_interval_days is not None and scan_interval_days > 0:
+        validity_days = (cert.not_after - cert.not_before).days
+        if validity_days > 0:
+            threshold = max(validity_days * 0.1, 1)
+            if scan_interval_days > threshold:
+                findings.append(Finding(
+                    check="scan_cadence",
+                    status="warn",
+                    message=(
+                        f"Scan interval ({scan_interval_days} days) exceeds 10% of "
+                        f"certificate lifetime ({validity_days} days). "
+                        f"Consider increasing scan frequency."
+                    ),
+                ))
 
     if grade_severity == 0:
         grade = "A"
