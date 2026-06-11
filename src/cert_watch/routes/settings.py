@@ -231,8 +231,10 @@ def _settings_context(
     except (json.JSONDecodeError, TypeError):
         ldap_role_map = {}
 
-    roles_data: list[dict] = []
-    users_data: list[dict] = []
+    from cert_watch.database import Role, User
+
+    roles_data: list[Role] = []
+    users_data: list[User] = []
     if tab in ("roles", "users"):
         from cert_watch.database import SqliteRoleRepository, SqliteUserRepository
         roles_data = SqliteRoleRepository(db).list_all()
