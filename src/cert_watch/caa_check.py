@@ -35,7 +35,7 @@ def _query_caa_records(domain: str) -> list[str] | str:
             continue
         except dns.resolver.NoAnswer:
             continue
-        except Exception as exc:
+        except (OSError, dns.exception.DNSException) as exc:  # DNS lookup
             logger.warning("CAA lookup failed for %s: %s", check_domain, exc)
             return f"DNS lookup failed: {exc}"
     return []

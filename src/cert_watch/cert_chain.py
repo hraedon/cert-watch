@@ -135,7 +135,7 @@ def _load_system_ca_cache() -> tuple[set[bytes], dict[bytes, list[x509.Certifica
                 subj = cert.subject.public_bytes(Encoding.DER)
                 subjects.add(subj)
                 by_subject.setdefault(subj, []).append(cert)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
             pem_data = pem_data[end:]
         break
@@ -391,7 +391,7 @@ def validate_is_ca_certificate(der_bytes: bytes) -> str | None:
     """
     try:
         cert = x509.load_der_x509_certificate(der_bytes)
-    except Exception:
+    except (ValueError, TypeError):  # DER parse
         return "failed to parse certificate"
 
     # Check BasicConstraints.ca — hard requirement

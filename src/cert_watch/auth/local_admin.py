@@ -8,11 +8,13 @@ small and tightly coupled to `LocalAdminProvider`.
 from __future__ import annotations
 
 import base64
+import binascii
 import contextlib
 import hashlib
 import hmac
 import logging
 import os
+import sqlite3
 
 from .protocol import AuthProvider, AuthResult
 
@@ -47,7 +49,7 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
         p = int(parts[3])
         salt = base64.b64decode(parts[4])
         expected_dk = base64.b64decode(parts[5])
-    except Exception:
+    except (ValueError, TypeError, binascii.Error):
         return False
     if n < 2 or r < 1 or p < 1 or len(expected_dk) != 32:
         logger.warning(
@@ -134,7 +136,7 @@ class LocalAdminProvider(AuthProvider):
                     # Wrong password for DB user — spend dummy time then fail
                     self._dummy_verify(password, user.password_hash)
                     return AuthResult(success=False, error="invalid credentials")
-            except Exception:
+            except sqlite3.DatabaseError:
                 logger.debug("local auth DB lookup failed", exc_info=True)
 
         # Legacy break-glass path (env-var local admin)

@@ -95,7 +95,7 @@ def api_download_pem(
 
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)
         pem = x509_cert.public_bytes(Encoding.PEM)
-    except Exception:
+    except (ValueError, TypeError):  # x509 encode
         return PlainTextResponse("cannot encode certificate", status_code=500)
     filename = f"cert-{cert_id[:8]}.pem"
     return PlainTextResponse(

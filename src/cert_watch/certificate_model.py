@@ -96,7 +96,7 @@ def parse_certificate(der_bytes: bytes) -> Certificate | MalformedCertificateErr
         return MalformedCertificateError(message="empty DER input")
     try:
         cert = x509.load_der_x509_certificate(der_bytes)
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, TypeError) as exc:  # DER parse
         return MalformedCertificateError(message=f"failed to parse DER: {exc}")
     return _from_x509(cert)
 
@@ -107,7 +107,7 @@ def parse_pem_certificate(pem_text: str) -> Certificate | MalformedCertificateEr
         return MalformedCertificateError(message="no PEM certificate block found")
     try:
         cert = x509.load_pem_x509_certificate(pem_text.encode("utf-8"))
-    except Exception as exc:  # noqa: BLE001
+    except (ValueError, TypeError) as exc:  # PEM parse
         return MalformedCertificateError(message=f"failed to parse PEM: {exc}")
     return _from_x509(cert)
 

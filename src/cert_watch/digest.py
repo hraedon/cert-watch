@@ -52,7 +52,7 @@ def _lifetime_trend_decreasing(entries: list[dict]) -> bool:
                 na = _parse_iso(not_after)
                 nb = _parse_iso(not_before)
                 lifetimes.append((na - nb).days)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
     if len(lifetimes) < 2:
         return False

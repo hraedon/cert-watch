@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import threading
 import time
 from collections import deque
@@ -249,7 +250,7 @@ def emit_event(
             except Exception:
                 logger.warning("event webhook submit failed", exc_info=True)
         return row_id
-    except Exception:
+    except (sqlite3.DatabaseError, TypeError, ValueError):
         logger.warning("emit_event failed", exc_info=True)
         return None
 

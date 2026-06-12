@@ -9,7 +9,7 @@ def test_check_caa_resolver_failure_surfaces_error(monkeypatch):
     import dns.resolver
 
     def _boom(domain, rdtype):
-        raise RuntimeError("nameserver unreachable")
+        raise dns.exception.DNSException("nameserver unreachable")
 
     monkeypatch.setattr(dns.resolver, "resolve", _boom)
     result = check_caa("example.com")

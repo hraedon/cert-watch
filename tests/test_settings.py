@@ -1552,10 +1552,11 @@ def test_test_smtp_nonnumeric_port_returns_error(reload_app):
 def test_test_smtp_ssrf_blocked_ip(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
+        # Link-local/cloud metadata is blocked regardless of allow_private.
         r = client.post(
             "/settings/test-smtp",
             data={
-                "smtp_host": "127.0.0.1",
+                "smtp_host": "169.254.169.254",
                 "smtp_port": "25",
                 "smtp_user": "",
                 "smtp_password": "",
@@ -1575,7 +1576,8 @@ def test_test_smtp_ssrf_blocked_ip(reload_app):
 def test_probe_tls_chain_returns_none_for_ssrf_ip():
     from cert_watch.routes.settings import _probe_tls_chain
 
-    assert _probe_tls_chain("127.0.0.1", 636) is None
+    # Link-local/cloud metadata is blocked regardless of allow_private.
+    assert _probe_tls_chain("169.254.169.254", 636) is None
 
 
 def test_probe_tls_chain_openssl_fallback(monkeypatch, chain_triplet):
@@ -1815,10 +1817,11 @@ def test_capture_starttls_chain_import_error(monkeypatch):
 def test_test_ldap_ssrf_blocked_ip(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
+        # Link-local/cloud metadata is blocked regardless of allow_private.
         r = client.post(
             "/settings/test-ldap",
             data={
-                "ldap_server": "ldap://127.0.0.1",
+                "ldap_server": "ldap://169.254.169.254",
                 "ldap_base_dn": "DC=example,DC=com",
             },
         )

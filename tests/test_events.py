@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
@@ -154,7 +155,7 @@ class TestEmitEvent:
             payload={"cert_id": "1"},
             source="scan",
         )
-        with patch("cert_watch.events._write_event_log", side_effect=Exception("boom")):
+        with patch("cert_watch.events._write_event_log", side_effect=sqlite3.DatabaseError("boom")):
             result = emit_event(e, db)
         assert result is None
 

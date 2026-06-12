@@ -108,12 +108,12 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 key_type_str = "Ed25519"
             elif isinstance(key_info, ed448.Ed448PublicKey):
                 key_type_str = "Ed448"
-        except Exception:
+        except (ValueError, TypeError):  # crypto key access
             pass
         sig_alg = x509_cert.signature_algorithm_oid._name
         serial = format(x509_cert.serial_number, "X")
         serial = ":".join(serial[i : i + 2] for i in range(0, len(serial), 2))
-    except Exception:
+    except (ValueError, TypeError):  # x509 DER parse
         key_type_str = "unknown"
         sig_alg = "unknown"
         serial = "unknown"
@@ -147,7 +147,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 kt = "Ed25519"
             elif isinstance(k, ed448.Ed448PublicKey):
                 kt = "Ed448"
-        except Exception:
+        except (ValueError, TypeError):  # crypto key access
             pass
         chain_certs.append(
             {
