@@ -138,7 +138,7 @@ def _load_system_ca_cache() -> tuple[set[bytes], dict[bytes, list[x509.Certifica
             except (ValueError, TypeError):
                 pass
             pem_data = pem_data[end:]
-        break
+        continue
 
     logger.debug("loaded %d system CA subjects from trust store", len(subjects))
     _system_ca_cache = (subjects, by_subject)

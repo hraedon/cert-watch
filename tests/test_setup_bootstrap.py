@@ -242,7 +242,7 @@ class TestSetupWizard:
         """AC-3: /setup is accessible when needs_setup is True."""
         r = setup_app_client.get("/setup", follow_redirects=False)
         assert r.status_code == 200
-        assert "Welcome to cert-watch" in r.text or "admin" in r.text.lower()
+        assert "Welcome to cert-watch" in r.text and "admin" in r.text.lower()
 
     def test_healthz_not_redirected(self, setup_app_client):
         """Healthz is never redirected even during setup."""

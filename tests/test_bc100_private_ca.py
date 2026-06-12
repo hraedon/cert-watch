@@ -102,7 +102,7 @@ def test_discover_counts_private_ca_via_chain_status(reload_app, tmp_path):
     assert r.status_code == 200
     assert "private-CA hosts excluded" in r.text
     # The private_count should be 1 because the chain_status is "private"
-    assert "1 private-CA hosts excluded" in r.text or "1 private-CA" in r.text
+    assert "1 private-CA" in r.text and "excluded" in r.text
 
 
 def test_discover_does_not_count_public_ca_as_private(reload_app, tmp_path):

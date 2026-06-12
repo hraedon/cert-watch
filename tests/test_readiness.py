@@ -397,7 +397,7 @@ class TestReadinessRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/readiness")
         assert r.status_code == 200
-        assert "auto.example.com" in r.text or "Public-Trust Host" in r.text
+        assert "auto.example.com" in r.text and "Public-Trust Host" in r.text
 
     def test_readiness_json_with_data(self, tmp_path, reload_app):
         app_mod = reload_app()

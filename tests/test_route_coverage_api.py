@@ -79,7 +79,11 @@ def test_api_cert_history(reload_app, tmp_path, leaf_pem_file):
         r = client.get(f"/api/certificates/{leaf_id}/history")
     assert r.status_code == 200
     data = r.json()
-    assert "history" in data
+    assert isinstance(data["history"], list)
+    if data["history"]:
+        entry = data["history"][0]
+        assert "leaf_id" in entry
+        assert "not_after" in entry
 
 
 def test_api_cert_history_not_found(reload_app):
@@ -722,7 +726,7 @@ def test_api_cert_alert_routing(reload_app, tmp_path, leaf_pem_file):
     assert r.status_code == 200
     data = r.json()
     assert data["cert_id"] == cert_id
-    assert "matched_groups" in data
+    assert isinstance(data["matched_groups"], list)
 
 
 def test_api_cert_alert_routing_not_found(reload_app):
@@ -823,6 +827,7 @@ def test_api_pivot_issuer(reload_app, tmp_path):
     assert r.status_code == 200
     data = r.json()
     assert data["pivot"] == "issuer"
+    assert isinstance(data.get("certificates", data.get("certs", [])), list)
 
 
 # ---------- Trends API ----------
@@ -833,7 +838,8 @@ def test_api_tls_version_trends(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/trends/tls-versions")
     assert r.status_code == 200
-    assert "trends" in r.json()
+    data = r.json()
+    assert isinstance(data["trends"], list)
 
 
 def test_api_grade_trends(reload_app):
@@ -841,7 +847,8 @@ def test_api_grade_trends(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/trends/grades")
     assert r.status_code == 200
-    assert "trends" in r.json()
+    data = r.json()
+    assert isinstance(data["trends"], list)
 
 
 # ---------- Calendar API ----------
@@ -852,7 +859,9 @@ def test_api_calendar(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/calendar")
     assert r.status_code == 200
-    assert "buckets" in r.json()
+    data = r.json()
+    assert isinstance(data["buckets"], list)
+    assert data["bucket"] in ("month", "week", "day")
 
 
 def test_api_calendar_day_bucket(reload_app):
@@ -1121,7 +1130,7 @@ def test_dashboard_filter_source_scanned(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?source=scanned")
     assert r.status_code == 200
-    assert "Certificates" in r.text or "certificates" in r.text
+    assert 'name="source"' in r.text or "source=scanned" in r.text or "scan.example.com" in r.text
 
 
 # ---------- Settings page ----------

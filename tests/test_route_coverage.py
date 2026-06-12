@@ -179,7 +179,7 @@ def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     assert r.status_code == 200
-    assert "fleet-grade" in r.text or "Fleet" in r.text
+    assert "Fleet posture" in r.text
 
 
 # ---------- dashboard ungrouped view with data ----------
@@ -346,7 +346,7 @@ def test_insights_view(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights")
     assert r.status_code == 200
-    assert "insights" in r.text.lower() or "calendar" in r.text.lower()
+    assert "Insights" in r.text
 
 
 def test_insights_view_tls_tab(tmp_path, reload_app):
@@ -395,7 +395,7 @@ def test_discover_view_with_hosts(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/discover")
     assert r.status_code == 200
-    assert "No gaps found" in r.text or "Discover" in r.text
+    assert "disc.example.com" in r.text
 
 
 # ---------- ct-lookup ----------
@@ -659,7 +659,7 @@ def test_certificate_detail_with_trust_anchor(reload_app, tmp_path, chain_pem_fi
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "Verified to trusted root" in r.text or "public" in r.text
+    assert "cw-chip-public" in r.text or "Chain status" in r.text
 
 
 def _stored_cert_id(db, hostname, port=443):
@@ -1205,7 +1205,7 @@ def test_audit_page_empty(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/audit")
     assert r.status_code == 200
-    assert "No audit events" in r.text or "Audit log" in r.text
+    assert "No audit events" in r.text
 
 
 def test_audit_page_with_entries(tmp_path, reload_app):

@@ -561,7 +561,12 @@ async def auth_middleware(request: Request, call_next):
 
     token = request.cookies.get(SESSION_COOKIE, "")
     db_path = _request_db_path(request)
-    username = validate_session(token, _request_security(request), db_path=db_path)
+    _settings = getattr(request.app.state, "settings", None)
+    _ttl = getattr(_settings, "session_ttl", None) if _settings else None
+    username = validate_session(
+        token, _request_security(request),
+        db_path=db_path, session_ttl=_ttl,
+    )
     if username:
         request.scope["auth_user"] = username
         # BC-145: propagate IdP groups/roles into the AuthContext so that
@@ -604,6 +609,9 @@ def _build_csp(nonce: str) -> str:
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'; "
         "frame-ancestors 'none'"
     )
     report_uri = os.environ.get("CERT_WATCH_CSP_REPORT_URI", "")
@@ -673,11 +681,14 @@ async def require_auth(request: Request) -> str:
         return ""
     token = request.cookies.get(SESSION_COOKIE, "")
     db_path = _request_db_path(request)
-    # decode_session gives us the signed claims (groups/roles) without the
-    # TTL / version DB check — we run the full validate_session next.
+    _settings = getattr(request.app.state, "settings", None)
+    _ttl = getattr(_settings, "session_ttl", None) if _settings else None
     info = decode_session(token, _request_security(request))
     username = (
-        validate_session(token, _request_security(request), db_path=db_path)
+        validate_session(
+            token, _request_security(request),
+            db_path=db_path, session_ttl=_ttl,
+        )
         if info is not None
         else ""
     )

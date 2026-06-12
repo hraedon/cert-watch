@@ -32,13 +32,17 @@ def _load_coverage() -> dict:
     return json.loads(COVERAGE_JSON.read_text(encoding="utf-8"))
 
 
-@pytest.mark.skipif(not COVERAGE_JSON.exists(), reason="coverage.json not found")
 @pytest.mark.parametrize(
     "path,floor",
     list(MODULE_FLOORS.items()),
     ids=[p.split("/")[-1] for p in MODULE_FLOORS],
 )
 def test_module_coverage_floor(path: str, floor: int):
+    if not COVERAGE_JSON.exists():
+        pytest.fail(
+            "coverage.json not found — run pytest with --cov-report=json:coverage.json "
+            "to generate it. Without this file, coverage regressions are invisible."
+        )
     data = _load_coverage()
     files = data.get("files", {})
     assert path in files, (

@@ -197,7 +197,7 @@ def _scan_host_once(
             cp.is_leaf = False
             chain_certs.append(cp)
 
-    hsts = _probe_hsts(hostname, port, pinned_ip=pinned_ip)
+    hsts = _probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify)
 
     return ScannedEntry(
         host=hostname,
@@ -250,8 +250,8 @@ def _scan_host_via_openssl(
                 chain=chain_certs,
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
-                hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
-                verify_requested=False,
+                hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify),
+                verify_requested=verify,
             )
 
     logger.warning(
@@ -297,8 +297,8 @@ def _scan_host_via_openssl(
         chain=[],
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
-        hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip),
-        verify_requested=False,
+        hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify),
+        verify_requested=verify,
         chain_incomplete=True,
     )
 
@@ -617,11 +617,16 @@ def store_scanned(
         stored_chain_status: str | None = None
         previous_grade: str | None = None
 
-        with contextlib.suppress(Exception):
+        try:
             pending_for_resolve, _ = _stage(
                 "resolve_pending_alerts",
                 _stage_resolve_pending_alerts,
                 repo_path_or_repo, entry, webhook_config,
+            )
+        except Exception:
+            logger.exception(
+                "store_scanned [resolve_pending_alerts] failed for %s:%s",
+                entry.host, entry.port,
             )
 
         try:

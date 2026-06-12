@@ -145,7 +145,7 @@
           <td class="mono cw-fz-12 cw-text-text-3">{{ m.scanned_issuer }}</td>
           <td class="mono cw-fz-12 cw-text-crit">{{ m.ct_issuer }}</td>
           <td class="cw-td-pr-20">
-            <a href="/certificates/{{ m.host }}" class="cw-btn sm">View cert</a>
+            <a href="/?q={{ m.host | urlencode }}" class="cw-btn sm">View host</a>
           </td>
         </tr>
         {% endfor %}
