@@ -136,7 +136,7 @@ def evaluate_thresholds(
                 cooldown_secs = cooldown_hours * 3600
                 if (
                     last_alert_time
-                    and (now - last_alert_time).total_seconds() < cooldown_secs
+                    and max(0.0, (now - last_alert_time).total_seconds()) < cooldown_secs
                 ):
                     continue
             alert = Alert(

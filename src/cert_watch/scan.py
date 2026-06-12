@@ -112,7 +112,11 @@ def scan_host(
         if isinstance(result, ScannedEntry):
             return result
         last_error = result
-    assert last_error is not None
+    if last_error is None:
+        return ScanError(
+            hostname=hostname, port=port,
+            error_message="no scan attempts made",
+        )
     return last_error
 
 
@@ -260,7 +264,7 @@ def _scan_host_via_openssl(
     )
     try:
         ssl_sock = _open_tls_connection(
-            hostname, port, timeout, verify=False,
+            hostname, port, timeout, verify=verify,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip,
         )
@@ -617,16 +621,11 @@ def store_scanned(
         stored_chain_status: str | None = None
         previous_grade: str | None = None
 
-        try:
+        with contextlib.suppress(Exception):
             pending_for_resolve, _ = _stage(
                 "resolve_pending_alerts",
                 _stage_resolve_pending_alerts,
                 repo_path_or_repo, entry, webhook_config,
-            )
-        except Exception:
-            logger.exception(
-                "store_scanned [resolve_pending_alerts] failed for %s:%s",
-                entry.host, entry.port,
             )
 
         try:

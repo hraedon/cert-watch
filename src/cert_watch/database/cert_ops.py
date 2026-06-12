@@ -86,6 +86,10 @@ def replace_scanned(
             conn.execute(
                 f"DELETE FROM alerts WHERE cert_id IN ({ph})", old_all_ids
             )
+            conn.execute(
+                f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",
+                old_all_ids,
+            )
 
         cv: int | None = None if chain_valid is None else (1 if chain_valid else 0)
         conn.execute(
@@ -151,23 +155,27 @@ def replace_scanned(
                     now,
                 ),
             )
-        conn.commit()
+        # Reset renewal_status on every successful scan (not just fingerprint
+        # change) so same-fingerprint re-issuances don't leave stale
+        # renewal_status='renewed' suppressing alerts (C1/M2).
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'pending' "
+            "WHERE hostname = ? AND port = ? AND renewal_status = 'renewed'",
+            (hostname, port),
+        )
 
-    if old_leaf_row is not None and leaf.fingerprint_sha256 != old_leaf_row["fingerprint_sha256"]:
-        changes = _compute_renewal_diff(old_leaf_row, leaf)
-        if changes:
-            import logging
-            logging.getLogger("cert_watch.database").info(
-                "certificate renewed for %s:%s — %s",
-                hostname, port, "; ".join(changes),
-            )
-        with _connect(db_path) as conn:
-            conn.execute(
-                "UPDATE hosts SET renewal_status = 'pending' "
-                "WHERE hostname = ? AND port = ? AND renewal_status = 'renewed'",
-                (hostname, port),
-            )
-            conn.commit()
+        if (
+            old_leaf_row is not None
+            and leaf.fingerprint_sha256 != old_leaf_row["fingerprint_sha256"]
+        ):
+            changes = _compute_renewal_diff(old_leaf_row, leaf)
+            if changes:
+                import logging
+                logging.getLogger("cert_watch.database").info(
+                    "certificate renewed for %s:%s — %s",
+                    hostname, port, "; ".join(changes),
+                )
+        conn.commit()
 
     return leaf_id, replaces_id
 
