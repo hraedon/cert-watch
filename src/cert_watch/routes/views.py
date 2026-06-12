@@ -113,7 +113,7 @@ def readyz(request: Request):
         checks["certificates"] = str(total_row[0] if total_row else 0)
         checks["expired"] = str(expired_row[0] if expired_row else 0)
     except Exception:
-        pass
+        logger.warning("readyz cert count query failed", exc_info=True)
     return {
         "status": "ok" if ok else "degraded",
         "version": __version__,

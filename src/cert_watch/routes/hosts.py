@@ -6,6 +6,7 @@ import asyncio
 import csv
 import io
 import logging
+import sqlite3
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -125,7 +126,7 @@ async def add_host(
                         allowed_subnets=s.allowed_subnets,
                         webhook_config=s.build_webhook_config(),
                     )
-                except Exception:
+                except sqlite3.DatabaseError:
                     logger.exception("store_scanned_async failed for %s:%d", hostname, p)
                     return False
             record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))

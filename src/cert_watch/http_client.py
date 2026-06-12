@@ -142,14 +142,9 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
             """HTTPSConnection that TCP-connects to the pinned IP."""
 
             def __init__(conn_self, host, **kwargs):
-                super().__init__(
-                    _hostname,
-                    port=_port,
-                    server_hostname=_hostname,
-                    context=ctx,
-                    **kwargs,
-                )
+                super().__init__(_hostname, port=_port, context=ctx, **kwargs)
                 conn_self._pinned_ip = _pinned_ip
+                conn_self.server_hostname = _hostname
 
             def connect(conn_self):
                 ip = ipaddress.ip_address(conn_self._pinned_ip)

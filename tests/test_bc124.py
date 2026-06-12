@@ -301,7 +301,8 @@ def test_webhook_url_validate_allows_public_hostname(monkeypatch):
 def test_build_webhook_config_skips_invalid_env_url(monkeypatch, tmp_path):
     """build_webhook_config rejects an env-configured webhook URL that fails SSRF validation."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ALERT_WEBHOOK_URL", "http://127.0.0.1:8080/webhook")
+    # Link-local/cloud metadata is blocked regardless of allow_private.
+    monkeypatch.setenv("ALERT_WEBHOOK_URL", "http://169.254.169.254:8080/webhook")
     from cert_watch.config import Settings
 
     s = Settings.from_env()

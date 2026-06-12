@@ -18,11 +18,18 @@ def test_public_ip_always_allowed():
     assert not _is_blocked_ip(_ip("8.8.8.8"), allowed_subnets=("10.0.0.0/8",))
 
 
-def test_loopback_and_metadata_always_blocked():
-    assert _is_blocked_ip(_ip("127.0.0.1"))
-    # cloud metadata endpoint (link-local) is blocked regardless of policy
+def test_loopback_and_metadata_blocked():
+    # IPv4 loopback is ALWAYS blocked (in _ALWAYS_BLOCKED_NETWORKS).
+    assert _is_blocked_ip(_ip("127.0.0.1"), allow_private=False)
+    assert _is_blocked_ip(_ip("127.0.0.1"), allow_private=True)
+    # ...and cannot be re-enabled via the allowlist.
+    assert _is_blocked_ip(
+        _ip("127.0.0.1"), allow_private=False, allowed_subnets=("127.0.0.0/8",)
+    )
+    # Link-local/cloud metadata is blocked regardless of policy.
     assert _is_blocked_ip(_ip("169.254.169.254"))
-    # ...and cannot be re-enabled via the allowlist
+    assert _is_blocked_ip(_ip("169.254.169.254"), allow_private=True)
+    # ...and cannot be re-enabled via the allowlist.
     assert _is_blocked_ip(
         _ip("169.254.169.254"), allow_private=True, allowed_subnets=("169.254.0.0/16",)
     )

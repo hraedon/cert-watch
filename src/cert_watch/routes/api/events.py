@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import sqlite3
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -59,7 +60,7 @@ async def api_event_stream(
                 break
             try:
                 events = get_events(db, event_type=event_type, source=source, limit=100)
-            except Exception:
+            except (sqlite3.DatabaseError, OSError):  # DB query / network
                 logger.warning("SSE event query failed", exc_info=True)
                 events = []
             for evt in reversed(events):

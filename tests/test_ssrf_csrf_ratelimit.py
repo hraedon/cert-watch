@@ -14,9 +14,10 @@ from fastapi.testclient import TestClient
 
 # ── SSRF: scan._is_blocked_ip ──────────────────────────────────────────────
 
-def test_is_blocked_ip_loopback():
+def test_is_blocked_ip_loopback_always_blocked():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1"), allow_private=False)
+    assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1"), allow_private=True)
 
 
 def test_is_blocked_ip_private_10():
@@ -49,9 +50,10 @@ def test_is_blocked_ip_ipv6_loopback():
     assert _is_blocked_ip(ipaddress.ip_address("::1"))
 
 
-def test_is_blocked_ip_ipv6_mapped_loopback():
+def test_is_blocked_ip_ipv6_mapped_loopback_always_blocked():
     from cert_watch.scan import _is_blocked_ip
-    assert _is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1"))
+    assert _is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1"), allow_private=False)
+    assert _is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1"), allow_private=True)
 
 
 def test_is_blocked_ip_ipv6_mapped_private():
@@ -76,22 +78,31 @@ def test_is_not_blocked_ipv6_public():
 
 # ── SSRF: scan._resolve_host rejects blocked hosts ─────────────────────────
 
-def test_resolve_host_blocks_loopback(monkeypatch):
+def test_resolve_host_blocks_loopback_when_private_disallowed(monkeypatch):
     from cert_watch.scan import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("127.0.0.1", 443)),
     ])
     with pytest.raises(OSError, match="blocked"):
-        _resolve_host("evil.local", 443)
+        _resolve_host("evil.local", 443, allow_private=False)
 
 
-def test_resolve_host_blocks_ipv6_mapped_loopback(monkeypatch):
+def test_resolve_host_blocks_ipv6_loopback(monkeypatch):
+    from cert_watch.scan import _resolve_host
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
+        (socket.AF_INET6, 1, 0, "", ("::1", 443, 0, 0)),
+    ])
+    with pytest.raises(OSError, match="blocked"):
+        _resolve_host("evil6.local", 443, allow_private=True)
+
+
+def test_resolve_host_blocks_ipv4_mapped_loopback_when_private_disallowed(monkeypatch):
     from cert_watch.scan import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET6, 1, 0, "", ("::ffff:127.0.0.1", 443, 0, 0)),
     ])
     with pytest.raises(OSError, match="blocked"):
-        _resolve_host("evil6.local", 443)
+        _resolve_host("evil6.local", 443, allow_private=False)
 
 
 def test_resolve_host_allows_public(monkeypatch):
@@ -106,7 +117,7 @@ def test_resolve_host_allows_public(monkeypatch):
 def test_resolve_host_skips_blocked_uses_next(monkeypatch):
     from cert_watch.scan import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
-        (socket.AF_INET, 1, 0, "", ("127.0.0.1", 443)),
+        (socket.AF_INET6, 1, 0, "", ("::1", 443, 0, 0)),
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", 443)),
     ])
     family, sockaddr = _resolve_host("mixed.example.com", 443)

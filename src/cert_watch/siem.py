@@ -157,6 +157,8 @@ class SiemExporter:
             logger.warning("syslog export failed", exc_info=True)
 
     def _to_hec(self, event: dict) -> None:
+        from urllib.error import HTTPError
+
         from cert_watch.http_client import ssrf_safe_urlopen
 
         try:
@@ -182,6 +184,8 @@ class SiemExporter:
             with resp:
                 if not (200 <= resp.status < 300):
                     logger.warning("HEC export non-2xx: %s", resp.status)
+        except HTTPError as exc:
+            logger.warning("HEC export non-2xx: %s", exc.code)
         except Exception:
             logger.warning("HEC export failed", exc_info=True)
 

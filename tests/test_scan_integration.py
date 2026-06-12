@@ -17,6 +17,7 @@ import pytest
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.scan import ScanError, ScannedEntry, scan_host
+from tests._integration_servers import allow_loopback_transport
 
 pytestmark = pytest.mark.integration
 
@@ -133,12 +134,8 @@ def test_openssl_chain_extraction(monkeypatch, tls_server_chain):
         ),
     )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
-    monkeypatch.setattr(
-        "cert_watch.scan._is_blocked_ip",
-        lambda ip, *, allow_private=True, allowed_subnets=(): False,
-    )
-
-    result = scan_host("localhost", port, timeout=5, allow_private=True)
+    with allow_loopback_transport(monkeypatch):
+        result = scan_host("localhost", port, timeout=5, allow_private=True)
     assert isinstance(result, ScannedEntry), f"expected ScannedEntry, got {result}"
     assert result.host == "localhost"
     assert result.port == port
@@ -165,12 +162,8 @@ def test_openssl_self_signed_leaf_only(monkeypatch, tls_server_self_signed):
         ),
     )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
-    monkeypatch.setattr(
-        "cert_watch.scan._is_blocked_ip",
-        lambda ip, *, allow_private=True, allowed_subnets=(): False,
-    )
-
-    result = scan_host("localhost", port, timeout=5, allow_private=True)
+    with allow_loopback_transport(monkeypatch):
+        result = scan_host("localhost", port, timeout=5, allow_private=True)
     assert isinstance(result, ScannedEntry), f"expected ScannedEntry, got {result}"
 
     expected_leaf = parse_certificate(leaf_cert.der)
@@ -190,6 +183,6 @@ def test_openssl_connection_refused(monkeypatch):
         ),
     )
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
-
-    result = scan_host("localhost", port, timeout=3, allow_private=True)
+    with allow_loopback_transport(monkeypatch):
+        result = scan_host("localhost", port, timeout=3, allow_private=True)
     assert isinstance(result, ScanError)

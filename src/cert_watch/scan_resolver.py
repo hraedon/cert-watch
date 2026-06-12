@@ -48,8 +48,9 @@ def _is_blocked_ip(
 ) -> bool:
     """Return True if *ip* must not be scanned (SSRF guard).
 
-    - Loopback / link-local / unspecified are ALWAYS blocked (incl. the cloud
-      metadata endpoint 169.254.169.254), regardless of policy.
+    - Loopback (127.0.0.0/8, ::1), link-local / cloud metadata (169.254.169.254),
+      unspecified, and other always-blocked ranges are ALWAYS blocked, regardless
+      of policy.
     - Public IPs are allowed (scanning public certs is the baseline function).
     - Private (RFC 1918 / ULA) IPs: when ``allowed_subnets`` is configured, a
       private IP is allowed only if it falls inside one of those CIDRs (the

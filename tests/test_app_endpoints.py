@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 
@@ -335,7 +337,7 @@ def test_add_host_store_scanned_async_failure_isolated(
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
     async def failing_store(*args, **kwargs):
-        raise RuntimeError("store boom")
+        raise sqlite3.DatabaseError("store boom")
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", failing_store)
@@ -376,7 +378,7 @@ def test_import_hosts_store_scanned_async_failure_isolated(
         call_count["n"] += 1
         # Second call (fail.example.com) fails.
         if call_count["n"] == 2:
-            raise RuntimeError("store boom")
+            raise sqlite3.DatabaseError("store boom")
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)
@@ -425,7 +427,7 @@ def test_scan_now_store_scanned_async_failure_isolated(
         return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
 
     async def failing_store(*args, **kwargs):
-        raise RuntimeError("store boom")
+        raise sqlite3.DatabaseError("store boom")
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", failing_store)
@@ -473,9 +475,8 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
 
     async def flaky_store(*args, **kwargs):
         call_count["n"] += 1
-        # The first call (batch-a) succeeds, second (batch-b) fails.
         if call_count["n"] == 2:
-            raise RuntimeError("store boom")
+            raise sqlite3.DatabaseError("store boom")
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)

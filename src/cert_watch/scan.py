@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sqlite3
 import typing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -627,7 +628,11 @@ def store_scanned(
             leaf_id, replaced_cert_id = _stage(
                 "replace", _stage_replace, repo_path_or_repo, entry,
             )
-        except Exception:
+        except sqlite3.DatabaseError:
+            logger.warning(
+                "store_scanned [replace] DB error for %s:%s",
+                entry.host, entry.port, exc_info=True,
+            )
             return ""
 
         with contextlib.suppress(Exception):

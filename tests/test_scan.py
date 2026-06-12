@@ -1,4 +1,5 @@
 import asyncio
+import socket
 import ssl
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -425,12 +426,13 @@ def test_resolve_host_all_blocked(monkeypatch):
     """When every resolved IP is blocked, OSError is raised."""
     import pytest
 
+    # IPv6 loopback is always blocked regardless of allow_private.
     monkeypatch.setattr(
         "cert_watch.scan_resolver.resolve_hostname",
-        lambda *a, **kw: [(2, ("127.0.0.1", 443))],
+        lambda *a, **kw: [(socket.AF_INET6, ("::1", 443, 0, 0))],
     )
     with pytest.raises(OSError, match="blocked"):
-        _resolve_host("loopback.example.com", 443)
+        _resolve_host("loopback6.example.com", 443)
 
 
 def test_resolve_host_dns_failure(monkeypatch):
@@ -681,7 +683,9 @@ def test_open_tls_connection_pinned_ip(monkeypatch, chain_triplet):
 def test_open_tls_connection_blocked_pinned_ip():
     import pytest
     with pytest.raises(OSError, match="blocked address"):
-        _open_tls_connection("example.com", 443, 5.0, pinned_ip="127.0.0.1")
+        _open_tls_connection(
+            "example.com", 443, 5.0, pinned_ip="127.0.0.1", allow_private=False
+        )
 
 
 def test_open_tls_connection_resolve_path(monkeypatch, chain_triplet):

@@ -27,6 +27,22 @@ _ALLOWED_JWT_ALGS = (
     "PS256", "PS384", "PS512",
 )
 
+# Exception types that JWT decode / claims validation can raise.
+# Built conditionally so the module imports cleanly without optional deps.
+_ID_TOKEN_ERRORS: tuple[type[Exception], ...] = (ValueError, KeyError, TypeError)
+try:  # noqa: I001
+    from joserfc.errors import JoseError as _JoseRfcError  # noqa: I001
+
+    _ID_TOKEN_ERRORS = (_JoseRfcError,) + _ID_TOKEN_ERRORS
+except ImportError:
+    pass
+try:  # noqa: I001
+    from authlib.jose.errors import JoseError as _JoseError  # noqa: I001
+
+    _ID_TOKEN_ERRORS = (_JoseError,) + _ID_TOKEN_ERRORS
+except ImportError:
+    pass
+
 
 def _safe_algs(advertised: list[str]) -> list[str]:
     """Intersect IdP-advertised algs with our asymmetric allowlist.
@@ -227,7 +243,7 @@ class OAuthProvider(AuthProvider):
                 _validate_claims_manual(raw_claims, issuer, self.config.client_id, nonce)
 
             return dict(raw_claims)
-        except Exception as exc:
+        except _ID_TOKEN_ERRORS as exc:
             if KeySet is not None:
                 try:
                     from joserfc.errors import InvalidKeyIdError

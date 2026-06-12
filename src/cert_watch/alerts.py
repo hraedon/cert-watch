@@ -315,7 +315,7 @@ def evaluate_renewal_window(
             continue  # a successor cert already exists → renewal worked
         try:
             days = (_parse_iso(leaf["not_after"]) - now).days
-        except Exception:
+        except (ValueError, TypeError):  # date parse
             continue
         if days < 0 or days > window_days:
             continue  # expired (expiry_warning owns it) or outside the window

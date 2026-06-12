@@ -98,7 +98,7 @@ def _extract_cn_from_name(x509_name: Any) -> str:
         cns = x509_name.get_attributes_for_oid(NameOID.COMMON_NAME)
         if cns:
             return cns[0].value
-    except Exception:
+    except (ValueError, TypeError, AttributeError):
         pass
     return str(x509_name)
 
@@ -127,6 +127,7 @@ def _evaluate_rule(
     hsts: bool | None,
     ocsp_stapling: bool | None,
 ) -> list[PolicyViolation]:
+    from cryptography import x509 as _x509_mod
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
@@ -146,7 +147,7 @@ def _evaluate_rule(
                         f"RSA key size {key.key_size} < {min_rsa} bits",
                         f"Replace certificate with RSA key of at least {min_rsa} bits",
                     )]
-        except Exception:
+        except (ValueError, TypeError):  # crypto key access
             pass
         return []
 
@@ -161,7 +162,7 @@ def _evaluate_rule(
                         f"ECDSA curve {key.curve.name} not in allowed list",
                         f"Replace certificate with an allowed curve: {', '.join(allowed)}",
                     )]
-        except Exception:
+        except (ValueError, TypeError):  # crypto key access
             pass
         return []
 
@@ -186,9 +187,9 @@ def _evaluate_rule(
                         "MD5 signature algorithm",
                         "Reissue certificate with SHA-256 or stronger signature",
                     )]
-            except Exception:
+            except (ValueError, TypeError):  # crypto hash access
                 pass
-        except Exception:
+        except (ValueError, TypeError):  # crypto sig access
             pass
         return []
 
@@ -232,7 +233,7 @@ def _evaluate_rule(
     if rid == "self_signed":
         try:
             is_self_signed = x509_cert.subject == x509_cert.issuer
-        except Exception:
+        except (ValueError, TypeError):  # x509 name comparison
             is_self_signed = cert.subject == cert.issuer
         if is_self_signed:
             return [PolicyViolation(
@@ -267,7 +268,7 @@ def _evaluate_rule(
         try:
             ext = x509_cert.extensions.get_extension_for_oid(ExtensionOID.TLS_FEATURE)
             must_staple = any(feature.value == 5 for feature in ext.value)
-        except Exception:
+        except (_x509_mod.ExtensionNotFound, ValueError, TypeError):  # must-staple extension
             must_staple = False
         if not must_staple:
             return [PolicyViolation(
@@ -341,7 +342,7 @@ def evaluate_policy(
 
     try:
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)
-    except Exception:
+    except (ValueError, TypeError):  # x509 DER parse
         logger.warning("Failed to parse certificate DER for policy evaluation")
         return [PolicyViolation(
             "no_data", "critical",

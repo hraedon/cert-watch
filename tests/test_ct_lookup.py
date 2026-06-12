@@ -54,7 +54,7 @@ def test_query_ct_log_expired_filtered():
 def test_query_ct_log_network_error():
     with patch(
         "cert_watch.ct_lookup.ssrf_safe_urlopen",
-        side_effect=Exception("timeout"),
+        side_effect=OSError("timeout"),
     ):
         result = query_ct_log("down.example.com")
     assert isinstance(result, str)

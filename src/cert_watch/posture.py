@@ -261,7 +261,7 @@ def evaluate_posture(
 
     try:
         x509_cert = x509.load_der_x509_certificate(cert.raw_der)
-    except Exception:
+    except (ValueError, TypeError):  # x509 DER parse
         return PostureResult(
             grade="F",
             findings=[Finding(check="parse", status="fail", message="Cannot parse certificate")],
@@ -299,7 +299,7 @@ def evaluate_posture(
                 check="key_type", status="pass",
                 message=type(key).__name__,
             ))
-    except Exception:
+    except (ValueError, TypeError):  # crypto key access
         findings.append(Finding(
             check="key_type", status="warn",
             message="Cannot determine key type",
@@ -321,7 +321,7 @@ def evaluate_posture(
                 check="sha1_signature", status="pass",
                 message="No SHA-1 signature",
             ))
-    except Exception:
+    except (ValueError, TypeError):  # crypto sig access
         findings.append(Finding(
             check="sha1_signature", status="warn",
             message="Cannot determine signature algorithm",
@@ -341,7 +341,7 @@ def evaluate_posture(
 
     try:
         is_self_signed = x509_cert.subject == x509_cert.issuer
-    except Exception:
+    except (ValueError, TypeError):  # x509 name comparison
         is_self_signed = cert.subject == cert.issuer
     if is_self_signed:
         findings.append(Finding(
@@ -357,7 +357,7 @@ def evaluate_posture(
     try:
         ext = x509_cert.extensions.get_extension_for_oid(ExtensionOID.TLS_FEATURE)
         must_staple = any(feature.value == 5 for feature in ext.value)  # type: ignore[attr-defined]
-    except (x509.ExtensionNotFound, Exception):
+    except (x509.ExtensionNotFound, ValueError, TypeError):  # must-staple extension
         must_staple = False
     if must_staple:
         if ocsp_stapling is False:

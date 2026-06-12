@@ -16,7 +16,13 @@ logger = logging.getLogger("cert_watch.scan")
 HSTS_TIMEOUT = 5.0
 
 
-def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool | None:
+def _probe_hsts(
+    hostname: str,
+    port: int,
+    pinned_ip: str | None = None,
+    *,
+    require_443: bool = True,
+) -> bool | None:
     """Check if an HTTPS server sends Strict-Transport-Security.
 
     Returns True if HSTS header found, False if not found, None on error.
@@ -25,8 +31,12 @@ def _probe_hsts(hostname: str, port: int, pinned_ip: str | None = None) -> bool 
 
     Precondition: *pinned_ip* must already be validated against
     :func:`_is_blocked_ip` by the caller (typically :func:`_resolve_host`).
+
+    By default, the check is skipped for non-443 ports because HSTS is only
+    meaningful on the standard HTTPS port during production scans. Pass
+    ``require_443=False`` to override this for testing or special cases.
     """
-    if port != 443:
+    if require_443 and port != 443:
         return None
     try:
         import http.client

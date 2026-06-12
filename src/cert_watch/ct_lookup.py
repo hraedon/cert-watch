@@ -70,7 +70,7 @@ def query_ct_log(
                 return f"CT log response too large for {domain} (>{_MAX_CT_RESPONSE} bytes)"
     except SSRFBlockedError as exc:
         return f"CT lookup blocked by SSRF policy for {domain}: {exc}"
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, ValueError) as exc:  # urllib / network errors
         return f"CT lookup failed for {domain}: {exc}"
     try:
         entries = json.loads(raw)
