@@ -725,6 +725,7 @@ document.addEventListener('click', function(e) {
   if (!btn) return;
   var hostId = btn.getAttribute('data-host-id');
   var csrf = btn.getAttribute('data-csrf');
+  var existingNote = btn.getAttribute('data-note') || '';
   var existing = document.getElementById('note-inline-form-' + hostId);
   if (existing) {
     existing.remove();
@@ -735,7 +736,7 @@ document.addEventListener('click', function(e) {
   form.className = 'cw-inline';
   form.style.cssText = 'margin-left:6px;';
   form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + escHtml(csrf) + '">' +
-    '<input type="text" name="notes" class="cw-input" style="width:200px;padding:3px 8px;font-size:12px;" placeholder="Add note…">' +
+    '<input type="text" name="notes" class="cw-input" style="width:200px;padding:3px 8px;font-size:12px;" placeholder="Add note…" value="' + escHtml(existingNote) + '">' +
     '<button type="submit" class="cw-btn sm" style="margin-left:4px;">Save</button>';
   btn.parentNode.insertBefore(form, btn.nextSibling);
   form.querySelector('input[name="notes"]').focus();

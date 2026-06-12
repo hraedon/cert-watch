@@ -707,7 +707,7 @@ def test_open_tls_connection_resolve_path(monkeypatch, chain_triplet):
 def test_open_tls_connection_exception_closes_socket(monkeypatch):
     mock_socket = MagicMock()
     mock_ctx = MagicMock()
-    mock_ctx.wrap_socket.side_effect = Exception("tls fail")
+    mock_ctx.wrap_socket.side_effect = OSError("tls fail")
     monkeypatch.setattr("socket.socket", lambda *a, **kw: mock_socket)
     monkeypatch.setattr("ssl.create_default_context", lambda: mock_ctx)
     monkeypatch.setattr(
@@ -715,7 +715,7 @@ def test_open_tls_connection_exception_closes_socket(monkeypatch):
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
     import pytest
-    with pytest.raises(Exception, match="tls fail"):
+    with pytest.raises(OSError, match="tls fail"):
         _open_tls_connection("example.com", 443, 5.0)
     mock_socket.close.assert_called_once()
 
@@ -1423,3 +1423,137 @@ def test_store_scanned_with_repo_and_chain(tmp_path, self_signed_leaf, chain_tri
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[chain_cert])
     leaf_id = store_scanned(entry, repo)
     assert leaf_id
+
+
+# ---------- verify_requested on openssl scan path ----------
+
+
+def test_scan_host_via_openssl_verify_requested_true(monkeypatch, chain_triplet):
+    der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: (der_chain, "TLSv1.3"),
+    )
+    monkeypatch.setattr("cert_watch.scan._probe_hsts", lambda *a, **kw: None)
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+        verify=True,
+    )
+    assert isinstance(result, ScannedEntry)
+    assert result.verify_requested is True
+
+
+def test_scan_host_via_openssl_verify_requested_false(monkeypatch, chain_triplet):
+    der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: (der_chain, "TLSv1.3"),
+    )
+    monkeypatch.setattr("cert_watch.scan._probe_hsts", lambda *a, **kw: None)
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+        verify=False,
+    )
+    assert isinstance(result, ScannedEntry)
+    assert result.verify_requested is False
+
+
+def test_scan_host_via_openssl_fallback_verify_requested_true(monkeypatch, chain_triplet):
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: ([], ""),
+    )
+    fake_sock = MagicMock()
+    fake_sock.getpeercert.return_value = chain_triplet["leaf"].der
+    fake_sock.version.return_value = "TLSv1.3"
+    fake_sock.close.return_value = None
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection", lambda *a, **kw: fake_sock,
+    )
+    monkeypatch.setattr("cert_watch.scan._probe_hsts", lambda *a, **kw: None)
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+        verify=True,
+    )
+    assert isinstance(result, ScannedEntry)
+    assert result.verify_requested is True
+    assert result.chain_incomplete is True
+
+
+# ---------- HSTS probe verify parameter ----------
+
+
+def test_probe_hsts_verify_true_keeps_cert_required(monkeypatch):
+    captured = {}
+
+    class _Conn:
+        def request(self, *a, **kw):
+            pass
+
+        def getresponse(self):
+            r = MagicMock()
+            r.getheader = lambda name: None
+            return r
+
+        def close(self):
+            pass
+
+    def _capture(*a, **kw):
+        captured["ctx"] = kw.get("context")
+        return _Conn()
+
+    monkeypatch.setattr("http.client.HTTPSConnection", _capture)
+    _probe_hsts("example.com", 443, verify=True)
+    assert captured["ctx"].check_hostname is True
+    assert captured["ctx"].verify_mode == ssl.CERT_REQUIRED
+
+
+def test_probe_hsts_verify_false_disables_verification(monkeypatch):
+    captured = {}
+
+    class _Conn:
+        def request(self, *a, **kw):
+            pass
+
+        def getresponse(self):
+            r = MagicMock()
+            r.getheader = lambda name: None
+            return r
+
+        def close(self):
+            pass
+
+    def _capture(*a, **kw):
+        captured["ctx"] = kw.get("context")
+        return _Conn()
+
+    monkeypatch.setattr("http.client.HTTPSConnection", _capture)
+    _probe_hsts("example.com", 443, verify=False)
+    assert captured["ctx"].check_hostname is False
+    assert captured["ctx"].verify_mode == ssl.CERT_NONE
+
+
+def test_probe_hsts_non_443_with_require_443_false(monkeypatch):
+    class _Conn:
+        sock = None
+
+        def request(self, *a, **kw):
+            pass
+
+        def getresponse(self):
+            r = MagicMock()
+            r.getheader = (
+                lambda name: "max-age=31536000"
+                if name == "Strict-Transport-Security"
+                else None
+            )
+            return r
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr("http.client.HTTPSConnection", lambda *a, **kw: _Conn())
+    assert _probe_hsts("example.com", 8443, require_443=False) is True

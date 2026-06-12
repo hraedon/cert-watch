@@ -610,7 +610,16 @@ function checkRevocation(el) {
           (f.status === 'warn' ? 'cw-text-text-warn' : 'cw-text-text-3');
         var div = document.createElement('div');
         div.className = 'cw-flex cw-items-start cw-gap-8';
-        div.innerHTML = '<span class="cw-fz-12 ' + tone + ' cw-min-w-16">' + icon + '</span><div><span class="cw-fz-12-5 cw-text-text">' + (f.message || '') + '</span></div>';
+        var msgSpan = document.createElement('span');
+        msgSpan.className = 'cw-fz-12-5 cw-text-text';
+        msgSpan.textContent = f.message || '';
+        var iconSpan = document.createElement('span');
+        iconSpan.className = 'cw-fz-12 ' + tone + ' cw-min-w-16';
+        iconSpan.innerHTML = icon;
+        var msgDiv = document.createElement('div');
+        msgDiv.appendChild(msgSpan);
+        div.appendChild(iconSpan);
+        div.appendChild(msgDiv);
         results.appendChild(div);
       });
     })

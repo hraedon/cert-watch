@@ -336,12 +336,17 @@ def validate_session(
     security: SecurityContext | None = None,
     *,
     db_path: str | None = None,
+    session_ttl: int | None = None,
 ) -> str | None:
     """Validate a session token and return the username, or None if invalid.
 
     When *db_path* is provided, the stored session version for the user is
     checked. If the stored version exceeds the version embedded in the token,
     the session is considered revoked (BC-081).
+
+    When *session_ttl* is provided (from Settings), it is used as the
+    session lifetime in seconds. Otherwise the env var
+    ``CERT_WATCH_SESSION_TTL`` or the module constant is used.
     """
     info = decode_session(token, security)
     if info is None:
@@ -352,8 +357,11 @@ def validate_session(
     # Env var CERT_WATCH_SESSION_TTL wins (project convention).
     import cert_watch.auth as _auth_pkg
 
-    env_ttl = int(os.environ.get("CERT_WATCH_SESSION_TTL", "0"))
-    ttl = env_ttl or getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
+    if session_ttl is not None:
+        ttl = session_ttl
+    else:
+        env_ttl = int(os.environ.get("CERT_WATCH_SESSION_TTL", "0"))
+        ttl = env_ttl or getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
     if (time.time() - info.timestamp) > ttl:
         return None
 

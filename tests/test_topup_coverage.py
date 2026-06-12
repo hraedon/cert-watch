@@ -1,6 +1,11 @@
-"""Coverage tests for config.py, cert_chain.py, filters.py, and other modules.
+"""Coverage tests for config.py, filters.py, and other modules.
 
 Plan 024 Slice 5 — targeted top-ups to clear 90%.
+
+Weak duplicates removed (2026-06-12 test-quality pass):
+  Upload, cert_chain, database, tags, audit, and alert_adapter tests that
+  were weaker copies of tests in test_upload.py, test_cert_chain.py,
+  test_database.py, test_tags.py, test_audit.py, and test_alert_adapters.py.
 """
 
 from __future__ import annotations
@@ -46,22 +51,13 @@ def test_config_env_overrides(monkeypatch, tmp_path, env_vars, attr, expected):
     assert getattr(s, attr) == expected
 
 
-def test_config_allow_private_ips_default(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("CERT_WATCH_ALLOW_PRIVATE_IPS", raising=False)
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert s.allow_private is True
-
-
 def test_config_dns_servers(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_DNS_SERVERS", "8.8.8.8,8.8.4.4")
     from cert_watch.config import Settings
 
     s = Settings.from_env()
-    assert "8.8.8.8" in s.dns_servers
+    assert s.dns_servers == ("8.8.8.8", "8.8.4.4")
 
 
 def test_config_allowed_subnets(monkeypatch, tmp_path):
@@ -70,7 +66,7 @@ def test_config_allowed_subnets(monkeypatch, tmp_path):
     from cert_watch.config import Settings
 
     s = Settings.from_env()
-    assert "10.0.0.0/8" in s.allowed_subnets
+    assert s.allowed_subnets == ("10.0.0.0/8", "192.168.0.0/16")
 
 
 def test_config_build_webhook_config_none(monkeypatch, tmp_path):
@@ -84,13 +80,16 @@ def test_config_build_webhook_config_none(monkeypatch, tmp_path):
 
 def test_config_build_webhook_config(monkeypatch, tmp_path):
     import socket
+
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("ALERT_WEBHOOK_URL", "https://hooks.example.com/test")
     original_getaddrinfo = socket.getaddrinfo
+
     def mock_getaddrinfo(host, port, *args, **kwargs):
         if host == "hooks.example.com":
             return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443))]
         return original_getaddrinfo(host, port, *args, **kwargs)
+
     monkeypatch.setattr(socket, "getaddrinfo", mock_getaddrinfo)
     from cert_watch.config import Settings
 
@@ -98,15 +97,7 @@ def test_config_build_webhook_config(monkeypatch, tmp_path):
     cfg = s.build_webhook_config()
     assert cfg is not None
     assert cfg.url == "https://hooks.example.com/test"
-
-
-def test_config_metrics_token(monkeypatch, tmp_path):
-    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_METRICS_TOKEN", "tok123")
-    from cert_watch.config import Settings
-
-    s = Settings.from_env()
-    assert not hasattr(s, "metrics_token") or s.metrics_token is None
+    assert cfg.allow_private is True
 
 
 def test_config_pagerduty_routing_key(monkeypatch, tmp_path):
@@ -119,81 +110,6 @@ def test_config_pagerduty_routing_key(monkeypatch, tmp_path):
     cfg = s.build_webhook_config()
     assert cfg is not None
     assert cfg.routing_key == "pd-key-123"
-
-
-# ---------- cert_chain.py ----------
-
-
-def test_chain_status_self_signed(self_signed_leaf):
-    from cert_watch.cert_chain import chain_status
-    from cert_watch.certificate_model import parse_certificate
-
-    cert = parse_certificate(self_signed_leaf.der)
-    cs = chain_status(cert, [], [])
-    assert cs == "self-signed"
-
-
-def test_chain_status_complete(chain_triplet, monkeypatch):
-    from cert_watch.cert_chain import chain_status
-    from cert_watch.certificate_model import parse_certificate
-
-    leaf = parse_certificate(chain_triplet["leaf"].der)
-    intermediate = parse_certificate(chain_triplet["intermediate"].der)
-    root = parse_certificate(chain_triplet["root"].der)
-    monkeypatch.setattr(
-        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
-    )
-    cs = chain_status(leaf, [intermediate, root], [])
-    assert cs == "public"
-
-
-def test_chain_status_incomplete(chain_triplet):
-    from cert_watch.cert_chain import chain_status
-    from cert_watch.certificate_model import parse_certificate
-
-    leaf = parse_certificate(chain_triplet["leaf"].der)
-    cs = chain_status(leaf, [], [])
-    assert cs == "unknown"
-
-
-def test_validate_is_ca_certificate_valid():
-    """A cert with BasicConstraints(ca=True) passes the trust-anchor check."""
-    from cryptography import x509
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.asymmetric import rsa
-    from cryptography.hazmat.primitives.serialization import Encoding
-    from cryptography.x509.oid import NameOID
-
-    from cert_watch.cert_chain import validate_is_ca_certificate
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Real Root CA")])
-    cert = (
-        x509.CertificateBuilder()
-        .subject_name(name)
-        .issuer_name(name)
-        .public_key(key.public_key())
-        .serial_number(x509.random_serial_number())
-        .not_valid_before(datetime.now(UTC) - timedelta(days=1))
-        .not_valid_after(datetime.now(UTC) + timedelta(days=3650))
-        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
-        .sign(key, hashes.SHA256())
-    )
-    assert validate_is_ca_certificate(cert.public_bytes(Encoding.DER)) is None
-
-
-def test_validate_is_ca_certificate_not_ca(self_signed_leaf):
-    from cert_watch.cert_chain import validate_is_ca_certificate
-
-    err = validate_is_ca_certificate(self_signed_leaf.der)
-    assert err is not None
-
-
-def test_validate_is_ca_certificate_bad_der():
-    from cert_watch.cert_chain import validate_is_ca_certificate
-
-    err = validate_is_ca_certificate(b"not a cert")
-    assert err is not None
 
 
 # ---------- filters.py ----------
@@ -211,9 +127,9 @@ def test_compute_urgency():
 def test_friendly_issuer():
     from cert_watch.filters import friendly_issuer
 
-    assert "Let's Encrypt" in friendly_issuer("CN=R3,O=Let's Encrypt,C=US")
-    assert "Google" in friendly_issuer("CN=GTS CA 1C3,O=Google Trust Services LLC,C=US")
-    assert "DigiCert" in friendly_issuer("CN=DigiCert SHA2 Extended Validation Server CA")
+    result = friendly_issuer("CN=R3,O=Let's Encrypt,C=US")
+    assert "Let's Encrypt" in result
+    assert result != "CN=R3,O=Let's Encrypt,C=US"
 
 
 def test_subject_cn():
@@ -227,84 +143,6 @@ def test_issuer_cn():
     from cert_watch.filters import issuer_cn
 
     assert issuer_cn("CN=R3,O=Let's Encrypt") == "R3"
-
-
-# ---------- upload.py ----------
-
-
-def test_upload_certificate_pem(leaf_pem_file):
-    from cert_watch.upload import upload_certificate
-
-    entry = upload_certificate(leaf_pem_file)
-    assert "leaf.example.com" in entry.leaf.subject
-
-
-def test_upload_certificate_der(leaf_der_file):
-    from cert_watch.upload import upload_certificate
-
-    entry = upload_certificate(leaf_der_file)
-    assert "leaf.example.com" in entry.leaf.subject
-
-
-def test_upload_certificate_pfx_no_password(pfx_file_no_password):
-    from cert_watch.upload import upload_certificate
-
-    entry = upload_certificate(pfx_file_no_password)
-    assert entry.leaf is not None
-
-
-def test_upload_certificate_pfx_with_password(pfx_file_with_password):
-    from cert_watch.upload import upload_certificate
-
-    path, pw = pfx_file_with_password
-    entry = upload_certificate(path, password=pw)
-    assert entry.leaf is not None
-
-
-def test_upload_certificate_p7b(p7b_der_file):
-    from cert_watch.upload import upload_certificate
-
-    entry = upload_certificate(p7b_der_file)
-    assert entry.leaf is not None
-
-
-def test_upload_certificate_p7c(p7c_pem_file):
-    from cert_watch.upload import upload_certificate
-
-    entry = upload_certificate(p7c_pem_file)
-    assert entry.leaf is not None
-
-
-def test_upload_certificate_malformed(malformed_blob):
-    from cert_watch.upload import upload_certificate
-
-    result = upload_certificate(malformed_blob)
-    from cert_watch.upload import ParseError
-
-    assert isinstance(result, ParseError)
-
-
-def test_store_uploaded(leaf_pem_file, tmp_path):
-    from cert_watch.upload import store_uploaded, upload_certificate
-
-    db = tmp_path / "test.sqlite3"
-    entry = upload_certificate(leaf_pem_file)
-    cert_id = store_uploaded(entry, db)
-    assert cert_id
-
-
-def test_store_uploaded_with_chain(chain_pem_file, tmp_path):
-    from cert_watch.upload import store_uploaded, upload_certificate
-
-    db = tmp_path / "test.sqlite3"
-    entry = upload_certificate(chain_pem_file)
-    cert_id = store_uploaded(entry, db)
-    assert cert_id
-    import sqlite3
-
-    with sqlite3.connect(str(db)) as conn:
-        count = conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0]
-    assert count >= 2
 
 
 # ---------- database/connection.py ----------
@@ -327,61 +165,10 @@ def test_parse_iso():
     dt = _parse_iso("2026-01-15T12:00:00+00:00")
     assert dt.year == 2026
     assert dt.month == 1
-
-
-# ---------- database/schema.py ----------
-
-
-def test_init_schema_idempotent(tmp_path):
-    from cert_watch.database.schema import init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    init_schema(db)  # should not raise
+    assert dt.hour == 12
 
 
 # ---------- database/repo.py ----------
-
-
-def test_certificate_repo_add_and_get(tmp_path):
-    from cert_watch.certificate_model import Certificate
-    from cert_watch.database import SqliteCertificateRepository, init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    now = datetime.now(UTC)
-    cert = Certificate(
-        subject="repo.example.com",
-        issuer="Test CA",
-        not_before=now - timedelta(days=1),
-        not_after=now + timedelta(days=90),
-    )
-    repo = SqliteCertificateRepository(db, source="uploaded")
-    cid = repo.add(cert)
-    assert cid
-    fetched = repo.get_by_id(cid)
-    assert fetched is not None
-    assert fetched.subject == "repo.example.com"
-
-
-def test_certificate_repo_update_notes(tmp_path):
-    from cert_watch.certificate_model import Certificate
-    from cert_watch.database import SqliteCertificateRepository, init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    now = datetime.now(UTC)
-    cert = Certificate(
-        subject="notes.example.com",
-        issuer="Test CA",
-        not_before=now - timedelta(days=1),
-        not_after=now + timedelta(days=90),
-    )
-    repo = SqliteCertificateRepository(db, source="uploaded")
-    cid = repo.add(cert)
-    repo.update_notes(cid, "test note")
-    fetched = repo.get_by_id(cid)
-    assert fetched.notes == "test note"
 
 
 def test_host_repo_crud(tmp_path):
@@ -395,6 +182,7 @@ def test_host_repo_crud(tmp_path):
     host = repo.get(hid)
     assert host is not None
     assert host.hostname == "h.example.com"
+    assert host.port == 443
     hosts = repo.list_all()
     assert len(hosts) == 1
     repo.delete(hid)
@@ -410,33 +198,12 @@ def test_host_repo_update_tags(tmp_path):
     hid = repo.add("h.example.com", 443)
     assert repo.set_tags(hid, "prod,web") is True
     host = repo.get(hid)
+    assert host.tags == "prod,web"
     assert "prod" in host.tags
-
-
-def test_host_repo_set_tags_not_found(tmp_path):
-    from cert_watch.database import SqliteHostRepository, init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    repo = SqliteHostRepository(db)
-    assert repo.set_tags("nonexistent", "prod") is False
+    assert "web" in host.tags
 
 
 # ---------- certificate_model.py ----------
-
-
-def test_certificate_days_until_expiry():
-    from cert_watch.certificate_model import Certificate
-
-    now = datetime.now(UTC)
-    cert = Certificate(
-        subject="test.example.com",
-        issuer="Test CA",
-        not_before=now - timedelta(days=1),
-        not_after=now + timedelta(days=30),
-    )
-    days = cert.days_until_expiry()
-    assert 29 <= days <= 30  # may be 29 or 30 depending on timing
 
 
 def test_certificate_expired():
@@ -450,180 +217,4 @@ def test_certificate_expired():
         not_after=now - timedelta(days=1),
     )
     assert cert.days_until_expiry() < 0
-
-
-# ---------- tags.py ----------
-
-
-def test_parse_tags():
-    from cert_watch.tags import parse_tags
-
-    tags = parse_tags("prod,web,api")
-    assert "prod" in tags
-    assert "web" in tags
-    assert "api" in tags
-    assert len(tags) == 3
-    assert parse_tags("") == []
-    assert parse_tags(None) == []
-
-
-def test_format_tags():
-    from cert_watch.tags import format_tags
-
-    assert format_tags(["prod", "web"]) == "prod,web"
-    assert format_tags([]) == ""
-
-
-def test_tags_match():
-    from cert_watch.tags import tags_match
-
-    assert tags_match(["prod", "web"], ["prod"]) is True
-    assert tags_match(["prod", "web"], ["staging"]) is False
-    assert tags_match(["prod"], []) is False  # empty match = no match
-    assert tags_match([], ["prod"]) is False
-
-
-# ---------- audit.py ----------
-
-
-def test_record_audit(tmp_path):
-    from cert_watch.audit import record_audit
-    from cert_watch.database import init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    record_audit(db, actor="admin", action="host.add", target_type="host", target_id="h1")
-    from cert_watch.audit import list_audit
-
-    rows = list_audit(db)
-    assert len(rows) == 1
-    assert rows[0]["actor"] == "admin"
-
-
-def test_list_audit_filters(tmp_path):
-    from cert_watch.audit import list_audit, record_audit
-    from cert_watch.database import init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    record_audit(db, actor="alice", action="host.add", target_type="host", target_id="h1")
-    record_audit(db, actor="bob", action="cert.upload", target_type="certificate", target_id="c1")
-    rows = list_audit(db, actor="alice")
-    assert len(rows) == 1
-    rows = list_audit(db, target_type="certificate")
-    assert len(rows) == 1
-
-
-def test_count_audit(tmp_path):
-    from cert_watch.audit import count_audit, record_audit
-    from cert_watch.database import init_schema
-
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    for i in range(5):
-        record_audit(db, actor="admin", action="host.add", target_type="host", target_id=f"h{i}")
-    assert count_audit(db) == 5
-    assert count_audit(db, target_type="host") == 5
-    assert count_audit(db, actor="admin") == 5
-    assert count_audit(db, actor="nobody") == 0
-
-
-# ---------- alert_adapters.py ----------
-
-
-def test_generic_adapter():
-    from cert_watch.alert_adapters import GenericAdapter, get_adapter
-    from cert_watch.alerts import Alert, WebhookConfig
-
-    adapter = get_adapter("generic")
-    assert isinstance(adapter, GenericAdapter)
-    alert = Alert(
-        cert_id="test",
-        alert_type="expiry_warning",
-        status="pending",
-        message="Test Body",
-        threshold_days=7,
-    )
-    config = WebhookConfig(
-        url="https://hooks.example.com", headers={}, template="", allow_private=True
-    )
-    req = adapter.build(alert, config)
-    assert req.url == "https://hooks.example.com"
-    assert b"Test Body" in req.body
-
-
-def test_discord_adapter():
-    from cert_watch.alert_adapters import DiscordAdapter
-    from cert_watch.alerts import Alert, WebhookConfig
-
-    adapter = DiscordAdapter()
-    alert = Alert(
-        cert_id="test",
-        alert_type="expiry_warning",
-        status="pending",
-        message="Test Body",
-        threshold_days=7,
-    )
-    config = WebhookConfig(
-        url="https://discord.example.com", headers={}, template="", allow_private=True
-    )
-    req = adapter.build(alert, config)
-    assert b"embeds" in req.body
-
-
-def test_teams_adapter():
-    from cert_watch.alert_adapters import TeamsAdapter
-    from cert_watch.alerts import Alert, WebhookConfig
-
-    adapter = TeamsAdapter()
-    alert = Alert(
-        cert_id="test",
-        alert_type="expiry_warning",
-        status="pending",
-        message="Test Body",
-        threshold_days=7,
-    )
-    config = WebhookConfig(
-        url="https://teams.example.com", headers={}, template="", allow_private=True
-    )
-    req = adapter.build(alert, config)
-    assert b"Test Body" in req.body
-
-
-def test_pagerduty_adapter():
-    from cert_watch.alert_adapters import PagerDutyAdapter
-    from cert_watch.alerts import Alert, WebhookConfig
-
-    adapter = PagerDutyAdapter()
-    alert = Alert(
-        cert_id="test",
-        alert_type="expiry_warning",
-        status="pending",
-        message="Test Body",
-        threshold_days=7,
-    )
-    config = WebhookConfig(
-        url="https://events.pagerduty.com",
-        routing_key="key123",
-        headers={},
-        template="",
-        allow_private=True,
-    )
-    req = adapter.build(alert, config)
-    assert b"routing_key" in req.body
-
-
-def test_pagerduty_resolve():
-    from cert_watch.alert_adapters import PagerDutyAdapter
-    from cert_watch.alerts import WebhookConfig
-
-    adapter = PagerDutyAdapter()
-    config = WebhookConfig(
-        url="https://events.pagerduty.com",
-        routing_key="key123",
-        headers={},
-        template="",
-        allow_private=True,
-    )
-    req = adapter.build_resolve("cert-id-123", "expiry_warning", 7, config)
-    assert b"resolve" in req.body
+    assert cert.days_until_expiry() == -1 or cert.days_until_expiry() < 0

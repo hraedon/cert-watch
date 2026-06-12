@@ -264,6 +264,8 @@ body {
 .cw-pill.healthy .dot  { background: var(--ok); }
 .cw-pill.gray     { color: var(--text-3); }
 .cw-pill.gray .dot     { background: var(--text-3); }
+.cw-pill.neutral  { color: var(--text-2); }
+.cw-pill.neutral .dot  { background: var(--text-2); }
 
 /* ---------- CHIPS (SANs, source, etc.) ---------- */
 .cw-chip {
@@ -633,12 +635,17 @@ body {
 .cw-text-crit         { color: var(--crit); }
 .cw-text-expired      { color: var(--expired); }
 .cw-text-text         { color: var(--text); }
+.cw-text-text-1       { color: var(--text); }
 .cw-text-text-2       { color: var(--text-2); }
 .cw-p-slide-body   { flex: 1; overflow: auto; padding: 20px; }
 .cw-p-slide-top     { padding: 16px 20px 0; }
 .cw-text-text-3     { color: var(--text-3); }
+.cw-text-text-crit   { color: var(--crit); }
+.cw-text-text-ok     { color: var(--ok); }
+.cw-text-text-warn   { color: var(--warn); }
 
 /* ---- FONT UTILITIES ---- */
+.cw-fz-10                           { font-size: 10px; }
 .cw-fz-10-5, .cw-fz-11, .cw-fz-11-5 { font-size: var(--fs-xs); }
 .cw-fz-12, .cw-fz-12-5              { font-size: var(--fs-sm); }
 .cw-fz-13, .cw-fz-13-5              { font-size: var(--fs-base); }
@@ -649,6 +656,7 @@ body {
 
 .cw-fw-500     { font-weight: 500; }
 .cw-fw-600     { font-weight: 600; }
+.cw-fw-700     { font-weight: 700; }
 
 .cw-ls-dot-04  { letter-spacing: -.4px; }
 .cw-ls-dot-5   { letter-spacing: -.5px; }
@@ -683,8 +691,11 @@ body {
 .cw-mt-20                        { margin-top: var(--space-5); }
 .cw-mt-24                        { margin-top: var(--space-6); }
 .cw-mt-0  { margin-top: 0; }
+.cw-mt-18 { margin-top: 18px; }
 
+.cw-mb-2                         { margin-bottom: 2px; }
 .cw-mb-4,.cw-mb-6                { margin-bottom: var(--space-1); }
+.cw-mb-7,.cw-mb-8,.cw-mb-9,.cw-mb-10 { margin-bottom: var(--space-2); }
 .cw-mb-12                        { margin-bottom: var(--space-3); }
 .cw-mb-14,.cw-mb-16              { margin-bottom: var(--space-4); }
 .cw-mb-18                        { margin-bottom: var(--space-5); }
@@ -887,6 +898,14 @@ body {
 
 /* ---- OTHER MARGINS ---- */
 .cw-mb-15  { margin-bottom: 15px; }
+
+.cw-mt-10  { margin-top: 10px; }
+.cw-mb-8   { margin-bottom: var(--space-2); }
+.cw-mb-13  { margin-bottom: 13px; }
+.cw-mr-12  { margin-right: var(--space-3); }
+.cw-p-12-14 { padding: 12px 14px; }
+
+.italic { font-style: italic; }
 
 /* ---- WORD BREAK ---- */
 .cw-word-break { word-break: break-word; }
@@ -1124,6 +1143,61 @@ body {
 .cw-segment.active { background: var(--accent-soft); color: var(--accent); }
 .cw-segment-count { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--border-2); color: var(--text-3); font-size: 11px; font-weight: 600; }
 .cw-segment.active .cw-segment-count { background: var(--accent); color: #fff; }
+
+.cw-heading-3 {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  letter-spacing: -.2px;
+}
+
+.cw-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 40px;
+  height: 22px;
+  cursor: pointer;
+}
+.cw-toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+.cw-toggle-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border-2);
+  border-radius: 11px;
+  transition: background .2s;
+}
+.cw-toggle input:checked + .cw-toggle-slider {
+  background: var(--accent);
+}
+.cw-toggle-slider::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform .2s;
+}
+.cw-toggle input:checked + .cw-toggle-slider::after {
+  transform: translateX(18px);
+}
+
+.cw-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
 
 /* ---------- NEW badge ---------- */
 .cw-badge-new { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }

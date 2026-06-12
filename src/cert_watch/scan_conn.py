@@ -22,6 +22,7 @@ def _probe_hsts(
     pinned_ip: str | None = None,
     *,
     require_443: bool = True,
+    verify: bool = False,
 ) -> bool | None:
     """Check if an HTTPS server sends Strict-Transport-Security.
 
@@ -42,6 +43,9 @@ def _probe_hsts(
         import http.client
 
         ctx = ssl.create_default_context()
+        if not verify:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
         if pinned_ip:
             sock = socket.create_connection((pinned_ip, port), timeout=HSTS_TIMEOUT)
             try:

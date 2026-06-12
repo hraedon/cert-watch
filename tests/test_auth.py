@@ -110,6 +110,39 @@ def test_validate_session_expired(monkeypatch):
     assert validate_session(token) is None
 
 
+# ---------- session_ttl parameter on validate_session ----------
+
+
+def test_validate_session_with_explicit_ttl_valid():
+    token = create_session("ttl-user")
+    assert validate_session(token, session_ttl=99999) == "ttl-user"
+
+
+def test_validate_session_with_ttl_zero_expires():
+    token = create_session("ttl-zero")
+    assert validate_session(token, session_ttl=0) is None
+
+
+def test_validate_session_ttl_overrides_env(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SESSION_TTL", "1")
+    token = create_session("ttl-env")
+    assert validate_session(token, session_ttl=99999) == "ttl-env"
+
+
+def test_validate_session_env_ttl_overrides_module_constant(monkeypatch):
+    import cert_watch.auth as auth_mod
+    monkeypatch.setenv("CERT_WATCH_SESSION_TTL", "99999")
+    monkeypatch.setattr(auth_mod, "SESSION_TTL", 0)
+    token = create_session("ttl-env-wins")
+    assert validate_session(token) == "ttl-env-wins"
+
+
+def test_validate_session_no_ttl_no_env_uses_module_constant(monkeypatch):
+    monkeypatch.delenv("CERT_WATCH_SESSION_TTL", raising=False)
+    token = create_session("ttl-module")
+    assert validate_session(token) == "ttl-module"
+
+
 # ---------- AuthResult dataclass tests (BC-051 regression) ----------
 
 
@@ -2083,7 +2116,7 @@ class TestOAuthJWKSVerification:
         assert result.success is False
         assert "authlib not installed" in result.error
 
-        """End-to-end test: complete_oauth_flow verifies the ID token via JWKS."""
+    def test_complete_flow_verifies_id_token_jwks(self):
         key, _, jwks = _generate_rsa_jwk()
         provider = _make_oauth_provider(jwks=jwks)
 

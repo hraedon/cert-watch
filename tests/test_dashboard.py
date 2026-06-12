@@ -181,7 +181,7 @@ def test_dashboard_pagination_empty():
     with TestClient(app) as client:
         r = client.get("/")
     assert r.status_code == 200
-    assert "pagination" not in r.text or "Page" not in r.text
+    assert "pagination" not in r.text and "Page" not in r.text
 
 
 def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):

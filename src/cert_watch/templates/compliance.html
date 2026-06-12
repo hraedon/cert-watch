@@ -63,7 +63,7 @@
     <h1>TLS Certificate Compliance Report</h1>
     <div class="cmp-sub">
       {{ report.scope_description }}
-      &middot; Generated {{ report.generated_at[:19] }} UTC
+      &middot; Generated {{ report.generated_at[:19]|replace('T', ' ') }} UTC
       {% if report.version %} &middot; cert-watch v{{ report.version }}{% endif %}
     </div>
   </div>
@@ -162,7 +162,7 @@
   <div class="cmp-footer">
     Content SHA-256: {{ report.content_sha256 }}<br>
     HMAC-SHA256 signature: {{ report.signature }}<br>
-    Generated at: {{ report.generated_at }}<br>
+    Generated at: {{ report.generated_at|replace('T', ' ') }}<br>
     Verify: <code>cert-watch verify-report &lt;file&gt;</code>
   </div>
 </div>

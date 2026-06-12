@@ -316,7 +316,8 @@ async def lifespan(app: FastAPI):
                 ),
             )
 
-    _weekly_digest_day: int = -1
+    import datetime as _dt_init
+    _weekly_digest_day: int = _dt_init.datetime.now(_dt_init.UTC).weekday()
 
     def _alerts() -> dict:
         from cert_watch.alerts import (

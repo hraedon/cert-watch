@@ -156,7 +156,7 @@ def test_team_pagination_defaults_to_page_1(tmp_path):
         r = client.get("/team")
     assert r.status_code == 200
     # Single cert — no pagination controls needed
-    assert "Page 1 of 1" not in r.text or "cw-pagination" not in r.text
+    assert "Page 1 of 1" not in r.text and "cw-pagination" not in r.text
 
 
 def test_team_pagination_with_many_certs(tmp_path):
