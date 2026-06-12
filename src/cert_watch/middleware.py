@@ -393,8 +393,10 @@ def get_auth_context(request: Request) -> dict:
         except (OSError, ValueError, Exception):
             pass
 
+    auth_provider = getattr(request.app.state, "auth_provider", None)
+    no_auth = auth_provider is None or isinstance(auth_provider, NoAuthProvider)
     is_admin = (
-        auth_ctx.is_admin if auth_ctx is not None else True
+        auth_ctx.is_admin if auth_ctx is not None else no_auth
     )
 
     return {

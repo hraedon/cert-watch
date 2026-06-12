@@ -83,7 +83,12 @@ class LocalAdminProvider(AuthProvider):
         admin hash (e.g. n=2**16, or an imported third-party hash with weaker
         params) would otherwise make the verify path cost differently than this
         dummy, reintroducing the very timing oracle this method exists to close.
+
+        Password is capped at 1024 bytes to prevent DoS via unbounded scrypt
+        input (WI-034).
         """
+        if len(password) > 1024:
+            password = password[:1024]
         n, r, p = _DUMMY_N, _DUMMY_R, _DUMMY_P
         parts = hash_ref.split("$") if hash_ref else []
         if len(parts) == 6:
@@ -107,6 +112,9 @@ class LocalAdminProvider(AuthProvider):
     def authenticate(self, username: str, password: str) -> AuthResult:
         if not username or not password:
             return AuthResult(success=False, error="username and password required")
+        if len(password) > 1024:
+            self._dummy_verify(password[:1024], self.password_hash)
+            return AuthResult(success=False, error="invalid credentials")
 
         # Plan 040: try the users table first (full local auth)
         if self.db_path:

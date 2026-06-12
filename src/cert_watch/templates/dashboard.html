@@ -85,7 +85,7 @@
   <div class="cw-stats cw-mb-18">
     {{ stat_card('default', 'shield', 'Tracked certificates', total_entries, '') }}
     {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
-    {{ stat_card('warning' if (ns.critical + ns.warning) else 'neutral', 'clock', 'Expiring within 14 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
+    {{ stat_card('warning' if (ns.critical + ns.warning) else 'neutral', 'clock', 'Expiring within 30 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
     {{ stat_card('ok', 'check-circle', 'Healthy', ns.healthy, 'no action needed') }}
   </div>
 

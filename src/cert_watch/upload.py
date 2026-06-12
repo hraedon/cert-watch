@@ -17,7 +17,7 @@ from cert_watch.certificate_model import (
     extract_chain_from_pem,
     parse_certificate,
 )
-from cert_watch.database import SqliteCertificateRepository, init_schema
+from cert_watch.database import init_schema
 
 
 @dataclass
@@ -96,8 +96,10 @@ def _parse_pkcs12(
 ) -> UploadedEntry | ParseError:
     try:
         _key, cert, additional = pkcs12.load_key_and_certificates(data, password)
-    except Exception as exc:  # noqa: BLE001 — cryptography raises various Errors
-        return ParseError(error_message=f"could not parse PKCS#12: {exc}")
+    except Exception:  # noqa: BLE001 — cryptography raises various Errors
+        return ParseError(
+            error_message="could not parse PKCS#12: invalid password or corrupted file"
+        )
     if cert is None:
         return ParseError(error_message="PKCS#12 contains no certificate")
     leaf_parsed = parse_certificate(cert.public_bytes(Encoding.DER))
@@ -127,18 +129,82 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
 
 
 def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
-    """Persist leaf + chain via dedicated repos so parent_cert_id is wired correctly."""
+    """Persist leaf + chain in a single transaction to avoid partial uploads."""
+    import json
+    import uuid
+
+    from cert_watch.database.connection import _connect, _iso
+
     init_schema(repo_path)
     chain_valid = validate_chain_order([entry.leaf, *entry.chain])
-    leaf_repo = SqliteCertificateRepository(
-        repo_path, source="uploaded", chain_valid=chain_valid
-    )
-    leaf_id = leaf_repo.add(entry.leaf)
-    for chain_cert in entry.chain:
-        chain_repo = SqliteCertificateRepository(
-            repo_path, source="uploaded", parent_cert_id=leaf_id
+    cv: int | None = None if chain_valid is None else (1 if chain_valid else 0)
+    leaf_id = str(uuid.uuid4())
+    now = _iso(datetime.now(UTC))
+
+    with _connect(repo_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO certificates
+            (id, subject, issuer, not_before, not_after, san_dns_names,
+             fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+             parent_cert_id, chain_valid, replaces_cert_id, notes,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                leaf_id,
+                entry.leaf.subject,
+                entry.leaf.issuer,
+                _iso(entry.leaf.not_before),
+                _iso(entry.leaf.not_after),
+                json.dumps(entry.leaf.san_dns_names),
+                entry.leaf.fingerprint_sha256,
+                entry.leaf.raw_der,
+                "uploaded",
+                "",
+                0,
+                1,
+                None,
+                cv,
+                None,
+                "",
+                now,
+                now,
+            ),
         )
-        chain_repo.add(chain_cert)
+        for chain_cert in entry.chain:
+            chain_id = str(uuid.uuid4())
+            conn.execute(
+                """
+                INSERT INTO certificates
+                (id, subject, issuer, not_before, not_after, san_dns_names,
+                 fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
+                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chain_id,
+                    chain_cert.subject,
+                    chain_cert.issuer,
+                    _iso(chain_cert.not_before),
+                    _iso(chain_cert.not_after),
+                    json.dumps(chain_cert.san_dns_names),
+                    chain_cert.fingerprint_sha256,
+                    chain_cert.raw_der,
+                    "uploaded",
+                    "",
+                    0,
+                    0,
+                    leaf_id,
+                    None,
+                    None,
+                    "",
+                    now,
+                    now,
+                ),
+            )
+        conn.commit()
     try:
         from cert_watch.events import Event, emit_event
 

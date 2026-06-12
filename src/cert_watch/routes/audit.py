@@ -19,7 +19,7 @@ router = APIRouter()
 templates = get_templates()
 
 
-@router.get("/audit", response_class=HTMLResponse)
+@router.get("/audit", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 def audit_page(
     request: Request,
     target_type: str = "",

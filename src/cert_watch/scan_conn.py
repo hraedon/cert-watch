@@ -183,11 +183,12 @@ def _scan_via_openssl(
         return [], ""
     if hostname.startswith("-"):
         return [], ""
+    connect_host = f"[{host}]" if ":" in host else host
     try:
         proc = subprocess.run(
             [
                 "openssl", "s_client",
-                "-connect", f"{host}:{port}",
+                "-connect", f"{connect_host}:{port}",
                 "-servername", hostname,
                 "-showcerts",
             ],
