@@ -132,13 +132,33 @@ def _default_data_dir() -> Path:
     return Path(_default_data_dir_str(os.name, os.environ.get("PROGRAMDATA")))
 
 
-def _parse_int(raw: str, default: int, name: str) -> int:
-    """Parse an integer env var with fallback and warning on invalid input."""
+def _validate_range(
+    value: int, name: str,
+    min_value: int | None = None, max_value: int | None = None,
+) -> int:
+    """Raise ValueError if *value* falls outside the allowed range."""
+    if min_value is not None and value < min_value:
+        raise ValueError(f"{name}={value} is below minimum {min_value}")
+    if max_value is not None and value > max_value:
+        raise ValueError(f"{name}={value} exceeds maximum {max_value}")
+    return value
+
+
+def _parse_int(raw: str, default: int, name: str, *,
+               min_value: int | None = None, max_value: int | None = None) -> int:
+    """Parse an integer env var with fallback, warning on invalid input, and range check.
+
+    On non-integer input, warns and returns *default*. On out-of-range input,
+    raises ``ValueError`` so the application fails fast at startup rather than
+    silently misbehaving (e.g. ``CERT_WATCH_SCHED_HOUR=25``).
+    """
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         logger.warning("Invalid %s=%r, using default %s", name, raw, default)
         return default
+    _validate_range(value, name, min_value, max_value)
+    return value
 
 
 def _parse_float(raw: str, default: float, name: str) -> float:

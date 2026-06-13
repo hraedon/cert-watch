@@ -1413,6 +1413,18 @@ def _make_oauth_provider(
 @pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
 class TestOAuthJWKSVerification:
 
+    def _mock_fetch_token(
+        self,
+        provider: "OAuthProvider",
+        response: dict | Exception | None,
+    ) -> MagicMock:
+        if isinstance(response, Exception):
+            mock = MagicMock(side_effect=response)
+        else:
+            mock = MagicMock(return_value=response or {})
+        provider._fetch_token = mock
+        return mock
+
     def test_valid_token_verified(self):
         key, jwk, jwks = _generate_rsa_jwk()
         provider = _make_oauth_provider(jwks=jwks)
@@ -1818,31 +1830,23 @@ class TestOAuthJWKSVerification:
     def test_complete_flow_token_exchange_error(self):
         """complete_oauth_flow handles token endpoint error."""
         provider = _make_oauth_provider(jwks=None)
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.side_effect = OSError("connection reset")
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
+        self._mock_fetch_token(provider, OSError("connection reset"))
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "OAuth authentication failed" in result.error
 
     def test_complete_flow_userinfo_endpoint_returns_500(self, monkeypatch):
         """complete_oauth_flow treats 500 as empty userinfo."""
         provider = _make_oauth_provider(jwks=None)
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
-        mock_session = MagicMock()
-        mock_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
-
-        def fake_userinfo(url, headers=None, timeout=None, allow_private=False, allowed_subnets=()):
+        def fake_userinfo(
+            url, headers=None, timeout=None,
+            allow_private=False, allowed_subnets=(), **kwargs,
+        ):
             resp = MagicMock()
             resp.status = 500
             resp.read.return_value = b'{}'
@@ -1853,13 +1857,10 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "could not determine username" in result.error
 
@@ -1867,20 +1868,11 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow returns failure when no id_token and no userinfo."""
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["userinfo_endpoint"] = ""
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "could not determine username" in result.error
 
@@ -1888,16 +1880,82 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow returns failure when token_endpoint is not configured."""
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["token_endpoint"] = ""
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = MagicMock()
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "token_endpoint not configured" in result.error
+
+    def test_fetch_token_non_2xx_raises_value_error(self, monkeypatch):
+        """_fetch_token treats a non-2xx token response as an exchange failure."""
+        provider = _make_oauth_provider()
+
+        def fake_urlopen(*a, **kw):
+            resp = MagicMock()
+            resp.status = 400
+            resp.read.return_value = b'{"error": "invalid_grant"}'
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda *a: None
+            return resp
+
+        monkeypatch.setattr(
+            "cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_urlopen,
+        )
+        monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
+
+        with pytest.raises(ValueError, match="token endpoint returned 400"):
+            provider._fetch_token("http://idp.example/token", "code", "https://app/callback")
+
+    def test_fetch_token_non_2xx_includes_error_body(self, monkeypatch):
+        """_fetch_token includes a truncated error body in the ValueError."""
+        provider = _make_oauth_provider()
+
+        def fake_urlopen(*a, **kw):
+            resp = MagicMock()
+            resp.status = 403
+            resp.read.return_value = (
+                b'{"error": "access_denied", "error_description": "Insufficient scope"}'
+            )
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda *a: None
+            return resp
+
+        monkeypatch.setattr(
+            "cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_urlopen,
+        )
+        monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
+
+        with pytest.raises(ValueError, match=r"token endpoint returned 403:.*access_denied"):
+            provider._fetch_token("http://idp.example/token", "code", "https://app/callback")
+
+    def test_fetch_token_caps_response_size(self, monkeypatch):
+        """_fetch_token reads at most _TOKEN_MAX_BYTES from a token response."""
+        from cert_watch.auth.oauth_provider import _TOKEN_MAX_BYTES
+        provider = _make_oauth_provider()
+
+        read_args: list[int | None] = []
+        payload = {"access_token": "at", "token_type": "Bearer"}
+
+        def fake_urlopen(*a, **kw):
+            resp = MagicMock()
+            resp.status = 200
+            def fake_read(n=None):
+                read_args.append(n)
+                return json.dumps(payload).encode()
+            resp.read = fake_read
+            resp.__enter__ = lambda s: s
+            resp.__exit__ = lambda *a: None
+            return resp
+
+        monkeypatch.setattr(
+            "cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_urlopen,
+        )
+        monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
+
+        result = provider._fetch_token("http://idp.example/token", "code", "https://app/callback")
+        assert result == payload
+        assert read_args == [_TOKEN_MAX_BYTES]
 
     def test_safe_algs_filters_unsafe(self):
         """_safe_algs strips symmetric / none algorithms."""
@@ -1955,12 +2013,7 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow emits warning when userinfo lacks nonce without id_token."""
         import logging
         provider = _make_oauth_provider(jwks=None)
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
         def fake_userinfo(*a, **kw):
             resp = MagicMock()
@@ -1973,12 +2026,10 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
         # Use a state WITH a nonce so the BC-071 warning fires
         signed_state = _sign_state("test-state", nonce="test-nonce")
         ctx = caplog.at_level(logging.WARNING, logger="cert_watch.auth")
-        with ctx, _inject_mock_authlib(mock_authlib):
+        with ctx:
             result = provider.complete_oauth_flow(
                 "auth-code", "http://localhost/callback", state=signed_state,
             )
@@ -2000,12 +2051,7 @@ class TestOAuthJWKSVerification:
     def test_complete_flow_userinfo_with_roles_groups(self, monkeypatch):
         """complete_oauth_flow extracts roles and groups from userinfo response."""
         provider = _make_oauth_provider(jwks=None)
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
         def fake_userinfo(*a, **kw):
             resp = MagicMock()
@@ -2023,13 +2069,10 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is True
         assert result.username == "alice"
         assert result.roles == ["admin", "viewer"]
@@ -2038,12 +2081,7 @@ class TestOAuthJWKSVerification:
     def test_complete_flow_userinfo_mismatch_nonce_rejected(self, monkeypatch):
         """complete_oauth_flow rejects when userinfo nonce does not match."""
         provider = _make_oauth_provider(jwks=None)
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
         def fake_userinfo(*a, **kw):
             resp = MagicMock()
@@ -2059,13 +2097,10 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
         signed_state = _sign_state("test-state", nonce="expected-nonce")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "nonce mismatch" in result.error.lower()
 
@@ -2073,48 +2108,13 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow handles SSRF during token exchange."""
         from cert_watch.http_client import SSRFBlockedError
         provider = _make_oauth_provider(jwks=None)
-
-        mock_session = MagicMock()
-        mock_session.fetch_token.side_effect = SSRFBlockedError("blocked")
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
+        self._mock_fetch_token(provider, SSRFBlockedError("blocked"))
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is False
         assert "authenticat" in result.error.lower()
-
-    def test_complete_flow_authlib_not_installed(self, monkeypatch):
-        """complete_oauth_flow returns failure when authlib is not installed."""
-        provider = _make_oauth_provider(jwks=None)
-        # Block authlib by removing it from sys.modules temporarily and injecting an ImportError
-        saved_modules = dict(sys.modules)
-        for key in list(sys.modules.keys()):
-            if key.startswith("authlib"):
-                del sys.modules[key]
-
-        # Patch __import__ to simulate authlib not being installed
-        import builtins
-        original_import = builtins.__import__
-
-        def fake_import(name, *args, **kwargs):
-            if name.startswith("authlib"):
-                raise ModuleNotFoundError("No module named 'authlib'")
-            return original_import(name, *args, **kwargs)
-
-        monkeypatch.setattr(builtins, "__import__", fake_import)
-        try:
-            result = provider.complete_oauth_flow("c", "r", state="s")
-        finally:
-            # Restore __import__ and sys.modules
-            monkeypatch.undo()
-            sys.modules.update(saved_modules)
-
-        assert result.success is False
-        assert "authlib not installed" in result.error
 
     def test_complete_flow_verifies_id_token_jwks(self):
         key, _, jwks = _generate_rsa_jwk()
@@ -2131,22 +2131,17 @@ class TestOAuthJWKSVerification:
         }
         id_token = _sign_jwt(claims, key)
 
-        mock_oauth_session = MagicMock()
-        mock_oauth_session.fetch_token.return_value = {
+        self._mock_fetch_token(provider, {
             "access_token": "at-123",
             "token_type": "Bearer",
             "id_token": id_token,
-        }
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        })
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
-            assert result.success is True
-            assert result.username == "alice@example.com"
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
+        assert result.success is True
+        assert result.username == "alice@example.com"
 
     def test_complete_flow_populates_roles_and_groups(self):
         """Plan 034 / 2b: app-role and group-GUID claims reach AuthResult so the
@@ -2168,19 +2163,15 @@ class TestOAuthJWKSVerification:
         }
         id_token = _sign_jwt(claims, key)
 
-        mock_oauth_session = MagicMock()
-        mock_oauth_session.fetch_token.return_value = {
+        self._mock_fetch_token(provider, {
             "access_token": "at-123",
             "token_type": "Bearer",
             "id_token": id_token,
-        }
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        })
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
         assert result.success is True
         assert result.roles == ["admin"]
         assert result.groups == [admins_guid]
@@ -2207,43 +2198,23 @@ class TestOAuthJWKSVerification:
         }
         id_token = _sign_jwt(claims, wrong_key, kid="bad-key")
 
-        mock_oauth_session = MagicMock()
-        mock_oauth_session.fetch_token.return_value = {
+        self._mock_fetch_token(provider, {
             "access_token": "at-123",
             "token_type": "Bearer",
             "id_token": id_token,
-        }
-        mock_userinfo_resp = MagicMock()
-        mock_userinfo_resp.status_code = 200
-        mock_userinfo_resp.json.return_value = {"preferred_username": "real-user"}
-        mock_oauth_session.get.return_value = mock_userinfo_resp
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
+        })
         signed_state = _sign_state("test-state")
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
-            assert result.success is False
-            assert "ID token verification failed" in result.error
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
+        assert result.success is False
+        assert "ID token verification failed" in result.error
 
     def test_complete_flow_no_id_token_uses_userinfo(self, monkeypatch):
         """When no ID token is returned, userinfo endpoint is used."""
         provider = _make_oauth_provider(jwks=None)
+        self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
-        mock_oauth_session = MagicMock()
-        mock_oauth_session.fetch_token.return_value = {
-            "access_token": "at-123",
-            "token_type": "Bearer",
-        }
-        mock_userinfo_resp = MagicMock()
-        mock_userinfo_resp.status_code = 200
-        mock_userinfo_resp.json.return_value = {"email": "bob@example.com"}
-        mock_oauth_session.get.return_value = mock_userinfo_resp
-
-        mock_authlib = MagicMock()
-        mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_oauth_session
         signed_state = _sign_state("test-state")
         # Bypass SSRF validation and HTTP open in test (DNS resolution won't work
         # for fake host)
@@ -2262,12 +2233,11 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr(
             "cert_watch.auth.oauth_provider.ssrf_safe_urlopen", _mock_urlopen,
         )
-        with _inject_mock_authlib(mock_authlib):
-            result = provider.complete_oauth_flow(
-                "auth-code", "http://localhost/callback", state=signed_state,
-            )
-            assert result.success is True
-            assert result.username == "bob@example.com"
+        result = provider.complete_oauth_flow(
+            "auth-code", "http://localhost/callback", state=signed_state,
+        )
+        assert result.success is True
+        assert result.username == "bob@example.com"
 
 
 class TestValidateClaimsManual:

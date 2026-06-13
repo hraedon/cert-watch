@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
-from cert_watch.routes.settings.core import _ALERT_KEYS, _save_config_section
+from cert_watch.routes.settings.config import _ALERT_KEYS
+from cert_watch.routes.settings.core import _save_config_section
 
 router = APIRouter()
 

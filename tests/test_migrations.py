@@ -30,6 +30,218 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+# v0.6.x baseline DDL — the tables and columns that existed before numbered
+# migrations were introduced. Newer tables/columns are added by ensure_base()
+# (catch-up) and the migration runner during the upgrade under test.
+_V06X_BASELINE_DDL = """
+CREATE TABLE IF NOT EXISTS certificates (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    san_dns_names TEXT NOT NULL,
+    fingerprint_sha256 TEXT NOT NULL,
+    raw_der BLOB NOT NULL,
+    source TEXT NOT NULL DEFAULT 'unknown',
+    hostname TEXT,
+    port INTEGER,
+    is_leaf INTEGER NOT NULL DEFAULT 1,
+    parent_cert_id TEXT,
+    chain_valid INTEGER,
+    replaces_cert_id TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    id TEXT PRIMARY KEY,
+    cert_id TEXT NOT NULL,
+    alert_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    message TEXT NOT NULL,
+    threshold_days INTEGER,
+    created_at TEXT NOT NULL,
+    sent_at TEXT,
+    error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS scan_history (
+    id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    error_message TEXT
+);
+
+CREATE TABLE IF NOT EXISTS hosts (
+    id TEXT PRIMARY KEY,
+    hostname TEXT NOT NULL,
+    port INTEGER NOT NULL DEFAULT 443,
+    threshold_days INTEGER,
+    tags TEXT NOT NULL DEFAULT '',
+    scan_interval_hours INTEGER,
+    owner_name TEXT NOT NULL DEFAULT '',
+    owner_email TEXT NOT NULL DEFAULT '',
+    owner_slack TEXT NOT NULL DEFAULT '',
+    renewal_status TEXT NOT NULL DEFAULT 'pending',
+    renewal_method TEXT NOT NULL DEFAULT '',
+    runbook_url TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    added_at TEXT NOT NULL,
+    UNIQUE(hostname, port)
+);
+
+CREATE TABLE IF NOT EXISTS trust_anchors (
+    id TEXT PRIMARY KEY,
+    subject TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    not_before TEXT NOT NULL,
+    not_after TEXT NOT NULL,
+    san_dns_names TEXT NOT NULL,
+    fingerprint_sha256 TEXT NOT NULL,
+    raw_der BLOB NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS scan_posture (
+    id TEXT PRIMARY KEY,
+    cert_id TEXT NOT NULL,
+    hostname TEXT,
+    port INTEGER,
+    grade TEXT NOT NULL,
+    protocol_version TEXT,
+    ocsp_stapling INTEGER,
+    hsts INTEGER,
+    must_staple INTEGER DEFAULT 0,
+    findings TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    FOREIGN KEY (cert_id) REFERENCES certificates(id)
+);
+"""
+
+
+def _create_v06x_baseline_db(db_path: Path) -> None:
+    """Create a SQLite DB with only the v0.6.x-era baseline schema."""
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+        conn.executescript(_V06X_BASELINE_DDL)
+        conn.commit()
+
+
+def _insert_v06x_sample_data(db_path: Path) -> None:
+    """Insert a small sanitized dataset into a v0.6.x baseline DB."""
+    with contextlib.closing(sqlite3.connect(str(db_path))) as conn:
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, threshold_days, tags, owner_email, added_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "h1",
+                "example.com",
+                443,
+                14,
+                "prod",
+                "admin@example.com",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, threshold_days, tags, owner_email, added_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "h2",
+                "test.example.com",
+                8443,
+                7,
+                "dev",
+                "dev@example.com",
+                "2025-01-02T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, san_dns_names,"
+            " fingerprint_sha256, raw_der, source, hostname, port, is_leaf, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "c1",
+                "CN=example.com",
+                "CN=Test CA",
+                "2025-01-01T00:00:00+00:00",
+                "2026-01-01T00:00:00+00:00",
+                "example.com",
+                "aa" * 32,
+                b"leaf-der",
+                "scan",
+                "example.com",
+                443,
+                1,
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, san_dns_names,"
+            " fingerprint_sha256, raw_der, source, is_leaf, created_at, updated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "c2",
+                "CN=Test CA",
+                "CN=Test Root",
+                "2020-01-01T00:00:00+00:00",
+                "2030-01-01T00:00:00+00:00",
+                "Test CA",
+                "bb" * 32,
+                b"intermediate-der",
+                "upload",
+                0,
+                "2025-01-01T00:00:00+00:00",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message,"
+            " threshold_days, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                "a1",
+                "c1",
+                "expiry",
+                "pending",
+                "Certificate expires soon",
+                14,
+                "2025-06-01T00:00:00+00:00",
+            ),
+        )
+        conn.execute(
+            "INSERT INTO scan_history (id, hostname, port, status, scanned_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            ("sh1", "example.com", 443, "ok", "2025-06-01T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO scan_posture (id, cert_id, hostname, port, grade, findings, scanned_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("sp1", "c1", "example.com", 443, "A", "[]", "2025-06-01T00:00:00+00:00"),
+        )
+        conn.execute(
+            "INSERT INTO trust_anchors (id, subject, issuer, not_before, not_after, san_dns_names,"
+            " fingerprint_sha256, raw_der, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "ta1",
+                "CN=Test Root",
+                "CN=Test Root",
+                "2020-01-01T00:00:00+00:00",
+                "2030-01-01T00:00:00+00:00",
+                "Test Root",
+                "cc" * 32,
+                b"root-der",
+                "2025-01-01T00:00:00+00:00",
+            ),
+        )
+        conn.commit()
+
+
 # ---------- AC-1: Migrations apply and record in schema_version ----------
 
 def test_init_schema_creates_all_tables(db_path: Path) -> None:
@@ -222,6 +434,99 @@ def test_audit_log_table_exists(db_path: Path) -> None:
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()}
     assert "audit_log" in tables
+
+
+def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
+    """A v0.6.x-era database with real rows migrates to the current schema.
+
+    Simulates a long-lived production database created before numbered migrations,
+    runs the full migration runner, and asserts both schema completeness and
+    data survival.
+    """
+    _create_v06x_baseline_db(db_path)
+    _insert_v06x_sample_data(db_path)
+
+    # Run the upgrade path used by the app on startup.
+    init_schema(db_path)
+
+    # All registered migrations should be recorded.
+    import cert_watch.migrations.registry  # noqa: F401 — side-effect: registers
+    from cert_watch.migrations.runner import get_migrations
+
+    expected_ids = [m[0] for m in get_migrations()]
+    with sqlite3.connect(str(db_path)) as conn:
+        applied_ids = [r[0] for r in conn.execute(
+            "SELECT id FROM schema_version ORDER BY id"
+        ).fetchall()]
+    assert applied_ids == expected_ids
+
+    # Tables added after the baseline must exist.
+    with sqlite3.connect(str(db_path)) as conn:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+    for table in (
+        "audit_log",
+        "rate_limits",
+        "kv_store",
+        "alert_groups",
+        "alert_group_certs",
+        "cert_history",
+        "session_versions",
+        "api_keys",
+        "ct_issuer_first_seen",
+        "users",
+        "roles",
+        "event_log",
+    ):
+        assert table in tables
+
+    # Columns added after the baseline must exist.
+    with sqlite3.connect(str(db_path)) as conn:
+        alerts_cols = _table_columns(conn, "alerts")
+        certs_cols = _table_columns(conn, "certificates")
+        hosts_cols = _table_columns(conn, "hosts")
+        posture_cols = _table_columns(conn, "scan_posture")
+        cert_history_cols = _table_columns(conn, "cert_history")
+
+    assert "extra_recipients" in alerts_cols
+    assert "read" in alerts_cols
+    assert "hostname" in alerts_cols
+    assert "subject" in alerts_cols
+    assert "tags" in certs_cols
+    assert "expected_issuers" in hosts_cols
+    assert "chain_incomplete" in posture_cols
+    assert "chain_status" in posture_cols
+    assert "caa_present" in posture_cols
+    assert "caa_records" in posture_cols
+    assert "verify_requested" in posture_cols
+    assert "not_before" in cert_history_cols
+
+    # Original rows must survive unchanged where columns existed in v0.6.x.
+    with sqlite3.connect(str(db_path)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 2
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM scan_posture").fetchone()[0] == 1
+        assert conn.execute("SELECT COUNT(*) FROM trust_anchors").fetchone()[0] == 1
+
+        host = conn.execute(
+            "SELECT hostname, port, owner_email FROM hosts WHERE id = ?", ("h1",)
+        ).fetchone()
+        assert host == ("example.com", 443, "admin@example.com")
+
+        cert = conn.execute(
+            "SELECT subject, fingerprint_sha256, source FROM certificates WHERE id = ?",
+            ("c1",),
+        ).fetchone()
+        assert cert == ("CN=example.com", "aa" * 32, "scan")
+
+        alert = conn.execute(
+            "SELECT cert_id, alert_type, status, message FROM alerts WHERE id = ?",
+            ("a1",),
+        ).fetchone()
+        assert alert == ("c1", "expiry", "pending", "Certificate expires soon")
 
 
 # ---------- CLI backup subcommand ----------

@@ -51,6 +51,7 @@ class Settings:
     scan_timeout: float = 10.0
     scan_retries: int = 2
     scan_retry_backoff: float = 1.0
+    scan_max_output_bytes: int = 1048576
     hsts_timeout: float = 5.0
     auth_provider: str = ""
     ldap_server: str = ""
@@ -112,38 +113,47 @@ class Settings:
         sched_hour = _parse_int(
             os.environ.get("CERT_WATCH_SCHED_HOUR", "6"), 6,
             "CERT_WATCH_SCHED_HOUR",
+            min_value=0, max_value=23,
         )
         sched_min = _parse_int(
             os.environ.get("CERT_WATCH_SCHED_MIN", "0"), 0,
             "CERT_WATCH_SCHED_MIN",
+            min_value=0, max_value=59,
         )
         smtp_port = _parse_int(
             os.environ.get("SMTP_PORT", "587"), 587,
             "SMTP_PORT",
+            min_value=1, max_value=65535,
         )
         ldap_connect_timeout = _parse_int(
             os.environ.get("LDAP_CONNECT_TIMEOUT", "5"), 5,
             "LDAP_CONNECT_TIMEOUT",
+            min_value=1, max_value=300,
         )
         audit_retention_days = _parse_int(
             os.environ.get("CERT_WATCH_AUDIT_RETENTION_DAYS", "90"), 90,
             "CERT_WATCH_AUDIT_RETENTION_DAYS",
+            min_value=0, max_value=3650,
         )
         renewal_window_days = _parse_int(
             os.environ.get("CERT_WATCH_RENEWAL_WINDOW_DAYS", "30"), 30,
             "CERT_WATCH_RENEWAL_WINDOW_DAYS",
+            min_value=1, max_value=365,
         )
         history_retention_days = _parse_int(
             os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365"), 365,
             "CERT_WATCH_HISTORY_RETENTION_DAYS",
+            min_value=0, max_value=3650,
         )
         alert_retention_days = _parse_int(
             os.environ.get("CERT_WATCH_ALERT_RETENTION_DAYS", "90"), 90,
             "CERT_WATCH_ALERT_RETENTION_DAYS",
+            min_value=0, max_value=3650,
         )
         event_retention_days = _parse_int(
             os.environ.get("CERT_WATCH_EVENT_RETENTION_DAYS", "30"), 30,
             "CERT_WATCH_EVENT_RETENTION_DAYS",
+            min_value=0, max_value=3650,
         )
 
         return cls(
@@ -229,10 +239,16 @@ class Settings:
             scan_retries=_parse_int(
                 os.environ.get("CERT_WATCH_SCAN_RETRIES", "2"), 2,
                 "CERT_WATCH_SCAN_RETRIES",
+                min_value=0, max_value=10,
             ),
             scan_retry_backoff=_parse_float(
                 os.environ.get("CERT_WATCH_SCAN_RETRY_BACKOFF", "1.0"), 1.0,
                 "CERT_WATCH_SCAN_RETRY_BACKOFF",
+            ),
+            scan_max_output_bytes=_parse_int(
+                os.environ.get("CERT_WATCH_SCAN_MAX_OUTPUT_BYTES", "1048576"), 1048576,
+                "CERT_WATCH_SCAN_MAX_OUTPUT_BYTES",
+                min_value=1024,
             ),
             hsts_timeout=_parse_float(
                 os.environ.get("CERT_WATCH_HSTS_TIMEOUT", "5.0"), 5.0,
@@ -241,6 +257,7 @@ class Settings:
             session_ttl=_parse_int(
                 os.environ.get("CERT_WATCH_SESSION_TTL", "28800"), 28800,
                 "CERT_WATCH_SESSION_TTL",
+                min_value=60, max_value=2592000,
             ),
             write_users=tuple(
                 u.strip()
@@ -256,7 +273,11 @@ class Settings:
             ) or "",
             base_url=os.environ.get("CERT_WATCH_BASE_URL", "").rstrip("/"),
             allow_unauth=os.environ.get("CERT_WATCH_ALLOW_UNAUTH", "0") == "1",
-            jwks_cache_ttl=int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400")),
+            jwks_cache_ttl=_parse_int(
+                os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"), 86400,
+                "CERT_WATCH_JWKS_CACHE_TTL",
+                min_value=60, max_value=604800,
+            ),
         )
 
     def build_alert_config(self):

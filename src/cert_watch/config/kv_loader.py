@@ -190,5 +190,6 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
         scan_timeout=base.scan_timeout,
         scan_retries=base.scan_retries,
         scan_retry_backoff=base.scan_retry_backoff,
+        scan_max_output_bytes=base.scan_max_output_bytes,
         hsts_timeout=base.hsts_timeout,
     )

@@ -1,3 +1,5 @@
+import sqlite3
+
 from fastapi.testclient import TestClient
 
 from cert_watch.app import create_app
@@ -366,7 +368,7 @@ def test_alert_routing_logs_on_failure(tmp_path, caplog):
     original_list_all = users_roles.SqliteRoleRepository.list_all
 
     def _raising_list_all(self):
-        raise RuntimeError("test error")
+        raise sqlite3.OperationalError("test error")
 
     users_roles.SqliteRoleRepository.list_all = _raising_list_all
     try:

@@ -106,8 +106,10 @@ class TestProbeHts:
         mock_conn.close.assert_called_once()
 
     def test_conn_closed_on_response_error(self):
+        import http.client
+
         mock_conn = MagicMock()
-        mock_conn.getresponse.side_effect = RuntimeError("read timeout")
+        mock_conn.getresponse.side_effect = http.client.HTTPException("read timeout")
 
         with patch("http.client.HTTPSConnection", return_value=mock_conn):
             result = _probe_hsts("example.com", 443)

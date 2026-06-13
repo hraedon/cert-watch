@@ -3,17 +3,43 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import http.client
 import logging
 import re
 import socket
 import ssl
 import subprocess
+import threading
+import time
 
 from cert_watch.scan_resolver import _is_blocked_ip, _resolve_host
 
 logger = logging.getLogger("cert_watch.scan")
 
 HSTS_TIMEOUT = 5.0
+DEFAULT_SCAN_MAX_OUTPUT_BYTES = 1024 * 1024
+
+
+class ScanOutputTooLargeError(Exception):
+    """Raised when an openssl subprocess produces more output than the configured cap."""
+
+
+def _format_connect_host(host: str) -> str:
+    """Format a host string for openssl's ``-connect`` argument.
+
+    IPv6 address literals must be wrapped in brackets
+    (e.g. ``[::1]:443``); IPv4 and hostnames are returned as-is.
+    """
+    import ipaddress as _ip
+
+    try:
+        addr = _ip.ip_address(host)
+    except ValueError:
+        return host
+    if isinstance(addr, _ip.IPv6Address):
+        return f"[{host}]"
+    return host
 
 
 def _probe_hsts(
@@ -40,8 +66,6 @@ def _probe_hsts(
     if require_443 and port != 443:
         return None
     try:
-        import http.client
-
         ctx = ssl.create_default_context()
         if not verify:
             ctx.check_hostname = False
@@ -50,7 +74,7 @@ def _probe_hsts(
             sock = socket.create_connection((pinned_ip, port), timeout=HSTS_TIMEOUT)
             try:
                 ssl_sock = ctx.wrap_socket(sock, server_hostname=hostname)
-            except Exception:
+            except Exception:  # cleanup: close raw socket on SSL wrap failure, then re-raise
                 sock.close()
                 raise
             conn = http.client.HTTPSConnection(hostname, port, timeout=HSTS_TIMEOUT, context=ctx)
@@ -66,7 +90,7 @@ def _probe_hsts(
         finally:
             conn.close()
         return hsts_header is not None
-    except Exception:
+    except (OSError, ValueError, http.client.HTTPException):
         return None
 
 
@@ -102,7 +126,7 @@ def _open_tls_connection(
     try:
         sock.connect(sockaddr)
         return ctx.wrap_socket(sock, server_hostname=hostname)
-    except Exception:
+    except Exception:  # cleanup: close socket on connection/TLS failure, then re-raise
         sock.close()
         raise
 
@@ -131,7 +155,7 @@ def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
         if getter:
             try:
                 items = getter()
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — Python 3.13+ chain APIs; error modes not fully known, fall through to next method
                 continue
             chain = []
             for c in items:
@@ -154,10 +178,123 @@ _PEM_CERT_PATTERN = re.compile(
 _PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNORECASE)
 
 
+def _run_openssl(
+    cmd: list[str],
+    input_data: bytes,
+    max_output_bytes: int,
+    timeout: float,
+) -> tuple[bytes, bytes, int]:
+    """Run an openssl subprocess with bounded stdout and overall timeout.
+
+    Raises FileNotFoundError, OSError, TimeoutError, or
+    ScanOutputTooLargeError. On normal completion returns
+    (stdout, stderr, returncode).
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        if proc.stdin is not None:
+            try:
+                proc.stdin.write(input_data)
+                proc.stdin.flush()
+                proc.stdin.close()
+            except BrokenPipeError:
+                pass
+
+        stdout_chunks: list[bytes] = []
+        stderr_chunks: list[bytes] = []
+        too_large = False
+
+        def _reader() -> None:
+            nonlocal too_large
+            accumulated = 0
+            chunk_size = 65536
+            while True:
+                chunk = proc.stdout.read(chunk_size)  # type: ignore[union-attr]
+                if not chunk:
+                    break
+                accumulated += len(chunk)
+                if accumulated > max_output_bytes:
+                    too_large = True
+                    with contextlib.suppress(ProcessLookupError):
+                        proc.kill()
+                    break
+                stdout_chunks.append(chunk)
+
+        def _err_reader(deadline: float) -> None:
+            accumulated = 0
+            chunk_size = 4096
+            max_stderr = 65536
+            while True:
+                if time.monotonic() >= deadline:
+                    break
+                chunk = proc.stderr.read(chunk_size)  # type: ignore[union-attr]
+                if not chunk:
+                    break
+                accumulated += len(chunk)
+                if accumulated > max_stderr:
+                    # Stop appending; also stop draining the pipe so a
+                    # misbehaving child cannot stall us forever. Closing the
+                    # read end gives the child a broken pipe instead of a full
+                    # stderr buffer.
+                    with contextlib.suppress(Exception):
+                        proc.stderr.close()  # type: ignore[union-attr]
+                    break
+                stderr_chunks.append(chunk)
+
+        reader = threading.Thread(target=_reader)
+        deadline = time.monotonic() + timeout
+        err_reader = threading.Thread(target=_err_reader, args=(deadline,))
+        reader.start()
+        err_reader.start()
+
+        for t in (reader, err_reader):
+            remaining = deadline - time.monotonic()
+            t.join(timeout=max(remaining, 0))
+            if t.is_alive():
+                with contextlib.suppress(ProcessLookupError):
+                    proc.kill()
+                reader.join(timeout=1)
+                err_reader.join(timeout=1)
+                if too_large:
+                    break
+                raise TimeoutError("openssl subprocess timed out")
+
+        if too_large:
+            reader.join(timeout=1)
+            err_reader.join(timeout=1)
+            if proc.poll() is None:
+                try:
+                    proc.kill()
+                    proc.wait(timeout=1)
+                except ProcessLookupError:
+                    pass
+            raise ScanOutputTooLargeError(
+                f"openssl output exceeded {max_output_bytes} bytes"
+            )
+
+        if proc.poll() is None:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=1)
+        return b"".join(stdout_chunks), b"".join(stderr_chunks), proc.returncode
+
+    finally:
+        if proc.poll() is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+                proc.wait(timeout=1)
+
+
 def _scan_via_openssl(
     hostname: str, port: int, timeout: float, *, allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (), pinned_ip: str | None = None,
+    max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
 ) -> tuple[list[bytes], str]:
     """Extract the full certificate chain and protocol version using a single
     openssl s_client call.
@@ -183,36 +320,36 @@ def _scan_via_openssl(
         return [], ""
     if hostname.startswith("-"):
         return [], ""
-    connect_host = f"[{host}]" if ":" in host else host
+    connect_host = _format_connect_host(host)
     try:
-        proc = subprocess.run(
+        stdout, stderr, returncode = _run_openssl(
             [
                 "openssl", "s_client",
                 "-connect", f"{connect_host}:{port}",
                 "-servername", hostname,
                 "-showcerts",
             ],
-            input=b"Q\n",
-            capture_output=True,
+            b"Q\n",
+            max_output_bytes=max_output_bytes,
             timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+    except (TimeoutError, FileNotFoundError, OSError):
         return [], ""
 
-    if proc.returncode not in (0, 1):
+    if returncode not in (0, 1):
         logging.getLogger("cert_watch.scan").debug(
             "openssl s_client for %s:%s exited %s: %s",
-            hostname, port, proc.returncode,
-            proc.stderr.decode("utf-8", errors="replace")[:500] if proc.stderr else "",
+            hostname, port, returncode,
+            stderr.decode("utf-8", errors="replace")[:500] if stderr else "",
         )
         return [], ""
 
     protocol_version = ""
-    proto_match = _PROTOCOL_RE.search(proc.stdout)
+    proto_match = _PROTOCOL_RE.search(stdout)
     if proto_match:
         protocol_version = proto_match.group(1).decode("ascii", errors="replace")
 
-    pem_output = proc.stdout
+    pem_output = stdout
     matches = _PEM_CERT_PATTERN.findall(pem_output)
     if not matches:
         return [], protocol_version
@@ -222,7 +359,7 @@ def _scan_via_openssl(
         try:
             der = base64.b64decode(pem_b64)
             result.append(der)
-        except Exception:
+        except (ValueError, TypeError):
             continue
 
     return result, protocol_version

@@ -4,6 +4,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from freezegun import freeze_time
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.policy import PolicyViolation, apply_policy_overrides, evaluate_policy
@@ -261,3 +262,233 @@ class TestSC081NoPostureGradeImpact:
         )
         sc081_vs = [v for v in vs if v.rule_id.startswith("sc081_")]
         assert sc081_vs == []
+
+
+# ---------------------------------------------------------------------------
+# Freeze-time boundary tests — P3.3
+#
+# The SC-081 rules compare cert.not_before against milestone dates
+# (2026-03-15, 2027-03-15, 2029-03-15).  On the milestone date itself,
+# not_before == milestone_date is NOT strictly less, so the rule DOES apply.
+#
+# freezegun freezes datetime.now() so each test reads as "on this date,
+# evaluate the SC-081 pack".  The rule logic is purely not_before-relative
+# (no current-time check), but freezing time makes the scenarios explicit
+# and guards against future implementation changes.
+#
+# IMPORTANT: freezegun's FakeDatetime is incompatible with cryptography's
+# Rust cert-signing, so certs must be created *before* entering the
+# freeze_time context.  Each test creates the cert first, then freezes
+# time for the evaluation.
+#
+# The SC-081 check uses strict `>` (validity_days > max_days), so a cert
+# with validity exactly equal to max_days does NOT produce a violation.
+# ---------------------------------------------------------------------------
+
+
+def _sc081_violation_ids(cert: Certificate, pack=None) -> list[str]:
+    """Evaluate an enabled SC-081 pack against *cert* and return the
+    rule_id list of any SC-081 violations."""
+    if pack is None:
+        pack = _enabled_pack()
+    vs = evaluate_policy(
+        cert, chain_status="public", chain_incomplete=False,
+        protocol_version=None, hsts=None, ocsp_stapling=None,
+        ruleset=pack,
+    )
+    return [v.rule_id for v in vs if v.rule_id.startswith("sc081_")]
+
+
+class TestSC081FreezeTimeBefore200Milestone:
+    """Before 2026-03-15: no SC-081 rule applies regardless of validity."""
+
+    def test_398_day_cert_no_violation(self):
+        cert = _make_cert(datetime(2026, 1, 15, tzinfo=UTC), 398)
+        with freeze_time("2026-01-15"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_500_day_cert_no_violation(self):
+        cert = _make_cert(datetime(2026, 1, 15, tzinfo=UTC), 500)
+        with freeze_time("2026-01-15"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_day_before_milestone_still_excluded(self):
+        cert = _make_cert(datetime(2026, 3, 14, tzinfo=UTC), 365)
+        with freeze_time("2026-03-14"):
+            assert _sc081_violation_ids(cert) == []
+
+
+class TestSC081FreezeTimeOn200Milestone:
+    """On 2026-03-15: the 200-day rule first applies (not_before is NOT < milestone)."""
+
+    def test_200_day_cert_passes(self):
+        cert = _make_cert(datetime(2026, 3, 15, tzinfo=UTC), 200)
+        with freeze_time("2026-03-15"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_201_day_cert_violates_200_rule(self):
+        cert = _make_cert(datetime(2026, 3, 15, tzinfo=UTC), 201)
+        with freeze_time("2026-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_200"]
+
+    def test_365_day_cert_violates_200_rule_only(self):
+        cert = _make_cert(datetime(2026, 3, 15, tzinfo=UTC), 365)
+        with freeze_time("2026-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert "sc081_validity_200" in ids
+        # 100- and 47-day milestones not yet reached for this not_before
+        assert "sc081_validity_100" not in ids
+        assert "sc081_validity_47" not in ids
+
+
+class TestSC081FreezeTimeBetween200And100Milestones:
+    """Between 2026-03-15 and 2027-03-15: only the 200-day rule applies."""
+
+    def test_200_day_cert_passes(self):
+        cert = _make_cert(datetime(2026, 9, 1, tzinfo=UTC), 200)
+        with freeze_time("2026-09-01"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_365_day_cert_violates_200_only(self):
+        cert = _make_cert(datetime(2026, 9, 1, tzinfo=UTC), 365)
+        with freeze_time("2026-09-01"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_200"]
+
+    def test_day_before_100_milestone_200_still_only_rule(self):
+        cert = _make_cert(datetime(2027, 3, 14, tzinfo=UTC), 365)
+        with freeze_time("2027-03-14"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_200"]
+
+
+class TestSC081FreezeTimeOn100Milestone:
+    """On 2027-03-15: the 100-day rule first applies."""
+
+    def test_100_day_cert_passes(self):
+        cert = _make_cert(datetime(2027, 3, 15, tzinfo=UTC), 100)
+        with freeze_time("2027-03-15"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_101_day_cert_violates_100_rule(self):
+        cert = _make_cert(datetime(2027, 3, 15, tzinfo=UTC), 101)
+        with freeze_time("2027-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_100"]
+
+    def test_150_day_cert_violates_100_not_200(self):
+        """150 days exceeds the 100-day limit but not the 200-day limit."""
+        cert = _make_cert(datetime(2027, 3, 15, tzinfo=UTC), 150)
+        with freeze_time("2027-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_100"]
+
+    def test_201_day_cert_violates_both_200_and_100(self):
+        """201 days exceeds both the 200- and 100-day limits."""
+        cert = _make_cert(datetime(2027, 3, 15, tzinfo=UTC), 201)
+        with freeze_time("2027-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert "sc081_validity_200" in ids
+        assert "sc081_validity_100" in ids
+        assert "sc081_validity_47" not in ids
+
+
+class TestSC081FreezeTimeBetween100And47Milestones:
+    """Between 2027-03-15 and 2029-03-15: both 200- and 100-day rules apply."""
+
+    def test_100_day_cert_passes(self):
+        cert = _make_cert(datetime(2028, 1, 1, tzinfo=UTC), 100)
+        with freeze_time("2028-01-01"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_150_day_cert_violates_100_only(self):
+        cert = _make_cert(datetime(2028, 1, 1, tzinfo=UTC), 150)
+        with freeze_time("2028-01-01"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_100"]
+
+    def test_201_day_cert_violates_both(self):
+        cert = _make_cert(datetime(2028, 1, 1, tzinfo=UTC), 201)
+        with freeze_time("2028-01-01"):
+            ids = _sc081_violation_ids(cert)
+        assert "sc081_validity_200" in ids
+        assert "sc081_validity_100" in ids
+        assert "sc081_validity_47" not in ids
+
+    def test_day_before_47_milestone(self):
+        cert = _make_cert(datetime(2029, 3, 14, tzinfo=UTC), 150)
+        with freeze_time("2029-03-14"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_100"]
+
+
+class TestSC081FreezeTimeOn47Milestone:
+    """On 2029-03-15: the 47-day rule first applies."""
+
+    def test_47_day_cert_passes(self):
+        cert = _make_cert(datetime(2029, 3, 15, tzinfo=UTC), 47)
+        with freeze_time("2029-03-15"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_48_day_cert_violates_47_rule_only(self):
+        cert = _make_cert(datetime(2029, 3, 15, tzinfo=UTC), 48)
+        with freeze_time("2029-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_47"]
+
+    def test_100_day_cert_violates_47_only(self):
+        """100 days exceeds the 47-day limit but not the 100- or 200-day
+        limits (the check is strict ``>``)."""
+        cert = _make_cert(datetime(2029, 3, 15, tzinfo=UTC), 100)
+        with freeze_time("2029-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_47"]
+
+    def test_201_day_cert_violates_all_three(self):
+        """201 days exceeds all three limits."""
+        cert = _make_cert(datetime(2029, 3, 15, tzinfo=UTC), 201)
+        with freeze_time("2029-03-15"):
+            ids = _sc081_violation_ids(cert)
+        assert "sc081_validity_200" in ids
+        assert "sc081_validity_100" in ids
+        assert "sc081_validity_47" in ids
+
+
+class TestSC081FreezeTimeAfter47Milestone:
+    """After 2029-03-15: all three SC-081 rules apply."""
+
+    def test_47_day_cert_passes(self):
+        cert = _make_cert(datetime(2030, 1, 1, tzinfo=UTC), 47)
+        with freeze_time("2030-01-01"):
+            assert _sc081_violation_ids(cert) == []
+
+    def test_100_day_cert_violates_47_only(self):
+        """100 days exceeds the 47-day limit but not the 100- or 200-day
+        limits (the check is strict ``>``)."""
+        cert = _make_cert(datetime(2030, 1, 1, tzinfo=UTC), 100)
+        with freeze_time("2030-01-01"):
+            ids = _sc081_violation_ids(cert)
+        assert ids == ["sc081_validity_47"]
+
+    def test_201_day_cert_violates_all_three(self):
+        cert = _make_cert(datetime(2030, 1, 1, tzinfo=UTC), 201)
+        with freeze_time("2030-01-01"):
+            ids = _sc081_violation_ids(cert)
+        assert "sc081_validity_200" in ids
+        assert "sc081_validity_100" in ids
+        assert "sc081_validity_47" in ids
+
+    def test_each_violation_is_grade_affecting_false(self):
+        cert = _make_cert(datetime(2030, 1, 1, tzinfo=UTC), 201)
+        pack = _enabled_pack()
+        with freeze_time("2030-01-01"):
+            vs = evaluate_policy(
+                cert, chain_status="public", chain_incomplete=False,
+                protocol_version=None, hsts=None, ocsp_stapling=None,
+                ruleset=pack,
+            )
+        sc081_vs = [v for v in vs if v.rule_id.startswith("sc081_")]
+        assert len(sc081_vs) == 3
+        for v in sc081_vs:
+            assert v.grade_affecting is False

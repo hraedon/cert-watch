@@ -1,3 +1,4 @@
+import smtplib
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -851,7 +852,7 @@ def test_expiry_digest_partial_smtp_failure_returns_false(tmp_path):
         call_count += 1
         if call_count == 1:
             return None
-        raise Exception("owner send failed")
+        raise smtplib.SMTPException("owner send failed")
 
     with patch("cert_watch.alerts.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value

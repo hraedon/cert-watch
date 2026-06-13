@@ -74,7 +74,7 @@ def _refresh_worker(db_path: str | Path, domains: list[str]) -> None:
         for d in domains:
             try:
                 ct_reconciliation(db_path, d)  # populates _CT_RECON_CACHE
-            except Exception:
+            except Exception:  # best-effort background refresh; must not crash worker thread
                 logger.warning("CT reconciliation refresh failed for %s", d, exc_info=True)
             finally:
                 with _CT_REFRESH_LOCK:
@@ -438,7 +438,7 @@ def run_ct_monitor(db_path: str | Path) -> dict[str, int]:
     for domain in sorted(domains):
         try:
             recon = ct_reconciliation(db_path, domain)
-        except Exception:
+        except Exception:  # best-effort per-domain reconciliation; must not crash CT monitor loop
             logger.warning("CT reconciliation failed for %s", domain, exc_info=True)
             continue
         for mi in recon.misissued:

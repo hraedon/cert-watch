@@ -497,3 +497,109 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
     assert rows[1][0] == "batch-b.example.com"
     assert rows[1][1] == "failure"
     assert rows[1][2] == "store failed"
+
+
+def test_flush_alert_queue(tmp_path, reload_app):
+    """POST /alerts/flush triggers process_pending and redirects back."""
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="fp1",
+            alert_type="expiry_warning",
+            status="pending",
+            message="expiring soon",
+            threshold_days=7,
+        )
+    )
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post("/alerts/flush", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/alerts?")
+
+
+def test_flush_alert_queue_rate_limited(tmp_path, reload_app):
+    """Flush is rate-limited: too many requests returns a rate-limit redirect."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        for _ in range(4):
+            r = client.post("/alerts/flush", follow_redirects=False)
+        assert r.status_code == 303
+        assert "error" in r.headers["location"]
+
+
+def test_mark_all_alerts_read(tmp_path, reload_app):
+    """POST /alerts/mark-all-read marks all unread alerts as read."""
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, _connect, init_schema
+
+    init_schema(db)
+    SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="fp1",
+            alert_type="expiry_warning",
+            status="pending",
+            message="m1",
+            threshold_days=7,
+        )
+    )
+    SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="fp2",
+            alert_type="expired",
+            status="sent",
+            message="m2",
+            threshold_days=0,
+        )
+    )
+    # Verify both are unread before the action
+    with _connect(db) as conn:
+        unread_before = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE read = 0"
+        ).fetchone()[0]
+    assert unread_before == 2
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post("/alerts/mark-all-read", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("/alerts?")
+    assert "saved" in r.headers["location"]
+
+    # Verify all are now read
+    with _connect(db) as conn:
+        unread_after = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE read = 0"
+        ).fetchone()[0]
+    assert unread_after == 0
+
+
+def test_mark_all_alerts_read_empty(tmp_path, reload_app):
+    """Mark all read on an empty alerts table redirects gracefully."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post("/alerts/mark-all-read", follow_redirects=False)
+    assert r.status_code == 303
+    assert "0%20alert" in r.headers["location"]
+
+
+def test_alerts_page_shows_action_buttons(reload_app):
+    """Alerts page renders Mark all read and Flush queue buttons."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/alerts")
+    assert r.status_code == 200
+    assert "Mark all read" in r.text
+    assert "Flush queue" in r.text
+
+
+def test_alerts_page_saved_flash(reload_app):
+    """Alerts page renders the saved flash message when present."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/alerts?saved=3+alerts+sent")
+    assert r.status_code == 200
+    assert "3 alerts sent" in r.text

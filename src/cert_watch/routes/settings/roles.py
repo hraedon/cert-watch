@@ -13,8 +13,10 @@ from cert_watch.database import (
     User,
 )
 from cert_watch.middleware import check_csrf, require_admin_form
-from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes.settings.core import _settings_context
+from cert_watch.routes._deps import IdParam, _db_path, get_templates
+from cert_watch.routes.settings.render import _settings_context
+
+templates = get_templates()
 
 router = APIRouter()
 
@@ -32,8 +34,6 @@ def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
     ctx = _settings_context(request, tab="roles")
     ctx["roles"] = roles
     ctx["users"] = []
-    from cert_watch.routes.settings.core import templates
-
     return templates.TemplateResponse(
         request=request,
         name="settings.html",
@@ -91,8 +91,6 @@ def users_page(request: Request) -> HTMLResponse | RedirectResponse:
     ctx = _settings_context(request, tab="users")
     ctx["users"] = users
     ctx["roles"] = roles
-    from cert_watch.routes.settings.core import templates
-
     return templates.TemplateResponse(
         request=request,
         name="settings.html",

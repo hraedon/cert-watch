@@ -139,29 +139,29 @@ def _run_cycle(
     try:
         scan_fn()
         logger.info("scheduled scan completed")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — failure isolation: one stage failing must not stop the others
         logger.exception("scheduler scan_fn failed")
     if ct_fn is not None:
         try:
             ct_fn()
             logger.info("scheduled CT check completed")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — failure isolation
             logger.exception("scheduler ct_fn failed")
     try:
         alert_fn()
         logger.info("scheduled alerts completed")
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — failure isolation
         logger.exception("scheduler alert_fn failed")
     if digest_fn is not None:
         try:
             digest_fn()
             logger.info("scheduled digest completed")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — failure isolation
             logger.exception("scheduler digest_fn failed")
     if maintenance_fn is not None:
         try:
             maintenance_fn()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — failure isolation
             logger.exception("scheduler maintenance_fn failed")
 
 
@@ -288,14 +288,14 @@ def run_scan_now(
                         ),
                         db_path,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001 — best-effort event emission; must not crash scan loop
                     pass
             continue
 
         if store_fn is not None:
             try:
                 store_fn(result)
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
                 logger.exception("store_fn failed for %s:%s", hostname, port)
 
         scanned += 1
@@ -370,7 +370,7 @@ def _check_renewal_overdue(
                     db_path,
                 )
                 already_emitted.add((signal.hostname, signal.cert_fingerprint))
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — best-effort overdue check; must not crash scan cycle
         logger.exception("renewal overdue check failed")
 
 
