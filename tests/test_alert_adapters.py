@@ -458,7 +458,8 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
+            with pytest.warns(DeprecationWarning, match="deprecated"):
+                ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
         assert ok is True
         body = json.loads(mock_urlopen.call_args[1]["data"])
         assert body["event_action"] == "resolve"
@@ -473,7 +474,8 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
+            with pytest.warns(DeprecationWarning, match="deprecated"):
+                ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
         assert ok is False
 
     def test_resolve_pagerduty_for_renewed_cert(self, tmp_path):
@@ -498,20 +500,23 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            resolved = resolve_pagerduty_for_renewed_cert(db, "old-cert-1", config)
+            with pytest.warns(DeprecationWarning, match="deprecated"):
+                resolved = resolve_pagerduty_for_renewed_cert(db, "old-cert-1", config)
         assert resolved == 2
 
     def test_resolve_pagerduty_noops_for_non_pagerduty(self):
         from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
 
         config = _config(kind="discord")
-        resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", config)
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", config)
         assert resolved == 0
 
     def test_resolve_pagerduty_noops_for_none_config(self):
         from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
 
-        resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", None)
+        with pytest.warns(DeprecationWarning, match="deprecated"):
+            resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
 
 

@@ -361,82 +361,6 @@ def test_insights_view_tls_tab(tmp_path, reload_app):
     assert "TLS" in r.text
 
 
-# ---------- discover ----------
-
-
-def test_discover_view_empty(reload_app):
-    app_mod = reload_app()
-    with TestClient(app_mod.app) as client:
-        r = client.get("/discover")
-    assert r.status_code == 200
-    assert "Discover" in r.text
-
-
-def test_discover_view_with_hosts(reload_app, tmp_path):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.certificate_model import Certificate
-    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
-
-    init_schema(db)
-    SqliteHostRepository(db).add("disc.example.com", 443)
-    now = datetime.now(UTC)
-    cert = Certificate(
-        subject="disc.example.com",
-        issuer="Test CA",
-        not_before=now - timedelta(days=1),
-        not_after=now + timedelta(days=90),
-        san_dns_names=["disc.example.com"],
-        fingerprint_sha256="a" * 64,
-    )
-    replace_scanned(db, "disc.example.com", 443, cert, [], True)
-    with TestClient(app_mod.app) as client:
-        r = client.get("/discover")
-    assert r.status_code == 200
-    assert "disc.example.com" in r.text
-
-
-# ---------- ct-lookup ----------
-
-
-def test_ct_lookup_error(monkeypatch, reload_app):
-    app_mod = reload_app()
-    import cert_watch.ct_lookup as ctl
-
-    monkeypatch.setattr(ctl, "query_ct_log", lambda domain: "DNS error")
-    with TestClient(app_mod.app) as client:
-        r = client.get("/ct-lookup/example.com")
-    assert r.status_code == 200
-    assert r.json()["error"] == "DNS error"
-
-
-def test_ct_lookup_success(monkeypatch, reload_app):
-    from dataclasses import dataclass
-    from datetime import UTC, datetime
-
-    @dataclass
-    class FakeEntry:
-        common_name: str = "*.example.com"
-        issuer_name: str = "Test CA"
-        name_value: str = "*.example.com"
-        not_before: datetime = datetime(2025, 1, 1, tzinfo=UTC)
-        not_after: datetime = datetime(2027, 1, 1, tzinfo=UTC)
-        serial_number: str = "abc123"
-
-    app_mod = reload_app()
-    import cert_watch.ct_lookup as ctl
-
-    monkeypatch.setattr(ctl, "query_ct_log", lambda domain: [FakeEntry()])
-    with TestClient(app_mod.app) as client:
-        r = client.get("/ct-lookup/example.com")
-    assert r.status_code == 200
-    data = r.json()
-    assert data["count"] == 1
-    assert data["entries"][0]["common_name"] == "*.example.com"
-
-
 # ---------- caa-check ----------
 
 
@@ -582,7 +506,7 @@ def test_metrics_with_scan_errors(tmp_path, reload_app):
         r = client.get("/metrics")
     assert r.status_code == 200
     text = r.text
-    assert "cert_scan_errors_total" in text
+    assert "cert_watch_scan_errors" in text
     assert "connection_refused" in text
     assert "timeout" in text
     assert "dns_failure" in text
@@ -619,7 +543,7 @@ def test_metrics_no_error_message(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 200
-    assert "cert_scan_errors_total" in r.text
+    assert "cert_watch_scan_errors" in r.text
 
 
 # ---------- certificate detail ----------

@@ -12,8 +12,7 @@ and understand why this exists anyway.
    estate and answer "is every certificate we depend on healthy?" — not just
    "what expires next." That means breadth in one unit: live host scanning **and**
    offline cert-file upload, read-only signature-verified chain validation, TLS
-   posture grading, CT *reconciliation* (coverage gaps, not just lookup), and
-   fleet-level analytics. An SMB otherwise assembles this from several
+   posture grading, and fleet-level analytics. An SMB otherwise assembles this from several
    single-purpose tools; cert-watch is the bundle.
 
 2. **No external-SaaS dependency in the trust path, with first-class directory
@@ -42,7 +41,8 @@ Stating this is what makes the rest credible:
   that well, with a far larger community, and bundles general uptime monitoring.
   For simple expiry alerting it is the rational choice.
 - **SSLMate Cert Spotter** — a battle-tested, focused CT-log monitor. For pure
-  CT watch with nothing else, it is more proven than cert-watch's CT module.
+  CT watch with nothing else, it is more proven than anything cert-watch offered.
+  (CT monitoring was removed from cert-watch in maintenance mode — see CHANGELOG.)
 - **Certimate** — if you want certificate *operations* (ACME issuance,
   deployment, renewal), that is a different and complementary tool.
 - **Certsentry** — a single Go binary with an embedded frontend; if avoiding a
@@ -56,13 +56,13 @@ lifecycle, it doesn't drive it.
 
 ## Landscape
 
-| Tool | Primary domain | Live scan | Offline upload | Sig-verified chain | Posture grade | CT monitor | Dir. auth (LDAP/OIDC) | Audit log | No cloud dep | Stack |
-|------|----------------|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|------|
-| **cert-watch** | cert observability | ✓ | ✓ | ✓ | ✓ | ✓ (lookup + reconciliation) | ✓ | ✓ | ✓ | Python / FastAPI / SQLite |
-| Uptime Kuma | uptime (SSL secondary) | ✓ | — | — | — | — | — | — | ✓ | Node / Vue |
-| Cert Spotter | CT monitoring | n/a | n/a | — | — | ✓ | n/a | — | ✓ | Go (CLI) |
-| Certimate | cert operations (ACME) | — | — | — | — | — | — | — | ✓ | Go / React |
-| Certsentry | cert monitoring | ✓ | — | ✓ | — | ✓ | — | — | ✓ | Go (single binary) |
+| Tool | Primary domain | Live scan | Offline upload | Sig-verified chain | Posture grade | Dir. auth (LDAP/OIDC) | Audit log | No cloud dep | Stack |
+|------|----------------|:--:|:--:|:--:|:--:|:--:|:--:|:--:|------|
+| **cert-watch** | cert observability | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | Python / FastAPI / SQLite |
+| Uptime Kuma | uptime (SSL secondary) | ✓ | — | — | — | — | — | ✓ | Node / Vue |
+| Cert Spotter | CT monitoring | n/a | n/a | — | — | n/a | — | ✓ | Go (CLI) |
+| Certimate | cert operations (ACME) | — | — | — | — | — | — | ✓ | Go / React |
+| Certsentry | cert monitoring | ✓ | — | ✓ | — | — | — | ✓ | Go (single binary) |
 | cw-agent | agent + cloud sync | ✓ | — | ✓ | — | — | — | — | ✗ (cloud) | Go agent |
 | Doomsday / certwatcher | expiry warning | ✓ | — | — | — | — | — | — | ✓ | Go |
 
@@ -74,7 +74,7 @@ survey time," not as a definitive claim of absence.
 ## Note on convergence
 
 A near-functional clone (**Certsentry**) appeared in early 2026 with the same
-core combination — host scan, dashboard, CT, alerts, SQLite. Independent
+core combination — host scan, dashboard, alerts, SQLite. Independent
 convergence on this feature set is evidence the niche is real and underserved,
 not crowded. cert-watch's differentiation against it is the all-in-one breadth
 an SMB wants without stitching tools together: directory auth + audit log +

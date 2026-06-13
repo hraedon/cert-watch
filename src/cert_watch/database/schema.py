@@ -172,11 +172,6 @@ CREATE TABLE IF NOT EXISTS session_versions (
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
-
-CREATE TABLE IF NOT EXISTS ct_issuer_first_seen (
-    issuer_name TEXT PRIMARY KEY,
-    first_seen_at TEXT NOT NULL
-);
 """
 
 _BASE_INDEXES = """

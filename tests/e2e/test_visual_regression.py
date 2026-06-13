@@ -77,7 +77,6 @@ _VISUAL_PAGES = {
     "dashboard": ("/", "dashboard-heading"),
     "alerts": ("/alerts", "alerts-heading"),
     "insights": ("/insights", "insights-heading"),
-    "discover": ("/discover", "discover-heading"),
     "audit": ("/audit", "audit-heading"),
     "settings": ("/settings", "settings-heading"),
     "api-keys": ("/settings/api-keys", "api-keys-heading"),

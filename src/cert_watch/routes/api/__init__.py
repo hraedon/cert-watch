@@ -7,7 +7,7 @@ a ``routes/api/`` package with concern-specific modules:
 - ``hosts`` — host list, owner updates, host tags
 - ``alerts`` — alerts list, alert groups CRUD, cert routing
 - ``reports`` — CSV/JSON exports, inventory, expiring, compliance reports
-- ``insights`` — CT reconciliation, pivot entries, trends, calendar, webhook test
+- ``insights`` — pivot entries, trends, calendar, webhook test
 - ``policy`` — policy set CRUD, policy violations export
 
 All modules are aggregated here into a single router so the rest of the app

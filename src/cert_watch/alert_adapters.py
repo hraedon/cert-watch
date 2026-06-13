@@ -53,8 +53,6 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
         if threshold_days is not None and threshold_days <= 3:
             return "error"
         return "warning"
-    if alert_type == "mis_issuance":
-        return "error"
     if alert_type == "renewal_stalled":
         return "warning"
     if alert_type == "policy_violation":
@@ -71,7 +69,6 @@ _ALERT_NAMES = {
     "expired": "CertExpired",
     "expiry_warning": "CertExpiry",
     "drift": "CertDrift",
-    "mis_issuance": "CertMisIssued",
     "renewal_stalled": "CertRenewalStalled",
     "scan_failure": "CertScanFailure",
     "policy_violation": "CertPolicyViolation",

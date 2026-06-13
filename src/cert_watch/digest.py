@@ -256,7 +256,11 @@ def send_renewal_digest(
                 try:
                     smtp_conn.send_message(msg)
                     any_smtp_success = True
-                except Exception:
+                except Exception as exc:
+                    logger.warning(
+                        "global renewal digest failed: %s",
+                        _sanitize_smtp_error(str(exc), alert_config),
+                    )
                     any_smtp_failure = True
                 for cf_email, od in owner_digests.items():
                     body = _build_digest_message(od)

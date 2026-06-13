@@ -7,6 +7,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cert_watch.alerts import AlertConfig, WebhookConfig
+    from cert_watch.auth import AuthProvider
 
 from cert_watch.config.helpers import (
     _default_data_dir,
@@ -280,7 +285,7 @@ class Settings:
             ),
         )
 
-    def build_alert_config(self):
+    def build_alert_config(self) -> AlertConfig | None:
         """Return an AlertConfig if SMTP envs are sufficiently populated, else None."""
         from cert_watch.alerts import AlertConfig
 
@@ -295,7 +300,7 @@ class Settings:
             recipients=list(self.alert_recipients),
         )
 
-    def build_webhook_config(self):
+    def build_webhook_config(self) -> WebhookConfig | None:
         """Return a WebhookConfig if webhook URL is set, else None."""
         from cert_watch.alerts import WebhookConfig
         from cert_watch.http_client import validate_webhook_url
@@ -323,7 +328,7 @@ class Settings:
             allowed_subnets=self.allowed_subnets,
         )
 
-    def build_auth_provider(self):
+    def build_auth_provider(self) -> AuthProvider:
         """Return an AuthProvider based on auth config.
 
         Falls back to kv_store for local_admin_user/local_admin_password_hash when

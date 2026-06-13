@@ -30,11 +30,11 @@ def expiring_cert(expiring_soon_leaf) -> Certificate:
 
 
 def test_evaluate_thresholds_creates_alerts(alert_repo, expiring_cert):
-    # Cert expires in ~5 days; should create alerts for 14 and 7 (leaf thresholds).
+    # Cert expires in ~5 days; only the most urgent newly-tripped threshold fires.
     alerts = evaluate_thresholds(expiring_cert, alert_repo)
     days = expiring_cert.days_until_expiry()
-    expected_count = sum(1 for t in (14, 7, 3, 1) if days <= t)
-    assert len(alerts) == expected_count
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == min(t for t in (14, 7, 3, 1) if days <= t)
 
 
 def test_evaluate_thresholds_no_duplicates(alert_repo, expiring_cert):
@@ -395,23 +395,18 @@ def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):
     assert alert_repo.list_for_cert(cert_id) == []
 
 
-def test_evaluate_thresholds_escalation_after_cooldown(alert_repo, expiring_cert):
-    """FEAT-004: alerts should re-fire after cooldown period expires."""
-    # First call — creates alerts
+def test_evaluate_thresholds_each_threshold_fires_once(alert_repo, expiring_cert):
+    """Each threshold fires exactly once — no re-alerting after cooldown."""
     first = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
-    assert len(first) > 0
-    first_ids = {a.id for a in first}
+    assert len(first) == 1
 
-    # Second call immediately — no new alerts (within cooldown)
+    # Second call immediately — no new alerts (already alerted)
     second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
     assert second == []
 
-    # Third call with cooldown=0 — should create escalation alerts
+    # Third call with cooldown=0 — still no new alerts (each fires exactly once)
     third = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
-    assert len(third) > 0
-    # New alerts should have different IDs
-    third_ids = {a.id for a in third}
-    assert third_ids.isdisjoint(first_ids)
+    assert third == []
 
 
 def test_evaluate_thresholds_no_escalation_within_cooldown(alert_repo, expiring_cert):
@@ -422,13 +417,130 @@ def test_evaluate_thresholds_no_escalation_within_cooldown(alert_repo, expiring_
     assert second == []
 
 
-def test_evaluate_thresholds_custom_cooldown(alert_repo, expiring_cert):
-    """FEAT-004: cooldown_hours parameter should be respected."""
-    # With very short cooldown, re-evaluation can produce new alerts
+def test_evaluate_thresholds_thresholds_never_refire(alert_repo, expiring_cert):
+    """cooldown_hours has no effect: each threshold fires exactly once."""
     evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
-    # All thresholds already have alerts, but cooldown=0 means they're eligible
+    # All thresholds already have alerts, cooldown=0 is irrelevant
     second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
-    assert len(second) > 0
+    assert second == []
+
+
+def test_escalation_one_email_per_new_threshold(alert_repo):
+    """Regression: a cert crossing thresholds over time fires exactly one alert
+    per newly-tripped threshold — not one per already-crossed stage."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+
+    def _make_cert(days_remaining: int) -> Certificate:
+        return Certificate(
+            subject="CN=escalation-test",
+            issuer="CN=CA",
+            not_before=datetime.now(UTC) - timedelta(days=360),
+            not_after=datetime.now(UTC) + timedelta(days=days_remaining, hours=12),
+            san_dns_names=[],
+            fingerprint_sha256="esc" * 22,
+            raw_der=b"",
+            is_leaf=True,
+        )
+
+    # Day 10: crosses t=14 only → one alert for 14
+    alerts_10 = evaluate_thresholds(_make_cert(10), alert_repo)
+    assert len(alerts_10) == 1
+    assert alerts_10[0].threshold_days == 14
+
+    # Day 9: same state, already alerted at 14 → no new alert
+    alerts_9 = evaluate_thresholds(_make_cert(9), alert_repo)
+    assert alerts_9 == []
+
+    # Day 6: crosses t=7 → one alert for 7 (not 14 again)
+    alerts_6 = evaluate_thresholds(_make_cert(6), alert_repo)
+    assert len(alerts_6) == 1
+    assert alerts_6[0].threshold_days == 7
+
+    # Day 2: crosses t=3 → one alert for 3
+    alerts_2 = evaluate_thresholds(_make_cert(2), alert_repo)
+    assert len(alerts_2) == 1
+    assert alerts_2[0].threshold_days == 3
+
+
+def test_first_scan_at_5_days_only_most_urgent(alert_repo):
+    """When a cert is first seen already past multiple thresholds,
+    only the most urgent fires — not every crossed stage."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+
+    cert = Certificate(
+        subject="CN=late-discovery",
+        issuer="CN=CA",
+        not_before=datetime.now(UTC) - timedelta(days=360),
+        not_after=datetime.now(UTC) + timedelta(days=5, hours=12),
+        san_dns_names=[],
+        fingerprint_sha256="lat" * 22,
+        raw_der=b"",
+        is_leaf=True,
+    )
+    alerts = evaluate_thresholds(cert, alert_repo)
+    # Crosses 14 and 7, but only the most urgent (7) fires
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == 7
+
+
+def test_expired_fires_after_expiry_warning_at_same_threshold(alert_repo):
+    """Regression: an 'expired' alert must fire even if an 'expiry_warning'
+    already exists at the same threshold — they are different alert types."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+
+    fp = "trn" * 22
+
+    # Day 1: expiry_warning at t=1
+    cert_1d = Certificate(
+        subject="CN=transition",
+        issuer="CN=CA",
+        not_before=datetime.now(UTC) - timedelta(days=364),
+        not_after=datetime.now(UTC) + timedelta(days=1, hours=12),
+        san_dns_names=[],
+        fingerprint_sha256=fp,
+        raw_der=b"",
+        is_leaf=True,
+    )
+    warnings = evaluate_thresholds(cert_1d, alert_repo)
+    assert len(warnings) == 1
+    assert warnings[0].alert_type == "expiry_warning"
+    assert warnings[0].threshold_days == 1
+
+    # Day -1: cert is expired — 'expired' alert should fire despite t=1 already alerted
+    cert_expired = Certificate(
+        subject="CN=transition",
+        issuer="CN=CA",
+        not_before=datetime.now(UTC) - timedelta(days=366),
+        not_after=datetime.now(UTC) - timedelta(days=1),
+        san_dns_names=[],
+        fingerprint_sha256=fp,
+        raw_der=b"",
+        is_leaf=True,
+    )
+    expired_alerts = evaluate_thresholds(cert_expired, alert_repo)
+    assert len(expired_alerts) == 1
+    assert expired_alerts[0].alert_type == "expired"
+
+
+def test_failed_alert_does_not_block_refire(alert_repo, expiring_cert):
+    """Regression: a failed delivery (status='failed') must not permanently
+    suppress the threshold — it should re-fire on the next evaluation."""
+    # First evaluation creates a pending alert
+    alerts = evaluate_thresholds(expiring_cert, alert_repo)
+    assert len(alerts) == 1
+
+    # Simulate delivery failure
+    alert_repo.mark_failed(alerts[0].id, "SMTP connection refused")
+
+    # Re-evaluate — should create a new alert because the old one is 'failed'
+    second = evaluate_thresholds(expiring_cert, alert_repo)
+    assert len(second) == 1
 
 
 # ---------- send_expiry_digest (Plan 002 WI-2) ----------

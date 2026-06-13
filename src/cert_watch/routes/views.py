@@ -1,4 +1,4 @@
-"""Dashboard, alerts, scan-history, healthz, metrics, CT lookup, CAA check routes."""
+"""Dashboard, alerts, scan-history, healthz, metrics, CAA check routes."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
+from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
-from cert_watch import __commit__, __version__, ct_lookup
+from cert_watch import __commit__, __version__
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
@@ -429,37 +429,12 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
 
 
 @router.get(
-    "/ct-lookup/{domain}",
-    dependencies=[Depends(require_auth), Depends(rate_limit("ct", 10, 60))],
-)
-def ct_lookup_view(request: Request, domain: str) -> dict:
-    result = ct_lookup.query_ct_log(domain)
-    if isinstance(result, str):
-        return {"error": result}
-    return {
-        "domain": domain,
-        "count": len(result),
-        "entries": [
-            {
-                "common_name": e.common_name,
-                "issuer_name": e.issuer_name,
-                "name_value": e.name_value,
-                "not_before": e.not_before.isoformat(),
-                "not_after": e.not_after.isoformat(),
-                "serial_number": e.serial_number,
-            }
-            for e in result
-        ],
-    }
-
-
-@router.get(
     "/caa-check/{domain}",
     dependencies=[Depends(require_auth), Depends(rate_limit("caa", 10, 60))],
 )
 def caa_check_view(request: Request, domain: str) -> dict:
     """FEAT-010: Return CAA records and issuance policy for a domain."""
-    from cert_watch.ct_lookup import _DOMAIN_RE, _MAX_DOMAIN_LEN
+    from cert_watch.caa_check import _DOMAIN_RE, _MAX_DOMAIN_LEN
     if not domain or len(domain) > _MAX_DOMAIN_LEN or not _DOMAIN_RE.match(domain):
         return {"domain": domain, "error": "invalid domain"}
     from cert_watch.caa_check import check_caa
@@ -824,129 +799,6 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
     )
 
 
-@router.get("/discover", response_class=HTMLResponse)
-def discover_view(request: Request) -> HTMLResponse:
-    db = _db_path(request)
-    # BC-097: never call crt.sh in the request path. Read the reconciliation
-    # cache (no I/O) and warm stale/missing domains in a background thread.
-    from cert_watch.ct_monitor import peek_reconciliation, start_reconciliation_refresh
-
-    domains_data = []
-    tracked_count = 0
-    ct_total = 0
-    untracked_all: list[dict] = []
-    misissued_all: list[dict] = []
-    first_seen_all: dict[str, str] = {}
-    private_count = 0
-    reconciled_age: float | None = None
-
-    # Count private-CA hosts (BC-100: trust-anchor-based, not hardcoded issuer names)
-    with _connect(db) as conn:
-        row = conn.execute(
-            """SELECT COUNT(*) FROM certificates c
-            WHERE c.is_leaf = 1 AND c.source = 'scanned'
-            AND (
-                SELECT sp.chain_status FROM scan_posture sp
-                WHERE sp.cert_id = c.id
-                ORDER BY sp.scanned_at DESC, sp.id DESC LIMIT 1
-            ) = 'private'"""
-        ).fetchone()
-        private_count = row[0] if row else 0
-
-    # Get unique base domains from tracked hosts
-    with _connect(db) as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT hostname FROM certificates "
-            "WHERE is_leaf = 1 AND hostname IS NOT NULL"
-        ).fetchall()
-
-    base_domains: set[str] = set()
-    _MULTI_PART_TLDS = {".co.uk", ".org.uk", ".co.jp", ".com.au", ".co.nz", ".net.au"}
-    for r in rows:
-        host = r["hostname"]
-        parts = host.split(".")
-        if len(parts) >= 3 and (".".join(parts[-2:])).lower() in _MULTI_PART_TLDS:
-            base_domains.add(".".join(parts[-3:]))
-        elif len(parts) >= 2:
-            base_domains.add(".".join(parts[-2:]))
-
-    sorted_domains = sorted(base_domains)
-    for domain in sorted_domains:
-        result, age = peek_reconciliation(db, domain)
-        if age is not None:
-            reconciled_age = age if reconciled_age is None else max(reconciled_age, age)
-        if result is None or result.error:
-            continue
-        domains_data.append({
-            "domain": domain,
-            "ct": len(result.ct_hostnames),
-            "tracked": len(result.tracked_hostnames),
-        })
-        ct_total += len(result.ct_hostnames)
-        tracked_count += len(result.tracked_hostnames)
-        for h in result.ct_only_hostnames:
-            untracked_all.append({
-                "host": h,
-                "domain": domain,
-            })
-        # BC-151: mis-issuance + first-seen
-        for m in result.misissued:
-            misissued_all.append({
-                "host": m["host"],
-                "scanned_issuer": m["scanned_issuer"],
-                "ct_issuer": m["ct_issuer"],
-                "domain": domain,
-            })
-        for issuer, first_seen in result.first_seen_by_issuer.items():
-            if issuer not in first_seen_all:
-                first_seen_all[issuer] = first_seen
-
-    # Kick off (or note) a background refresh for any stale/missing domains.
-    # Idempotent and non-blocking; the next page load shows fresh results.
-    reconciling = start_reconciliation_refresh(db, sorted_domains)
-    coverage = round(tracked_count / ct_total * 100) if ct_total > 0 else 0
-
-    # Also get tracked hosts with expected issuers for the allowlist UI
-    tracked_hosts_data: list[dict] = []
-    with _connect(db) as conn:
-        rows = conn.execute(
-            "SELECT id, hostname, port, expected_issuers FROM hosts "
-            "WHERE hostname IS NOT NULL ORDER BY hostname"
-        ).fetchall()
-    for r in rows:
-        raw = r["expected_issuers"] or ""
-        issuers = [i.strip() for i in raw.split(",") if i.strip()] if raw else []
-        tracked_hosts_data.append({
-            "id": r["id"],
-            "hostname": r["hostname"],
-            "port": r["port"],
-            "expected_issuers": issuers,
-            "expected_issuers_str": raw,
-        })
-
-    return templates.TemplateResponse(
-        request=request,
-        name="discover.html",
-        context={
-            "version": __version__, "commit": __commit__,
-            **get_auth_context(request),
-            "active_page": "discover",
-            "domains": domains_data,
-            "coverage": coverage,
-            "total_ct": ct_total,
-            "total_tracked": tracked_count,
-            "untracked": untracked_all,
-            "misissued": misissued_all,
-            "first_seen_by_issuer": first_seen_all,
-            "private_count": private_count,
-            "reconciling": reconciling,
-            "reconciled_age": int(reconciled_age) if reconciled_age is not None else None,
-            "tracked_hosts": tracked_hosts_data,
-            **get_csrf_context(request),
-        },
-    )
-
-
 def _scan_error_reason(error_message: str | None) -> str:
     """Map a scan error_message to a canonical counter reason label."""
     if not error_message:
@@ -977,7 +829,7 @@ def metrics(request: Request) -> PlainTextResponse:
     cert_expiry_gauge = Gauge(
         "cert_watch_cert_expiry_days",
         "Days until certificate expiry",
-        ["host", "subject"],
+        ["host", "subject", "fingerprint"],
         registry=registry,
     )
     hosts_gauge = Gauge(
@@ -987,7 +839,7 @@ def metrics(request: Request) -> PlainTextResponse:
     )
     certs_gauge = Gauge(
         "cert_watch_certificates_tracked",
-        "Number of certificate groups",
+        "Number of leaf certificate groups",
         registry=registry,
     )
     expired_gauge = Gauge(
@@ -995,38 +847,87 @@ def metrics(request: Request) -> PlainTextResponse:
         "Number of expired certificates",
         registry=registry,
     )
-    scan_errors_counter = Counter(
-        "cert_scan_errors_total",
-        "Total scan errors by host and reason",
+    urgency_gauge = Gauge(
+        "cert_watch_certificates_by_urgency",
+        "Leaf certificates grouped by expiry urgency",
+        ["urgency"],
+        registry=registry,
+    )
+    posture_gauge = Gauge(
+        "cert_watch_certificates_by_posture",
+        "Leaf certificates grouped by TLS posture grade",
+        ["grade"],
+        registry=registry,
+    )
+    scan_errors_gauge = Gauge(
+        "cert_watch_scan_errors",
+        "Recorded scan failures by host and reason (gauge, not counter — "
+        "old records are purged by retention)",
         ["host", "reason"],
         registry=registry,
     )
 
+    now = datetime.now(UTC)
     with _connect(db) as conn:
         cert_rows = conn.execute(
-            "SELECT hostname, port, subject, not_after FROM certificates WHERE is_leaf = 1"
+            "SELECT c.id, c.hostname, c.port, c.subject, c.not_after, "
+            "c.fingerprint_sha256 "
+            "FROM certificates c WHERE c.is_leaf = 1"
         ).fetchall()
+
+        cert_ids = [r["id"] for r in cert_rows]
+        posture_map: dict[str, str] = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
+
+        urgency_counts = {"healthy": 0, "warning": 0, "critical": 0, "expired": 0}
+        grade_counts: dict[str, int] = {
+            "a_plus": 0, "a": 0, "b": 0, "c": 0, "f": 0, "unknown": 0,
+        }
+        expired = 0
         for r in cert_rows:
             host_label = f'{r["hostname"]}:{r["port"]}' if r["hostname"] else "(uploaded)"
             not_after = _parse_iso(r["not_after"])
-            days = (not_after - datetime.now(UTC)).days
-            cert_expiry_gauge.labels(host=host_label, subject=r["subject"]).set(days)
+            days = (not_after - now).days
+            fp_short = (r["fingerprint_sha256"] or "")[:16]
+            cert_expiry_gauge.labels(
+                host=host_label, subject=r["subject"], fingerprint=fp_short,
+            ).set(days)
+            if days < 0:
+                urgency_counts["expired"] += 1
+                expired += 1
+            elif days < 7:
+                urgency_counts["critical"] += 1
+            elif days < 30:
+                urgency_counts["warning"] += 1
+            else:
+                urgency_counts["healthy"] += 1
+            grade = posture_map.get(r["id"], "unknown")
+            if grade not in grade_counts:
+                grade_counts[grade] = 0
+            grade_counts[grade] += 1
+
         total_certs = len(cert_rows)
-        expired = sum(
-            1 for r in cert_rows
-            if (_parse_iso(r["not_after"]) - datetime.now(UTC)).days < 0
-        )
         hosts_row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
         total_hosts = hosts_row[0] if hosts_row else 0
 
-        # Scan errors (BC-109)
         error_rows = conn.execute(
-            "SELECT hostname, port, error_message FROM scan_history WHERE status = 'failure'"
+            "SELECT hostname, port, error_message, COUNT(*) as cnt "
+            "FROM scan_history WHERE status = 'failure' "
+            "GROUP BY hostname, port, error_message"
         ).fetchall()
+        error_counts: dict[tuple[str, str], int] = {}
         for r in error_rows:
             host_label = f'{r["hostname"]}:{r["port"]}'
             reason = _scan_error_reason(r["error_message"])
-            scan_errors_counter.labels(host=host_label, reason=reason).inc()
+            error_counts[(host_label, reason)] = (
+                error_counts.get((host_label, reason), 0) + r["cnt"]
+            )
+
+    for urgency, count in urgency_counts.items():
+        urgency_gauge.labels(urgency=urgency).set(count)
+    for grade, count in grade_counts.items():
+        posture_gauge.labels(grade=grade).set(count)
+    for (host_label, reason), count in error_counts.items():
+        scan_errors_gauge.labels(host=host_label, reason=reason).set(count)
 
     hosts_gauge.set(total_hosts)
     certs_gauge.set(total_certs)

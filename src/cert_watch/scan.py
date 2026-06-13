@@ -10,6 +10,10 @@ import typing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cert_watch.database import CertificateRepository
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
@@ -580,7 +584,7 @@ def _stage_events(
 
 def store_scanned(
     entry: ScannedEntry,
-    repo_path_or_repo,
+    repo_path_or_repo: str | Path | CertificateRepository,
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,
@@ -823,7 +827,7 @@ async def scan_host_async(
 
 async def store_scanned_async(
     entry: ScannedEntry,
-    repo_path_or_repo,
+    repo_path_or_repo: str | Path | CertificateRepository,
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,

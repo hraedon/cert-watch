@@ -6,7 +6,7 @@ All-in-one observability for the **certificate lifecycle** — built for small a
 mid-sized businesses that need one self-hosted place to see every TLS
 certificate they depend on. Live host scanning **and** offline file upload feed a
 web dashboard, REST API, and alerting; signature-verified chain validation, TLS
-posture grading, and Certificate Transparency reconciliation turn "is it
+posture grading, and chain validation turn "is it
 expiring?" into "is the whole estate healthy?"
 
 Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), and multi-cert chain bundles.
@@ -21,7 +21,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
 - **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
-- **Certificate Transparency** — lookup certificates via crt.sh
+- **Certificate Transparency** — removed in maintenance mode (was crt.sh-based lookup; see CHANGELOG)
 - **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
 - **Discover** — CT-based coverage reconciliation: surfaces hostnames seen in CT but not tracked, plus a private-CA inventory
 - **Bulk import** — CSV upload for adding many hosts at once
@@ -184,10 +184,15 @@ All configuration is via environment variables.
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of alert records to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_EVENT_RETENTION_DAYS` | `30` | Days of event-log entries to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_DRIFT_ALERTS` | `1` | Set `0` to disable drift alerts (issuer change, key-size drop, SHA-1 downgrade, posture/TLS downgrade) |
 | `CERT_WATCH_RENEWAL_WINDOW_DAYS` | `30` | Window for the renewal-stall alert: a leaf cert this many days from expiry with no successor certificate raises a `renewal_stalled` alert. `0` disables it |
-| `CERT_WATCH_CT_LOG_URL` | `https://crt.sh` | CT log base URL for Discover/CT lookups; point at a private CT log if needed (validated http/https) |
 | `CERT_WATCH_CHECK_REVOCATION` | `0` | Set `1` to probe OCSP/CRL reachability during posture grading (findings are warnings, not penalties) |
+| `CERT_WATCH_SCAN_TIMEOUT` | `10` | Per-scan TLS connection timeout (seconds) |
+| `CERT_WATCH_SCAN_RETRIES` | `2` | Number of retry attempts for a failing scan |
+| `CERT_WATCH_SCAN_RETRY_BACKOFF` | `1` | Base delay (seconds) for scan retry backoff |
+| `CERT_WATCH_SCAN_MAX_OUTPUT_BYTES` | `1048576` | Maximum bytes to read from the openssl `s_client` output (1 MiB) |
+| `CERT_WATCH_HSTS_TIMEOUT` | `5` | Timeout (seconds) for the HSTS header probe on port 443 |
 | `CERT_WATCH_RELOAD` | `0` | Set `1` to enable uvicorn auto-reload on code changes (development only) |
 | `CERT_WATCH_DNS_SERVERS` | — | Comma-separated DNS server IPs for hostname resolution during scans (e.g. internal DCs). Falls back to the system resolver |
 | `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
@@ -218,6 +223,17 @@ shop — but should be tightened for sensitive environments:
 
 ### Alerts (SMTP)
 
+cert-watch supports two alerting modes:
+
+- **Per-threshold alerts** (default): each newly-tripped expiry threshold sends
+  an alert — one when a cert crosses 14 days, another at 7, etc. Best for a
+  small number of critical certificates that need immediate attention.
+- **Digest mode** (`ALERT_DIGEST_ONLY=1`): sends one global email plus one
+  per-owner email (each listing only their certs) listing all certificates
+  expiring within 30 days. **Recommended for new deployments** — it gives you
+  a daily summary without inbox noise. Renewal-stall alerts still fire
+  individually. The weekly renewal digest runs regardless of mode.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SMTP_HOST` | — | SMTP server hostname |
@@ -226,7 +242,7 @@ shop — but should be tightened for sensitive environments:
 | `SMTP_PASSWORD` | — | SMTP password (optional; `SMTP_PASSWORD_FILE` supported) |
 | `ALERT_FROM` | — | Sender email address |
 | `ALERT_RECIPIENTS` | — | Comma-separated recipient addresses |
-| `ALERT_DIGEST_ONLY` | `0` | Set `1` to batch alerts into a single digest rather than one message per certificate |
+| `ALERT_DIGEST_ONLY` | `0` | Set `1` for digest mode (recommended for new deployments) |
 
 ### Alerts (Webhook)
 
@@ -285,6 +301,7 @@ anyway (dev / air-gapped), set `CERT_WATCH_ALLOW_UNAUTH=1`.
 | `LDAP_CA_CERT` | — | CA cert for LDAPS (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
 | `LDAP_REQUIRED_GROUPS` | — | Comma-separated group DNs; transitive membership check |
 | `LDAP_CONNECT_TIMEOUT` | `5` | LDAP connection timeout (seconds) |
+| `LDAP_GROUP_FILTER` | AD transitive OID | LDAP group filter for transitive membership checks. Use `{group}` as the placeholder for the target group DN (default uses the AD `1.2.840.113556.1.4.1941` matching rule OID). Set to a standard `member={group}` filter for non-AD directories |
 
 Requires: `pip install cert-watch[auth-ldap]`
 
@@ -372,6 +389,8 @@ only); they remain subject to the same per-IP rate limits as the rest of `/api/*
 | `CERT_WATCH_AUTH_SECRET` | persisted | HMAC key for session cookies. If unset, a key is generated and persisted to `${DATA_DIR}/.auth_secret` so sessions survive restarts. `*_FILE` supported. Set explicitly in production (or use the file the installers write) |
 | `CERT_WATCH_CSRF_SECRET` | persisted | HMAC key for CSRF tokens; same persistence behaviour as `CERT_WATCH_AUTH_SECRET`. `*_FILE` supported |
 | `CERT_WATCH_COOKIE_SECURE` | `1` | Cookies are `Secure`-flagged by default. Set `0` only for plain-HTTP local dev |
+| `CERT_WATCH_SESSION_TTL` | `28800` | Session-cookie lifetime in seconds (default 8 hours) |
+| `CERT_WATCH_CSP_REPORT_URI` | — | URL for CSP violation reports (added to the `report-uri` / `report-to` directives) |
 | `CERT_WATCH_CSRF_DISABLED` | `0` | Set `1` to disable CSRF (testing only) |
 
 > Rotating `CERT_WATCH_AUTH_SECRET` invalidates existing sessions and requires
@@ -460,6 +479,35 @@ cert-watch verify-report compliance-report.json
 > on-demand lookup (`/caa-check`), not yet stored per scan, so it is reported
 > honestly rather than estimated. Per-scan CAA storage is a planned follow-on.
 
+## Prometheus metrics
+
+The `/metrics` endpoint exposes Prometheus-native gauges for integration with
+Grafana, Datadog, or any Prometheus-compatible scraping system. When
+`CERT_WATCH_METRICS_TOKEN` is set, send it as a bearer token.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `cert_watch_cert_expiry_days` | gauge | `host`, `subject`, `fingerprint` | Days until expiry (negative = expired) |
+| `cert_watch_certificates_tracked` | gauge | — | Total leaf certificate count |
+| `cert_watch_certificates_expired` | gauge | — | Count of expired certificates |
+| `cert_watch_certificates_by_urgency` | gauge | `urgency` | Count by urgency bucket (`healthy`, `warning`, `critical`, `expired`) — matches dashboard |
+| `cert_watch_certificates_by_posture` | gauge | `grade` | Count by TLS posture grade (`a_plus`, `a`, `b`, `c`, `f`, `unknown`) |
+| `cert_watch_hosts_tracked` | gauge | — | Total tracked host count |
+| `cert_watch_scan_errors` | gauge | `host`, `reason` | Recorded scan failures (gauge — old records are purged by retention) |
+
+Pre-built alert rules for the Prometheus Operator are in
+[`deploy/k8s/prometheus-rules.yaml`](deploy/k8s/prometheus-rules.yaml) (CertExpiringCritical, CertExpiringWarning, CertExpired).
+
+Example scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: cert-watch
+    static_configs:
+      - targets: ["cert-watch-service:8000"]
+    bearer_token: "<your-metrics-token>"
+```
+
 ## Endpoints
 
 JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
@@ -472,7 +520,6 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/alerts` | Alerts view |
 | `GET` | `/scan-history` | Per-scan history |
 | `GET` | `/insights` | Expiration calendar + TLS/grade trends |
-| `GET` | `/discover` | CT coverage reconciliation + private-CA inventory |
 | `GET` | `/audit` | Audit log |
 | `GET` | `/reports/compliance` | Compliance report (print-to-PDF; `?tag=` to scope) |
 | `GET` | `/settings` | Settings (admin) |
@@ -492,9 +539,7 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `PUT` | `/api/hosts/{id}/tags` | Set a host's tags |
 | `GET` | `/api/hosts` | List tracked hosts |
 | `GET` | `/api/alerts` | List alerts |
-| `GET` | `/ct-lookup/{domain}` | Certificate Transparency lookup |
 | `GET` | `/caa-check/{domain}` | CAA record lookup |
-| `GET` | `/api/ct/reconciliation?domain=` | CT reconciliation (coverage gaps) |
 | `GET` | `/api/reports/compliance.json` | Signed compliance report (JSON; `?tag=` to scope) |
 | `GET` | `/api/reports/compliance.csv` | Signed compliance report (CSV) |
 | `POST` | `/hosts` | Add host (form) |
@@ -521,7 +566,6 @@ src/cert_watch/
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
   config.py            Environment-based settings
-  ct_lookup.py         Certificate Transparency lookups
   posture.py           TLS posture grading
   database/            SQLite persistence layer (repositories, queries, migrations)
   scan.py              TLS scanning
@@ -552,7 +596,7 @@ ACME issuance/renewal, **Certimate**.
 
 cert-watch's value is the bundle an SMB otherwise has to assemble piecemeal,
 delivered as one self-contained unit: live scan **+** offline upload,
-signature-verified chain validation, TLS posture grading, CT reconciliation,
+signature-verified chain validation, TLS posture grading,
 directory auth (LDAP/Entra), and an audit log. (It also began life as a
 hand-built comparison point for
 [software-factory-2](https://github.com/hraedon/software-factory-2); that origin

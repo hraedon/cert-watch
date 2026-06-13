@@ -330,6 +330,8 @@ async def lifespan(app: FastAPI):
 
         repo = SqliteAlertRepository(s.db_path)
         if s.alert_digest_only:
+            evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
+            process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
             delivered = send_expiry_digest(s.db_path, alert_cfg, webhook_config=webhook_cfg)
             return {"sent": 1 if delivered else 0, "failed": 0 if delivered else 1}
         evaluate_all_certs(s.db_path, repo)
@@ -354,11 +356,6 @@ async def lifespan(app: FastAPI):
                 logger.exception("weekly renewal digest failed")
         return {"sent": 0, "failed": 0}
 
-    def _ct_check() -> dict:
-        """Scheduled CT monitoring: query crt.sh for every tracked host domain."""
-        from cert_watch.ct_monitor import run_ct_monitor
-        return run_ct_monitor(s.db_path)
-
     def _maintenance() -> None:
         """Daily housekeeping: trim audit log, cert history, alerts, and events."""
         from cert_watch.audit import purge_old_audit
@@ -377,7 +374,6 @@ async def lifespan(app: FastAPI):
     start_scheduler(
         scan_fn=_scan_all,
         alert_fn=_alerts,
-        ct_fn=_ct_check,
         maintenance_fn=_maintenance,
         digest_fn=_maybe_run_weekly_digest,
         hour=s.sched_hour,
