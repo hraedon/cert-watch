@@ -111,7 +111,7 @@ The positioning above is the lens for what we build next. Concretely:
 ## The SC-081 window
 
 The CA/Browser Forum's Ballot SC-081 phases the maximum TLS-certificate
-validity from 398 days (current) down through 200 days (2026-09-15) and 100
+validity from 398 days (current) down through 200 days (2026-03-15) and 100
 days (2027-03-15) to a final 47 days (2029-03-15). This is the one predictable
 demand shock in the certificate-observability niche: every public-trust
 certificate in an SMB's estate must be re-issued more frequently, and renewal
