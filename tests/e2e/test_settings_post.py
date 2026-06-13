@@ -85,20 +85,14 @@ def _login(
 # Module-scoped authed server fixture (starts in needs_setup mode)
 # ---------------------------------------------------------------------------
 
-@pytest.fixture(scope="module")
-def authed_server(
-    tmp_path_factory: pytest.TempPathFactory, browser: Browser,
-) -> Iterator[str]:
-    """Server with a local admin created via the setup wizard.
-
-    The wizard is driven through a temporary browser context so credentials
-    are persisted to kv_store (password-change form needs it) and the
-    server's auth_provider is updated in-process.
+def _spawn_authed_server(
+    data_dir: Path, browser: Browser,
+) -> tuple[subprocess.Popen, str]:
+    """Start a server and create a local admin (e2eadmin / newE2ePass1) via the
+    setup wizard, driven through a throwaway browser context so credentials are
+    persisted to kv_store and the server's auth_provider is updated in-process.
     """
-    data_dir: Path = tmp_path_factory.mktemp("cw-settings-auth-data")
     proc, base = _start_server(data_dir)
-
-    # Run the setup wizard through a throwaway browser context
     ctx = browser.new_context()
     pg = ctx.new_page()
     pg.goto(f"{base}/setup")
@@ -108,15 +102,53 @@ def authed_server(
     pg.get_by_test_id("setup-submit-btn").click()
     pg.wait_for_url("**/*", timeout=5000)
     ctx.close()
+    return proc, base
 
+
+def _terminate(proc: subprocess.Popen) -> None:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+
+
+@pytest.fixture(scope="module")
+def authed_server(
+    tmp_path_factory: pytest.TempPathFactory, browser: Browser,
+) -> Iterator[str]:
+    """Server with a local admin, used by tests that depend on the admin
+    password staying at ``newE2ePass1`` for the lifetime of the module.
+
+    Password-mutating tests must NOT use this fixture — rotating the admin
+    password here breaks every later login-dependent test sharing it. Those
+    tests use ``authed_server_mutable`` instead, which is isolated for exactly
+    that reason.
+    """
+    data_dir: Path = tmp_path_factory.mktemp("cw-settings-auth-data")
+    proc, base = _spawn_authed_server(data_dir, browser)
     try:
         yield base
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        _terminate(proc)
+
+
+@pytest.fixture(scope="module")
+def authed_server_mutable(
+    tmp_path_factory: pytest.TempPathFactory, browser: Browser,
+) -> Iterator[str]:
+    """Isolated authed server for tests that rotate the admin password.
+
+    Kept separate from ``authed_server`` so a password change cannot pollute
+    the login-dependent form tests (the order-dependent failure mode this
+    suite is meant to guard against, not reproduce).
+    """
+    data_dir: Path = tmp_path_factory.mktemp("cw-settings-auth-mutable-data")
+    proc, base = _spawn_authed_server(data_dir, browser)
+    try:
+        yield base
+    finally:
+        _terminate(proc)
 
 
 # ===================================================================
@@ -310,9 +342,33 @@ class TestUnauthedSettingsRedirect:
 
 
 class TestSettingsPasswordPost:
-    """POST /settings/change-password — local admin password rotation."""
+    """POST /settings/change-password — local admin password rotation.
 
-    def test_change_password_roundtrip(self, page: Page, authed_server: str) -> None:
+    Both tests share the module-scoped ``authed_server_mutable`` fixture. The
+    non-mutating wrong-current test is defined first so it runs against the
+    original password; ``test_change_password_roundtrip`` runs last because it
+    permanently rotates the admin password on that server.
+    """
+
+    def test_change_password_wrong_current_fails(
+        self, page: Page, authed_server_mutable: str
+    ) -> None:
+        authed_server = authed_server_mutable
+        _login(page, authed_server, "e2eadmin", "newE2ePass1")
+        page.goto(f"{authed_server}/settings?tab=auth")
+
+        page.locator("#current_password").fill("wrongPassword")
+        page.locator("#new_password").fill("anotherPass1")
+        page.locator("#confirm_password").fill("anotherPass1")
+        page.locator("form[action='/settings/change-password']").locator('button[type="submit"]').click()
+
+        expect(page).to_have_url(re.compile(r"error="), timeout=5000)
+        expect(page.locator("body")).to_contain_text("incorrect")
+
+    def test_change_password_roundtrip(
+        self, page: Page, authed_server_mutable: str
+    ) -> None:
+        authed_server = authed_server_mutable
         # Login with current password
         _login(page, authed_server, "e2eadmin", "newE2ePass1")
         # Verify login succeeded
@@ -338,20 +394,6 @@ class TestSettingsPasswordPost:
         # Verify the new password works
         _login(page, authed_server, "e2eadmin", "rotatedPass1")
         expect(page.locator("body")).to_contain_text("Certificates")
-
-    def test_change_password_wrong_current_fails(
-        self, page: Page, authed_server: str
-    ) -> None:
-        _login(page, authed_server, "e2eadmin", "newE2ePass1")
-        page.goto(f"{authed_server}/settings?tab=auth")
-
-        page.locator("#current_password").fill("wrongPassword")
-        page.locator("#new_password").fill("anotherPass1")
-        page.locator("#confirm_password").fill("anotherPass1")
-        page.locator("form[action='/settings/change-password']").locator('button[type="submit"]').click()
-
-        expect(page).to_have_url(re.compile(r"error="), timeout=5000)
-        expect(page.locator("body")).to_contain_text("incorrect")
 
 
 class TestAuthedSettingsPostForms:
