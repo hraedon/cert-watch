@@ -101,6 +101,24 @@ The positioning above is the lens for what we build next. Concretely:
 - **Deliberately decline** features that make an external cloud service a
   dependency, or that drift toward a different product class — external
   cloud-API discovery, reliance on a hosted CT-streaming feed, active network
-  scanning, and ACME renewal automation. (Self-hostable versions of some of
-  these stay on the table; the line is *no external-SaaS dependency*, not *no
-  egress*.) Plan 017 records *why*, so the comparison stays legible.
+  scanning, ACME renewal automation, and **private-CA / AD CS certificate
+  inventory**. cert-watch observes public-trust TLS certificates; private-CA
+  lifecycle management is a different product class (the CA itself already has
+  an issuance log). (Self-hostable versions of some declined features stay on
+  the table; the line is *no external-SaaS dependency*, not *no egress*.)
+  Plan 017 records *why*, so the comparison stays legible.
+
+## The SC-081 window
+
+The CA/Browser Forum's Ballot SC-081 phases the maximum TLS-certificate
+validity from 398 days (current) down through 200 days (2026-09-15) and 100
+days (2027-03-15) to a final 47 days (2029-03-15). This is the one predictable
+demand shock in the certificate-observability niche: every public-trust
+certificate in an SMB's estate must be re-issued more frequently, and renewal
+failures that were tolerable on a 12-month cadence become outages on a 47-day
+one. cert-watch's SC-081 readiness report (Plan 048), lifetime-relative alert
+thresholds, and per-host renewal-analytics are the specific response. The
+window is 2026–2029: demand for renewal monitoring rises, cert-watch is
+positioned for it, and the maintenance-mode plan (Plan 049) keeps the date-keyed
+policy logic accurate through the milestone transitions without expanding the
+product surface.

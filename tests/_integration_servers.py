@@ -112,7 +112,7 @@ _IS_BLOCKED_IP_PATCH_TARGETS = [
     "cert_watch.scan_conn._is_blocked_ip",
     "cert_watch.http_client._is_blocked_ip",
     "cert_watch.routes.settings.auth._is_blocked_ip",
-    "cert_watch.routes.settings.core._is_blocked_ip",
+    "cert_watch.routes.settings.ca_probe._is_blocked_ip",
     "cert_watch.routes.settings.smtp._is_blocked_ip",
 ]
 

@@ -7,6 +7,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.events import (
     ALL_EVENT_TYPES,
@@ -16,8 +17,9 @@ from cert_watch.events import (
 )
 from cert_watch.http_client import validate_webhook_url
 from cert_watch.middleware import check_csrf, require_admin_form
-from cert_watch.routes._deps import _db_path
-from cert_watch.routes.settings.core import __commit__, __version__, templates
+from cert_watch.routes._deps import _db_path, get_templates
+
+templates = get_templates()
 
 router = APIRouter()
 

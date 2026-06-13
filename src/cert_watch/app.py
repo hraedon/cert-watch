@@ -302,6 +302,7 @@ async def lifespan(app: FastAPI):
                     retries=s.scan_retries, allow_private=s.allow_private,
                     allowed_subnets=s.allowed_subnets,
                     dns_servers=s.dns_servers,
+                    max_output_bytes=s.scan_max_output_bytes,
                 ),
                 alert_fn=lambda: {"sent": 0, "failed": 0},
                 db_path=s.db_path,

@@ -10,7 +10,7 @@ from cert_watch.database import SqliteApiKeyRepository
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes.settings.core import _render_api_keys
+from cert_watch.routes.settings.render import _render_api_keys
 
 router = APIRouter()
 

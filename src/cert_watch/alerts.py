@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import smtplib
+import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -214,7 +215,7 @@ def evaluate_all_certs(
                 ]
                 if _users_in_role:
                     role_user_emails[_role.email.casefold()] = [u.email for u in _users_in_role]
-    except Exception:
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
         logger.debug("Role-based alert routing unavailable", exc_info=True)
         role_user_emails = {}
 
@@ -469,7 +470,7 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
                 s.login(config.smtp_user, config.smtp_password)
             s.send_message(msg)
         return True
-    except Exception as exc:  # noqa: BLE001 — AC-06 says do not raise
+    except Exception as exc:  # noqa: BLE001 — AC-06: never raise; SMTP is an external service with unpredictable failure modes
         alert.error_message = _sanitize_smtp_error(str(exc), config)
         return False
 
@@ -504,7 +505,7 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
     except SSRFBlockedError as exc:
         alert.error_message = f"webhook URL blocked by SSRF policy: {exc}"
         return False
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — webhook is an external service with unpredictable failure modes
         alert.error_message = _sanitize_webhook_error(str(exc), config)
         return False
 
@@ -561,7 +562,7 @@ def send_webhook_resolve(
             _sanitize_webhook_error(str(exc), config),
         )
         return False
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — webhook resolve is an external service with unpredictable failure modes
         logger.warning(
             "%s resolve failed for cert %s: %s",
             config.kind,
@@ -841,7 +842,7 @@ def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SS
         if config.smtp_user:
             s.login(config.smtp_user, config.smtp_password)
         return s
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — SMTP is an external service with unpredictable failure modes
         logger.warning(
             "SMTP connect failed: %s",
             _sanitize_smtp_error(str(exc), config),
@@ -878,7 +879,7 @@ def _send_digest_smtp(
         try:
             _conn.send_message(msg)
             return True
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
             logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
             return False
     for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
@@ -892,7 +893,7 @@ def _send_digest_smtp(
             finally:
                 with contextlib.suppress(Exception):
                     conn.quit()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — SMTP retry loop, external service
             logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
     return False
 
@@ -1007,7 +1008,7 @@ def send_expiry_digest(
                     try:
                         smtp_conn.send_message(msg)
                         any_smtp_success = True
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
                         logger.warning(
                             "global digest failed: %s",
                             _sanitize_smtp_error(str(exc), config),
@@ -1022,7 +1023,7 @@ def send_expiry_digest(
                     try:
                         smtp_conn.send_message(msg)
                         any_smtp_success = True
-                    except Exception as exc:
+                    except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
                         logger.warning(
                             "owner digest for %s failed: %s",
                             original,

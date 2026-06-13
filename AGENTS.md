@@ -186,3 +186,27 @@ Project is registered with agent-notes (postgres-backed), resolving via path `/p
 - `ci.yml` — ruff + pytest (unit) on every push/PR
 - `e2e.yml` — Playwright E2E on every push/PR
 - `release.yml` — on `main`: multi-arch image build → GHCR → commit kustomize tag bump (skips itself via `paths-ignore`)
+
+## Maintenance mode
+
+This project entered maintenance mode after Plan 049 (2026-06-13). Development is done; the surface is closed. Work is now limited to:
+
+**What gets done:**
+- **Defect fixes** — bugs in existing functionality
+- **Security** — CVE response, auth/session/CSRF hardening, dependency patches
+- **Dependency updates** — monthly `uv lock` refresh + `trivy` review; CRITICAL CVEs out-of-cycle
+- **SC-081 date-logic upkeep** — the policy pack in `policy_packs/cab_forum_sc081.py` changes behavior on milestone dates (2026-03-15, 2027-03-15, 2029-03-15); freeze-time tests in `tests/test_policy_sc081.py` guard the boundaries
+- **Doc truth-keeping** — AGENTS.md, positioning.md, and README must stay accurate
+
+**What doesn't get done (without a priced plan):**
+- New alert channels, auth providers, report formats, or pages
+- New product surface of any kind
+- Postgres backend (Plan 043 — deferred; SQLite single-writer is a documented feature)
+- ACME renewal automation or cloud-API discovery (positioning.md non-goals)
+- Private-CA / AD CS certificate inventory (declined 2026-06-13; see Plan 047 decision 4)
+
+**Conventions for maintenance agents:**
+- The test suite (2039+ unit, 18+ E2E, 9+ integration) is the safety net. Run it after every change.
+- The ruff + pytest gates in CI are the authority. A passing local run is necessary but not sufficient — push and watch CI.
+- When fixing a bug, add a regression test that fails without the fix. The suite is the only brake that survives session boundaries.
+- `docs/positioning.md` records the product identity and what was deliberately declined. Consult it before adding features.

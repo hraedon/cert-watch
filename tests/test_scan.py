@@ -1,8 +1,10 @@
 import asyncio
 import socket
 import ssl
-import subprocess
+import sys
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import SqliteCertificateRepository
@@ -26,6 +28,7 @@ from cert_watch.scan import (
     store_scanned,
     store_scanned_async,
 )
+from cert_watch.scan_conn import ScanOutputTooLargeError, _format_connect_host, _run_openssl
 
 
 def _fake_ssl_socket(der_chain: list[bytes]) -> MagicMock:
@@ -253,19 +256,13 @@ def test_openssl_hostname_injection_blocked(monkeypatch):
 
 
 def test_openssl_timeout_expired(monkeypatch, self_signed_leaf):
-    """subprocess.TimeoutExpired returns empty chain."""
+    """TimeoutError from the subprocess helper returns empty chain."""
     monkeypatch.setattr(
         "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    mock_proc = MagicMock()
-    mock_proc.configure_mock(
-        returncode=1,
-        stdout=b"",
-        stderr=b"timeout",
-    )
-    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["openssl"], timeout=1)
+    with patch("cert_watch.scan_conn._run_openssl") as mock_run:
+        mock_run.side_effect = TimeoutError("timed out")
         chain, proto = _scan_via_openssl("slow.example.com", 443, timeout=1)
     assert chain == []
     assert proto == ""
@@ -277,7 +274,7 @@ def test_openssl_file_not_found(monkeypatch):
         "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
+    with patch("cert_watch.scan_conn._run_openssl") as mock_run:
         mock_run.side_effect = FileNotFoundError("no openssl")
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
@@ -290,11 +287,7 @@ def test_openssl_nonzero_return(monkeypatch):
         "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    mock_proc = MagicMock()
-    mock_proc.returncode = 2
-    mock_proc.stdout = b""
-    mock_proc.stderr = b"some error"
-    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(b"", b"some error", 2)):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
     assert proto == ""
@@ -306,11 +299,8 @@ def test_openssl_no_pem_in_output(monkeypatch):
         "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.stdout = b"Protocol  : TLSv1.3\nNo certs here\n"
-    mock_proc.stderr = b""
-    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+    stdout = b"Protocol  : TLSv1.3\nNo certs here\n"
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(stdout, b"", 0)):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
     assert proto == "TLSv1.3"
@@ -328,11 +318,9 @@ def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
         b"!!!not-base64!!!"
         b"\n-----END CERTIFICATE-----\n"
     )
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.stdout = valid_pem + invalid_pem
-    mock_proc.stderr = b""
-    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+    with patch(
+        "cert_watch.scan_conn._run_openssl", return_value=(valid_pem + invalid_pem, b"", 0),
+    ):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert len(chain) == 1
     assert chain[0] == self_signed_leaf.der
@@ -347,11 +335,10 @@ def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
     combined = _pem_block(chain_triplet["leaf"].der) + _pem_block(
         chain_triplet["intermediate"].der
     )
-    mock_proc = MagicMock()
-    mock_proc.returncode = 1
-    mock_proc.stdout = b"Protocol  : TLSv1.2\n" + combined
-    mock_proc.stderr = b"verify error"
-    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+    stdout = b"Protocol  : TLSv1.2\n" + combined
+    with patch(
+        "cert_watch.scan_conn._run_openssl", return_value=(stdout, b"verify error", 1),
+    ):
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert len(chain) == 2
     assert chain[0] == chain_triplet["leaf"].der
@@ -360,16 +347,104 @@ def test_openssl_success_with_protocol(monkeypatch, chain_triplet):
 
 
 def test_openssl_oserror_during_run(monkeypatch):
-    """OSError during subprocess.run (e.g., permission denied) returns empty."""
+    """OSError during subprocess execution (e.g., permission denied) returns empty."""
     monkeypatch.setattr(
         "cert_watch.scan_conn._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
     )
-    with patch("cert_watch.scan_conn.subprocess.run") as mock_run:
+    with patch("cert_watch.scan_conn._run_openssl") as mock_run:
         mock_run.side_effect = OSError("permission denied")
         chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert chain == []
     assert proto == ""
+
+
+# ---------- _format_connect_host (WI-036) ----------
+
+
+def test_format_connect_host_ipv4():
+    assert _format_connect_host("93.184.216.34") == "93.184.216.34"
+
+
+def test_format_connect_host_ipv6_loopback():
+    assert _format_connect_host("::1") == "[::1]"
+
+
+def test_format_connect_host_ipv6_full():
+    assert _format_connect_host("2001:db8::1") == "[2001:db8::1]"
+
+
+def test_format_connect_host_ipv6_mapped():
+    assert _format_connect_host("::ffff:192.0.2.1") == "[::ffff:192.0.2.1]"
+
+
+def test_format_connect_host_hostname():
+    assert _format_connect_host("example.com") == "example.com"
+
+
+def test_format_connect_host_hostname_with_dots():
+    assert _format_connect_host("sub.example.com") == "sub.example.com"
+
+
+# ---------- _scan_via_openssl IPv6 -connect argument (WI-036) ----------
+
+
+def test_scan_via_openssl_ipv4_pinned_ip_connect_arg(monkeypatch):
+    """IPv4 pinned_ip produces '-connect 93.184.216.34:443'."""
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not resolve")),
+    )
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(b"", b"", 0)) as mock_run:
+        _scan_via_openssl("example.com", 443, timeout=1, pinned_ip="93.184.216.34")
+    cmd = mock_run.call_args[0][0]
+    connect_idx = cmd.index("-connect")
+    assert cmd[connect_idx + 1] == "93.184.216.34:443"
+
+
+def test_scan_via_openssl_ipv6_pinned_ip_connect_arg(monkeypatch):
+    """IPv6 pinned_ip produces '-connect [2001:db8::1]:443'."""
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("should not resolve")),
+    )
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(b"", b"", 0)) as mock_run:
+        _scan_via_openssl(
+            "example.com", 443, timeout=1, pinned_ip="2001:db8::1",
+            allow_private=True, allowed_subnets=("2001:db8::/32",),
+        )
+    cmd = mock_run.call_args[0][0]
+    connect_idx = cmd.index("-connect")
+    assert cmd[connect_idx + 1] == "[2001:db8::1]:443"
+
+
+def test_scan_via_openssl_resolved_ipv6_connect_arg(monkeypatch):
+    """When DNS resolves to an IPv6 address, '-connect' uses brackets."""
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (socket.AF_INET6, ("2001:db8::1", 443, 0, 0)),
+    )
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(b"", b"", 0)) as mock_run:
+        _scan_via_openssl(
+            "example.com", 443, timeout=1,
+            allow_private=True, allowed_subnets=("2001:db8::/32",),
+        )
+    cmd = mock_run.call_args[0][0]
+    connect_idx = cmd.index("-connect")
+    assert cmd[connect_idx + 1] == "[2001:db8::1]:443"
+
+
+def test_scan_via_openssl_resolved_ipv4_connect_arg(monkeypatch):
+    """When DNS resolves to an IPv4 address, '-connect' has no brackets."""
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (socket.AF_INET, ("93.184.216.34", 443)),
+    )
+    with patch("cert_watch.scan_conn._run_openssl", return_value=(b"", b"", 0)) as mock_run:
+        _scan_via_openssl("example.com", 443, timeout=1)
+    cmd = mock_run.call_args[0][0]
+    connect_idx = cmd.index("-connect")
+    assert cmd[connect_idx + 1] == "93.184.216.34:443"
 
 
 # ---------- _friendly_scan_error coverage ----------
@@ -553,12 +628,12 @@ def test_probe_hsts_ssl_wrap_exception_pinned_ip(monkeypatch):
     monkeypatch.setattr("socket.create_connection", lambda *a, **kw: fake_sock)
     monkeypatch.setattr(
         "ssl.create_default_context",
-        lambda: MagicMock(wraps=lambda *a, **kw: (_ for _ in ()).throw(Exception("ssl fail"))),
+        lambda: MagicMock(wraps=lambda *a, **kw: (_ for _ in ()).throw(ssl.SSLError("ssl fail"))),
     )
 
     class _BadCtx:
         def wrap_socket(self, sock, **kw):
-            raise Exception("ssl fail")
+            raise ssl.SSLError("ssl fail")
 
     monkeypatch.setattr("ssl.create_default_context", lambda: _BadCtx())
     assert _probe_hsts("example.com", 443, pinned_ip="93.184.216.34") is None
@@ -588,7 +663,7 @@ def test_probe_hsts_non_pinned_ip_path(monkeypatch):
 def test_probe_hsts_generic_exception(monkeypatch):
     monkeypatch.setattr(
         "ssl.create_default_context",
-        lambda: (_ for _ in ()).throw(Exception("boom")),
+        lambda: (_ for _ in ()).throw(OSError("boom")),
     )
     assert _probe_hsts("example.com", 443) is None
 
@@ -1385,11 +1460,10 @@ def test_scan_via_openssl_valid_pinned_ip(monkeypatch, chain_triplet):
     combined = _pem_block(chain_triplet["leaf"].der) + _pem_block(
         chain_triplet["intermediate"].der
     )
-    mock_proc = MagicMock()
-    mock_proc.returncode = 0
-    mock_proc.stdout = b"Protocol  : TLSv1.3\n" + combined
-    mock_proc.stderr = b""
-    with patch("cert_watch.scan_conn.subprocess.run", return_value=mock_proc):
+    stdout = b"Protocol  : TLSv1.3\n" + combined
+    with patch(
+        "cert_watch.scan_conn._run_openssl", return_value=(stdout, b"", 0),
+    ):
         chain, proto = _scan_via_openssl(
             "example.com", 443, timeout=1, pinned_ip="93.184.216.34"
         )
@@ -1557,3 +1631,85 @@ def test_probe_hsts_non_443_with_require_443_false(monkeypatch):
 
     monkeypatch.setattr("http.client.HTTPSConnection", lambda *a, **kw: _Conn())
     assert _probe_hsts("example.com", 8443, require_443=False) is True
+
+
+# ---------- output cap enforcement (WI-037) ----------
+
+
+def test_run_openssl_enforces_max_output_bytes():
+    """When subprocess stdout exceeds the cap, ScanOutputTooLargeError is raised."""
+    script = "import sys; sys.stdout.buffer.write(b'x' * 200_000)"
+    with pytest.raises(ScanOutputTooLargeError):
+        _run_openssl(
+            [sys.executable, "-c", script],
+            b"",
+            max_output_bytes=10_000,
+            timeout=5,
+        )
+
+
+def test_scan_via_openssl_propagates_output_too_large(monkeypatch):
+    """_scan_via_openssl raises ScanOutputTooLargeError from the helper."""
+    monkeypatch.setattr(
+        "cert_watch.scan_conn._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    with (
+        patch(
+            "cert_watch.scan_conn._run_openssl",
+            side_effect=ScanOutputTooLargeError("output too large"),
+        ),
+        pytest.raises(ScanOutputTooLargeError),
+    ):
+        _scan_via_openssl("example.com", 443, timeout=1)
+
+
+def test_scan_host_via_openssl_returns_scan_error_on_output_cap(monkeypatch, chain_triplet):
+    """When the openssl output cap is exceeded the scan returns a ScanError."""
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: (_ for _ in ()).throw(ScanOutputTooLargeError("output too large")),
+    )
+    result = _scan_host_via_openssl(
+        "example.com", 443, timeout=5.0, allow_private=True,
+        allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+    )
+    assert isinstance(result, ScanError)
+    assert "output too large" in result.error_message
+
+
+def test_run_openssl_stderr_reader_stops_at_cap():
+    """_err_reader stops reading stderr once the cap is exceeded.
+
+    It must not keep draining an arbitrarily large stderr stream just to
+    discard it, which both wastes time and can mask a stdout overflow timeout
+    with a plain TimeoutError.
+    """
+    # Write exactly the cap to stderr first, flush, then write stdout so the
+    # reader can observe valid output. The final stderr byte pushes the
+    # err_reader over its cap and causes it to close the pipe rather than
+    # continuing to discard bytes.
+    script = (
+        "import sys;"
+        "sys.stderr.buffer.write(b'x' * 65536);"
+        "sys.stderr.buffer.flush();"
+        "sys.stdout.buffer.write(b'ok');"
+        "sys.stdout.buffer.flush();"
+        "sys.stderr.buffer.write(b'y');"
+    )
+    stdout, stderr, rc = _run_openssl(
+        [sys.executable, "-c", script],
+        b"",
+        max_output_bytes=100_000,
+        timeout=5,
+    )
+    assert stdout == b"ok"
+    assert len(stderr) == 65536
+    assert stderr == b"x" * 65536
+    # The child got a broken stderr pipe, so rc is unlikely to be 0; do not
+    # assert a specific returncode.

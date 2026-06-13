@@ -121,13 +121,26 @@ def get_session_token(request: Request) -> str:
 
 # ---------- Rate limiting (SQLite-backed sliding window, BC-049) ----------
 
-_rate_lock = threading.Lock()
+_RATE_SHARDS = 256
+_rate_db_init_lock = threading.Lock()
 _rate_db_path: Path | None = None
 _rate_db_initialized = False
-# In-memory cache for reduced DB I/O (per-key, synced to SQLite)
-_rate_cache: dict[str, list[float]] = {}
+# In-memory cache for reduced DB I/O (per-key, synced to SQLite). Sharded to
+# avoid a single global lock serialising unrelated keys under concurrent load.
+_rate_locks: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(_RATE_SHARDS))
+_rate_caches: list[dict[str, list[float]]] = [{} for _ in range(_RATE_SHARDS)]
 _RATE_CACHE_TTL = 10.0  # seconds before cache entry is considered stale
 _RATE_STALE_TTL = 600.0  # evict rows stale for 10 minutes
+
+
+def _rate_shard(key: str) -> int:
+    return hash(key) % _RATE_SHARDS
+
+
+def _clear_rate_caches() -> None:
+    """Clear all in-memory rate-limit cache shards (test helper)."""
+    for cache in _rate_caches:
+        cache.clear()
 
 _TRUST_PROXY = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
 _TRUSTED_PROXIES = frozenset(
@@ -207,6 +220,25 @@ def _cleanup_stale(conn: sqlite3.Connection) -> None:
     )
 
 
+def _apply_memory_limit(
+    cache: dict[str, list[float]], key: str, cutoff: float, max_requests: int, now: float
+) -> bool:
+    """Apply sliding-window rate limit in-memory for a single cache shard."""
+    ts = [t for t in cache.get(key, []) if t >= cutoff]
+    if len(ts) >= max_requests:
+        cache[key] = ts
+        return False
+    ts.append(now)
+    cache[key] = ts
+    # Evict stale keys to prevent unbounded growth; per-shard threshold keeps
+    # total cache bounded without a global lock.
+    if len(cache) > max(16, 256 // _RATE_SHARDS):
+        stale = [k for k, v in cache.items() if not v or max(v) < cutoff]
+        for k in stale:
+            del cache[k]
+    return True
+
+
 def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
     """Return True if request is allowed, False if rate-limited.
 
@@ -216,36 +248,29 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
     now = datetime.now(UTC).timestamp()
     cutoff = now - window_seconds
 
+    shard = _rate_shard(key)
+    lock = _rate_locks[shard]
+    cache = _rate_caches[shard]
+
     if _rate_db_path is None:
         # Fallback: in-memory only (single-worker mode)
-        with _rate_lock:
-            if key not in _rate_cache:
-                _rate_cache[key] = []
-            ts = [t for t in _rate_cache[key] if t >= cutoff]
-            if len(ts) >= max_requests:
-                _rate_cache[key] = ts
-                return False
-            ts.append(now)
-            _rate_cache[key] = ts
-            # Evict stale keys to prevent unbounded growth
-            if len(_rate_cache) > 256:
-                stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
-                for k in stale:
-                    del _rate_cache[k]
-            return True
+        with lock:
+            return _apply_memory_limit(cache, key, cutoff, max_requests, now)
 
-    with _rate_lock:
+    with lock:
         try:
             from cert_watch.database.connection import _connect
             from cert_watch.database.schema import init_schema
 
             global _rate_db_initialized
             if not _rate_db_initialized:
-                init_schema(_rate_db_path)
-                _rate_db_initialized = True
+                with _rate_db_init_lock:
+                    if not _rate_db_initialized:
+                        init_schema(_rate_db_path)
+                        _rate_db_initialized = True
             with _connect(_rate_db_path) as conn:
                 # Periodic cleanup of stale entries
-                cache_ts = _rate_cache.get(key)
+                cache_ts = cache.get(key)
                 if cache_ts is not None and now - min(cache_ts, default=now) < _RATE_CACHE_TTL:
                     # Use cached timestamps (still valid within cache TTL)
                     ts = [t for t in cache_ts if t >= cutoff]
@@ -253,19 +278,19 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                     ts = _load_timestamps(conn, key, cutoff)
 
                 # Evict stale in-memory cache entries periodically
-                if len(_rate_cache) > 256:
-                    stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
+                if len(cache) > max(16, 256 // _RATE_SHARDS):
+                    stale = [k for k, v in cache.items() if not v or max(v) < cutoff]
                     for k in stale:
-                        del _rate_cache[k]
+                        del cache[k]
 
                 if len(ts) >= max_requests:
-                    _rate_cache[key] = ts
+                    cache[key] = ts
                     _save_timestamps(conn, key, ts)
                     conn.commit()
                     return False
 
                 ts.append(now)
-                _rate_cache[key] = ts
+                cache[key] = ts
                 _save_timestamps(conn, key, ts)
                 conn.commit()
                 return True
@@ -280,26 +305,15 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                 exc_info=True,
             )
             # Fallback to in-memory on DB errors
-            if key not in _rate_cache:
-                _rate_cache[key] = []
-            ts = [t for t in _rate_cache[key] if t >= cutoff]
-            if len(ts) >= max_requests:
-                _rate_cache[key] = ts
-                return False
-            ts.append(now)
-            _rate_cache[key] = ts
-            # Evict stale keys to prevent unbounded growth
-            if len(_rate_cache) > 256:
-                stale = [k for k, v in _rate_cache.items() if not v or max(v) < cutoff]
-                for k in stale:
-                    del _rate_cache[k]
-            return True
+            return _apply_memory_limit(cache, key, cutoff, max_requests, now)
 
 
 def get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tuple[int, int]:
     """Return (remaining, retry_after_seconds) for the given rate limit window."""
     now = datetime.now(UTC).timestamp()
     cutoff = now - window_seconds
+    shard = _rate_shard(key)
+    cache = _rate_caches[shard]
 
     if _rate_db_path is not None:
         try:
@@ -308,9 +322,11 @@ def get_rate_remaining(key: str, max_requests: int, window_seconds: int) -> tupl
             with _connect(_rate_db_path) as conn:
                 ts = _load_timestamps(conn, key, cutoff)
         except (sqlite3.Error, OSError):
-            ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
+            with _rate_locks[shard]:
+                ts = [t for t in cache.get(key, []) if t >= cutoff]
     else:
-        ts = [t for t in _rate_cache.get(key, []) if t >= cutoff]
+        with _rate_locks[shard]:
+            ts = [t for t in cache.get(key, []) if t >= cutoff]
 
     count = len(ts)
     remaining = max(0, max_requests - count)

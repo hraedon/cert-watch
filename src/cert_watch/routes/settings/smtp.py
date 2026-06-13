@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.middleware import require_admin_write
-from cert_watch.routes.settings.core import _SMTP_KEYS, _sanitize_test_error, _save_config_section
+from cert_watch.routes.settings.config import _SMTP_KEYS
+from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section
 
 router = APIRouter()
 

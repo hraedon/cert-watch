@@ -1189,7 +1189,7 @@ def test_capture_starttls_chain_fallback_to_probe(monkeypatch, chain_triplet):
     )
     monkeypatch.setattr(ldap3, "Server", lambda *a, **k: None)
     monkeypatch.setattr(
-        "cert_watch.routes.settings._probe_tls_chain",
+        "cert_watch.routes.settings.ca_probe._probe_tls_chain",
         lambda *a, **k: [
             {
                 "subject": "CN=Test Intermediate CA",
@@ -1795,7 +1795,7 @@ def test_capture_starttls_chain_import_error(monkeypatch):
     from cert_watch.routes.settings import _capture_starttls_chain
 
     monkeypatch.setattr(
-        "cert_watch.routes.settings._probe_tls_chain",
+        "cert_watch.routes.settings.ca_probe._probe_tls_chain",
         lambda *a, **k: None,
     )
     import builtins

@@ -8,46 +8,16 @@ import json
 import ssl
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.database import kv_set, kv_set_secret
 from cert_watch.middleware import check_csrf, require_admin_form, require_admin_write
 from cert_watch.routes._deps import _db_path, _get_settings
-from cert_watch.routes.settings.core import (
-    _AUTH_KEYS,
-    _is_cert_verify_error,
-    _sanitize_test_error,
-    _save_config_section,
-    _settings_context,
-    logger,
-    templates,
-)
+from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
+from cert_watch.routes.settings.config import _AUTH_KEYS
+from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section, logger
 
 router = APIRouter()
-
-
-@router.get("/settings", response_class=HTMLResponse, response_model=None)
-def settings_page(
-    request: Request,
-    tab: str = "auth",
-    saved: str | None = None,
-    error: str | None = None,
-    password_changed: str | None = None,
-) -> HTMLResponse | RedirectResponse:
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=_settings_context(
-            request,
-            tab=tab,
-            saved=saved,
-            error=error,
-            password_changed=password_changed,
-        ),
-    )
 
 
 @router.post("/settings/auth")

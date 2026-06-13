@@ -12,6 +12,7 @@ from cert_watch.config.helpers import (
     _parse_float,
     _parse_int,
     _parse_role_map,
+    _validate_range,
     read_secret,
     resolve_or_persist_secret,
     split_group_dns,
@@ -29,4 +30,5 @@ __all__ = [
     "_parse_float",
     "_parse_int",
     "_parse_role_map",
+    "_validate_range",
 ]

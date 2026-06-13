@@ -44,11 +44,11 @@ def test_rate_limit_in_memory_fallback(monkeypatch, tmp_path):
     import cert_watch.middleware as mw
 
     mw._rate_db_path = None
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     assert mw.check_rate_limit("test:key", 2, 60) is True
     assert mw.check_rate_limit("test:key", 2, 60) is True
     assert mw.check_rate_limit("test:key", 2, 60) is False
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
 
 
 def test_rate_limit_db_path(monkeypatch, tmp_path):
@@ -61,11 +61,11 @@ def test_rate_limit_db_path(monkeypatch, tmp_path):
     db_path = tmp_path / "rate.sqlite3"
     mw._init_rate_db(db_path)
     mw._rate_db_initialized = False
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     assert mw.check_rate_limit("test:db", 2, 60) is True
     assert mw.check_rate_limit("test:db", 2, 60) is True
     assert mw.check_rate_limit("test:db", 2, 60) is False
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     mw._rate_db_path = None
     mw._rate_db_initialized = False
 
@@ -79,9 +79,9 @@ def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
 
     mw._rate_db_path = tmp_path / "nonexistent" / "dir" / "rate.sqlite3"
     mw._rate_db_initialized = False
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     assert mw.check_rate_limit("test:fallback", 2, 60) is True
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     mw._rate_db_path = None
     mw._rate_db_initialized = False
 
@@ -96,12 +96,12 @@ def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     db_path = tmp_path / "rate.sqlite3"
     mw._init_rate_db(db_path)
     mw._rate_db_initialized = False
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     # First request populates cache
     assert mw.check_rate_limit("test:cache", 5, 60) is True
     # Second request should use cache
     assert mw.check_rate_limit("test:cache", 5, 60) is True
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     mw._rate_db_path = None
     mw._rate_db_initialized = False
 
@@ -114,11 +114,51 @@ def test_get_rate_remaining(monkeypatch, tmp_path):
     import cert_watch.middleware as mw
 
     mw._rate_db_path = None
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
     remaining, retry_after = mw.get_rate_remaining("test:remaining", 5, 60)
     assert remaining == 5
     assert retry_after >= 0  # 60 when empty (default=now gives full window)
-    mw._rate_cache.clear()
+    mw._clear_rate_caches()
+
+
+def test_rate_limit_concurrent_same_key_no_race():
+    """Concurrent checks for the same key must not exceed the limit."""
+    import concurrent.futures
+
+    import cert_watch.middleware as mw
+
+    mw._rate_db_path = None
+    mw._clear_rate_caches()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+        futures = [ex.submit(mw.check_rate_limit, "race:key", 50, 60) for _ in range(200)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    assert results.count(True) == 50
+    assert results.count(False) == 150
+    mw._clear_rate_caches()
+
+
+def test_rate_limit_concurrent_different_keys_no_deadlock():
+    """Many concurrent checks for different keys must complete without deadlock."""
+    import concurrent.futures
+    import time
+
+    import cert_watch.middleware as mw
+
+    mw._rate_db_path = None
+    mw._clear_rate_caches()
+
+    start = time.perf_counter()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
+        futures = [ex.submit(mw.check_rate_limit, f"key:{i % 128}", 100, 60) for i in range(256)]
+        results = [f.result() for f in concurrent.futures.as_completed(futures)]
+
+    assert all(results)
+    # 256 cheap in-memory checks should complete in well under a second; the old
+    # global-lock design would still pass, but a deadlock or severe contention fails.
+    assert time.perf_counter() - start < 5.0
+    mw._clear_rate_caches()
 
 
 # ---------- CSRF ----------

@@ -267,7 +267,11 @@ def test_cross_worker_rate_limit_shared(tmp_path: Path, monkeypatch: pytest.Monk
     _init_rate_db(db)
 
     # Monkeypatch away the in-memory fallback cache so we always hit SQLite
-    monkeypatch.setattr("cert_watch.middleware._rate_cache", {})
+    from cert_watch import middleware as _mw
+    monkeypatch.setattr(
+        "cert_watch.middleware._rate_caches",
+        [{} for _ in range(_mw._RATE_SHARDS)],
+    )
 
     key = f"cross_worker:{time.time()}"
 

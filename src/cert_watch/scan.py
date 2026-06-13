@@ -16,7 +16,9 @@ from cert_watch.database import init_schema, replace_scanned
 from cert_watch.retry import backoff_range
 from cert_watch.scan_conn import (  # noqa: F401
     _PROTOCOL_RE,
+    DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     HSTS_TIMEOUT,
+    ScanOutputTooLargeError,
     _der_enc,
     _get_chain_der,
     _has_native_chain_api,
@@ -96,6 +98,7 @@ def scan_host(
     dns_servers: tuple[str, ...] = (),
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
+    max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06.
 
@@ -107,7 +110,7 @@ def scan_host(
         result = _scan_host_once(
             hostname, port, timeout=timeout, verify=verify,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
-            pinned_ip=pinned_ip,
+            pinned_ip=pinned_ip, max_output_bytes=max_output_bytes,
         )
         if isinstance(result, ScannedEntry):
             return result
@@ -130,6 +133,7 @@ def _scan_host_once(
     allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
     pinned_ip: str | None = None,
+    max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
 ) -> ScannedEntry | ScanError:
     """Single TLS handshake attempt — no retry logic.
 
@@ -159,7 +163,7 @@ def _scan_host_once(
         return _scan_host_via_openssl(
             hostname, port, timeout=timeout,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
-            pinned_ip=pinned_ip, verify=verify,
+            pinned_ip=pinned_ip, verify=verify, max_output_bytes=max_output_bytes,
         )
 
     try:
@@ -170,7 +174,7 @@ def _scan_host_once(
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — unexpected TLS errors (e.g. ssl.SSLError subtypes, ValueError); defensive catch to return ScanError
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
     protocol_version = ""
@@ -225,6 +229,7 @@ def _scan_host_via_openssl(
     dns_servers: tuple[str, ...],
     pinned_ip: str | None = None,
     verify: bool = False,
+    max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
 ) -> ScannedEntry | ScanError:
     """Scan using openssl s_client only — one connection for both leaf and chain.
 
@@ -232,11 +237,14 @@ def _scan_host_via_openssl(
     If openssl is unavailable or fails, falls back to the Python TLS
     connection (leaf-only, no chain).
     """
-    der_chain, protocol_version = _scan_via_openssl(
-        hostname, port, timeout, allow_private=allow_private,
-        allowed_subnets=allowed_subnets, dns_servers=dns_servers,
-        pinned_ip=pinned_ip,
-    )
+    try:
+        der_chain, protocol_version = _scan_via_openssl(
+            hostname, port, timeout, allow_private=allow_private,
+            allowed_subnets=allowed_subnets, dns_servers=dns_servers,
+            pinned_ip=pinned_ip, max_output_bytes=max_output_bytes,
+        )
+    except ScanOutputTooLargeError as exc:
+        return ScanError(hostname=hostname, port=port, error_message=str(exc))
 
     if der_chain:
         leaf_parsed = parse_certificate(der_chain[0])
@@ -270,7 +278,7 @@ def _scan_host_via_openssl(
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — unexpected TLS errors; defensive catch to return ScanError
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
     protocol_version_fb = ""
@@ -605,7 +613,7 @@ def store_scanned(
             """Run a stage; on failure log with stage name and re-raise."""
             try:
                 return fn(*args, **kwargs)
-            except Exception:
+            except Exception:  # logs + re-raises; outer suppress() handles non-critical stages
                 logger.warning(
                     "store_scanned [%s] failed for %s:%s",
                     name, entry.host, entry.port,
@@ -795,6 +803,7 @@ async def scan_host_async(
     dns_servers: tuple[str, ...] = (),
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
+    max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
 ) -> ScannedEntry | ScanError:
     """Async wrapper around scan_host — runs the blocking TLS scan in a thread."""
     return await asyncio.to_thread(
@@ -808,6 +817,7 @@ async def scan_host_async(
         dns_servers=dns_servers,
         retries=retries,
         pinned_ip=pinned_ip,
+        max_output_bytes=max_output_bytes,
     )
 
 

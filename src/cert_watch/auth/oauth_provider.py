@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import secrets
 import time
 import typing
 from dataclasses import dataclass
+from urllib.parse import urlencode
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
@@ -73,6 +75,8 @@ class OAuthConfig:
 
 
 _JWKS_MAX_BYTES = 256 * 1024  # 256 KiB — a JWKS response should be a few KB
+_TOKEN_MAX_BYTES = 65536       # 64 KiB — token responses are typically <10 KiB
+_TOKEN_ERROR_MAX_BYTES = 512   # Snippet of error body for debugging
 
 
 class OAuthProvider(AuthProvider):
@@ -149,6 +153,42 @@ class OAuthProvider(AuthProvider):
                 "id_token_signing_alg_values_supported": "RS256",
             }
         return self._discovered
+
+    def _fetch_token(
+        self, token_endpoint: str, code: str, redirect_uri: str,
+    ) -> dict:
+        """Exchange an authorization code for tokens via the SSRF-safe opener."""
+        client_id = self.config.client_id
+        client_secret = self.config.client_secret
+        payload = urlencode({
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+        })
+        credentials = base64.b64encode(
+            f"{client_id}:{client_secret}".encode(),
+        ).decode("ascii")
+        resp = ssrf_safe_urlopen(
+            token_endpoint,
+            method="POST",
+            data=payload.encode(),
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Authorization": f"Basic {credentials}",
+                "User-Agent": "cert-watch",
+                "Accept": "application/json",
+            },
+            timeout=10,
+            allow_private=self._allow_private,
+            allowed_subnets=self._allowed_subnets,
+        )
+        with resp:
+            if not (200 <= resp.status < 300):
+                error_body = resp.read(_TOKEN_ERROR_MAX_BYTES).decode("utf-8", errors="replace")
+                raise ValueError(
+                    f"token endpoint returned {resp.status}: {error_body}"
+                )
+            return json.loads(resp.read(_TOKEN_MAX_BYTES))
 
     def _fetch_jwks(self, *, force: bool = False) -> dict | None:
         """Fetch and cache JWKS from the IdP's jwks_uri."""
@@ -309,10 +349,6 @@ class OAuthProvider(AuthProvider):
         )
 
     def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
-        try:
-            from authlib.integrations.requests_client import OAuth2Session
-        except ImportError:
-            return AuthResult(success=False, error="authlib not installed")
         # BC-009: verify state parameter before exchanging code
         if not state:
             return AuthResult(success=False, error="missing OAuth state parameter")
@@ -325,15 +361,7 @@ class OAuthProvider(AuthProvider):
         if not token_endpoint:
             return AuthResult(success=False, error="token_endpoint not configured")
         try:
-            client = OAuth2Session(
-                client_id=self.config.client_id,
-                client_secret=self.config.client_secret,
-            )
-            token = client.fetch_token(
-                token_endpoint,
-                code=code,
-                redirect_uri=redirect_uri,
-            )
+            token = self._fetch_token(token_endpoint, code, redirect_uri)
             username = ""
             roles: list[str] = []
             groups: list[str] = []

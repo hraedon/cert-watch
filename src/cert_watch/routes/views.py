@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from prometheus_client import CollectorRegistry, Counter, Gauge, generate_latest
 
 from cert_watch import __commit__, __version__, ct_lookup
@@ -28,8 +29,9 @@ from cert_watch.middleware import (
     rate_limit,
     require_auth,
     require_write,
+    require_write_form,
 )
-from cert_watch.routes._deps import IdParam, _db_path, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -326,6 +328,7 @@ def alerts_view(
     request: Request,
     page: int = 1,
     filter_type: str = "all",
+    saved: str = "",
 ) -> HTMLResponse:
     db = _db_path(request)
     per_page = 50
@@ -396,6 +399,7 @@ def alerts_view(
             "has_next": page < total_pages,
             "filter_type": filter_type,
             "alert_counts": counts,
+            "saved": saved,
         },
     )
 
@@ -487,6 +491,90 @@ async def mark_alert_read(
         )
         conn.commit()
     return {"ok": True, "id": alert_id, "updated": cur.rowcount > 0}
+
+
+@router.post("/alerts/flush")
+async def flush_alert_queue(request: Request) -> RedirectResponse:
+    """Flush the pending alert queue: trigger immediate send via process_pending()."""
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    from cert_watch.middleware import _extract_client_ip, check_rate_limit
+
+    if not check_rate_limit(f"flush_alerts:{_extract_client_ip(request)}", 3, 300):
+        return RedirectResponse(
+            url="/alerts?error=rate+limited%3A+too+many+flush+requests",
+            status_code=303,
+        )
+    db = _db_path(request)
+    s = _get_settings(request)
+    from cert_watch.alerts import process_pending
+    from cert_watch.database import SqliteAlertRepository
+
+    alert_repo = SqliteAlertRepository(db)
+    alert_config = s.build_alert_config() if s.smtp_host else None
+    webhook_config = s.build_webhook_config() if s.webhook_url else None
+    result = process_pending(alert_repo, alert_config, webhook_config)
+    from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.flush_queue",
+        target_type="alert",
+        target_id="all",
+        detail=result,
+        source_ip=resolve_source_ip(request),
+    )
+    sent = result["sent"]
+    failed = result["failed"]
+    if failed > 0:
+        return RedirectResponse(
+            url=f"/alerts?warning={quote(f'Flushed {sent} alert(s), {failed} failed')}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/alerts?saved={quote(f'{sent} alert(s) sent')}",
+        status_code=303,
+    )
+
+
+@router.post("/alerts/mark-all-read")
+async def mark_all_alerts_read(request: Request) -> RedirectResponse:
+    """Mark all unread alerts as read."""
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    from cert_watch.middleware import _extract_client_ip, check_rate_limit
+
+    if not check_rate_limit(f"mark_all_read:{_extract_client_ip(request)}", 10, 300):
+        return RedirectResponse(
+            url="/alerts?error=rate+limited%3A+too+many+mark-all-read+requests",
+            status_code=303,
+        )
+    db = _db_path(request)
+    from cert_watch.database import _connect
+
+    with _connect(db) as conn:
+        cur = conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
+        conn.commit()
+    count = cur.rowcount
+    from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.mark_all_read",
+        target_type="alert",
+        target_id="all",
+        detail={"count": count},
+        source_ip=resolve_source_ip(request),
+    )
+    plural = "alert" if count == 1 else "alerts"
+    return RedirectResponse(
+        url=f"/alerts?saved={quote(f'{count} {plural} marked as read')}",
+        status_code=303,
+    )
 
 
 def _pivot_tls_monthly(rows: list[dict]) -> tuple[list[dict], int]:

@@ -207,23 +207,28 @@ sessions — the suite is the safety net and it's strong.
 
 ---
 
-## Decisions requested (explicit, so drift doesn't decide instead)
+## Decisions recorded
 
-1. **Plan 041 (cloud auto-discovery: AWS/GCP/Azure) — recommend DECLINE** and
-   annotate the plan file. It directly contradicts `docs/positioning.md` and
-   Plan 017 Tier C ("external cloud-API discovery… exactly the external-SaaS
-   dependency the positioning declines"). Exception worth keeping: the
-   `static` file source (cheap, air-gap-friendly) and possibly k8s Ingress
-   discovery (inside the trust boundary, self-hosted) — if kept, update
-   Plan 017 Tier C to record the boundary redrawn.
-2. **Plan 040 (RFC-6962 CT streaming client) — recommend DEFER.** WI-B.3 gets
+1. **Plan 041 (cloud auto-discovery: AWS/GCP/Azure) — DECLINED.** It directly
+   contradicts `docs/positioning.md` and Plan 017 Tier C ("external cloud-API
+   discovery… exactly the external-SaaS dependency the positioning declines").
+   Exception worth keeping: the `static` file source (cheap, air-gap-friendly)
+   and possibly k8s Ingress discovery (inside the trust boundary, self-hosted)
+   — if kept, update Plan 017 Tier C to record the boundary redrawn.
+2. **Plan 040 (RFC-6962 CT streaming client) — DEFERRED.** WI-B.3 gets
    most of the value through the existing crt.sh path with no new polling
    infrastructure. Revisit only if near-real-time issuance detection becomes a
    hard requirement (Plan 017 Tier C already records the self-hosted
    certstream option for that day).
-3. **Plan 043 (Postgres backend) — recommend DEFER.** Single-file SQLite is a
+3. **Plan 043 (Postgres backend) — DEFERRED.** Single-file SQLite is a
    *feature* for the SMB self-hosted positioning; nothing on this roadmap
    needs multi-writer. Revisit at a concrete scale signal.
+4. **Workstream D (AD CS / Windows cert-store discovery) — DECLINED (2026-06-13).**
+   The private-CA/AD CS story is out: written into positioning as a non-goal.
+   cert-watch observes public-trust certificates; private-CA inventory is a
+   different product class. The AD CS spike (WI-D.1) will not be executed.
+   Plan 030 (AD CS discovery) is closed. Plan 049 P0 is resolved — the answer
+   is "no," and the maintenance contract (P4) is written around that answer.
 
 ## Release framing
 

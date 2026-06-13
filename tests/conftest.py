@@ -230,7 +230,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     # coverage) run — flaky, order/timing-dependent CI failures. Each test that
     # needs to exercise rate limiting bursts within its own body, so a clean
     # window at the start is correct.
-    _mw._rate_cache.clear()
+    _mw._clear_rate_caches()
     _mw._rate_db_path = None
     _mw._rate_db_initialized = False
     yield
