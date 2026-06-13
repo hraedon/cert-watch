@@ -760,6 +760,14 @@ def _evaluate_and_store_posture(
         if row and row["scan_interval_hours"] is not None:
             scan_interval_days = max(row["scan_interval_hours"] // 24, 1)
 
+    # Find the issuer cert from the chain for CRL signature verification
+    issuer_der: bytes | None = None
+    if chain and cs == "private":
+        for chain_cert in chain:
+            if chain_cert.subject == cert.issuer:
+                issuer_der = chain_cert.raw_der
+                break
+
     result = evaluate_posture(
         cert=cert,
         protocol_version=entry.protocol_version or None,
@@ -773,6 +781,7 @@ def _evaluate_and_store_posture(
         scan_interval_days=scan_interval_days,
         allow_private=allow_private,
         allowed_subnets=allowed_subnets,
+        issuer_der=issuer_der,
     )
 
     store_scan_posture(

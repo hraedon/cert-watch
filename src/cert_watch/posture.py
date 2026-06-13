@@ -174,7 +174,7 @@ def check_revocation_endpoints(
                 check="ocsp_endpoint", status="pass",
                 message=f"OCSP responder reachable at {ocsp_url}",
             ))
-        elif block_msg:
+        elif "SSRF" in block_msg or "blocked" in block_msg:
             findings.append(Finding(
                 check="ocsp_endpoint", status="warn",
                 message=f"OCSP endpoint {ocsp_url} {block_msg}",
@@ -187,7 +187,7 @@ def check_revocation_endpoints(
     else:
         findings.append(Finding(
             check="ocsp_endpoint", status="info",
-            message="No OCSP responder URL in AIA extension",
+            message="No OCSP responder URL in certificate",
         ))
 
     crl_urls = _extract_crl_urls(cert_der)
@@ -200,9 +200,9 @@ def check_revocation_endpoints(
             if reachable:
                 findings.append(Finding(
                     check="crl_endpoint", status="pass",
-                    message=f"CRL endpoint reachable at {url}",
+                    message=f"CRL distribution point reachable at {url}",
                 ))
-            elif block_msg:
+            elif "SSRF" in block_msg or "blocked" in block_msg:
                 findings.append(Finding(
                     check="crl_endpoint", status="warn",
                     message=f"CRL endpoint {url} {block_msg}",
@@ -210,12 +210,156 @@ def check_revocation_endpoints(
             else:
                 findings.append(Finding(
                     check="crl_endpoint", status="warn",
-                    message=f"CRL endpoint unreachable at {url}",
+                    message=f"CRL distribution point unreachable at {url}",
                 ))
     else:
         findings.append(Finding(
             check="crl_endpoint", status="info",
             message="No CRL distribution points in certificate",
+        ))
+
+    return findings
+
+
+def check_private_crl_freshness(
+    cert_der: bytes,
+    issuer_der: bytes | None = None,
+    *,
+    timeout: int = 10,
+    allow_private: bool = False,
+    allowed_subnets: tuple[str, ...] = (),
+) -> list[Finding]:
+    """Download and validate the CRL for a private-trust certificate.
+
+    WI-042: For certs chaining to a private/internal CA, read the CRL from
+    the cert's CDP extension and check freshness, reachability, and (when
+    the issuer cert is available) signature validity.
+
+    Misconfig flags:
+    - CRL past nextUpdate (expired/stale)
+    - CDP unreachable or blocked by SSRF policy
+    - CRL publication interval stale (thisUpdate too old)
+    - Signature/issuer mismatch (when issuer_der provided)
+
+    All findings are warnings — they don't affect the posture grade.
+    """
+    from datetime import UTC, datetime
+
+    from cryptography import x509
+
+    crl_urls = _extract_crl_urls(cert_der)
+    if not crl_urls:
+        return [Finding(
+            check="private_crl", status="warn",
+            message="Private-trust cert has no CRL distribution points — "
+                    "revocation cannot be checked via CRL",
+        )]
+
+    findings: list[Finding] = []
+    now = datetime.now(UTC)
+    checked_any = False
+
+    for url in crl_urls:
+        if not url.startswith(("http://", "https://")):
+            continue
+
+        checked_any = True
+        try:
+            resp = ssrf_safe_urlopen(
+                url, timeout=timeout, method="GET",
+                allow_private=allow_private, allowed_subnets=allowed_subnets,
+            )
+            with resp:
+                if not (200 <= resp.status < 300):
+                    findings.append(Finding(
+                        check="private_crl", status="warn",
+                        message=f"CRL fetch from {url} returned HTTP {resp.status}",
+                    ))
+                    continue
+                content_length = resp.headers.get("Content-Length")
+                if content_length and int(content_length) > 10 * 1024 * 1024:
+                    findings.append(Finding(
+                        check="private_crl", status="warn",
+                        message=f"CRL from {url} too large ({int(content_length)} bytes)",
+                    ))
+                    continue
+                crl_bytes = resp.read(10 * 1024 * 1024)
+        except SSRFBlockedError:
+            findings.append(Finding(
+                check="private_crl", status="warn",
+                message=f"CRL endpoint {url} blocked by SSRF policy",
+            ))
+            continue
+        except Exception:
+            findings.append(Finding(
+                check="private_crl", status="warn",
+                message=f"CRL endpoint {url} unreachable",
+            ))
+            continue
+
+        try:
+            crl = x509.load_der_x509_crl(crl_bytes)
+        except ValueError:
+            try:
+                crl = x509.load_pem_x509_crl(crl_bytes)
+            except ValueError:
+                findings.append(Finding(
+                    check="private_crl", status="warn",
+                    message=f"CRL from {url} is not valid DER or PEM",
+                ))
+                continue
+
+        issuer_name = crl.issuer.rfc4514_string() if crl.issuer else "(unknown)"
+
+        next_update = crl.next_update_utc
+        if next_update is not None:
+            if next_update < now:
+                delta = (now - next_update).days
+                findings.append(Finding(
+                    check="private_crl", status="warn",
+                    message=f"CRL from {url} expired {delta} day(s) ago "
+                            f"(nextUpdate {next_update.strftime('%Y-%m-%d')})",
+                ))
+            else:
+                findings.append(Finding(
+                    check="private_crl", status="pass",
+                    message=f"CRL from {url} valid until "
+                            f"{next_update.strftime('%Y-%m-%d')}",
+                ))
+        else:
+            findings.append(Finding(
+                check="private_crl", status="warn",
+                message=f"CRL from {url} has no nextUpdate — "
+                        "freshness cannot be determined",
+            ))
+
+        this_update = crl.last_update_utc
+        if this_update is not None:
+            age = (now - this_update).days
+            if age > 30:
+                findings.append(Finding(
+                    check="private_crl", status="warn",
+                    message=f"CRL from {url} not published in {age} days "
+                            f"(last update {this_update.strftime('%Y-%m-%d')})",
+                ))
+
+        if issuer_der:
+            try:
+                issuer_cert = x509.load_der_x509_certificate(issuer_der)
+                if not crl.is_signature_valid(issuer_cert.public_key()):
+                    findings.append(Finding(
+                        check="private_crl", status="warn",
+                        message=f"CRL from {url} signature does not match "
+                                f"issuer '{issuer_name}'",
+                    ))
+            except (ValueError, TypeError):
+                logger.debug("Failed to parse issuer DER for CRL signature check from %s", url)
+
+    if not checked_any:
+        findings.append(Finding(
+            check="private_crl", status="warn",
+            message="Private-trust cert has CRL distribution points but none "
+                    "use HTTP/HTTPS — cannot fetch",
         ))
 
     return findings
@@ -237,6 +381,7 @@ def evaluate_posture(
     scan_interval_days: int | None = None,
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
+    issuer_der: bytes | None = None,
 ) -> PostureResult:
     """Evaluate TLS posture grade and lint findings from certificate data.
 
@@ -442,7 +587,8 @@ def evaluate_posture(
         ))
 
     # Revocation endpoint health (opt-in, Plan 017 A1)
-    if check_revocation and cert.raw_der:
+    # For private trusts, the CRL freshness check below subsumes CRL reachability.
+    if check_revocation and cert.raw_der and chain_status != "private":
         revocation_findings = check_revocation_endpoints(
             cert.raw_der, timeout=revocation_timeout,
             allow_private=allow_private, allowed_subnets=allowed_subnets,
@@ -450,6 +596,17 @@ def evaluate_posture(
         findings.extend(revocation_findings)
         # Unreachable OCSP/CRL is a warning, not a grade penalty
         # (the cert itself may be fine; the responder may be down)
+
+    # Private-trust CRL freshness (WI-042): automatically check CRL validity
+    # for certs chaining to a private CA, regardless of check_revocation.
+    if chain_status == "private" and cert.raw_der:
+        crl_findings = check_private_crl_freshness(
+            cert.raw_der, issuer_der=issuer_der,
+            timeout=revocation_timeout + 5,
+            allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
+        )
+        findings.extend(crl_findings)
 
     # Scan-cadence guidance (WI-3.2 / Plan 048)
     if scan_interval_days is not None and scan_interval_days > 0:

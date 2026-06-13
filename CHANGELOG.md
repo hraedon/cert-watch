@@ -11,6 +11,13 @@ this is the last development batch before maintenance mode. See AGENTS.md
 ### Added
 - **Alerts: "Mark all read" and "Flush queue" actions** (WI-030) on the alerts
   page header, write-gated and CSRF-protected.
+- **Private-trust CRL freshness checking (WI-042).** Certificates chaining to a
+  private/internal CA now automatically have their CRL fetched and validated
+  as part of the default scan workflow — no opt-in required. Checks: CRL
+  freshness (past nextUpdate), CDP reachability, stale publication interval
+  (> 30 days), and CRL signature verification against the issuing CA's public
+  key. All findings are warnings, not grade penalties. Public-trust certs are
+  unaffected.
 
 ### Changed
 - **Digest-first alerting recommended.** `ALERT_DIGEST_ONLY=1` is now the
