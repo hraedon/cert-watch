@@ -150,11 +150,24 @@ Automated pre-migration backups are also created on every upgrade (see Upgrade s
    sudo systemctl stop cert-watch
    ```
 
-2. **Replace the database file.**
+2. **Replace the database file — and remove the WAL sidecars.**
 
    ```bash
-   cp /path/to/backup.sqlite3 /var/lib/cert-watch/cert-watch.sqlite3
+   cd /var/lib/cert-watch
+   rm -f cert-watch.sqlite3-wal cert-watch.sqlite3-shm   # critical: see below
+   cp /path/to/backup.sqlite3 cert-watch.sqlite3
    ```
+
+   **Why the `rm` matters.** cert-watch runs in WAL mode. If the previous
+   process exited uncleanly (crash, OOM kill, `kill -9`), stale
+   `cert-watch.sqlite3-wal` / `-shm` files are left behind. SQLite will replay
+   that stale WAL onto whatever `cert-watch.sqlite3` it finds on next open — so
+   copying the backup over the main file *without* deleting the sidecars
+   silently discards the restored data and resurrects the pre-crash state.
+   Always delete the `-wal` and `-shm` files as part of a restore. (A clean
+   shutdown via step 1 normally checkpoints and removes them, but do not rely on
+   that during a recovery — the whole reason you are restoring may be that the
+   process did not stop cleanly.)
 
 3. **Start cert-watch.**
 
