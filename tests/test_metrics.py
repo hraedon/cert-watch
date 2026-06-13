@@ -11,6 +11,9 @@ def test_metrics_empty(reload_app):
     assert "cert_watch_hosts_tracked 0" in text
     assert "cert_watch_certificates_tracked 0" in text
     assert "cert_watch_certificates_expired 0" in text
+    assert 'urgency="healthy"' in text
+    assert 'urgency="expired"' in text
+    assert 'grade="unknown"' in text
 
 
 def test_metrics_with_data(tmp_path, reload_app, leaf_pem_file):
@@ -34,9 +37,10 @@ def test_metrics_with_data(tmp_path, reload_app, leaf_pem_file):
     assert "cert_watch_hosts_tracked 1" in text
     assert "cert_watch_certificates_tracked 1" in text
     assert "leaf.example.com" in text
+    assert 'fingerprint="' in text
 
 
-def test_metrics_scan_errors_counter(tmp_path, reload_app):
+def test_metrics_scan_errors(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema
@@ -71,7 +75,7 @@ def test_metrics_scan_errors_counter(tmp_path, reload_app):
         r = client.get("/metrics")
     assert r.status_code == 200
     text = r.text
-    assert "cert_scan_errors_total" in text
+    assert "cert_watch_scan_errors" in text
     assert 'reason="connection_refused"' in text
     assert 'reason="timeout"' in text
     assert 'reason="dns_failure"' in text

@@ -21,7 +21,6 @@ PAGES = {
     "nav-alerts": "alerts-heading",
     "nav-scans": "scans-heading",
     "nav-insights": "insights-heading",
-    "nav-discover": "discover-heading",
     "nav-audit": "audit-heading",
 }
 

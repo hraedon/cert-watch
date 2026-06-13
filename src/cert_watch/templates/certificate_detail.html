@@ -39,7 +39,7 @@
           <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
         {% endif %}
         <span class="mono cw-fz-12-5 cw-text-text-3">
-          {% if cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}{% elif cert.source == 'uploaded' %}uploaded file{% else %}discovered via Certificate Transparency{% endif %}
+          {% if cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}{% elif cert.source == 'uploaded' %}uploaded file{% endif %}
         </span>
       </div>
     </div>

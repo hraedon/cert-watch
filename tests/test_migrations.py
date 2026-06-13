@@ -474,7 +474,6 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
         "cert_history",
         "session_versions",
         "api_keys",
-        "ct_issuer_first_seen",
         "users",
         "roles",
         "event_log",

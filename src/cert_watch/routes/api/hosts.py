@@ -243,7 +243,7 @@ async def api_set_host_issuers(
     """Update the expected-issuer CN allowlist for a host (WI-007).
 
     Accepts ``{"issuers": ["R3", "R4"]}`` or ``{"issuers": "R3,R4"}``.
-    Admin-gated because mis-configuration suppresses mis-issuance alerts.
+    Admin-gated because mis-configuration suppresses issuer drift detection.
     """
     db = _db_path(request)
     repo = SqliteHostRepository(db)
@@ -279,9 +279,6 @@ async def api_set_host_issuers(
             content={"error": "too many issuers (max 50)"}, status_code=400
         )
     repo.set_expected_issuers(host_id, issuers_csv)
-    # Invalidate CT reconciliation cache so the change takes effect immediately
-    from cert_watch.ct_monitor import invalidate_ct_cache
-    invalidate_ct_cache()
     record_audit(
         db,
         actor=resolve_actor(request),

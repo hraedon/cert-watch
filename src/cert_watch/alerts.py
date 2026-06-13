@@ -78,14 +78,16 @@ def evaluate_thresholds(
     extra_recipients: list[str] | None = None,
     hostname: str = "",
 ) -> list[Alert]:
-    """
-    Create pending alerts for thresholds the cert has now crossed, skipping any
-    threshold that already has an alert recorded for this cert. See AC-02.
+    """Create a pending alert for the most urgent newly-tripped threshold.
 
-    Escalation: if the most recent alert for a threshold is older than
-    cooldown_hours and the cert still crosses that threshold, a new alert
-    is created. This ensures persistent expiry issues get re-alerted while
-    avoiding noise from repeated alerts within the cooldown window.
+    Each threshold fires **exactly once** per certificate: once a threshold has
+    been alerted, it is never re-alerted. Only the single most urgent (smallest)
+    threshold that the cert has crossed but hasn't yet been alerted for produces
+    an alert. This prevents users from receiving a separate email for every
+    threshold stage when a cert is already past several of them.
+
+    ``cooldown_hours`` is accepted for backward compatibility but has no effect
+    — thresholds do not re-fire after cooldown.
 
     The spec talks about cert_id as the link to existing alerts; we accept it as
     a kwarg so callers that persisted the cert can pass the row id. If omitted we
@@ -100,69 +102,68 @@ def evaluate_thresholds(
     days = cert.days_until_expiry()
     thresholds = effective_thresholds(cert, custom_thresholds=custom_thresholds)
     cid = cert_id or cert.fingerprint_sha256
-    now = datetime.now(UTC)
 
-    # Find existing alerts for this cert and their thresholds.
-    # Track the most recent alert time per threshold for cooldown logic.
-    existing_thresholds: set[int] = set()
-    latest_alert_by_threshold: dict[int, datetime] = {}
+    # Suppress alerts when renewal is complete.
+    if owner_info and owner_info.get("renewal_status") == "renewed":
+        return []
+
+    # Collect existing alerts scoped to the current alert_type so that
+    # renewal_stalled / policy_violation rows don't interfere with expiry
+    # thresholds. Exclude failed alerts so SMTP delivery failures get retried
+    # on the next daily cycle instead of permanently blocking the threshold.
+    current_type = "expired" if days < 0 else "expiry_warning"
     cert_alerts = (
         alert_repo.list_for_cert(cid)
         if hasattr(alert_repo, "list_for_cert")
         else [a for a in alert_repo.list_pending() if a.cert_id == cid]
     )
-    for a in cert_alerts:
-        if a.threshold_days is not None:
-            existing_thresholds.add(a.threshold_days)
-            prev_latest = latest_alert_by_threshold.get(
-                a.threshold_days, datetime.min.replace(tzinfo=UTC)
-            )
-            if a.created_at > prev_latest:
-                latest_alert_by_threshold[a.threshold_days] = a.created_at
+    existing_for_type: set[int] = {
+        a.threshold_days
+        for a in cert_alerts
+        if a.threshold_days is not None
+        and a.alert_type == current_type
+        and a.status != "failed"
+    }
 
-    created: list[Alert] = []
-    for t in thresholds:
-        # Suppress alerts when renewal is complete — certs renewed don't need
-        # re-alerting until the next threshold window opens.
-        if owner_info and owner_info.get("renewal_status") == "renewed":
-            continue
-        # Floor semantics: days_until_expiry() returns floor(delta), so a
-        # cert with 1d23h remaining shows days=1 and crosses the t=1 threshold.
-        # This means a threshold can fire up to ~23h before the nominal expiry
-        # day; acceptable because thresholds are calendar-day aligned.
-        if days <= t:
-            # Check cooldown: skip if a recent alert exists for this threshold
-            if t in existing_thresholds:
-                last_alert_time = latest_alert_by_threshold.get(t)
-                cooldown_secs = cooldown_hours * 3600
-                if (
-                    last_alert_time
-                    and max(0.0, (now - last_alert_time).total_seconds()) < cooldown_secs
-                ):
-                    continue
-            alert = Alert(
-                cert_id=cid,
-                alert_type="expired" if days < 0 else "expiry_warning",
-                status="pending",
-                message=_format_message(cert, days, t, owner_info=owner_info),
-                threshold_days=t,
-                extra_recipients=(
-                    list(extra_recipients)
-                    if extra_recipients
-                    else (
-                        [owner_info["owner_email"]]
-                        if owner_info and owner_info.get("owner_email")
-                        else []
-                    )
-                ),
-                hostname=hostname,
-                subject=cert.subject,
+    # Find the most urgent (smallest) threshold the cert has now crossed.
+    # Floor semantics: days_until_expiry() returns floor(delta), so a cert
+    # with 1d23h remaining shows days=1 and crosses the t=1 threshold.
+    crossed = [t for t in thresholds if days <= t]
+    if not crossed:
+        return []
+
+    most_urgent = min(crossed)
+
+    # Each (alert_type, threshold) fires exactly once.
+    if most_urgent in existing_for_type:
+        return []
+
+    # Don't go backwards: if a more urgent threshold was already alerted
+    # for this type, the situation has escalated past this one.
+    if any(e < most_urgent for e in existing_for_type):
+        return []
+
+    alert = Alert(
+        cert_id=cid,
+        alert_type="expired" if days < 0 else "expiry_warning",
+        status="pending",
+        message=_format_message(cert, days, most_urgent, owner_info=owner_info),
+        threshold_days=most_urgent,
+        extra_recipients=(
+            list(extra_recipients)
+            if extra_recipients
+            else (
+                [owner_info["owner_email"]]
+                if owner_info and owner_info.get("owner_email")
+                else []
             )
-            alert_id = alert_repo.create(alert)
-            alert.id = alert_id
-            created.append(alert)
-            existing_thresholds.add(t)
-    return created
+        ),
+        hostname=hostname,
+        subject=cert.subject,
+    )
+    alert_id = alert_repo.create(alert)
+    alert.id = alert_id
+    return [alert]
 
 
 def evaluate_all_certs(
@@ -585,6 +586,13 @@ def send_pagerduty_resolve(
     Deprecated: prefer ``send_webhook_resolve``, which dispatches
     through the adapter registry and also supports Alertmanager.
     """
+    import warnings
+
+    warnings.warn(
+        "send_pagerduty_resolve is deprecated; use send_webhook_resolve instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if config.kind != "pagerduty":
         return False
     return send_webhook_resolve(
@@ -649,6 +657,14 @@ def resolve_pagerduty_for_renewed_cert(
     Delegates to ``resolve_webhook_for_renewed_cert``. Kept for backward
     compatibility with callers that import by the old name.
     """
+    import warnings
+
+    warnings.warn(
+        "resolve_pagerduty_for_renewed_cert is deprecated; "
+        "use resolve_webhook_for_renewed_cert instead",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if webhook_config is not None and webhook_config.kind != "pagerduty":
         return 0
     return resolve_webhook_for_renewed_cert(db_path, old_cert_id, webhook_config)

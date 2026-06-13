@@ -455,28 +455,3 @@ def test_connection_cache_evicts_oldest(tmp_path):
         conns[0].execute("SELECT 1")  # evicted + closed
     conns[-1].execute("SELECT 1")  # newest still live
     close_connections()
-
-
-def test_ct_refresh_worker_closes_connections(tmp_path, monkeypatch):
-    """_refresh_worker threads are short-lived: they must release their cached
-    connection explicitly rather than stranding it (WI-024)."""
-    import sqlite3
-
-    import pytest
-
-    from cert_watch import ct_monitor
-    from cert_watch.database.connection import _connect
-
-    db = tmp_path / "cw.sqlite3"
-    init_schema(db)
-    captured = {}
-
-    def fake_reconciliation(db_path, domain):
-        captured["conn"] = _connect(db_path)
-        captured["conn"].execute("SELECT 1")
-
-    monkeypatch.setattr(ct_monitor, "ct_reconciliation", fake_reconciliation)
-    ct_monitor._refresh_worker(db, ["example.com"])
-
-    with pytest.raises(sqlite3.ProgrammingError):
-        captured["conn"].execute("SELECT 1")

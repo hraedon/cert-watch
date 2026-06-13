@@ -121,8 +121,9 @@ class TestBackwardCompatLongLived:
         cert = _cert(validity_days=365, days_remaining=5)
         alerts = evaluate_thresholds(cert, alert_repo)
         thresholds_fired = {a.threshold_days for a in alerts}
-        expected = {t for t in LEAF_THRESHOLDS if cert.days_until_expiry() <= t}
-        assert thresholds_fired == expected
+        days = cert.days_until_expiry()
+        expected = min(t for t in LEAF_THRESHOLDS if days <= t)
+        assert thresholds_fired == {expected}
 
     def test_365_day_chain_no_alerts_at_35_days(self, alert_repo):
         cert = _cert(validity_days=365, days_remaining=35, is_leaf=False)
@@ -147,11 +148,12 @@ class TestBackwardCompatLongLived:
             alerts = evaluate_thresholds(cert, repo)
             thresholds_fired = {a.threshold_days for a in alerts}
             days = cert.days_until_expiry()
-            for t in LEAF_THRESHOLDS:
-                if days <= t:
-                    assert t in thresholds_fired, (
-                        f"t={t} missing at remaining={remaining}, days={days}"
-                    )
+            # Only the most urgent newly-crossed threshold fires
+            expected = min(t for t in LEAF_THRESHOLDS if days <= t)
+            assert thresholds_fired == {expected}, (
+                f"expected {{{expected}}} at remaining={remaining}, days={days}, "
+                f"got {thresholds_fired}"
+            )
 
 
 class TestShortLivedCerts:
@@ -163,7 +165,8 @@ class TestShortLivedCerts:
         cert = _cert(validity_days=47, days_remaining=4)
         alerts = evaluate_thresholds(cert, alert_repo)
         thresholds_fired = {a.threshold_days for a in alerts}
-        assert thresholds_fired == {24, 12, 5}
+        # Only the most urgent newly-crossed threshold fires
+        assert thresholds_fired == {5}
 
     def test_47_day_cert_before_first_threshold(self, alert_repo):
         cert = _cert(validity_days=47, days_remaining=26)
@@ -188,7 +191,8 @@ class TestShortLivedCerts:
         cert = _cert(validity_days=47, days_remaining=12)
         alerts = evaluate_thresholds(cert, alert_repo)
         thresholds_fired = {a.threshold_days for a in alerts}
-        assert thresholds_fired == {24, 12}
+        # Only the most urgent newly-crossed threshold fires
+        assert thresholds_fired == {12}
 
     def test_47_day_cert_chain_relative(self):
         cert = _cert(validity_days=47, is_leaf=False)
@@ -202,14 +206,16 @@ class TestBoundaryConditions:
         alerts = evaluate_thresholds(cert, alert_repo)
         thresholds_fired = {a.threshold_days for a in alerts}
         relative = effective_thresholds(_cert(validity_days=90))
-        assert thresholds_fired == set(relative)
+        # Only the most urgent newly-crossed threshold fires
+        assert thresholds_fired == {min(relative)}
 
     def test_91_day_uses_fixed(self, alert_repo):
         cert = _cert(validity_days=91, days_remaining=5)
         alerts = evaluate_thresholds(cert, alert_repo)
         thresholds_fired = {a.threshold_days for a in alerts}
-        expected = {t for t in LEAF_THRESHOLDS if cert.days_until_expiry() <= t}
-        assert thresholds_fired == expected
+        days = cert.days_until_expiry()
+        expected = min(t for t in LEAF_THRESHOLDS if days <= t)
+        assert thresholds_fired == {expected}
 
     def test_1_day_validity(self):
         cert = _cert(validity_days=1)
@@ -259,14 +265,14 @@ class TestEscalationCooldownUnchanged:
         second = evaluate_thresholds(cert, alert_repo, cooldown_hours=24)
         assert second == []
 
-    def test_escalation_after_cooldown(self, alert_repo):
+    def test_thresholds_never_refire_after_cooldown(self, alert_repo):
+        """Each threshold fires exactly once — cooldown_hours has no effect."""
         cert = _cert(validity_days=47, days_remaining=4)
         first = evaluate_thresholds(cert, alert_repo, cooldown_hours=24)
         first_ids = {a.id for a in first}
         third = evaluate_thresholds(cert, alert_repo, cooldown_hours=0)
-        third_ids = {a.id for a in third}
-        assert third_ids.isdisjoint(first_ids)
-        assert len(third) > 0
+        assert third == []
+        assert first_ids
 
     def test_expired_alert_type(self, alert_repo):
         cert = _cert(validity_days=47, days_remaining=-1)
@@ -278,18 +284,18 @@ class TestEscalationCooldownUnchanged:
         alerts = evaluate_thresholds(cert, alert_repo)
         assert any(a.alert_type == "expired" for a in alerts)
         thresholds_fired = {a.threshold_days for a in alerts}
-        assert thresholds_fired <= {4, 2, 1}
+        assert thresholds_fired == {1}
 
     def test_collapsed_thresholds_1_day_produces_alerts(self, alert_repo):
         cert = _cert(validity_days=1, days_remaining=0)
         alerts = evaluate_thresholds(cert, alert_repo)
-        assert len(alerts) == 3
+        assert len(alerts) == 1
         assert all(a.threshold_days == 1 for a in alerts)
 
     def test_collapsed_thresholds_2_day_produces_alerts(self, alert_repo):
         cert = _cert(validity_days=2, days_remaining=0)
         alerts = evaluate_thresholds(cert, alert_repo)
-        assert len(alerts) == 3
+        assert len(alerts) == 1
         assert all(a.threshold_days == 1 for a in alerts)
 
     def test_expiry_warning_type(self, alert_repo):

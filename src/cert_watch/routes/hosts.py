@@ -143,8 +143,8 @@ async def add_host(
         try:
             from cert_watch.events import emit_scan_failed
             emit_scan_failed(db, hostname, p, result.error_message, source="scan")
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 — best-effort event emission
+            logger.debug("emit_scan_failed suppressed for %s:%d", hostname, p, exc_info=True)
         logger.warning(
             "added host %s:%d but scan failed: %s",
             hostname, p, result.error_message,
@@ -306,8 +306,8 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             try:
                 from cert_watch.events import emit_scan_failed
                 emit_scan_failed(db, hostname, port, result.error_message, source="scan")
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 — best-effort event emission
+                logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
         imported += 1
     if errors and imported == 0:
         logger.warning("CSV import failed: %s", errors[:3])
@@ -363,7 +363,7 @@ async def update_host_expected_issuers(
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
     if host is None:
-        return RedirectResponse(url="/discover?error=host+not+found", status_code=303)
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
     # Normalize: comma-separated, stripped
     normalized = ",".join(
         i.strip()
@@ -371,11 +371,8 @@ async def update_host_expected_issuers(
         if i.strip()
     )
     if len(normalized) > 2000:
-        return RedirectResponse(url="/discover?error=expected+issuers+too+long", status_code=303)
+        return RedirectResponse(url="/?error=expected+issuers+too+long", status_code=303)
     repo.set_expected_issuers(host_id, normalized)
-    # Invalidate CT reconciliation cache
-    from cert_watch.ct_monitor import invalidate_ct_cache
-    invalidate_ct_cache()
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -386,7 +383,7 @@ async def update_host_expected_issuers(
         source_ip=resolve_source_ip(request),
     )
     logger.info("updated expected_issuers for host %s", host_id)
-    return RedirectResponse(url="/discover?saved=1", status_code=303)
+    return RedirectResponse(url="/?saved=1", status_code=303)
 
 
 @router.post("/hosts/{host_id}/delete")
@@ -462,8 +459,11 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                 try:
                     from cert_watch.events import emit_scan_failed
                     emit_scan_failed(db, h.hostname, h.port, result.error_message, source="scan")
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception:  # noqa: BLE001 — best-effort event emission
+                    logger.debug(
+                        "emit_scan_failed suppressed for %s:%d",
+                        h.hostname, h.port, exc_info=True,
+                    )
                 failures += 1
             else:
                 async with _store_sem:
@@ -570,8 +570,11 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
     try:
         from cert_watch.events import emit_scan_failed
         emit_scan_failed(db, host.hostname, host.port, result.error_message, source="manual")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 — best-effort event emission
+        logger.debug(
+            "emit_scan_failed suppressed for %s:%d",
+            host.hostname, host.port, exc_info=True,
+        )
     logger.warning(
         "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
     )

@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 import dns.rdatatype
 import dns.resolver
 
 logger = logging.getLogger("cert_watch.caa_check")
+
+_DOMAIN_RE = re.compile(
+    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?"
+    r"(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*"
+    r"\.[a-zA-Z]{2,}$"
+)
+_MAX_DOMAIN_LEN = 253
 
 
 @dataclass

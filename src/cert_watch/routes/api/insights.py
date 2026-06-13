@@ -1,4 +1,4 @@
-"""Insights, trends, CT reconciliation, and webhook test API endpoints."""
+"""Insights, trends, and webhook test API endpoints."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import rate_limit, require_auth, require_write
+from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path, _get_settings
 
 logger = logging.getLogger("cert_watch.routes.api.insights")
@@ -48,40 +48,6 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
             "message": test_alert.error_message or "webhook delivery failed",
         },
         status_code=502,
-    )
-
-
-@router.get(
-    "/api/ct/reconciliation",
-    dependencies=[Depends(rate_limit("ct_recon", 10, 60))],
-)
-def ct_reconciliation(request: Request, _auth: str = Depends(require_auth), domain: str = ""):
-    """CT reconciliation: compare CT log entries against tracked hosts.
-
-    Query params:
-      domain (required): base domain to check (e.g. "example.com")
-
-    Returns JSON with tracked/ct hostnames, coverage percentage, and gaps.
-    """
-    if not domain:
-        return JSONResponse(
-            content={"error": "domain query parameter is required"},
-            status_code=400,
-        )
-    s = _get_settings(request)
-    from cert_watch.ct_monitor import ct_reconciliation as ct_recon
-
-    result = ct_recon(s.db_path, domain)
-    return JSONResponse(
-        content={
-            "domain": result.domain,
-            "tracked_hostnames": result.tracked_hostnames,
-            "ct_hostnames": result.ct_hostnames,
-            "ct_only_hostnames": result.ct_only_hostnames,
-            "tracked_only_hostnames": result.tracked_only_hostnames,
-            "coverage_pct": result.coverage_pct,
-            "error": result.error or None,
-        }
     )
 
 

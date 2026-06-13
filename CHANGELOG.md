@@ -13,6 +13,33 @@ this is the last development batch before maintenance mode. See AGENTS.md
   page header, write-gated and CSRF-protected.
 
 ### Changed
+- **Digest-first alerting recommended.** `ALERT_DIGEST_ONLY=1` is now the
+  documented recommended default for new deployments. The digest sends one
+  consolidated email per day listing all certificates expiring within 30 days,
+  instead of a separate email per threshold crossing. The per-threshold model
+  is still available (the default) for operators who want immediate individual
+  notifications.
+- **Prometheus metrics enhanced.** The `/metrics` endpoint now exposes per-cert
+  expiry with a `fingerprint` label, urgency distribution (`cert_watch_certificates_by_urgency`,
+  aligned to the dashboard's buckets: healthy/warning/critical/expired), and posture
+  grade distribution (`cert_watch_certificates_by_posture`). The scan errors metric
+  was renamed from `cert_scan_errors_total` (Counter) to `cert_watch_scan_errors`
+  (Gauge) — gauge semantics are correct because old scan records are purged by
+  retention. Existing dashboards referencing the old name will need updating.
+- **Certificate Transparency monitoring removed.** The CT reconciliation feature
+  (`ct_monitor.py`, `ct_lookup.py`, `/discover`, `/ct-lookup`, `/api/ct/reconciliation`)
+  has been removed. It depended on crt.sh (a free, rate-limited service) for on-demand
+  lookups, which is not continuous monitoring and provided marginal value for the SMB
+  target audience. The `expected_issuers` host field and its API (`GET/PUT
+  /api/hosts/{id}/issuers`) are retained. `CERT_WATCH_CT_LOG_URL` is no longer read.
+- **Expiry alert semantics** (`alerts.evaluate_thresholds`): each threshold now
+  fires at most once per certificate — previously, all crossed thresholds fired
+  on every evaluation, so a cert at 5 days produced separate alerts for both the
+  14-day and 7-day thresholds. Now only the most urgent newly-tripped threshold
+  fires, and the `cooldown_hours` parameter is a no-op. The `expired` alert type
+  is tracked separately from `expiry_warning`, so a cert that exhausts the 1-day
+  warning still fires an `expired` alert. Failed delivery alerts (SMTP failure)
+  are excluded from dedup so they retry on the next daily cycle.
 - **Rate limiter no longer serialises all requests** (WI-032): the single
   global lock is replaced by 256 sharded locks/caches keyed by client, so
   unrelated keys no longer contend under concurrent load.
@@ -370,7 +397,7 @@ security-hardening fixes from two adversarial reviews.
   re-resolves on connect, so this is a large improvement over unvalidated
   `urlopen`, not the airtight pinned-IP guarantee the TLS scanner has — see the
   `http_client` module docstring; **BC-116/BC-117**.)*
-- **Configurable LDAP group filter (BC-118)** — `CERT_WATCH_LDAP_GROUP_FILTER`
+- **Configurable LDAP group filter (BC-118)** — `LDAP_GROUP_FILTER`
   with a `{group}` placeholder (defaults to the AD transitive-membership OID),
   unblocking OpenLDAP/FreeIPA `LDAP_REQUIRED_GROUPS`.
 

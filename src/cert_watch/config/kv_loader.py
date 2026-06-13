@@ -5,12 +5,15 @@ Decomposed from the monolithic config.py (BC-144a / config decomposition).
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from cert_watch.config.helpers import (
     SENSITIVE_SETTING_KEYS,
     split_group_dns,
 )
+
+logger = logging.getLogger("cert_watch.config.kv_loader")
 
 
 def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
@@ -24,6 +27,7 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
         from cert_watch.database import fernet_decrypt, kv_all
         kv = kv_all(db_path)
     except Exception:
+        logger.warning("kv_store load failed; using env-only settings", exc_info=True)
         return base
     if not kv:
         return base
@@ -155,6 +159,7 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
         audit_retention_days=base.audit_retention_days,
         history_retention_days=base.history_retention_days,
         alert_retention_days=base.alert_retention_days,
+        event_retention_days=base.event_retention_days,
         drift_alerts=base.drift_alerts,
         renewal_window_days=base.renewal_window_days,
         check_revocation=base.check_revocation,
