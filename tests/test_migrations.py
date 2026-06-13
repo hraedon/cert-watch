@@ -170,7 +170,7 @@ def _insert_v06x_sample_data(db_path: Path) -> None:
                 "CN=Test CA",
                 "2025-01-01T00:00:00+00:00",
                 "2026-01-01T00:00:00+00:00",
-                "example.com",
+                '["example.com"]',
                 "aa" * 32,
                 b"leaf-der",
                 "scan",
@@ -191,7 +191,7 @@ def _insert_v06x_sample_data(db_path: Path) -> None:
                 "CN=Test Root",
                 "2020-01-01T00:00:00+00:00",
                 "2030-01-01T00:00:00+00:00",
-                "Test CA",
+                '["Test CA"]',
                 "bb" * 32,
                 b"intermediate-der",
                 "upload",
@@ -233,7 +233,7 @@ def _insert_v06x_sample_data(db_path: Path) -> None:
                 "CN=Test Root",
                 "2020-01-01T00:00:00+00:00",
                 "2030-01-01T00:00:00+00:00",
-                "Test Root",
+                '["Test Root"]',
                 "cc" * 32,
                 b"root-der",
                 "2025-01-01T00:00:00+00:00",
@@ -527,6 +527,34 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
             ("a1",),
         ).fetchone()
         assert alert == ("c1", "expiry", "pending", "Certificate expires soon")
+
+    # Smoke-read the real dashboard query helpers against the migrated DB.
+    # Schema/row-count assertions above prove structure and data survival;
+    # this proves the app's actual read paths execute against a database that
+    # reached the current schema by *migration* (not fresh init) — the class of
+    # bug a long-lived production DB hits that fresh-schema tests cannot (P3.1).
+    from cert_watch.database.dashboard import (
+        list_dashboard_grouped_page,
+        list_dashboard_page,
+    )
+    from cert_watch.database.fleet import list_fleet_pivot
+
+    rows, total = list_dashboard_page(db_path)
+    assert total >= 1
+    leaf = next(r for r in rows if r["name"] == "example.com")
+    # The san_dns_names JSON column must round-trip through json.loads — the
+    # read path the raw-SQL assertions above never exercise.
+    assert leaf["san_dns_names"] == ["example.com"]
+
+    grouped_rows, grouped_total = list_dashboard_grouped_page(db_path)
+    assert grouped_total >= 1
+    assert grouped_rows  # at least one grouped entry materialises
+
+    for pivot in ("issuer", "owner", "renewal_method"):
+        groups = list_fleet_pivot(db_path, pivot)
+        # Aggregation must execute and total the surviving leaf certs.
+        assert isinstance(groups, list)
+        assert sum(g["count"] for g in groups) >= 1
 
 
 # ---------- CLI backup subcommand ----------
