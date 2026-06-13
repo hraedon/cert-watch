@@ -2,6 +2,49 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+Maintenance-entry release (Plan 049). The product surface is now closed;
+this is the last development batch before maintenance mode. See AGENTS.md
+*Maintenance mode* for what gets in from here.
+
+### Added
+- **Alerts: "Mark all read" and "Flush queue" actions** (WI-030) on the alerts
+  page header, write-gated and CSRF-protected.
+
+### Changed
+- **Rate limiter no longer serialises all requests** (WI-032): the single
+  global lock is replaced by 256 sharded locks/caches keyed by client, so
+  unrelated keys no longer contend under concurrent load.
+- **`routes/settings.py` decomposed into a package** (WI-031): per-section
+  sub-routers replace the ~1,450-line module where UI defects concentrated.
+
+### Fixed
+- **Config integers are range-validated** (WI-033): out-of-range values such as
+  `CERT_WATCH_SCHED_HOUR=25` now warn and fall back to the default instead of
+  crashing the scheduler.
+- **IPv6 scan targets** (WI-036): IPv6 address literals are bracketed for
+  openssl's `-connect` argument (`[::1]:443`) instead of producing a malformed
+  argument.
+- **openssl output is size-capped** (WI-037): the `s_client` subprocess output
+  is bounded (`ScanOutputTooLargeError`) instead of being buffered into memory
+  without limit.
+- Plus the post-0.8.0 adversarial-audit batch (security, data-layer, scan, and
+  template fixes) and SSRF IP-pinning integration tests (WI-026).
+
+### Docs / tests
+- **Restore runbook data-loss fix**: the documented restore now removes the
+  `-wal`/`-shm` sidecars before replacing the database. Without this, a stale
+  WAL from an unclean shutdown is replayed onto the restored file, silently
+  discarding the backup. (Caught by exercising the runbook end-to-end.)
+- **SC-081 200-day milestone date corrected** to 2026-03-15 in positioning.md
+  (it matches the policy pack, readiness report, and tests; positioning was the
+  lone outlier).
+- Real-database migration test now smoke-reads the dashboard query helpers
+  against a migrated v0.6.x database; SC-081 freeze-time boundary tests cover
+  each milestone transition; settings-POST e2e coverage added and its
+  password-rotation tests isolated from the login-dependent form tests.
+
 ## [0.8.1] — 2026-06-11
 
 Defect release: every fix found by the post-0.8.0 adversarial UI review,
