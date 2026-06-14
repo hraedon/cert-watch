@@ -246,6 +246,8 @@ def check_private_crl_freshness(
     from datetime import UTC, datetime
 
     from cryptography import x509
+    from cryptography.hazmat.primitives.asymmetric.x448 import X448PublicKey
+    from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
     crl_urls = _extract_crl_urls(cert_der)
     if not crl_urls:
@@ -346,7 +348,15 @@ def check_private_crl_freshness(
         if issuer_der:
             try:
                 issuer_cert = x509.load_der_x509_certificate(issuer_der)
-                if not crl.is_signature_valid(issuer_cert.public_key()):
+                issuer_key = issuer_cert.public_key()
+                if isinstance(issuer_key, (X25519PublicKey, X448PublicKey)):
+                    # Key-agreement keys can't produce signatures, so there is
+                    # nothing to verify against — skip rather than error.
+                    logger.debug(
+                        "CRL issuer key for %s is key-agreement type; "
+                        "skipping signature check", url,
+                    )
+                elif not crl.is_signature_valid(issuer_key):
                     findings.append(Finding(
                         check="private_crl", status="warn",
                         message=f"CRL from {url} signature does not match "
