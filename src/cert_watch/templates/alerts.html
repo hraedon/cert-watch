@@ -16,11 +16,11 @@
       <a href="/settings?tab=alerts" class="cw-btn ghost sm">{{ icons.svg_icon('cog', 12) }}Alert settings</a>
       {% endif %}
       {% if may_write %}
-      <form method="POST" action="/alerts/mark-all-read" class="cw-inline">
+      <form method="post" action="/alerts/mark-all-read" class="cw-inline">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-btn ghost sm" data-action="mark-all-read">{{ icons.svg_icon('check', 12) }}Mark all read</button>
       </form>
-      <form method="POST" action="/alerts/flush" class="cw-inline">
+      <form method="post" action="/alerts/flush" class="cw-inline">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <button type="submit" class="cw-btn ghost sm" data-action="flush-queue">{{ icons.svg_icon('send', 12) }}Flush queue</button>
       </form>
