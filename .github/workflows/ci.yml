@@ -44,9 +44,19 @@ jobs:
       - name: pytest
         # COVERAGE_CORE=sysmon uses the faster sys.monitoring coverage core
         # (Python 3.12+). Parallelism (`-n auto`) comes from addopts in pyproject.
+        #
+        # Two passes so the per-module coverage floors actually enforce: pass 1
+        # runs the unit suite and writes coverage.json (deferring the floor gate,
+        # which must read a *completed* report); pass 2 runs only the floor gate
+        # against that report. Without this the gate silently skips on CI.
         env:
           COVERAGE_CORE: sysmon
-        run: .venv/bin/pytest -q --ignore=tests/e2e --ignore=tests/integration
+        run: |
+          .venv/bin/pytest -q --ignore=tests/e2e --ignore=tests/integration \
+            --cov-report=json:coverage.json \
+            --deselect tests/test_module_coverage_floors.py
+          .venv/bin/pytest -q --no-cov -p no:cacheprovider \
+            tests/test_module_coverage_floors.py
 
   ldap-integration:
     runs-on: ubuntu-latest
