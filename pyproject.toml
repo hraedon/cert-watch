@@ -26,6 +26,7 @@ dev = [
     "ruff>=0.7",
     "mypy>=1.13",
     "djlint>=1.36",
+    "freezegun>=1.5",
 ]
 e2e = [
     "playwright>=1.49",
