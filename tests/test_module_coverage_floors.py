@@ -5,8 +5,10 @@ while the global average stays high. This is a *ratchet*: floors are set at
 current actual percentages (rounded down). ONLY GOES UP — if coverage improves,
 raise the floor.
 
-Run with the full suite so coverage.json reflects real numbers:
-    pytest --cov=cert_watch --cov-report=json:coverage.json -n auto
+The CI `test` job enforces these by running two passes (generate coverage.json,
+then run this module against it); see .github/workflows/ci.yml. The floors are
+therefore measured against the **unit** suite (the selection that job runs:
+excludes e2e/integration), on Python 3.13.
 """
 
 from __future__ import annotations
@@ -18,13 +20,21 @@ import pytest
 
 COVERAGE_JSON = Path(__file__).resolve().parent.parent / "coverage.json"
 
+# Floors reflect the unit-suite coverage on the CI `test` job (3.13), rounded
+# down. routes/settings.py was decomposed into a package (WI-031), so the
+# security-critical settings routes are floored individually here. scan.py reads
+# 94% under the unit suite — its former 99 floor came from a full-scope run that
+# the gate never actually enforced (the test always skipped on CI); the unit job
+# can't reach it without e2e subprocess coverage (tracked separately).
 MODULE_FLOORS: dict[str, int] = {
     "src/cert_watch/auth/ldap_provider.py": 90,
     "src/cert_watch/auth/oauth_provider.py": 84,
     "src/cert_watch/middleware.py": 88,
     "src/cert_watch/security.py": 100,
-    "src/cert_watch/routes/settings.py": 86,
-    "src/cert_watch/scan.py": 99,
+    "src/cert_watch/routes/settings/auth.py": 96,
+    "src/cert_watch/routes/settings/password.py": 90,
+    "src/cert_watch/routes/settings/roles.py": 88,
+    "src/cert_watch/scan.py": 94,
 }
 
 
@@ -33,11 +43,10 @@ def _load_coverage() -> dict:
 
 
 # coverage.json is .gitignored and pytest-cov only writes it at session end, so
-# in a single-pass run (local or CI) it is absent while this test executes —
-# hence skipif, not a hard fail. A prior "hardening" change turned this into
-# pytest.fail(), which broke CI because the gate cannot be satisfied in a single
-# pass. Until CI does a two-pass run (generate coverage.json, then run these),
-# the floors only enforce when a coverage.json from an earlier run is present.
+# in a single-pass run (e.g. a plain local `pytest`) it is absent while this
+# test executes — hence skipif rather than a hard fail there. CI enforces the
+# floors by running a dedicated second pass after coverage.json exists (see the
+# `test` job in .github/workflows/ci.yml), so this does NOT skip on CI.
 @pytest.mark.skipif(not COVERAGE_JSON.exists(), reason="coverage.json not found")
 @pytest.mark.parametrize(
     "path,floor",
