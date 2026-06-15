@@ -27,6 +27,22 @@ All notable changes to cert-watch are documented in this file.
   0.9.0). `cert_watch.__version__` now derives from installed package metadata
   (single source of truth: pyproject), with `_version.txt` supplying the commit
   and a source-tree-only version fallback.
+- **Installer refreshes the package on upgrade and verifies the result.** Since
+  `__version__` reads installed metadata, a re-install that did not actually
+  refresh the venv left the GUI reporting a stale version (e.g. 0.8.1 after a
+  0.9.0 deploy). `install-windows.ps1` now runs `pip install --upgrade`, fails
+  loudly if pip errors, and prints the installed version (warning on drift from
+  the source tree) so a stale install is visible at install time.
+- **Installer restarts the app pool after an upgrade-in-place.** The pool is
+  stopped before touching the venv to release locked files, but it was only
+  restarted inside the `-ConfigureIIS` path — so a plain upgrade (no
+  `-ConfigureIIS`) left the site stopped and serving HTTP 503. It is now
+  restarted at the end whenever the script stopped it and did not run IIS config.
+- **Installer no longer surfaces a benign venv message as an error.** Python
+  3.14's `python -m venv` can log "Unable to copy ... venvlauncher.exe" while
+  still producing a working venv via its fallback. That output is now captured
+  and only shown if the venv fails verification; on success a short note explains
+  it is cosmetic.
 
 ## [0.9.0] — 2026-06-15
 

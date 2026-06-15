@@ -266,6 +266,7 @@ foreach ($d in @($InstallDir, $secrets, $logs)) {
 # .pyd/.exe). On a re-install over a live site, leaving it running locks these
 # files and both venv creation and pip install fail. appcmd is always present
 # with IIS, so this avoids a hard dependency on the WebAdministration module.
+$script:poolWasStopped = $false
 $appcmdExe = "$env:windir\system32\inetsrv\appcmd.exe"
 if (Test-Path $appcmdExe) {
     $poolExists = & $appcmdExe list apppool "$AppPool" 2>$null
@@ -273,6 +274,7 @@ if (Test-Path $appcmdExe) {
         Write-Host "Stopping app pool `"$AppPool`" to release files before install ..."
         & $appcmdExe stop apppool /apppool.name:"$AppPool" 2>$null | Out-Null
         Start-Sleep -Seconds 3
+        $script:poolWasStopped = $true
     }
 }
 
@@ -289,8 +291,13 @@ foreach ($vl in @("Lib\venv\scripts\nt\venvlauncher.exe", "Lib\venv\scripts\nt\v
 }
 
 Write-Host "Creating virtualenv at $venv ..."
-& $python.Exe @($python.Args + @("-m", "venv", $venv))
+# Capture venv output rather than letting it stream. Python 3.14 can emit a
+# scary-looking "Unable to copy ... venvlauncher.exe" line while still producing
+# a working venv via its fallback; we only want to show that noise if the venv
+# actually fails to verify below.
+$venvOut = & $python.Exe @($python.Args + @("-m", "venv", $venv)) 2>&1
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
+    if ($venvOut) { Write-Host ($venvOut | Out-String) }
     throw "Failed to create virtualenv at $venv using $($python.Exe)."
 }
 
@@ -300,13 +307,41 @@ $venvPy = Join-Path $venv "Scripts\python.exe"
 # launcher has hidden/system attributes.
 $venvProbe = & $venvPy -c "import sys; print(sys.executable)" 2>&1
 if ($LASTEXITCODE -ne 0) {
+    if ($venvOut) { Write-Host ($venvOut | Out-String) }
     throw "venv created but python.exe is not functional (exit $LASTEXITCODE): $venvProbe"
 }
 Write-Host "  venv verified: $venvProbe"
+if ("$venvOut" -match "Unable to copy") {
+    # The venv verified functional, so the launcher-copy message is cosmetic
+    # (Python used its fallback wrapper). Say so, so it does not read as a failure.
+    Write-Host "  Note: Python logged a benign `"Unable to copy venvlauncher.exe`" message during"
+    Write-Host "        venv creation; the venv was created and verified working, so it is not an error."
+}
 Write-Host "Installing cert-watch ..."
 & $venvPy -m pip install --upgrade pip | Out-Null
 $pkg = if ($WithAuthExtras) { "$repoRoot[auth-ldap,auth-oauth]" } else { $repoRoot }
-& $venvPy -m pip install $pkg
+# --upgrade so an in-place re-install actually refreshes the package metadata.
+# Without it pip could leave a prior version's dist-info in place, which is what
+# the app reports as its version (the GUI then shows a stale version after an
+# upgrade that otherwise appeared to succeed).
+& $venvPy -m pip install --upgrade $pkg
+if ($LASTEXITCODE -ne 0) {
+    throw "pip install of cert-watch failed (exit $LASTEXITCODE)."
+}
+# Surface the version that actually landed in the venv, and flag drift from the
+# source tree being installed. This closes the loop on "the GUI shows the wrong
+# version after a deploy" by making the installed version visible at install time.
+$installedVer = ((& $venvPy -m pip show cert-watch 2>$null | Select-String "^Version:") -replace "^Version:\s*", "").Trim()
+$sourceVer = ""
+$pyprojectPath = Join-Path $repoRoot "pyproject.toml"
+if (Test-Path $pyprojectPath) {
+    $verLine = Get-Content $pyprojectPath | Select-String '^\s*version\s*=' | Select-Object -First 1
+    if ($verLine) { $sourceVer = ($verLine.ToString() -replace '.*=\s*"?([^"]*)"?.*', '$1').Trim() }
+}
+Write-Host "  Installed cert-watch version: $installedVer"
+if ($sourceVer -and $installedVer -and ($installedVer -ne $sourceVer)) {
+    Write-Host "  [warn] Installed version ($installedVer) does not match the source tree ($sourceVer)."
+}
 
 # --- Generate persistent signing keys (idempotent) ---
 function New-HexSecret {
@@ -520,6 +555,22 @@ if ($ConfigureIIS) {
         }
 
         $script:iisActuallyConfigured = $true
+    }
+}
+
+# If we stopped the pool to release locked files but did NOT run the IIS-config
+# path (which restarts it), bring it back up now. Otherwise a plain
+# upgrade-in-place (install without -ConfigureIIS) leaves the site stopped and
+# serving HTTP 503.
+if ($script:poolWasStopped -and -not $script:iisActuallyConfigured) {
+    Write-Host ""
+    Write-Host "Restarting app pool `"$AppPool`" (was stopped to release files) ..."
+    & $appcmdExe start apppool /apppool.name:"$AppPool" 2>$null | Out-Null
+    Start-Sleep -Seconds 2
+    $poolState = (& $appcmdExe list apppool "$AppPool" /text:state) 2>$null
+    Write-Host "  App pool state: $poolState"
+    if ("$poolState" -ne "Started") {
+        Write-Host "  [warn] App pool `"$AppPool`" is not Started; the site will return HTTP 503 until it starts."
     }
 }
 
