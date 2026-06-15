@@ -123,7 +123,7 @@
             </div>
             {% if host_info.notes %}
             <div class="cw-col-span-2">
-              <div class="cw-detail-label">Host notes</div>
+              <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
               <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host_info.notes }}</div>
             </div>
             {% endif %}
@@ -135,13 +135,13 @@
         </form>
         <div id="host-notes-view" class="cw-mt-10">
           <div class="cw-flex cw-items-center cw-gap-8 cw-mb-8">
-            <div class="cw-detail-label">Host notes</div>
+            <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
             <div class="cw-spacer"></div>
             <button class="cw-btn ghost sm" type="button" data-action="toggle-host-notes">
               {{ icons.svg_icon('key', 13) }}<span id="host-notes-btn-label">Edit</span>
             </button>
           </div>
-          <div id="host-notes-display" class="cw-notes-pre">{{ host_info.notes or 'Add notes about this host…' }}</div>
+          <div id="host-notes-display" class="cw-notes-pre">{{ host_info.notes or 'Add notes about this host (visible on every certificate on it)…' }}</div>
         </div>
         <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -393,11 +393,46 @@
       </div>
       {% endif %}
 
+      {# Tags #}
+      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
+        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
+          {{ icons.svg_icon('tag', 15) }}
+          <span class="cw-fz-13-5 cw-fw-600">Tags</span>
+          <span class="cw-muted cw-fz-11">— route alerts to teams (see Alerts settings)</span>
+          <div class="cw-spacer"></div>
+          {% if may_write %}
+          <details class="cw-inline-edit">
+            <summary class="cw-btn ghost sm">{{ icons.svg_icon('key', 13) }}Edit</summary>
+            <form method="post" action="/certificates/{{ cert_id }}/tags" class="cw-mt-8">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <input class="cw-input" type="text" name="tags" value="{{ cert_tags | join(', ') }}"
+                     list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
+              <datalist id="cw-all-tags">
+                {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
+              </datalist>
+              <div class="cw-muted cw-fz-11 cw-mt-3">Edits this certificate's own tags. Host tags are inherited automatically.</div>
+              <button type="submit" class="cw-btn primary sm cw-mt-8">Save tags</button>
+            </form>
+          </details>
+          {% endif %}
+        </div>
+        {% if effective_tags %}
+        <div class="cw-flex cw-gap-8 cw-wrap">
+          {% for t in effective_tags %}
+          <span class="cw-chip{% if t not in cert_tags %} tone-muted{% endif %}">{{ t }}{% if t not in cert_tags %} <span class="cw-muted cw-fz-11">(host)</span>{% endif %}</span>
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="cw-muted cw-fz-12">No tags yet.</div>
+        {% endif %}
+      </div>
+
       {# Notes #}
       <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
         <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
           {{ icons.svg_icon('file', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Notes &amp; procedures</span>
+          <span class="cw-fz-13-5 cw-fw-600">Certificate notes &amp; procedures</span>
+          <span class="cw-muted cw-fz-11">— this certificate only</span>
           <div class="cw-spacer"></div>
           {% if may_write %}
           <form method="post" action="/certificates/{{ cert_id }}/notes" class="cw-inline">

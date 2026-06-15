@@ -319,8 +319,16 @@ async def lifespan(app: FastAPI):
 
     import datetime as _dt_init
     _weekly_digest_day: int = _dt_init.datetime.now(_dt_init.UTC).weekday()
+    # Track the ISO (year, week) the expiry digest last went out so it sends
+    # weekly rather than on every (daily) alert cycle. Seeded to the current week
+    # so a (re)start mid-week does not immediately re-send; it fires at the next
+    # week boundary.
+    _iso_init = _dt_init.datetime.now(_dt_init.UTC).isocalendar()
+    _expiry_digest_week: tuple[int, int] = (_iso_init[0], _iso_init[1])
 
     def _alerts() -> dict:
+        import datetime as _dt
+
         from cert_watch.alerts import (
             evaluate_all_certs,
             evaluate_renewal_window,
@@ -328,12 +336,26 @@ async def lifespan(app: FastAPI):
             send_expiry_digest,
         )
 
+        nonlocal _expiry_digest_week
         repo = SqliteAlertRepository(s.db_path)
         if s.alert_digest_only:
+            # Even in digest mode, the final-countdown (<= URGENT_THRESHOLD_DAYS)
+            # per-certificate alerts still fire every cycle; the digest only
+            # replaces the routine heads-up thresholds.
+            evaluate_all_certs(s.db_path, repo, urgent_only=True)
             evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
-            process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
-            delivered = send_expiry_digest(s.db_path, alert_cfg, webhook_config=webhook_cfg)
-            return {"sent": 1 if delivered else 0, "failed": 0 if delivered else 1}
+            result = process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
+            # The summary digest is weekly, not daily.
+            iso = _dt.datetime.now(_dt.UTC).isocalendar()
+            this_week = (iso[0], iso[1])
+            if this_week != _expiry_digest_week:
+                _expiry_digest_week = this_week
+                delivered = send_expiry_digest(
+                    s.db_path, alert_cfg, webhook_config=webhook_cfg
+                )
+                result["sent"] = result.get("sent", 0) + (1 if delivered else 0)
+                result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
+            return result
         evaluate_all_certs(s.db_path, repo)
         evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
         return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)

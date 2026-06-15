@@ -222,7 +222,8 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
 
 def _matches_q(e: dict, ql: str) -> bool:
     """Python text match used by the dashboard filter (case-insensitive)."""
-    fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host")]
+    fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host"),
+              e.get("tags")]
     if e.get("kind") == "grouped":
         for h in e.get("hosts", []):
             fields.extend([h.get("host"), h.get("name")])
@@ -436,9 +437,11 @@ def list_dashboard_page(
                 scanned_sql += (
                     " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
                     " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
-                    " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
+                    " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.tags) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
-                scanned_params += [like, like, like]
+                scanned_params += [like, like, like, like, like]
             select_parts.append(scanned_sql)
             params += scanned_params
 
@@ -462,9 +465,10 @@ def list_dashboard_page(
             pending_params: list = []
             if like:
                 pending_sql += (
-                    " AND LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
+                    " AND (LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
-                pending_params += [like]
+                pending_params += [like, like]
             select_parts.append(pending_sql)
             params += pending_params
 
@@ -482,9 +486,10 @@ def list_dashboard_page(
             if like:
                 uploaded_sql += (
                     " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
-                    " OR LOWER(c.issuer) LIKE ? ESCAPE '\\')"
+                    " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.tags) LIKE ? ESCAPE '\\')"
                 )
-                uploaded_params += [like, like]
+                uploaded_params += [like, like, like]
             select_parts.append(uploaded_sql)
             params += uploaded_params
 
@@ -584,6 +589,7 @@ def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
             "kind": "pending",
             "name": host_key,
             "host": host_key,
+            "tags": dict(h).get("tags", ""),
             "source": "scanned",
             "subject": None,
             "issuer": None,
