@@ -27,16 +27,12 @@ def _load_runtime_version() -> tuple[str, str]:
                 commit = parts[1].strip()
     except OSError:
         pass
-    try:
-        from importlib.metadata import PackageNotFoundError
-        from importlib.metadata import version as _pkg_version
+    import contextlib
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _pkg_version
 
-        try:
-            version = _pkg_version("cert-watch")
-        except PackageNotFoundError:
-            pass
-    except Exception:
-        pass
+    with contextlib.suppress(PackageNotFoundError):
+        version = _pkg_version("cert-watch")
     return (version or "0.0.0"), commit
 
 
