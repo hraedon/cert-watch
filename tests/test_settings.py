@@ -2071,6 +2071,62 @@ def test_save_role_mapping_persists_users_and_merges(reload_app, tmp_path):
     assert stored["sec"]["users"] == ["carol@x.com"]
 
 
+def test_save_role_mapping_clears_existing(reload_app, tmp_path, monkeypatch):
+    """#1: submitting an empty groups+users for a role removes its mapping."""
+    import json
+
+    from cert_watch.database import Role, SqliteRoleRepository, kv_get
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    role_id = SqliteRoleRepository(db).add(Role(name="ops"))
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        client.post("/settings/ldap-role-map",
+                    data={f"role_users_{role_id}": "alice@x.com"}, follow_redirects=False)
+        assert "ops" in json.loads(kv_get(db, "ldap_role_map"))
+        # Now clear it.
+        client.post("/settings/ldap-role-map",
+                    data={f"role_map_{role_id}": "", f"role_users_{role_id}": ""},
+                    follow_redirects=False)
+    assert "ops" not in json.loads(kv_get(db, "ldap_role_map"))
+
+
+def test_save_role_mapping_tolerates_bad_state(reload_app, tmp_path, monkeypatch):
+    """auth.py defensive branches: corrupt/non-dict stored JSON and unknown role id."""
+    import json
+
+    from cert_watch.database import Role, SqliteRoleRepository, kv_get, kv_set
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
+    _seed_local_admin(tmp_path)
+    db = tmp_path / "cert-watch.sqlite3"
+    role_id = SqliteRoleRepository(db).add(Role(name="ops"))
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        # Corrupt JSON in store -> treated as empty, then written cleanly.
+        kv_set(db, "ldap_role_map", "{not json")
+        client.post("/settings/ldap-role-map",
+                    data={f"role_users_{role_id}": "a@x.com"}, follow_redirects=False)
+        assert json.loads(kv_get(db, "ldap_role_map"))["ops"]["users"] == ["a@x.com"]
+        # Non-dict JSON in store -> also reset.
+        kv_set(db, "ldap_role_map", "[1, 2]")
+        client.post("/settings/ldap-role-map",
+                    data={f"role_users_{role_id}": "b@x.com"}, follow_redirects=False)
+        assert json.loads(kv_get(db, "ldap_role_map"))["ops"]["users"] == ["b@x.com"]
+        # Unknown role id referenced in the form -> skipped, no crash.
+        r = client.post("/settings/ldap-role-map",
+                        data={"role_map_nonexistent-role": "CN=X"}, follow_redirects=False)
+        assert r.status_code == 303
+
+
 def test_role_mapping_lives_on_roles_tab(reload_app, tmp_path):
     """#1: the IdP group/user -> role mapping moved from the Authentication tab
     to the Roles tab. It must be a self-contained form (WI-027: never nested in

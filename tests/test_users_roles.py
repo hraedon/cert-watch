@@ -249,3 +249,49 @@ class TestSettingsRoutes:
         users = SqliteUserRepository(Settings.from_env().db_path).list_all()
         jsmith = next(u for u in users if u.username == "jsmith")
         assert jsmith.role_id == secops_id
+
+    def test_update_user_error_paths(self, reload_app, monkeypatch, tmp_path):
+        import re
+
+        monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            # Unknown (well-formed) user id -> not found.
+            r = client.post("/settings/users/00000000-0000-0000-0000-000000000000",
+                            data={"username": "x"}, follow_redirects=False)
+            assert r.status_code == 303
+            assert "not+found" in r.headers["location"]
+
+            client.post("/settings/users", data={
+                "username": "jsmith", "password": "password123", "email": "j@x.com",
+            }, follow_redirects=False)
+            uid = re.search(
+                r'/settings/users/([0-9a-f-]{36})"', client.get("/settings/users").text
+            ).group(1)
+
+            # Missing username -> error.
+            r = client.post(f"/settings/users/{uid}", data={"username": "  "},
+                            follow_redirects=False)
+            assert "username+required" in r.headers["location"]
+
+            # Too-short new password -> error.
+            r = client.post(f"/settings/users/{uid}",
+                            data={"username": "jsmith", "password": "short"},
+                            follow_redirects=False)
+            assert "at+least+8" in r.headers["location"]
+
+            # Valid new password -> hash changes.
+            r = client.post(f"/settings/users/{uid}",
+                            data={"username": "jsmith", "password": "newpassword123"},
+                            follow_redirects=False)
+            assert "saved=1" in r.headers["location"]
+
+        from cert_watch.config import Settings
+        from cert_watch.database import SqliteUserRepository
+        u = next(
+            x for x in SqliteUserRepository(Settings.from_env().db_path).list_all()
+            if x.username == "jsmith"
+        )
+        # A scrypt hash was stored (not the plaintext).
+        assert u.password_hash and "newpassword123" not in u.password_hash
