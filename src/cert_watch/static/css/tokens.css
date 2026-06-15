@@ -467,6 +467,8 @@ body {
 .cw-inline-flex { display: inline-flex; }
 .cw-wrap { flex-wrap: wrap; }
 .cw-inline { display: inline; }
+/* Inline expand-to-edit control (a <details> that sits next to other buttons). */
+.cw-inline-edit { display: inline-block; vertical-align: top; }
 .cw-hidden { display: none; }
 
 /* ---- FORM STACK ---- */
@@ -1018,6 +1020,7 @@ body {
 
 /* ---- META CHIP TONES (chain state / renewal / owner) ---- */
 .cw-chip.tone-warn   { color: var(--warn);   border-color: color-mix(in srgb, var(--warn) 32%, transparent);   background: var(--warn-soft); }
+.cw-chip.tone-muted  { color: var(--text-3); border-color: var(--border); background: transparent; }
 .cw-chip.tone-crit   { color: var(--crit);   border-color: color-mix(in srgb, var(--crit) 32%, transparent);   background: var(--crit-soft); }
 .cw-chip.tone-accent { color: var(--accent); border-color: var(--accent-line);                                  background: var(--accent-soft); }
 .cw-chip.tone-ok     { color: var(--ok);     border-color: color-mix(in srgb, var(--ok) 30%, transparent);     background: var(--ok-soft); }

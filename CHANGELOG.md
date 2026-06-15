@@ -5,6 +5,13 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Tag management in the GUI.** The existing tag system (used for alert-group
+  routing) is now editable and visible in the UI: edit a certificate's own tags
+  on its detail page and a host's tags on the host page; the certificate page
+  shows *effective* tags (its own plus inherited host tags, the latter flagged
+  `(host)`). The dashboard's Issuer column is replaced by a Tags column, and the
+  dashboard search now also matches tags (with a typeahead of existing tags).
+  New routes `POST /certificates/{id}/tags` and `POST /hosts/{id}/tags`.
 - **IdP → role mapping moved to the Roles tab, and can target individual users.**
   The LDAP/IdP group → role mapping now lives on the Roles tab (edited per role,
   alongside the role it grants) instead of the Authentication tab. Each role can

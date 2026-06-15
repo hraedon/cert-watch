@@ -226,6 +226,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 "renewal_method": h.get("renewal_method", ""),
                 "runbook_url": h.get("runbook_url") or None,
                 "notes": h.get("notes", ""),
+                "tags": h.get("tags", ""),
             }
             rm = h.get("renewal_method", "")
             if rm == "acme":
@@ -346,12 +347,16 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         getattr(settings, "webhook_kind", "") == "slack" if settings else False
     )
 
+    from cert_watch.database import distinct_tags
+    from cert_watch.tags import parse_tags
+
     return templates.TemplateResponse(
         request=request,
         name="certificate_detail.html",
         context={
             "cert": cert,
             "cert_id": cert_id,
+            "all_tags": distinct_tags(db),
             "version": __version__,
             "commit": __commit__,
             **auth_ctx,
@@ -372,6 +377,8 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "host_id": host_id,
             "last_scan": last_scan,
             "host_info": host_info,
+            "cert_tags": parse_tags(repo.get_tags(cert_id)),
+            "effective_tags": repo.effective_tags(cert_id),
             "chain_issue": chain_issue,
             "renewal_history": renewal_history,
             "renewal_method_label": renewal_method_label,
@@ -453,6 +460,40 @@ async def update_certificate_notes(
     )
     logger.info("updated notes for certificate %s", cert_id)
     return RedirectResponse(url="/", status_code=303)
+
+
+@router.post("/certificates/{cert_id}/tags")
+async def update_certificate_tags(
+    request: Request, cert_id: IdParam, tags: str = Form("")
+) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    if len(tags) > 2000:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('tags too long (max 2000)')}",
+            status_code=303,
+        )
+    db = _db_path(request)
+    repo = SqliteCertificateRepository(db)
+    if repo.get_by_id(cert_id) is None:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    # Normalize through the tag parser (dedupe/trim) before persisting.
+    from cert_watch.tags import format_tags, parse_tags
+
+    normalized = format_tags(parse_tags(tags))
+    repo.set_tags(cert_id, normalized)
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="cert.update_tags",
+        target_type="certificate",
+        target_id=cert_id,
+        detail={"tags": normalized},
+        source_ip=resolve_source_ip(request),
+    )
+    logger.info("updated tags for certificate %s", cert_id)
+    return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
 
 @router.post("/certificates/{cert_id}/owner")
