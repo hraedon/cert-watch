@@ -12,4 +12,4 @@ resources:
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch
-  newTag: v0.8.1
+  newTag: v0.9.0
