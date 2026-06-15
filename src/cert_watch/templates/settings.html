@@ -368,10 +368,12 @@
           <label class="cw-label" for="alert_digest_only">Digest mode</label>
           <select class="cw-input" id="alert_digest_only" name="alert_digest_only">
             <option value="0" {% if alert.alert_digest_only != '1' %}selected{% endif %}>Per-certificate alerts</option>
-            <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Daily digest (one email per day)</option>
+            <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Weekly digest (urgent alerts still sent)</option>
           </select>
           <div class="cw-muted cw-fz-11 cw-mt-3">
-            Digest mode sends one summary email instead of individual alerts per certificate.
+            Digest mode sends one weekly summary email instead of individual alerts for the
+            routine heads-up thresholds. Urgent alerts (≤3 days to expiry) are always sent
+            individually so an imminent expiry is never buried in a digest.
           </div>
         </div>
 

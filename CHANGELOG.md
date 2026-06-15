@@ -4,6 +4,15 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **Digest mode is now weekly, and urgent alerts always fire.** Digest mode
+  previously sent a summary every day and suppressed *all* per-certificate
+  alerts. It now sends the summary once per week, and the final-countdown
+  per-certificate alerts (≤3 days to expiry, `URGENT_THRESHOLD_DAYS`) always
+  fire individually so an imminent expiry is never buried in a digest. The
+  routine heads-up thresholds (14/7-day, chain 30/14/7) are what the weekly
+  digest covers. Setting label updated accordingly.
+
 ### Fixed
 - **Windows installer works in non-interactive sessions (WI-050).** The Python
   probe in `install-windows.ps1` resolved `py` / `python` / `python3` only from
