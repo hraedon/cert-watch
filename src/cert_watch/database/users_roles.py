@@ -16,6 +16,8 @@ class Role:
     name: str = ""
     email: str = ""
     description: str = ""
+    permission_tier: str = "viewer"
+    scope_tag: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -40,9 +42,12 @@ class SqliteRoleRepository:
         now = datetime.now(UTC).isoformat()
         with _connect(self.db_path) as conn:
             conn.execute(
-                "INSERT INTO roles (id, name, email, description, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (role_id, role.name, role.email, role.description, now, now),
+                "INSERT INTO roles"
+                " (id, name, email, description, permission_tier, scope_tag,"
+                " created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (role_id, role.name, role.email, role.description,
+                 role.permission_tier or "viewer", role.scope_tag or "", now, now),
             )
             conn.commit()
         return role_id
@@ -50,7 +55,8 @@ class SqliteRoleRepository:
     def get(self, role_id: str) -> Role | None:
         with _connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT id, name, email, description, created_at, updated_at "
+                "SELECT id, name, email, description, permission_tier,"
+                " scope_tag, created_at, updated_at "
                 "FROM roles WHERE id = ?",
                 (role_id,),
             ).fetchone()
@@ -61,6 +67,8 @@ class SqliteRoleRepository:
             name=row["name"],
             email=row["email"],
             description=row["description"],
+            permission_tier=row["permission_tier"] or "viewer",
+            scope_tag=row["scope_tag"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -68,7 +76,8 @@ class SqliteRoleRepository:
     def get_by_name(self, name: str) -> Role | None:
         with _connect(self.db_path) as conn:
             row = conn.execute(
-                "SELECT id, name, email, description, created_at, updated_at "
+                "SELECT id, name, email, description, permission_tier,"
+                " scope_tag, created_at, updated_at "
                 "FROM roles WHERE name = ?",
                 (name,),
             ).fetchone()
@@ -79,6 +88,8 @@ class SqliteRoleRepository:
             name=row["name"],
             email=row["email"],
             description=row["description"],
+            permission_tier=row["permission_tier"] or "viewer",
+            scope_tag=row["scope_tag"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -86,7 +97,8 @@ class SqliteRoleRepository:
     def list_all(self) -> list[Role]:
         with _connect(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT id, name, email, description, created_at, updated_at "
+                "SELECT id, name, email, description, permission_tier,"
+                " scope_tag, created_at, updated_at "
                 "FROM roles ORDER BY name"
             ).fetchall()
         return [
@@ -95,6 +107,8 @@ class SqliteRoleRepository:
                 name=r["name"],
                 email=r["email"],
                 description=r["description"],
+                permission_tier=r["permission_tier"] or "viewer",
+                scope_tag=r["scope_tag"] or "",
                 created_at=datetime.fromisoformat(r["created_at"]),
                 updated_at=datetime.fromisoformat(r["updated_at"]),
             )
@@ -105,9 +119,11 @@ class SqliteRoleRepository:
         now = datetime.now(UTC).isoformat()
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE roles SET name = ?, email = ?, description = ?, updated_at = ? "
+                "UPDATE roles SET name = ?, email = ?, description = ?,"
+                " permission_tier = ?, scope_tag = ?, updated_at = ? "
                 "WHERE id = ?",
-                (role.name, role.email, role.description, now, role.id),
+                (role.name, role.email, role.description,
+                 role.permission_tier or "viewer", role.scope_tag or "", now, role.id),
             )
             conn.commit()
 

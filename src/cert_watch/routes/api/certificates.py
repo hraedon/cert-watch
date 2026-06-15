@@ -10,13 +10,13 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
     SqliteCertificateRepository,
-    count_dashboard_leaves,
     list_cert_history,
-    list_dashboard_rows,
+    list_dashboard_page,
 )
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings
+from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import (
     _normalize_pagination,
     _pagination_links,
@@ -34,9 +34,14 @@ def api_list_certificates(
     request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
 ) -> JSONResponse:
     db = _db_path(request)
-    total = count_dashboard_leaves(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, total = list_dashboard_page(
+        db,
+        page=page, per_page=limit,
+        scope_tags=scope_tags,
+    )
     page, limit, pages, _offset = _normalize_pagination(page, limit, total)
-    rows = list_dashboard_rows(db, page=page, per_page=limit)
+    # Re-normalize against the scoped total that came back from the query.
     return JSONResponse(
         content={
             "certificates": rows,
@@ -110,6 +115,9 @@ async def api_update_notes(
     cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
     if cert is None:
@@ -197,6 +205,9 @@ async def api_set_cert_tags(
     cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteCertificateRepository(db)
     if repo.get_by_id(cert_id) is None:
         return JSONResponse(content={"error": "not found"}, status_code=404)

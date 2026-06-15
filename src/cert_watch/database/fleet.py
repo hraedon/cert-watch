@@ -12,13 +12,18 @@ _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
 def list_fleet_pivot(
     db_path: str | Path,
     pivot: str,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict]:
     """Return fleet pivot groups using SQL-level aggregation.
 
     Each group has ``key``, ``count``, ``worst_urgency``, ``earliest_expiry``.
     The ``entries`` field is ``None`` — use :func:`get_pivot_group_entries`
     to fetch entries for a specific group on demand (BC-048).
+
+    ``scope_tags`` restricts results to hosts/certificates whose effective tags
+    include at least one supplied tag (WI-051).
     """
+    from cert_watch.database.dashboard import _add_effective_tag_filter
     from cert_watch.filters import friendly_issuer
 
     init_schema(db_path)
@@ -41,8 +46,7 @@ def list_fleet_pivot(
 
     with _connect(db_path) as conn:
         # Scanned hosts: aggregate per group from leaf certificates
-        rows = conn.execute(
-            f"""
+        scanned_sql = f"""
             SELECT {group_col} AS grp,
                    CAST(MIN(CASE
                         WHEN c.not_after < datetime('now') THEN 0
@@ -55,15 +59,18 @@ def list_fleet_pivot(
             FROM certificates c
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
             WHERE c.is_leaf = 1
-            GROUP BY grp
-            """
-        ).fetchall()
+        """
+        scanned_params: list = []
+        scanned_sql, scanned_params = _add_effective_tag_filter(
+            scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
+        )
+        scanned_sql += " GROUP BY grp"
+        rows = conn.execute(scanned_sql, scanned_params).fetchall()
 
         # Pending hosts: hosts with no leaf certificate
         # For issuer pivot, pending hosts have no cert so group by "Unknown"
         pending_group_col = "''" if pivot == "issuer" else group_col
-        pending_rows = conn.execute(
-            f"""
+        pending_sql = f"""
             SELECT {pending_group_col} AS grp,
                    COUNT(*) AS cnt
             FROM hosts h
@@ -71,9 +78,13 @@ def list_fleet_pivot(
                 SELECT 1 FROM certificates c
                 WHERE c.hostname = h.hostname AND c.port = h.port AND c.is_leaf = 1
             )
-            GROUP BY grp
-            """
-        ).fetchall()
+        """
+        pending_params: list = []
+        pending_sql, pending_params = _add_effective_tag_filter(
+            pending_sql, pending_params, scope_tags or (), col_cert=None, col_host="h.tags"
+        )
+        pending_sql += " GROUP BY grp"
+        pending_rows = conn.execute(pending_sql, pending_params).fetchall()
 
     result: list[dict] = []
 

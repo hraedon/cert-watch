@@ -453,6 +453,19 @@
           <input class="cw-input" type="text" id="role_name" name="name" placeholder="e.g., operators" required>
         </div>
         <div class="cw-field">
+          <label class="cw-label" for="role_permission_tier">Permission tier</label>
+          <select class="cw-input" id="role_permission_tier" name="permission_tier">
+            <option value="viewer" selected>Viewer — read only</option>
+            <option value="operator">Operator — read and write</option>
+            <option value="admin">Admin — full settings access</option>
+          </select>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="role_scope_tag">Team scope tag</label>
+          <input class="cw-input" type="text" id="role_scope_tag" name="scope_tag" placeholder="e.g., platform-team">
+          <div class="cw-muted cw-fz-11 cw-mt-3">When set, members of this role only see/manage hosts and certificates carrying this tag.</div>
+        </div>
+        <div class="cw-field">
           <label class="cw-label" for="role_email">Email</label>
           <input class="cw-input" type="email" id="role_email" name="email" placeholder="ops@example.com">
         </div>
@@ -466,15 +479,48 @@
       {% if roles %}
       <table class="cw-table cw-mt-16">
         <thead>
-          <tr><th>Name</th><th>Email</th><th>Description</th><th></th></tr>
+          <tr><th>Name</th><th>Tier</th><th>Scope tag</th><th>Email</th><th>Description</th><th></th></tr>
         </thead>
         <tbody>
           {% for r in roles %}
           <tr>
             <td>{{ r.name }}</td>
+            <td>{{ r.permission_tier }}</td>
+            <td>{{ r.scope_tag or '—' }}</td>
             <td>{{ r.email }}</td>
             <td>{{ r.description }}</td>
             <td>
+              <details class="cw-inline-edit">
+                <summary class="cw-btn ghost sm">Edit</summary>
+                <form method="post" action="/settings/roles/{{ r.id }}" class="cw-mt-8">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_name_{{ r.id }}">Name</label>
+                    <input class="cw-input" type="text" id="edit_role_name_{{ r.id }}" name="name" value="{{ r.name }}" required>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_permission_tier_{{ r.id }}">Permission tier</label>
+                    <select class="cw-input" id="edit_role_permission_tier_{{ r.id }}" name="permission_tier">
+                      <option value="viewer" {% if r.permission_tier == 'viewer' %}selected{% endif %}>Viewer</option>
+                      <option value="operator" {% if r.permission_tier == 'operator' %}selected{% endif %}>Operator</option>
+                      <option value="admin" {% if r.permission_tier == 'admin' %}selected{% endif %}>Admin</option>
+                    </select>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_scope_tag_{{ r.id }}">Team scope tag</label>
+                    <input class="cw-input" type="text" id="edit_role_scope_tag_{{ r.id }}" name="scope_tag" value="{{ r.scope_tag }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_email_{{ r.id }}">Email</label>
+                    <input class="cw-input" type="email" id="edit_role_email_{{ r.id }}" name="email" value="{{ r.email }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_description_{{ r.id }}">Description</label>
+                    <input class="cw-input" type="text" id="edit_role_description_{{ r.id }}" name="description" value="{{ r.description }}">
+                  </div>
+                  <button type="submit" class="cw-btn primary sm">Save changes</button>
+                </form>
+              </details>
               <details class="cw-inline-edit">
                 <summary class="cw-btn ghost sm">IdP mapping</summary>
                 <form method="post" action="/settings/ldap-role-map" class="cw-mt-8">
@@ -497,7 +543,7 @@
                   <button type="submit" class="cw-btn primary sm">Save mapping</button>
                 </form>
               </details>
-              <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline">
+              <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role?">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="cw-btn ghost sm">Delete</button>
               </form>

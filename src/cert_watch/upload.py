@@ -128,8 +128,16 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
     return UploadedEntry(file_name=name, leaf=leaf, chain=chain_certs)
 
 
-def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
-    """Persist leaf + chain in a single transaction to avoid partial uploads."""
+def store_uploaded(
+    entry: UploadedEntry,
+    repo_path: Path | str,
+    *,
+    tags: str = "",
+) -> str:
+    """Persist leaf + chain in a single transaction to avoid partial uploads.
+
+    *tags* are stored on the uploaded leaf certificate (WI-052).
+    """
     import json
     import uuid
 
@@ -147,10 +155,10 @@ def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
             INSERT INTO certificates
             (id, subject, issuer, not_before, not_after, san_dns_names,
              fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, notes,
+             parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
              created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             """,
             (
                 leaf_id,
                 entry.leaf.subject,
@@ -168,6 +176,7 @@ def store_uploaded(entry: UploadedEntry, repo_path: Path | str) -> str:
                 cv,
                 None,
                 "",
+                tags,
                 now,
                 now,
             ),

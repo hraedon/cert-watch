@@ -22,6 +22,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
+from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
 from cert_watch.scan import (
     ScanError,
     ScannedEntry,
@@ -30,6 +31,7 @@ from cert_watch.scan import (
     store_scanned_async,
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.tags import parse_tags
 
 ScanResult = ScannedEntry | ScanError
 
@@ -91,7 +93,7 @@ async def add_host(
             hostname,
             p,
             threshold_days=threshold_days,
-            tags=tags,
+            tags=tags_with_scope(request, tags),
             scan_interval_hours=scan_interval_hours,
             notes=notes,
         )
@@ -231,7 +233,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             hostname,
             port,
             threshold_days=threshold,
-            tags=row_tags,
+            tags=tags_with_scope(request, row_tags),
             scan_interval_hours=interval_hours,
             notes=row_notes,
         )
@@ -333,6 +335,9 @@ async def update_host_notes(
             url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
         )
     db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     repo = SqliteHostRepository(db)
     if not repo.update_notes(host_id, notes):
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
@@ -362,7 +367,10 @@ async def update_host_tags(
             status_code=303,
         )
     db = _db_path(request)
-    from cert_watch.tags import format_tags, parse_tags
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
+    from cert_watch.tags import format_tags
 
     normalized = format_tags(parse_tags(tags))
     repo = SqliteHostRepository(db)
@@ -424,6 +432,9 @@ async def delete_host(request: Request, host_id: IdParam) -> RedirectResponse:
     if write_err:
         return write_err
     db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     SqliteHostRepository(db).delete(host_id)
     record_audit(
         db,
