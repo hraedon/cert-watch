@@ -4,11 +4,22 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
-Maintenance-entry release (Plan 049). The product surface is now closed;
-this is the last development batch before maintenance mode. See AGENTS.md
-*Maintenance mode* for what gets in from here.
+## [0.9.0] — 2026-06-15
+
+Maintenance-entry release (Plan 049) plus the first maintenance-mode batch
+(installer hardening, on-demand revocation check). The product surface is
+closed; from here only defect/security/installer/docs fixes get in. See
+AGENTS.md *Maintenance mode*.
+
+**Breaking:** Certificate Transparency monitoring was removed (see *Changed*),
+and the scan-errors Prometheus metric was renamed
+`cert_scan_errors_total` → `cert_watch_scan_errors`. Dashboards referencing
+the old metric or the `/discover` / `/ct-lookup` endpoints need updating.
 
 ### Added
+- **On-demand OCSP/CRL revocation check (BC-131).** New
+  `GET /api/certificates/{id}/revocation` endpoint and a button on the
+  certificate detail page run a live revocation probe for a single cert.
 - **Alerts: "Mark all read" and "Flush queue" actions** (WI-030) on the alerts
   page header, write-gated and CSRF-protected.
 - **Private-trust CRL freshness checking (WI-042).** Certificates chaining to a
@@ -63,6 +74,16 @@ this is the last development batch before maintenance mode. See AGENTS.md
 - **openssl output is size-capped** (WI-037): the `s_client` subprocess output
   is bounded (`ScanOutputTooLargeError`) instead of being buffered into memory
   without limit.
+- **Windows/IIS installer hardened (WI-046/047/048/049)**, validated on the
+  integration VM (clean install → re-install → Verify-Install 14/14):
+  `install-windows.ps1` no longer clobbers an existing `web.config` (which
+  silently wiped operator `AUTH_PROVIDER`/`LDAP_*`/secret paths and broke auth);
+  the TLS cert now binds the catch-all `ipport=0.0.0.0:443` with explicit
+  `certstorename=MY` and throws on failure instead of warning; the app pool is
+  stopped before `pip install` (releasing locked venv files) and started +
+  state-verified after; and `Verify-Install` resolves the site via the
+  WebAdministration provider, fixing a false "site not found" warn and a
+  `DriveNotFound` throw.
 - Plus the post-0.8.0 adversarial-audit batch (security, data-layer, scan, and
   template fixes) and SSRF IP-pinning integration tests (WI-026).
 
