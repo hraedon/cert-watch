@@ -11,6 +11,7 @@ from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
+from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
@@ -23,10 +24,33 @@ def api_list_hosts(
     request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
 ) -> JSONResponse:
     db = _db_path(request)
-    repo = SqliteHostRepository(db)
-    total = repo.count_all()
-    page, limit, pages, offset = _normalize_pagination(page, limit, total)
-    page_hosts = repo.list_page(offset=offset, limit=limit)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+
+    if scope_tags:
+        from cert_watch.database.connection import _connect
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        count_sql = "SELECT COUNT(*) FROM hosts h WHERE 1=1"
+        count_sql, count_params = _add_effective_tag_filter(
+            count_sql, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        page_sql = "SELECT h.* FROM hosts h WHERE 1=1"
+        page_sql, page_params = _add_effective_tag_filter(
+            page_sql, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        page_sql += " ORDER BY h.added_at LIMIT ? OFFSET ?"
+        with _connect(db) as conn:
+            total = conn.execute(count_sql, count_params).fetchone()[0]
+        page, limit, pages, offset = _normalize_pagination(page, limit, total)
+        with _connect(db) as conn:
+            host_rows = conn.execute(page_sql, page_params + [limit, offset]).fetchall()
+        page_hosts = [SqliteHostRepository(db)._row_to_host(r) for r in host_rows]
+    else:
+        repo = SqliteHostRepository(db)
+        total = repo.count_all()
+        page, limit, pages, offset = _normalize_pagination(page, limit, total)
+        page_hosts = repo.list_page(offset=offset, limit=limit)
+
     return JSONResponse(
         content={
             "hosts": [
@@ -106,6 +130,9 @@ async def api_update_host_owner(
             return JSONResponse(content={"error": err}, status_code=400)
 
     db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
     if host is None:
@@ -163,6 +190,9 @@ async def api_update_host_notes(
     host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
     if host is None:
@@ -194,6 +224,9 @@ async def api_set_host_tags(
     host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
     try:
         body = await request.json()

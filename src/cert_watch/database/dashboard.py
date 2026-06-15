@@ -9,6 +9,7 @@ from cert_watch.database.connection import _connect, _parse_iso, _row_to_cert
 from cert_watch.database.posture import get_posture_for_cert
 from cert_watch.database.schema import init_schema
 from cert_watch.filters import subject_cn
+from cert_watch.tags import format_tags, merge_tags
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
 
@@ -28,6 +29,82 @@ _SORT_COLUMNS_GROUPED = frozenset({
 })
 
 _SQL_DIRS = frozenset({"ASC", "DESC"})
+
+
+def _add_effective_tag_filter(
+    sql: str,
+    params: list,
+    scope_tags: list[str] | tuple[str, ...],
+    col_cert: str | None = "c.tags",
+    col_host: str = "h.tags",
+) -> tuple[str, list]:
+    """Append effective-tag (cert ∪ host) filter clauses to *sql*.
+
+    For each scope tag, adds LIKE conditions on the cert and/or host tag
+    columns. Passing *col_cert=None* omits the cert-tag condition (e.g. for
+    pending hosts that have no certificate row yet). Tags that are empty or
+    whitespace are ignored.  LIKE wildcards in tags are escaped (BC-051).
+    """
+    if not scope_tags:
+        return sql, params
+    conditions: list[str] = []
+    new_params: list = []
+    seen: set[str] = set()
+    for tag in scope_tags:
+        tag = tag.strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        like = f"%,{_escape_like(tag)},%"
+        if col_cert:
+            conditions.append(
+                f"(',' || COALESCE({col_cert}, '') || ',') LIKE ? ESCAPE '\\'"
+            )
+            new_params.append(like)
+        conditions.append(
+            f"(',' || COALESCE({col_host}, '') || ',') LIKE ? ESCAPE '\\'"
+        )
+        new_params.append(like)
+    if not conditions:
+        return sql, params
+    return f"{sql} AND ({' OR '.join(conditions)})", params + new_params
+
+
+def _add_grouped_effective_tag_filter(
+    sql: str,
+    params: list,
+    scope_tags: list[str] | tuple[str, ...],
+) -> tuple[str, list]:
+    """Append effective-tag filter for grouped fingerprint rows (WI-051).
+
+    A fingerprint group is kept when at least one of its scanned leaf certs
+    has a matching cert tag or its host has a matching host tag.  LIKE
+    wildcards in tags are escaped (BC-051).
+    """
+    if not scope_tags:
+        return sql, params
+    conditions: list[str] = []
+    new_params: list = []
+    seen: set[str] = set()
+    for tag in scope_tags:
+        tag = tag.strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        like = f"%,{_escape_like(tag)},%"
+        conditions.append(
+            "EXISTS ("
+            "SELECT 1 FROM certificates c2 "
+            "LEFT JOIN hosts h ON h.hostname = c2.hostname AND h.port = c2.port "
+            "WHERE c2.fingerprint_sha256 = c.fingerprint_sha256 "
+            "AND c2.is_leaf = 1 AND c2.source = 'scanned' "
+            "AND ((',' || COALESCE(c2.tags, '') || ',') LIKE ? ESCAPE '\\' "
+            "OR (',' || COALESCE(h.tags, '') || ',') LIKE ? ESCAPE '\\'))"
+        )
+        new_params.extend([like, like])
+    if not conditions:
+        return sql, params
+    return f"{sql} AND ({' OR '.join(conditions)})", params + new_params
 
 
 def _safe_col(col: str, allowed: frozenset[str]) -> str:
@@ -356,6 +433,7 @@ def list_dashboard_page(
     sort_order: str = "asc",
     page: int = 1,
     per_page: int = 50,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[list[dict], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
 
@@ -367,7 +445,12 @@ def list_dashboard_page(
     ``urgency`` filtering depends on computed chain status (which cannot be
     expressed faithfully in SQL), so when an ``urgency`` filter is requested the
     SQL-narrowed candidate set is built and filtered in Python before
-    pagination.  Returns ``(rows, total)``.
+    pagination.
+
+    ``scope_tags`` restricts results to certificates/hosts whose effective tags
+    (cert tags ∪ host tags) include at least one of the supplied tags (WI-051).
+    Admins with an empty scope can pass an empty sequence to see everything.
+    Returns ``(rows, total)``.
     """
     init_schema(db_path)
 
@@ -442,6 +525,9 @@ def list_dashboard_page(
                     " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
                 scanned_params += [like, like, like, like, like]
+            scanned_sql, scanned_params = _add_effective_tag_filter(
+                scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
+            )
             select_parts.append(scanned_sql)
             params += scanned_params
 
@@ -469,6 +555,9 @@ def list_dashboard_page(
                     " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
                 pending_params += [like, like]
+            pending_sql, pending_params = _add_effective_tag_filter(
+                pending_sql, pending_params, scope_tags or (), col_cert=None, col_host="h.tags"
+            )
             select_parts.append(pending_sql)
             params += pending_params
 
@@ -490,6 +579,9 @@ def list_dashboard_page(
                     " OR LOWER(c.tags) LIKE ? ESCAPE '\\')"
                 )
                 uploaded_params += [like, like, like]
+            uploaded_sql, uploaded_params = _add_effective_tag_filter(
+                uploaded_sql, uploaded_params, scope_tags or (), col_cert="c.tags", col_host="''"
+            )
             select_parts.append(uploaded_sql)
             params += uploaded_params
 
@@ -614,6 +706,23 @@ def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
     return entries
 
 
+def _entry_matches_scope_tag(
+    entry: dict,
+    scope_tags: list[str] | tuple[str, ...],
+) -> bool:
+    """Return True when *entry*'s tags intersect *scope_tags*.
+
+    Used for Python-level filtering of uploaded/pending rows in the grouped
+    dashboard path, where the per-row effective tags have already been
+    materialised.
+    """
+    if not scope_tags:
+        return True
+    entry_tags = entry.get("tags", "")
+    entry_set = set(t.strip().lower() for t in entry_tags.split(",") if t.strip())
+    return any(t.strip().lower() in entry_set for t in scope_tags)
+
+
 def list_dashboard_grouped_page(
     db_path: str | Path,
     *,
@@ -624,6 +733,7 @@ def list_dashboard_grouped_page(
     sort_order: str = "asc",
     page: int = 1,
     per_page: int = 50,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> tuple[list[dict], int]:
     """Return a SQL-grouped, filtered, sorted, paginated page of dashboard rows.
 
@@ -636,6 +746,9 @@ def list_dashboard_grouped_page(
     grouped rows is materialised with full cert/host/scan detail.  Ungrouped
     entries (uploaded, pending) are loaded and merged in Python.  Returns
     ``(rows, total)``.
+
+    ``scope_tags`` restricts results to certificates/hosts whose effective tags
+    (cert tags ∪ host tags) include at least one supplied tag (WI-051).
     """
     init_schema(db_path)
 
@@ -690,6 +803,10 @@ def list_dashboard_grouped_page(
                 " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
             )
             params.extend([like, like, like])
+
+        grouped_sql, params = _add_grouped_effective_tag_filter(
+            grouped_sql, params, scope_tags or ()
+        )
 
         grouped_sql += " GROUP BY c.fingerprint_sha256"
 
@@ -758,6 +875,7 @@ def list_dashboard_grouped_page(
             continue
         group_idx += 1
         first = group[0]
+        group_tags = format_tags(merge_tags(*[h.get("tags", "") for h in group]))
 
         urgency_counts: dict[str, int] = {}
         for h in group:
@@ -806,6 +924,7 @@ def list_dashboard_grouped_page(
             "renewal_status": first.get("renewal_status", "pending"),
             "renewal_method": first.get("renewal_method", ""),
             "runbook_url": first.get("runbook_url", ""),
+            "tags": group_tags,
         })
 
     # Step 4: Load ungrouped entries (uploaded + pending) and merge.
@@ -844,6 +963,9 @@ def list_dashboard_grouped_page(
         if (h["hostname"], h["port"]) not in scanned_host_keys
     ]
     ungrouped.extend(_build_pending_entries(pending_hosts, scan_rows))
+
+    if scope_tags:
+        ungrouped = [e for e in ungrouped if _entry_matches_scope_tag(e, scope_tags)]
 
     all_entries = grouped_entries + ungrouped
     all_entries = _filter_unified(all_entries, q=q, urgency=urgency, source=source)
@@ -933,6 +1055,9 @@ def _build_unified_from_dash(
     host_id_map: dict[tuple[str, int], str] = {
         (h["hostname"], h["port"]): h["id"] for h in host_rows
     }
+    host_tags_map: dict[tuple[str, int], str] = {
+        (h["hostname"], h["port"]): (h["tags"] or "") for h in host_rows
+    }
 
     entries: list[dict] = []
     for h in host_rows:
@@ -955,6 +1080,9 @@ def _build_unified_from_dash(
             row["scan_status"] = scan["status"] if scan else None
             row["scan_error"] = scan.get("error_message") if scan else None
             row["added_at"] = h["added_at"]
+            # WI-053: dashboard shows effective tags (cert tags ∪ host tags).
+            host_tags = host_tags_map.get((h["hostname"], h["port"]), "")
+            row["tags"] = format_tags(merge_tags(row.get("tags", ""), host_tags))
             row.update(owner_info)
             entries.append(row)
         else:

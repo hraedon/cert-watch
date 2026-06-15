@@ -37,6 +37,8 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
+from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
+from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
@@ -348,7 +350,6 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     )
 
     from cert_watch.database import distinct_tags
-    from cert_watch.tags import parse_tags
 
     return templates.TemplateResponse(
         request=request,
@@ -419,6 +420,9 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
     if write_err:
         return write_err
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     delete_certificate_cascade(db, cert_id)
     record_audit(
         db,
@@ -444,6 +448,9 @@ async def update_certificate_notes(
             url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
         )
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
 
     repo = SqliteCertificateRepository(db)
     if repo.get_by_id(cert_id) is None:
@@ -475,11 +482,14 @@ async def update_certificate_tags(
             status_code=303,
         )
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     repo = SqliteCertificateRepository(db)
     if repo.get_by_id(cert_id) is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     # Normalize through the tag parser (dedupe/trim) before persisting.
-    from cert_watch.tags import format_tags, parse_tags
+    from cert_watch.tags import format_tags
 
     normalized = format_tags(parse_tags(tags))
     repo.set_tags(cert_id, normalized)
@@ -510,6 +520,9 @@ async def update_certificate_owner(
     if write_err:
         return write_err
     db = _db_path(request)
+    denied = scope_write_denied(request, db, cert_id=cert_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
 
     # If no cert exists, the cert_id may be a host_id (pending/failed scan).
     host_repo = SqliteHostRepository(db)
@@ -632,7 +645,7 @@ async def upload(
         if isinstance(entry, ParseError):
             return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
         entry.file_name = file.filename or entry.file_name
-        store_uploaded(entry, db)
+        store_uploaded(entry, db, tags=tags_with_scope(request, ""))
         record_audit(
             db,
             actor=resolve_actor(request),

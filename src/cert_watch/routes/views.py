@@ -33,6 +33,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
+from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -202,11 +203,16 @@ def dashboard(
 ) -> HTMLResponse:
     db = _db_path(request)
 
+    # Tag-scoped access control: scoped users see only objects whose effective
+    # tags include one of their scope tags. Admins with an empty scope see all.
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
     # Pivot views use SQL-level aggregation (BC-048)
     pivot_groups = None
     pivot_stats = None
     if view in ("issuer", "owner", "renewal_method"):
-        pivot_groups = list_fleet_pivot(db, view)
+        pivot_groups = list_fleet_pivot(db, view, scope_tags=scope_tags)
 
     per_page = 25
     if pivot_groups:
@@ -248,6 +254,7 @@ def dashboard(
             db, q=q, urgency=urgency, source=source,
             sort_by=sort_by, sort_order=sort_order,
             page=page, per_page=per_page,
+            scope_tags=scope_tags,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -257,6 +264,7 @@ def dashboard(
             db, q=q, urgency=urgency, source=source,
             sort_by=sort_by, sort_order=sort_order,
             page=page, per_page=per_page,
+            scope_tags=scope_tags,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))

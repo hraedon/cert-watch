@@ -11,8 +11,18 @@ carries the resolved roles and permissions for the current user.
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+
+# Valid RBAC tiers.  The team-role name is now decoupled from the permission
+# set; every role resolves to one of these tiers.
+PERMISSION_TIERS = frozenset({"admin", "operator", "viewer"})
 
 # ---------------------------------------------------------------------------
 # Permissions
@@ -41,8 +51,18 @@ ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
 }
 
 
+def permissions_for_tier(tier: str) -> frozenset[Permission]:
+    """Return the permission set for a permission tier (admin/operator/viewer)."""
+    return ROLE_PERMISSIONS.get(tier, ROLE_PERMISSIONS[ROLE_VIEWER])
+
+
 def permissions_for_roles(role_names: list[str]) -> frozenset[Permission]:
-    """Return the union of permissions for the given role names."""
+    """Return the union of permissions for legacy role names.
+
+    Kept for backward compatibility with code that still resolves by name
+    (e.g. API-key scope mapping). New code should prefer
+    :func:`permissions_for_tier`.
+    """
     result: set[Permission] = set()
     for name in role_names:
         result |= ROLE_PERMISSIONS.get(name, frozenset())
@@ -127,23 +147,54 @@ def claims_for_session(
 class AuthContext:
     """Per-request authorization context.
 
-    Carries the resolved roles and the derived permission set. Stored on
-    ``request.state.auth_context`` by the middleware.
+    Carries the resolved roles, the effective permission tier, and the
+    derived permission set. Stored on ``request.state.auth_context`` by the
+    middleware. When a user's role has a *scope_tag*, list access is limited
+    to hosts/certificates whose effective tags include that tag (WI-051).
     """
 
     username: str
     roles: list[str] = field(default_factory=list)
     permissions: frozenset[Permission] = frozenset()
+    tier: str = ""
+    scope_tag: str = ""
+    email: str = ""
 
     @classmethod
     def from_roles(cls, username: str, roles: list[str]) -> AuthContext:
         perms = permissions_for_roles(roles)
-        return cls(username=username, roles=roles, permissions=perms)
+        tier = roles[0] if roles else ""
+        return cls(username=username, roles=roles, permissions=perms, tier=tier)
+
+    @classmethod
+    def from_tier(
+        cls,
+        username: str,
+        tier: str,
+        roles: list[str] | None = None,
+        scope_tag: str = "",
+        email: str = "",
+    ) -> AuthContext:
+        """Build a context from the explicit permission tier (WI-050)."""
+        tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
+        return cls(
+            username=username,
+            roles=roles or [tier],
+            permissions=permissions_for_tier(tier),
+            tier=tier,
+            scope_tag=scope_tag,
+            email=email,
+        )
 
     @classmethod
     def full_access(cls, username: str) -> AuthContext:
         """No role map configured → grant all permissions."""
-        return cls(username=username, roles=[ROLE_ADMIN], permissions=frozenset(Permission))
+        return cls(
+            username=username,
+            roles=[ROLE_ADMIN],
+            permissions=frozenset(Permission),
+            tier=ROLE_ADMIN,
+        )
 
     def has_permission(self, perm: Permission) -> bool:
         return perm in self.permissions
@@ -161,18 +212,72 @@ class AuthContext:
 # ---------------------------------------------------------------------------
 
 
+def _role_tiers_from_map(
+    role_map: dict,
+    role_repo: SqliteRoleRepository | None,
+) -> dict[str, tuple[str, str]]:
+    """Return {role_name: (permission_tier, scope_tag)} for mapped role names.
+
+    Falls back to the legacy name-based tier when no Role row exists, so
+    configurations that pre-date WI-050 keep working.
+    """
+    result: dict[str, tuple[str, str]] = {}
+    db_roles: dict[str, tuple[str, str]] = {}
+    if role_repo is not None:
+        try:
+            for role in role_repo.list_all():
+                db_roles[role.name] = (role.permission_tier, role.scope_tag)
+        except (OSError, sqlite3.Error):
+            pass
+    for role_name in role_map:
+        if role_name in db_roles:
+            result[role_name] = db_roles[role_name]
+        elif role_name in ROLE_PERMISSIONS:
+            result[role_name] = (role_name, "")
+    return result
+
+
+def _resolve_tier_and_scope(
+    resolved_role_names: list[str],
+    role_tiers: dict[str, tuple[str, str]],
+) -> tuple[str, str]:
+    """Pick the highest-privilege tier and union scope tags from resolved roles."""
+    order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
+    chosen_tier = ROLE_VIEWER
+    scope_tags: set[str] = set()
+    for name in resolved_role_names:
+        tier, scope = role_tiers.get(name, (ROLE_VIEWER, ""))
+        if order.get(tier, 0) > order.get(chosen_tier, 0):
+            chosen_tier = tier
+        if scope:
+            scope_tags.add(scope)
+    return chosen_tier, ",".join(sorted(scope_tags))
+
+
 def build_auth_context(
     username: str,
     user_groups: list[str],
     user_roles: list[str],
     role_map: dict,
+    role_repo: SqliteRoleRepository | None = None,
 ) -> AuthContext:
     """Build an AuthContext by resolving IdP groups/roles to cert-watch roles.
 
     If *role_map* is empty, returns a full-access context (backward compat).
+
+    When *role_repo* is supplied, the permission tier and scope tag are read
+    from the Role row (WI-050). Otherwise the legacy role-name → permission
+    mapping is used.
     """
     if not role_map:
         return AuthContext.full_access(username)
 
-    roles = resolve_roles(user_groups, user_roles, role_map, username=username)
-    return AuthContext.from_roles(username, roles)
+    resolved = resolve_roles(user_groups, user_roles, role_map, username=username)
+    role_tiers = _role_tiers_from_map(role_map, role_repo)
+    tier, scope = _resolve_tier_and_scope(resolved, role_tiers)
+    return AuthContext.from_tier(
+        username=username,
+        tier=tier,
+        roles=resolved,
+        scope_tag=scope,
+    )

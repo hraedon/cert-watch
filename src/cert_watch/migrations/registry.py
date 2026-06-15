@@ -54,6 +54,9 @@ from cert_watch.migrations.m0022_hosts_expected_issuers import (
 from cert_watch.migrations.m0023_cert_history_not_before import (
     upgrade as cert_history_not_before_upgrade,
 )
+from cert_watch.migrations.m0024_role_tiers import (
+    upgrade as role_tiers_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -122,4 +125,8 @@ runner.register(
 runner.register(
     "0023", "add not_before column to cert_history (Plan 048 WI-2.1)",
     cert_history_not_before_upgrade,
+)
+runner.register(
+    "0024", "add permission_tier and scope_tag to roles (WI-050 / WI-052)",
+    role_tiers_upgrade,
 )

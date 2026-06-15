@@ -6,6 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.auth import _scrypt_hash
+from cert_watch.auth.rbac import PERMISSION_TIERS
 from cert_watch.database import (
     Role,
     SqliteRoleRepository,
@@ -19,6 +20,17 @@ from cert_watch.routes.settings.render import _settings_context
 templates = get_templates()
 
 router = APIRouter()
+
+
+def _normalize_permission_tier(tier: str) -> str:
+    tier = (tier or "").strip().lower()
+    return tier if tier in PERMISSION_TIERS else "viewer"
+
+
+def _normalize_scope_tag(tag: str) -> str:
+    from cert_watch.tags import format_tags, parse_tags
+
+    return format_tags(parse_tags(tag))
 
 
 # ---------- Role management ----------
@@ -55,11 +67,44 @@ async def create_role(request: Request) -> RedirectResponse:
     name = str(form.get("name") or "").strip()
     email = str(form.get("email") or "").strip()
     description = str(form.get("description") or "").strip()
+    permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
+    scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
     if not name:
         return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
 
-    role = Role(name=name, email=email, description=description)
+    role = Role(
+        name=name, email=email, description=description,
+        permission_tier=permission_tier, scope_tag=scope_tag,
+    )
     SqliteRoleRepository(_db_path(request)).add(role)
+    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+
+
+@router.post("/settings/roles/{role_id}")
+async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
+    admin_err = require_admin_form(request)
+    if admin_err:
+        return admin_err
+
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/settings?tab=roles&error={csrf_err}", status_code=303)
+
+    repo = SqliteRoleRepository(_db_path(request))
+    role = repo.get(role_id)
+    if role is None:
+        return RedirectResponse(url="/settings?tab=roles&error=role+not+found", status_code=303)
+
+    form = await request.form()
+    name = str(form.get("name") or "").strip()
+    if not name:
+        return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
+    role.name = name
+    role.email = str(form.get("email") or "").strip()
+    role.description = str(form.get("description") or "").strip()
+    role.permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
+    role.scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
+    repo.update(role)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
