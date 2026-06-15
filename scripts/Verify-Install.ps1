@@ -366,6 +366,19 @@ Add-Check -Id 'IIS-002' -Title 'Application pool exists and is configured for al
 
 Add-Check -Id 'IIS-003' -Title 'IIS site exists and has a binding' -Category 'iis' -Severity 'medium' -Remediation 'Create the site and binding per deploy/iis/README.md Step 2a.3.' -Test {
     if (-not (Test-IisAvailable)) { return (New-Body 'skip' 'IIS not detected on this host') }
+    # Use the WebAdministration provider as the source of truth. appcmd list
+    # site can emit 'ERROR ( message:... )' for a site that actually exists,
+    # which previously produced a false 'site not found' warn (WI-049).
+    $site = $null
+    try {
+        Import-Module WebAdministration -ErrorAction SilentlyContinue
+        $site = Get-Website -Name $SiteName -ErrorAction SilentlyContinue
+    } catch { $site = $null }
+    if ($site) {
+        $bindings = (@($site.bindings.Collection) | ForEach-Object { $_.protocol + ' ' + $_.bindingInformation }) -join '; '
+        return (New-Body 'pass' ('site present: ' + $SiteName + ' [' + $bindings + ']'))
+    }
+    # Fall back to appcmd if the provider was unavailable.
     $appcmd = Get-AppcmdPath
     $out = & $appcmd list site $SiteName '/text:*' 2>&1 | Out-String
     if ($out -eq '' -or $out -match 'ERROR') {
@@ -475,11 +488,25 @@ function Get-Diagnostics {
     # web.config (env vars, processPath).
     try {
         if (Test-IisAvailable) {
-            $appcmd = Get-AppcmdPath
-            $siteOut = & $appcmd list site $SiteName '/text:physicalPath' 2>&1 | Out-String
-            $phys = $siteOut.Trim()
-            if ($phys -ne '' -and (Test-Path (Join-Path $phys 'web.config'))) {
-                $d['web_config'] = Limit-Text ((Get-Content -Path (Join-Path $phys 'web.config') -Raw)) 4000
+            # Prefer the provider; fall back to appcmd. Guard against appcmd
+            # emitting 'ERROR ( message:... )' instead of a path, which fed an
+            # invalid drive to Join-Path and threw DriveNotFound (WI-049).
+            $phys = ''
+            try {
+                Import-Module WebAdministration -ErrorAction SilentlyContinue
+                $site = Get-Website -Name $SiteName -ErrorAction SilentlyContinue
+                if ($site) { $phys = [string]$site.physicalPath }
+            } catch { $phys = '' }
+            if ($phys -eq '') {
+                $appcmd = Get-AppcmdPath
+                $siteOut = (& $appcmd list site $SiteName '/text:physicalPath' 2>&1 | Out-String).Trim()
+                if ($siteOut -ne '' -and $siteOut -notmatch 'ERROR') { $phys = $siteOut }
+            }
+            if ($phys -ne '' -and (Test-Path $phys)) {
+                $wcPath = Join-Path $phys 'web.config'
+                if (Test-Path $wcPath) {
+                    $d['web_config'] = Limit-Text ((Get-Content -Path $wcPath -Raw)) 4000
+                }
             }
         }
     } catch { $d['web_config'] = 'n/a' }

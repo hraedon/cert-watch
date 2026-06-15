@@ -236,6 +236,21 @@ if ($LASTEXITCODE -ne 0) {
     throw "venv created but python.exe is not functional (exit $LASTEXITCODE): $venvProbe"
 }
 Write-Host "  venv verified: $venvProbe"
+# Stop the IIS app pool (if it exists) before installing so the running worker
+# releases the venv files it has loaded. Without this, pip can fail to overwrite
+# locked .pyd/.exe files on a re-install, and the old code stays live until a
+# recycle. Uses appcmd (always present with IIS) to avoid a hard dependency on
+# the WebAdministration module here.
+$appcmdExe = "$env:windir\system32\inetsrv\appcmd.exe"
+if (Test-Path $appcmdExe) {
+    $poolExists = & $appcmdExe list apppool "$AppPool" 2>$null
+    if ($poolExists) {
+        Write-Host "Stopping app pool `"$AppPool`" to release files before install ..."
+        & $appcmdExe stop apppool /apppool.name:"$AppPool" 2>$null | Out-Null
+        Start-Sleep -Seconds 3
+    }
+}
+
 Write-Host "Installing cert-watch ..."
 & $venvPy -m pip install --upgrade pip | Out-Null
 $pkg = if ($WithAuthExtras) { "$repoRoot[auth-ldap,auth-oauth]" } else { $repoRoot }
@@ -328,24 +343,36 @@ if ($ConfigureIIS) {
 
         $webConfigSrc = Join-Path $repoRoot "deploy\iis\web.config"
         $webConfigDst = Join-Path $SitePath "web.config"
-        Write-Host "  Copying web.config ..."
-        Copy-Item $webConfigSrc $webConfigDst -Force
+        # Do NOT clobber an existing web.config. It holds operator-set
+        # environmentVariables (AUTH_PROVIDER, LDAP_*, CERT_WATCH_BASE_URL,
+        # secret-file paths) that the template does not. Overwriting it on a
+        # re-install silently breaks auth (the app still serves /login, so the
+        # breakage is invisible until someone tries to log in). Only lay the
+        # template down on a fresh install; to reset, delete it and re-run.
+        if (Test-Path $webConfigDst) {
+            Write-Host "  Keeping existing web.config (preserving operator settings)."
+            Write-Host "    To reset it to the template, delete `"$webConfigDst`" and re-run."
+        } else {
+            Write-Host "  Installing web.config from template ..."
+            Copy-Item $webConfigSrc $webConfigDst -Force
 
-        # Update paths in web.config to reflect InstallDir
-        $defaultDir = "C:\ProgramData\cert-watch"
-        $wcContent = Get-Content $webConfigDst -Raw
-        if ($InstallDir -ne $defaultDir) {
-            $wcContent = $wcContent.Replace($defaultDir, $InstallDir)
+            # Update paths in web.config to reflect InstallDir
+            $defaultDir = "C:\ProgramData\cert-watch"
+            $wcContent = Get-Content $webConfigDst -Raw
+            if ($InstallDir -ne $defaultDir) {
+                $wcContent = $wcContent.Replace($defaultDir, $InstallDir)
+            }
+            # Validate the result is well-formed XML before writing
+            try {
+                $null = [xml]$wcContent
+            } catch {
+                throw "web.config rewrite produced invalid XML"
+            }
+            # Write without BOM (Set-Content -Encoding UTF8 emits BOM on PS 5.1)
+            [System.IO.File]::WriteAllText($webConfigDst, $wcContent, (New-Object System.Text.UTF8Encoding $false))
+            Write-Host "    Wrote template web.config (paths -> $InstallDir)."
+            Write-Host "    Edit it to set AUTH_PROVIDER / LDAP_* / secret paths before first login."
         }
-        # Validate the result is well-formed XML before writing
-        try {
-            $null = [xml]$wcContent
-        } catch {
-            throw "web.config rewrite produced invalid XML"
-        }
-        # Write without BOM (Set-Content -Encoding UTF8 emits BOM on PS 5.1)
-        [System.IO.File]::WriteAllText($webConfigDst, $wcContent, (New-Object System.Text.UTF8Encoding $false))
-        Write-Host "    Updated paths to $InstallDir"
 
         # 2. Unlock handlers section
         Write-Host "  Unlocking system.webServer/handlers ..."
@@ -389,38 +416,35 @@ if ($ConfigureIIS) {
             Set-ItemProperty $sitePathIIS -Name physicalPath -Value $SitePath
         }
 
-        # 5. TLS cert binding (idempotent: delete first, then add, then verify)
+        # 5. TLS cert binding (idempotent: delete stale bindings, add, verify)
         if ($TlsCertThumbprint) {
             Write-Host "  Binding TLS certificate $TlsCertThumbprint ..."
-            $bindHost = "0.0.0.0"
-            if ($HostName) {
-                $bindHost = $HostName
-            }
             $bindPort = "443"
             $appId = "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
-            # Remove any existing binding first (ignore errors)
+            $ipport = "0.0.0.0:$bindPort"
+            # Bind the cert to the catch-all ipport. The IIS site binding keeps
+            # its host header but stays non-SNI (sslFlags=0), so http.sys serves
+            # this cert for the port. We deliberately avoid the SNI hostnameport
+            # form: it requires sslFlags=1 on the binding and otherwise fails the
+            # netsh add with error 87, deleting the working binding and leaving
+            # HTTPS dead (WI-047). cert-watch is the only 443 site on its host,
+            # so a catch-all cert is correct. certstorename=MY is explicit
+            # (another common error-87 trigger when omitted).
+            & netsh http delete sslcert ipport="$ipport" 2>$null | Out-Null
             if ($HostName) {
-                & netsh http delete sslcert hostnameport="$HostName`:$bindPort" 2>$null
-            } else {
-                & netsh http delete sslcert ipport="$bindHost`:$bindPort" 2>$null
+                & netsh http delete sslcert hostnameport="$HostName`:$bindPort" 2>$null | Out-Null
             }
-            # Add the binding
-            if ($HostName) {
-                & netsh http add sslcert hostnameport="$HostName`:$bindPort" certhash="$TlsCertThumbprint" appid="$appId"
-            } else {
-                & netsh http add sslcert ipport="$bindHost`:$bindPort" certhash="$TlsCertThumbprint" appid="$appId"
-            }
+            $addOut = & netsh http add sslcert ipport="$ipport" certhash="$TlsCertThumbprint" appid="$appId" certstorename=MY 2>&1
             if ($LASTEXITCODE -ne 0) {
-                Write-Host "    [warn] netsh add sslcert returned exit code $LASTEXITCODE"
-            } else {
-                # Verify the binding
-                if ($HostName) {
-                    & netsh http show sslcert hostnameport="$HostName`:$bindPort"
-                } else {
-                    & netsh http show sslcert ipport="$bindHost`:$bindPort"
-                }
-                Write-Host "    TLS certificate bound."
+                Write-Host ($addOut | Out-String)
+                throw "Failed to bind TLS certificate (netsh exit $LASTEXITCODE). HTTPS will not work. Verify the thumbprint exists in LocalMachine\My and has a private key."
             }
+            # Verify the binding actually landed (-match is case-insensitive).
+            $show = & netsh http show sslcert ipport="$ipport" 2>&1 | Out-String
+            if ($show -notmatch [regex]::Escape($TlsCertThumbprint)) {
+                throw "TLS certificate binding verification failed for $ipport (cert hash not present after add)."
+            }
+            Write-Host "    TLS certificate bound to $ipport (store: MY)."
         } else {
             Write-Host "  [warn] No -TlsCertThumbprint provided. HTTPS binding exists but no certificate is assigned."
             Write-Host ('         Assign a certificate via IIS Manager or re-run with -TlsCertThumbprint ' + '.')
@@ -429,6 +453,19 @@ if ($ConfigureIIS) {
         # 6. Grant app pool identity read access to site path
         Write-Host "  Granting $identity read access to $SitePath ..."
         icacls $SitePath /grant "${identity}:(OI)(CI)R" | Out-Null
+
+        # 7. Start the app pool so the freshly installed code is the live code.
+        # (It was stopped before pip install on a re-install; a fresh pool may
+        # also be stopped depending on IIS state.) Verify it reaches Started so
+        # a silent 503 does not slip through.
+        Write-Host "  Starting app pool `"$AppPool`" ..."
+        & $appcmdExe start apppool /apppool.name:"$AppPool" 2>$null | Out-Null
+        Start-Sleep -Seconds 2
+        $poolState = (& $appcmdExe list apppool "$AppPool" /text:state) 2>$null
+        Write-Host "    App pool state: $poolState"
+        if ("$poolState" -ne "Started") {
+            Write-Host "    [warn] App pool `"$AppPool`" is not Started; the site will return HTTP 503 until it starts."
+        }
 
         $script:iisActuallyConfigured = $true
     }
