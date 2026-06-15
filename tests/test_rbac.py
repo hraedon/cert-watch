@@ -71,6 +71,16 @@ class TestResolveRoles:
         result = resolve_roles([], ["superuser"], role_map)
         assert "admin" in result
 
+    def test_user_match(self):
+        # An IdP user named directly in a role's users list is granted that role
+        # even with no group/role match (case-insensitive).
+        role_map = {"operator": {"groups": [], "users": ["alice@example.com"]}}
+        assert "operator" in resolve_roles([], [], role_map, username="ALICE@example.com")
+
+    def test_user_no_match_falls_to_viewer(self):
+        role_map = {"operator": {"users": ["alice@example.com"]}}
+        assert resolve_roles([], [], role_map, username="bob@example.com") == ["viewer"]
+
     def test_union_of_roles(self):
         role_map = {
             "admin": {"groups": ["g1"]},

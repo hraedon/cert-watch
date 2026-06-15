@@ -5,6 +5,13 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **IdP → role mapping moved to the Roles tab, and can target individual users.**
+  The LDAP/IdP group → role mapping now lives on the Roles tab (edited per role,
+  alongside the role it grants) instead of the Authentication tab. Each role can
+  now also be granted to individual IdP users by username/UPN — useful for a user
+  who isn't in a suitable group. Group DNs are semicolon-separated (a DN contains
+  commas; comma-splitting previously shattered a single DN); usernames are
+  comma-separated. `rbac.resolve_roles` matches the username case-insensitively.
 - **Local users can be edited.** The Users settings tab now has a per-user edit
   form (inline `<details>`) to change username, email, and role/team, and
   optionally set a new password (left blank, the existing one is kept). New

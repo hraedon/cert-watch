@@ -1453,7 +1453,7 @@ def test_save_ldap_role_map(reload_app, tmp_path, monkeypatch):
         _login_admin(client, monkeypatch)
         r = client.post(
             "/settings/ldap-role-map",
-            data={f"role_map_{role_id}": "cert-watch-admins, cert-watch-users"},
+            data={f"role_map_{role_id}": "cert-watch-admins; cert-watch-users"},
             follow_redirects=False,
         )
     assert r.status_code == 303
@@ -2036,10 +2036,46 @@ def _max_form_nesting_depth(html: str) -> int:
     return max_depth
 
 
-def test_auth_tab_has_no_nested_forms(reload_app, tmp_path):
-    """WI-027 regression: the ldap-role-map form was nested inside the auth
-    form, which in a real browser killed the auth save button, prevented role
-    mappings from ever saving, and wiped OAuth kv keys on 'Save role mapping'.
+def test_save_role_mapping_persists_users_and_merges(reload_app, tmp_path):
+    """#1: the save route stores per-role groups + users and merges (a submit for
+    one role must not wipe another role's mapping)."""
+    import json
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema, kv_get
+    from cert_watch.database.users_roles import Role, SqliteRoleRepository
+
+    init_schema(db)
+    repo = SqliteRoleRepository(db)
+    ops_id = repo.add(Role(name="ops", email="ops@x.com"))
+    sec_id = repo.add(Role(name="sec", email="sec@x.com"))
+
+    with TestClient(app_mod.app) as client:
+        # Map ops -> a group DN (contains commas) + direct users.
+        client.post("/settings/ldap-role-map", data={
+            f"role_map_{ops_id}": "CN=Ops,OU=Groups,DC=x",
+            f"role_users_{ops_id}": "alice@x.com, bob@x.com",
+        }, follow_redirects=False)
+        # Separately map sec -> a user; ops must survive (merge, not rebuild).
+        r = client.post("/settings/ldap-role-map", data={
+            f"role_users_{sec_id}": "carol@x.com",
+        }, follow_redirects=False)
+        assert r.status_code == 303
+        assert "tab=roles" in r.headers["location"]
+
+    stored = json.loads(kv_get(db, "ldap_role_map"))
+    # The full DN survives (semicolon-separated, not shattered on its commas).
+    assert stored["ops"]["groups"] == ["CN=Ops,OU=Groups,DC=x"]
+    assert stored["ops"]["users"] == ["alice@x.com", "bob@x.com"]
+    assert stored["sec"]["users"] == ["carol@x.com"]
+
+
+def test_role_mapping_lives_on_roles_tab(reload_app, tmp_path):
+    """#1: the IdP group/user -> role mapping moved from the Authentication tab
+    to the Roles tab. It must be a self-contained form (WI-027: never nested in
+    another form), carry both groups and users fields, and no longer appear on
+    the auth tab.
     """
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
@@ -2047,19 +2083,21 @@ def test_auth_tab_has_no_nested_forms(reload_app, tmp_path):
     from cert_watch.database.users_roles import Role, SqliteRoleRepository
 
     init_schema(db)
-    # A role must exist for the role_map_* inputs to render at all.
     role_id = SqliteRoleRepository(db).add(Role(name="Platform", email="p@example.com"))
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/settings?tab=auth")
-    assert r.status_code == 200
-    assert _max_form_nesting_depth(r.text) == 1
-    # The role-map inputs/button live inside the auth form's markup but must
-    # belong to the sibling form via the form attribute.
-    assert 'id="ldap-role-map-form"' in r.text
-    assert f'name="role_map_{role_id}" form="ldap-role-map-form"' in r.text or (
-        f'name="role_map_{role_id}"' in r.text and 'form="ldap-role-map-form"' in r.text
-    )
+        roles = client.get("/settings?tab=roles")
+    assert roles.status_code == 200
+    # No nested forms (the browser-killing hazard from WI-027).
+    assert _max_form_nesting_depth(roles.text) == 1
+    # The old auth-tab orphan form + form-attribute wiring are gone.
+    assert "ldap-role-map-form" not in roles.text
+    assert f'name="role_map_{role_id}" form=' not in roles.text
+    # Mapping now rendered via the Roles-tab per-role UI, with groups + users.
+    assert "IdP mapping</summary>" in roles.text
+    assert 'action="/settings/ldap-role-map"' in roles.text
+    assert f'name="role_map_{role_id}"' in roles.text
+    assert f'name="role_users_{role_id}"' in roles.text
 
 
 def test_no_nested_forms_on_any_settings_tab(reload_app, tmp_path):

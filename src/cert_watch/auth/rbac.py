@@ -57,23 +57,33 @@ def resolve_roles(
     user_groups: list[str],
     user_roles: list[str],
     role_map: dict[str, dict],
+    username: str = "",
 ) -> list[str]:
     """Map IdP groups/roles to cert-watch role names.
 
-    *role_map* maps ``{role_name: {"groups": [...], "roles": [...]}``.
-    A user receives the union of all matching roles.
-    Falls back to ``["viewer"]`` if nothing matches.
+    *role_map* maps ``{role_name: {"groups": [...], "roles": [...], "users": [...]}``.
+    A user receives the union of all matching roles — by group membership, IdP
+    role, or by being named individually in ``users`` (matched case-insensitively
+    against *username*, which lets an IdP user with no suitable group be mapped
+    directly).  Falls back to ``["viewer"]`` if nothing matches.
     """
     if not role_map:
         return [ROLE_ADMIN]  # no map → full access (backward compat)
 
+    uname = username.casefold()
     matched: set[str] = set()
     for role_name, mapping in role_map.items():
         allowed_groups = mapping.get("groups", [])
         allowed_roles = mapping.get("roles", [])
+        allowed_users = mapping.get("users", [])
         group_match = any(g in user_groups for g in allowed_groups) if allowed_groups else False
         role_match = any(r in user_roles for r in allowed_roles) if allowed_roles else False
-        if group_match or role_match:
+        user_match = (
+            any(u.casefold() == uname for u in allowed_users)
+            if (allowed_users and uname)
+            else False
+        )
+        if group_match or role_match or user_match:
             matched.add(role_name)
 
     return list(matched) if matched else [ROLE_VIEWER]
@@ -164,5 +174,5 @@ def build_auth_context(
     if not role_map:
         return AuthContext.full_access(username)
 
-    roles = resolve_roles(user_groups, user_roles, role_map)
+    roles = resolve_roles(user_groups, user_roles, role_map, username=username)
     return AuthContext.from_roles(username, roles)
