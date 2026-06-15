@@ -1008,3 +1008,42 @@ def test_expiry_digest_webhook_strips_owner_email_pii(tmp_path):
         body = body.decode("utf-8")
     assert "secret@example.com" not in body
     assert "pii.example.com" in body
+
+
+def _leaf_expiring_in(days: int, fp: str) -> Certificate:
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.UTC)
+    return Certificate(
+        subject="CN=urgent-test",
+        issuer="CN=test-ca",
+        not_before=now - _dt.timedelta(days=365),
+        # +12h buffer so days_until_expiry()'s floor semantics yield exactly `days`.
+        not_after=now + _dt.timedelta(days=days, hours=12),
+        san_dns_names=[],
+        fingerprint_sha256=fp,
+        raw_der=b"",
+        is_leaf=True,
+    )
+
+
+def test_urgent_only_skips_routine_thresholds(alert_repo):
+    # 10 days out: trips the 14-day heads-up normally, but in digest mode the
+    # routine thresholds are left to the weekly digest, so nothing fires.
+    cert = _leaf_expiring_in(10, "fp-routine")
+    assert evaluate_thresholds(cert, alert_repo, urgent_only=True) == []
+
+
+def test_urgent_only_fires_final_countdown(alert_repo):
+    # 2 days out: the final-countdown (<=3) alert still fires even in digest mode.
+    cert = _leaf_expiring_in(2, "fp-urgent")
+    alerts = evaluate_thresholds(cert, alert_repo, urgent_only=True)
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == 3
+
+
+def test_routine_threshold_fires_when_not_digest(alert_repo):
+    # Same 10-day cert fires normally when not in digest mode (sanity).
+    cert = _leaf_expiring_in(10, "fp-normal")
+    alerts = evaluate_thresholds(cert, alert_repo, urgent_only=False)
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == 14

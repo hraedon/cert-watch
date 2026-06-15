@@ -93,7 +93,10 @@
   <form method="get" action="/" class="cw-toolbar cw-mb-14">
     <div class="cw-search">
       {{ icons.svg_icon('search', 15) }}
-      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host…" data-testid="dashboard-search">
+      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host, tag…" list="dash-all-tags" data-testid="dashboard-search">
+      <datalist id="dash-all-tags">
+        {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
+      </datalist>
     </div>
     <div class="cw-seg">
       <button type="submit" name="urgency" value="" class="{% if not filter_urgency %}on{% endif %}">All<span class="cnt">{{ total_entries }}</span></button>
@@ -158,7 +161,7 @@
       <thead>
         <tr>
           <th class="sortable cw-th-pt-14">{{ sort_link('name', 'Certificate (CN)') }}</th>
-          <th class="sortable">{{ sort_link('issuer', 'Issuer') }}</th>
+          <th>Tags</th>
           <th>Source</th>
           <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
           <th class="cw-w-120">Status</th>
@@ -190,8 +193,12 @@
               </div>
             </td>
             <td>
-              <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
-              <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
+              {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
+              {% if _tags %}
+              <div class="cw-flex cw-gap-8 cw-wrap">
+                {% for t in _tags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
+              </div>
+              {% else %}<span class="cw-muted">—</span>{% endif %}
             </td>
             <td>
               <div class="cw-table-chip-col">
@@ -325,8 +332,12 @@
               {% endif %}
             </td>
             <td>
-              <div class="cw-cert-cell">{{ e.issuer | friendly_issuer if e.issuer else '—' }}</div>
-              <div class="cw-sub mono">{{ e.issuer | issuer_cn if e.issuer else '' }}</div>
+              {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
+              {% if _tags %}
+              <div class="cw-flex cw-gap-8 cw-wrap">
+                {% for t in _tags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
+              </div>
+              {% else %}<span class="cw-muted">—</span>{% endif %}
             </td>
             <td>
               <div class="cw-table-chip-col">

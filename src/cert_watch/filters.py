@@ -137,6 +137,38 @@ def subject_cn(subject_dn: str) -> str:
     return parse_dn_field(subject_dn, "CN") or subject_dn
 
 
+# Acronyms that should stay upper-case in humanized labels. Jinja's built-in
+# `title` filter lower-cases them (hsts -> Hsts, ocsp -> Ocsp); this set restores
+# the conventional casing for our domain terms.
+_ACRONYMS = {
+    "hsts": "HSTS",
+    "ocsp": "OCSP",
+    "tls": "TLS",
+    "ssl": "SSL",
+    "rsa": "RSA",
+    "ec": "EC",
+    "san": "SAN",
+    "crl": "CRL",
+    "caa": "CAA",
+    "sni": "SNI",
+    "dns": "DNS",
+    "ca": "CA",
+    "id": "ID",
+}
+
+
+def humanize_label(value: str) -> str:
+    """Title-case an identifier for display, preserving known acronyms.
+
+    ``hsts_required`` -> ``HSTS Required``; ``ocsp_must_staple`` ->
+    ``OCSP Must Staple``. Words not in :data:`_ACRONYMS` are title-cased.
+    """
+    if not value:
+        return ""
+    words = str(value).replace("_", " ").replace("-", " ").split()
+    return " ".join(_ACRONYMS.get(w.lower(), w.capitalize()) for w in words)
+
+
 def register_filters(templates) -> None:
     """Register all filters on a Jinja2Templates instance."""
     templates.env.filters["humanize_expiry"] = humanize_expiry
@@ -145,3 +177,4 @@ def register_filters(templates) -> None:
     templates.env.filters["friendly_issuer"] = friendly_issuer
     templates.env.filters["issuer_cn"] = issuer_cn
     templates.env.filters["subject_cn"] = subject_cn
+    templates.env.filters["humanize_label"] = humanize_label

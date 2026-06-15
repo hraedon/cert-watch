@@ -14,6 +14,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
+    distinct_tags,
     get_posture_grades_for_certs,
     list_alerts_with_subject,
     list_dashboard_grouped_page,
@@ -296,6 +297,7 @@ def dashboard(
         context={
             "entries": display_entries,
             "all_entries": page_entries,
+            "all_tags": distinct_tags(db),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
             "pivot_view": view if pivot_groups else "",

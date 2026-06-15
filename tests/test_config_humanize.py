@@ -247,3 +247,14 @@ def test_text_formatter_output():
     output = formatter.format(record)
     assert "hello world" in output
     assert "INFO" in output
+
+
+def test_humanize_label_preserves_acronyms():
+    from cert_watch.filters import humanize_label
+
+    assert humanize_label("hsts_required") == "HSTS Required"
+    assert humanize_label("ocsp_must_staple") == "OCSP Must Staple"
+    assert humanize_label("tls_version") == "TLS Version"
+    assert humanize_label("key_size_rsa") == "Key Size RSA"
+    assert humanize_label("validity_max_days") == "Validity Max Days"
+    assert humanize_label("") == ""

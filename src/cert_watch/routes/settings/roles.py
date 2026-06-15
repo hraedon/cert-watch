@@ -132,6 +132,46 @@ async def create_user(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
+@router.post("/settings/users/{user_id}")
+async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
+    admin_err = require_admin_form(request)
+    if admin_err:
+        return admin_err
+
+    csrf_err = await check_csrf(request)
+    if csrf_err:
+        return RedirectResponse(url=f"/settings?tab=users&error={csrf_err}", status_code=303)
+
+    repo = SqliteUserRepository(_db_path(request))
+    user = repo.get(user_id)
+    if user is None:
+        return RedirectResponse(url="/settings?tab=users&error=user+not+found", status_code=303)
+
+    form = await request.form()
+    username = str(form.get("username") or "").strip()
+    email = str(form.get("email") or "").strip()
+    password = str(form.get("password") or "").strip()
+    role_id = str(form.get("role_id") or "").strip()
+    if not username:
+        return RedirectResponse(
+            url="/settings?tab=users&error=username+required", status_code=303
+        )
+    user.username = username
+    user.email = email
+    user.role_id = role_id
+    # Password is optional on edit: only re-hash when a new one is supplied,
+    # otherwise the existing hash is kept.
+    if password:
+        if len(password) < 8:
+            return RedirectResponse(
+                url="/settings?tab=users&error=password+must+be+at+least+8+characters",
+                status_code=303,
+            )
+        user.password_hash = _scrypt_hash(password)
+    repo.update(user)
+    return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
+
+
 @router.post("/settings/users/{user_id}/delete")
 async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
     admin_err = require_admin_form(request)

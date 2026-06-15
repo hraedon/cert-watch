@@ -50,22 +50,49 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
 
     form = await request.form()
-    from cert_watch.database import SqliteRoleRepository, kv_set
+    from cert_watch.database import SqliteRoleRepository, kv_get, kv_set
 
-    role_repo = SqliteRoleRepository(_db_path(request))
-    map_data = {}
+    db = _db_path(request)
+    role_repo = SqliteRoleRepository(db)
+
+    # Merge into the existing map: each role's mapping is now edited on its own
+    # row in the Roles tab, so a submit only carries the role(s) being edited.
+    # Roles not present in this form must be left untouched.
+    try:
+        map_data = json.loads(kv_get(db, "ldap_role_map") or "{}")
+        if not isinstance(map_data, dict):
+            map_data = {}
+    except (ValueError, TypeError):
+        map_data = {}
+
+    # Collect the role ids referenced by either the groups or users fields.
+    role_ids: set[str] = set()
     for key in form:
         if key.startswith("role_map_"):
-            role_id = key[len("role_map_"):]
-            groups = str(form.get(key) or "").strip()
-            if groups:
-                role = role_repo.get(role_id)
-                if role:
-                    map_data[role.name] = {
-                        "groups": [g.strip() for g in groups.split(",") if g.strip()]
-                    }
-    kv_set(_db_path(request), "ldap_role_map", json.dumps(map_data))
-    return RedirectResponse(url="/settings?tab=auth&saved=1", status_code=303)
+            role_ids.add(key[len("role_map_"):])
+        elif key.startswith("role_users_"):
+            role_ids.add(key[len("role_users_"):])
+
+    def _split(raw: str, sep: str) -> list[str]:
+        return [p.strip() for p in raw.split(sep) if p.strip()]
+
+    for role_id in role_ids:
+        role = role_repo.get(role_id)
+        if not role:
+            continue
+        # Group DNs are semicolon-separated (a DN itself contains commas, so
+        # comma-splitting would shatter it — matching the "Required groups" field).
+        # Usernames/UPNs are comma-separated (they contain neither).
+        groups = _split(str(form.get(f"role_map_{role_id}") or ""), ";")
+        users = _split(str(form.get(f"role_users_{role_id}") or ""), ",")
+        if groups or users:
+            map_data[role.name] = {"groups": groups, "users": users}
+        else:
+            # Both cleared → drop the mapping for this role.
+            map_data.pop(role.name, None)
+
+    kv_set(db, "ldap_role_map", json.dumps(map_data))
+    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
 # ---------- Test LDAP connection ----------

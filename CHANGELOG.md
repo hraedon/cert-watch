@@ -4,6 +4,36 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Tag management in the GUI.** The existing tag system (used for alert-group
+  routing) is now editable and visible in the UI: edit a certificate's own tags
+  on its detail page and a host's tags on the host page; the certificate page
+  shows *effective* tags (its own plus inherited host tags, the latter flagged
+  `(host)`). The dashboard's Issuer column is replaced by a Tags column, and the
+  dashboard search now also matches tags (with a typeahead of existing tags).
+  New routes `POST /certificates/{id}/tags` and `POST /hosts/{id}/tags`.
+- **IdP → role mapping moved to the Roles tab, and can target individual users.**
+  The LDAP/IdP group → role mapping now lives on the Roles tab (edited per role,
+  alongside the role it grants) instead of the Authentication tab. Each role can
+  now also be granted to individual IdP users by username/UPN — useful for a user
+  who isn't in a suitable group. Group DNs are semicolon-separated (a DN contains
+  commas; comma-splitting previously shattered a single DN); usernames are
+  comma-separated. `rbac.resolve_roles` matches the username case-insensitively.
+- **Local users can be edited.** The Users settings tab now has a per-user edit
+  form (inline `<details>`) to change username, email, and role/team, and
+  optionally set a new password (left blank, the existing one is kept). New
+  `POST /settings/users/{id}` route; the user repository already supported
+  update.
+
+### Changed
+- **Digest mode is now weekly, and urgent alerts always fire.** Digest mode
+  previously sent a summary every day and suppressed *all* per-certificate
+  alerts. It now sends the summary once per week, and the final-countdown
+  per-certificate alerts (≤3 days to expiry, `URGENT_THRESHOLD_DAYS`) always
+  fire individually so an imminent expiry is never buried in a digest. The
+  routine heads-up thresholds (14/7-day, chain 30/14/7) are what the weekly
+  digest covers. Setting label updated accordingly.
+
 ### Fixed
 - **Windows installer works in non-interactive sessions (WI-050).** The Python
   probe in `install-windows.ps1` resolved `py` / `python` / `python3` only from
@@ -27,6 +57,22 @@ All notable changes to cert-watch are documented in this file.
   0.9.0). `cert_watch.__version__` now derives from installed package metadata
   (single source of truth: pyproject), with `_version.txt` supplying the commit
   and a source-tree-only version fallback.
+- **Installer refreshes the package on upgrade and verifies the result.** Since
+  `__version__` reads installed metadata, a re-install that did not actually
+  refresh the venv left the GUI reporting a stale version (e.g. 0.8.1 after a
+  0.9.0 deploy). `install-windows.ps1` now runs `pip install --upgrade`, fails
+  loudly if pip errors, and prints the installed version (warning on drift from
+  the source tree) so a stale install is visible at install time.
+- **Installer restarts the app pool after an upgrade-in-place.** The pool is
+  stopped before touching the venv to release locked files, but it was only
+  restarted inside the `-ConfigureIIS` path — so a plain upgrade (no
+  `-ConfigureIIS`) left the site stopped and serving HTTP 503. It is now
+  restarted at the end whenever the script stopped it and did not run IIS config.
+- **Installer no longer surfaces a benign venv message as an error.** Python
+  3.14's `python -m venv` can log "Unable to copy ... venvlauncher.exe" while
+  still producing a working venv via its fallback. That output is now captured
+  and only shown if the venv fails verification; on success a short note explains
+  it is cosmetic.
 
 ## [0.9.0] — 2026-06-15
 

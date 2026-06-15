@@ -22,6 +22,10 @@ logger = logging.getLogger("cert_watch.alerts")
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 CHAIN_THRESHOLDS = (30, 14, 7)
+# In digest mode, per-certificate alerts at or below this many days to expiry
+# still fire individually (the final-countdown "3/2/1" alerts); the routine
+# heads-up thresholds are left to the weekly digest. See evaluate_thresholds.
+URGENT_THRESHOLD_DAYS = 3
 SHORT_CERT_LIFETIME_DAYS = 90
 SHORT_LIFETIME_LEAF_PCT = (50, 25, 10)
 SHORT_LIFETIME_CHAIN_PCT = (50, 25, 10)
@@ -77,6 +81,7 @@ def evaluate_thresholds(
     owner_info: dict | None = None,
     extra_recipients: list[str] | None = None,
     hostname: str = "",
+    urgent_only: bool = False,
 ) -> list[Alert]:
     """Create a pending alert for the most urgent newly-tripped threshold.
 
@@ -101,6 +106,10 @@ def evaluate_thresholds(
     """
     days = cert.days_until_expiry()
     thresholds = effective_thresholds(cert, custom_thresholds=custom_thresholds)
+    # Digest mode: only the final-countdown thresholds fire as individual alerts;
+    # the rest are summarized by the weekly digest.
+    if urgent_only:
+        thresholds = tuple(t for t in thresholds if t <= URGENT_THRESHOLD_DAYS)
     cid = cert_id or cert.fingerprint_sha256
 
     # Suppress alerts when renewal is complete.
@@ -167,9 +176,13 @@ def evaluate_thresholds(
 
 
 def evaluate_all_certs(
-    db_path: str | Path, alert_repo: AlertRepository
+    db_path: str | Path, alert_repo: AlertRepository, *, urgent_only: bool = False
 ) -> list[Alert]:
     """Evaluate thresholds for all leaf certificates in the database.
+
+    When ``urgent_only`` is set (digest mode), only the final-countdown
+    thresholds (<= ``URGENT_THRESHOLD_DAYS``) produce individual alerts; the
+    routine heads-up thresholds are covered by the weekly digest instead.
 
     Looks up per-host custom thresholds and owner/contact info from the hosts
     table and passes them through to evaluate_thresholds. Also resolves
@@ -266,7 +279,7 @@ def evaluate_all_certs(
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
             owner_info=owner_info, extra_recipients=merged_extra or None,
-            hostname=leaf_row["hostname"] or "",
+            hostname=leaf_row["hostname"] or "", urgent_only=urgent_only,
         )
         all_alerts.extend(alerts)
     return all_alerts

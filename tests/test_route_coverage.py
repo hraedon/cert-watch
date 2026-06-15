@@ -111,6 +111,20 @@ def test_dashboard_pivot_issuer(reload_app, tmp_path, self_signed_leaf):
         not_after=now + timedelta(days=90),
     )
     SqliteCertificateRepository(db, source="uploaded").add(cert)
+    # The issuer pivot aggregates per host (it JOINs hosts), so attach the cert
+    # to a host — otherwise it falls back to the flat list, which no longer has
+    # an Issuer column (#7: that column was replaced by Tags).
+    import sqlite3
+
+    from cert_watch.database import SqliteHostRepository
+
+    SqliteHostRepository(db).add("pivot.example.com", 443)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "UPDATE certificates SET hostname = ?, port = ? WHERE issuer = ?",
+            ("pivot.example.com", 443, "Test CA"),
+        )
+        conn.commit()
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=issuer")
     assert r.status_code == 200

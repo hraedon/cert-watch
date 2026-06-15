@@ -144,6 +144,35 @@
     {% endif %}
   </div>
 
+  {# ---- Tags ---- #}
+  <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
+    <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
+      {{ icons.svg_icon('tag', 15) }}
+      <span class="cw-fz-13-5 cw-fw-600">Tags</span>
+      <span class="cw-muted cw-fz-11">— apply to every certificate on this host; route alerts to teams</span>
+      <div class="cw-spacer"></div>
+      {% if may_write %}
+      <details class="cw-inline-edit">
+        <summary class="cw-btn ghost sm">{{ icons.svg_icon('key', 13) }}Edit</summary>
+        <form method="post" action="/hosts/{{ host.id }}/tags" class="cw-mt-8">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <input class="cw-input" type="text" name="tags" value="{{ host.tags }}"
+                 placeholder="comma-separated, e.g. prod, payments">
+          <button type="submit" class="cw-btn primary sm cw-mt-8">Save tags</button>
+        </form>
+      </details>
+      {% endif %}
+    </div>
+    {% set _htags = host.tags.split(',') | map('trim') | select | list if host.tags else [] %}
+    {% if _htags %}
+    <div class="cw-flex cw-gap-8 cw-wrap">
+      {% for t in _htags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
+    </div>
+    {% else %}
+    <div class="cw-muted cw-fz-12">No tags yet.</div>
+    {% endif %}
+  </div>
+
   {# ---- Helpful note ---- #}
   <div class="cw-panel cw-panel--p-15-18">
     <div class="cw-flex cw-items-start cw-gap-8">

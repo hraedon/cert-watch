@@ -349,6 +349,38 @@ async def update_host_notes(
     return RedirectResponse(url="/", status_code=303)
 
 
+@router.post("/hosts/{host_id}/tags")
+async def update_host_tags(
+    request: Request, host_id: IdParam, tags: str = Form("")
+) -> RedirectResponse:
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    if len(tags) > 2000:
+        return RedirectResponse(
+            url=f"/hosts/{host_id}?error={quote('tags too long (max 2000)')}",
+            status_code=303,
+        )
+    db = _db_path(request)
+    from cert_watch.tags import format_tags, parse_tags
+
+    normalized = format_tags(parse_tags(tags))
+    repo = SqliteHostRepository(db)
+    if not repo.set_tags(host_id, normalized):
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.update_tags",
+        target_type="host",
+        target_id=host_id,
+        detail={"tags": normalized},
+        source_ip=resolve_source_ip(request),
+    )
+    logger.info("updated tags for host %s", host_id)
+    return RedirectResponse(url=f"/hosts/{host_id}", status_code=303)
+
+
 @router.post("/hosts/{host_id}/expected-issuers")
 async def update_host_expected_issuers(
     request: Request, host_id: IdParam, expected_issuers: str = Form(""),
