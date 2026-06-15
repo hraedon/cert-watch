@@ -106,18 +106,58 @@ function Invoke-PyProbe {
     @{ ExitCode = $exit; Output = if ($out) { $out.Trim() } else { "" } }
 }
 
-$launchers = @(
-    @{ Exe = "py";     Args = @("-3.14") },
-    @{ Exe = "py";     Args = @("-3.12") },
-    @{ Exe = "py";     Args = @("-3") },
-    @{ Exe = "python"; Args = @() },
+# Candidate interpreters, in priority order. Fully-qualified python.exe paths
+# come first because they work in non-interactive sessions (SSH / scheduled
+# task / service); the bare `py` / `python` / `python3` PATH launchers come
+# last and are skipped below when they resolve to a Windows Store
+# execution-alias stub under WindowsApps — those 0-byte reparse points fail
+# with "cannot be accessed by the system" outside an interactive logon, which
+# is exactly what broke a remote (SSH) re-install (WI-050).
+$launchers = @()
+# 1. The shared interpreter a prior install copied under InstallDir. Present on
+#    every re-install/upgrade and guaranteed outside a user profile/WindowsApps.
+$sharedCandidate = Join-Path $InstallDir "python\python.exe"
+if (Test-Path $sharedCandidate) { $launchers += @{ Exe = $sharedCandidate; Args = @() } }
+# 2. Python Install Manager per-user runtimes (full prefixes, real exes — not
+#    the Store aliases). Prefer the runtime dir over the bin\ shims so the
+#    "ensure shared" copy below has a complete prefix to copy.
+$imRoot = Join-Path $env:LOCALAPPDATA "Python"
+foreach ($pc in (Get-ChildItem $imRoot -Filter "pythoncore-*" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+    $p = Join-Path $pc.FullName "python.exe"
+    if (Test-Path $p) { $launchers += @{ Exe = $p; Args = @() } }
+}
+# 3. Per-machine Python installs.
+foreach ($base in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    if (-not $base) { continue }
+    foreach ($d in (Get-ChildItem $base -Filter "Python3*" -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending)) {
+        $p = Join-Path $d.FullName "python.exe"
+        if (Test-Path $p) { $launchers += @{ Exe = $p; Args = @() } }
+    }
+}
+# 4. Install Manager bin shims, then the bare PATH launchers, as a last resort.
+foreach ($n in @("python3.exe", "python.exe")) {
+    $p = Join-Path (Join-Path $imRoot "bin") $n
+    if (Test-Path $p) { $launchers += @{ Exe = $p; Args = @() } }
+}
+$launchers += @(
+    @{ Exe = "py";      Args = @("-3.14") },
+    @{ Exe = "py";      Args = @("-3.12") },
+    @{ Exe = "py";      Args = @("-3") },
+    @{ Exe = "python";  Args = @() },
     @{ Exe = "python3"; Args = @() }
 )
 $python = $null
 foreach ($l in $launchers) {
     $label = "$($l.Exe) $($l.Args -join `" `")"
-    if (-not (Get-Command $l.Exe -ErrorAction SilentlyContinue)) {
+    $cmd = Get-Command $l.Exe -ErrorAction SilentlyContinue
+    if (-not $cmd) {
         Write-Host "  [skip] $label -- exe not found on PATH"
+        continue
+    }
+    # Skip Windows Store execution-alias stubs (WI-050): they resolve on PATH
+    # but cannot be executed in a non-interactive session.
+    if ($cmd.Source -and $cmd.Source -match "\\WindowsApps\\") {
+        Write-Host "  [skip] $label -- Windows Store alias ($($cmd.Source)), unusable non-interactively"
         continue
     }
     $probeArgs = $l.Args + @("--version")
@@ -221,6 +261,33 @@ foreach ($d in @($InstallDir, $secrets, $logs)) {
     New-Item -ItemType Directory -Force -Path $d | Out-Null
 }
 
+# Stop the IIS app pool (if it exists) BEFORE touching the venv so the running
+# worker releases the files it holds (venv\Scripts\python.exe and loaded
+# .pyd/.exe). On a re-install over a live site, leaving it running locks these
+# files and both venv creation and pip install fail. appcmd is always present
+# with IIS, so this avoids a hard dependency on the WebAdministration module.
+$appcmdExe = "$env:windir\system32\inetsrv\appcmd.exe"
+if (Test-Path $appcmdExe) {
+    $poolExists = & $appcmdExe list apppool "$AppPool" 2>$null
+    if ($poolExists) {
+        Write-Host "Stopping app pool `"$AppPool`" to release files before install ..."
+        & $appcmdExe stop apppool /apppool.name:"$AppPool" 2>$null | Out-Null
+        Start-Sleep -Seconds 3
+    }
+}
+
+# Clear hidden/system attributes on the chosen interpreter's venv launchers
+# before creating the venv. Python 3.14 marks venvlauncher.exe hidden+system;
+# venv creation then fails with "Unable to copy ... venvlauncher.exe". The
+# fresh-copy path above clears these, but when we reuse an existing shared
+# Python (the common re-install case) the attributes survive, so clear them
+# here unconditionally against whichever interpreter we resolved (WI-050).
+$pyPrefix = Split-Path $python.Exe
+foreach ($vl in @("Lib\venv\scripts\nt\venvlauncher.exe", "Lib\venv\scripts\nt\venvwlauncher.exe")) {
+    $vlPath = Join-Path $pyPrefix $vl
+    if (Test-Path $vlPath) { attrib -H -S $vlPath 2>$null | Out-Null }
+}
+
 Write-Host "Creating virtualenv at $venv ..."
 & $python.Exe @($python.Args + @("-m", "venv", $venv))
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path (Join-Path $venv "Scripts\python.exe"))) {
@@ -236,21 +303,6 @@ if ($LASTEXITCODE -ne 0) {
     throw "venv created but python.exe is not functional (exit $LASTEXITCODE): $venvProbe"
 }
 Write-Host "  venv verified: $venvProbe"
-# Stop the IIS app pool (if it exists) before installing so the running worker
-# releases the venv files it has loaded. Without this, pip can fail to overwrite
-# locked .pyd/.exe files on a re-install, and the old code stays live until a
-# recycle. Uses appcmd (always present with IIS) to avoid a hard dependency on
-# the WebAdministration module here.
-$appcmdExe = "$env:windir\system32\inetsrv\appcmd.exe"
-if (Test-Path $appcmdExe) {
-    $poolExists = & $appcmdExe list apppool "$AppPool" 2>$null
-    if ($poolExists) {
-        Write-Host "Stopping app pool `"$AppPool`" to release files before install ..."
-        & $appcmdExe stop apppool /apppool.name:"$AppPool" 2>$null | Out-Null
-        Start-Sleep -Seconds 3
-    }
-}
-
 Write-Host "Installing cert-watch ..."
 & $venvPy -m pip install --upgrade pip | Out-Null
 $pkg = if ($WithAuthExtras) { "$repoRoot[auth-ldap,auth-oauth]" } else { $repoRoot }

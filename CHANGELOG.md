@@ -4,6 +4,30 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Windows installer works in non-interactive sessions (WI-050).** The Python
+  probe in `install-windows.ps1` resolved `py` / `python` / `python3` only from
+  PATH, which on a Python-Install-Manager (per-user) host are Windows Store
+  execution-alias stubs that fail with "cannot be accessed by the system" over
+  SSH / a scheduled task / a service account — breaking remote re-installs. It
+  now prefers fully-qualified interpreters (the installer's own shared copy
+  under `InstallDir\python`, the Install Manager runtimes, per-machine
+  `Program Files\Python3*`) and skips WindowsApps alias stubs. Validated by a
+  full remote re-install on the integration VM (Verify-Install 16/16 PASS).
+- **venv creation no longer fails when reusing an existing shared Python
+  (WI-050).** The hidden/system attribute clear on Python 3.14's
+  `venvlauncher.exe` only ran while *copying* a fresh interpreter; on the common
+  re-install path (shared Python already present) it was skipped, so
+  `python -m venv` failed with "Unable to copy ... venvlauncher.exe". The clear
+  now runs unconditionally before venv creation, and the app-pool stop was moved
+  *before* venv creation so a running worker can't lock `venv\Scripts\python.exe`.
+- **Installed version is reported correctly off package metadata.** Non-Docker
+  installs (Windows / `pip install`) read a hand-maintained `_version.txt` /
+  hardcoded fallback that had drifted (0.8.1 / 0.6.5 while the package was
+  0.9.0). `cert_watch.__version__` now derives from installed package metadata
+  (single source of truth: pyproject), with `_version.txt` supplying the commit
+  and a source-tree-only version fallback.
+
 ## [0.9.0] — 2026-06-15
 
 Maintenance-entry release (Plan 049) plus the first maintenance-mode batch
