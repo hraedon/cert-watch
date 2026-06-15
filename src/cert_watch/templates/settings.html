@@ -567,7 +567,35 @@
               {% endfor %}
             </td>
             <td>
-              <form method="post" action="/settings/users/{{ u.id }}/delete" style="display:inline">
+              <details class="cw-inline-edit">
+                <summary class="cw-btn ghost sm">Edit</summary>
+                <form method="post" action="/settings/users/{{ u.id }}" class="cw-mt-8">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_username_{{ u.id }}">Username</label>
+                    <input class="cw-input" type="text" id="edit_username_{{ u.id }}" name="username" value="{{ u.username }}" required>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_email_{{ u.id }}">Email</label>
+                    <input class="cw-input" type="email" id="edit_email_{{ u.id }}" name="email" value="{{ u.email }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_{{ u.id }}">Role / team</label>
+                    <select class="cw-input" id="edit_role_{{ u.id }}" name="role_id">
+                      <option value="">(none)</option>
+                      {% for r in roles %}
+                      <option value="{{ r.id }}" {% if r.id == u.role_id %}selected{% endif %}>{{ r.name }}</option>
+                      {% endfor %}
+                    </select>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_password_{{ u.id }}">New password</label>
+                    <input class="cw-input" type="password" id="edit_password_{{ u.id }}" name="password" placeholder="Leave blank to keep current">
+                  </div>
+                  <button type="submit" class="cw-btn primary sm">Save changes</button>
+                </form>
+              </details>
+              <form method="post" action="/settings/users/{{ u.id }}/delete" class="cw-inline">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <button type="submit" class="cw-btn ghost sm">Delete</button>
               </form>

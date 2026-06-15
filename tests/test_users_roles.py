@@ -216,3 +216,36 @@ class TestSettingsRoutes:
             r = client.get("/settings/users")
         assert r.status_code == 200
         assert "Users" in r.text
+
+    def test_update_user_changes_role(self, reload_app, monkeypatch, tmp_path):
+        import re
+
+        monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            client.post("/settings/roles", data={"name": "ops", "email": "ops@x.com"},
+                        follow_redirects=False)
+            client.post("/settings/roles", data={"name": "secops", "email": "sec@x.com"},
+                        follow_redirects=False)
+            page = client.get("/settings/users").text
+            ops_id = re.search(r'<option value="([^"]+)">ops</option>', page).group(1)
+            secops_id = re.search(r'<option value="([^"]+)">secops</option>', page).group(1)
+            client.post("/settings/users", data={
+                "username": "jsmith", "password": "password123",
+                "email": "j@x.com", "role_id": ops_id,
+            }, follow_redirects=False)
+            page = client.get("/settings/users").text
+            uid = re.search(r'/settings/users/([0-9a-f-]{36})"', page).group(1)
+            # Edit: move jsmith from ops -> secops, no new password.
+            r = client.post(f"/settings/users/{uid}", data={
+                "username": "jsmith", "email": "j@x.com", "role_id": secops_id,
+            }, follow_redirects=False)
+            assert r.status_code == 303
+            assert "saved=1" in r.headers["location"]
+
+        from cert_watch.config import Settings
+        from cert_watch.database import SqliteUserRepository
+        users = SqliteUserRepository(Settings.from_env().db_path).list_all()
+        jsmith = next(u for u in users if u.username == "jsmith")
+        assert jsmith.role_id == secops_id

@@ -4,6 +4,13 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Local users can be edited.** The Users settings tab now has a per-user edit
+  form (inline `<details>`) to change username, email, and role/team, and
+  optionally set a new password (left blank, the existing one is kept). New
+  `POST /settings/users/{id}` route; the user repository already supported
+  update.
+
 ### Changed
 - **Digest mode is now weekly, and urgent alerts always fire.** Digest mode
   previously sent a summary every day and suppressed *all* per-certificate
