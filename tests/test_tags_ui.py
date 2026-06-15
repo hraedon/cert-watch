@@ -83,3 +83,20 @@ def test_dashboard_search_matches_tags(tmp_path, reload_app, leaf_pem_file):
 
     assert "leaf.example.com" in hit
     assert "leaf.example.com" not in miss
+
+
+def test_dashboard_search_matches_pending_host_tags(tmp_path, reload_app):
+    """A pending host (no certificate) is still found by a tag search."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    from cert_watch.database import SqliteHostRepository
+
+    SqliteHostRepository(db).add("pending.example.com", 443, tags="payments")
+
+    with TestClient(app_mod.app) as client:
+        hit = client.get("/?q=payments").text
+        miss = client.get("/?q=zzz-none").text
+
+    assert "pending.example.com" in hit
+    assert "pending.example.com" not in miss

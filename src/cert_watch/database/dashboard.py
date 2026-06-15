@@ -465,9 +465,10 @@ def list_dashboard_page(
             pending_params: list = []
             if like:
                 pending_sql += (
-                    " AND LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
+                    " AND (LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
-                pending_params += [like]
+                pending_params += [like, like]
             select_parts.append(pending_sql)
             params += pending_params
 
@@ -588,6 +589,7 @@ def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
             "kind": "pending",
             "name": host_key,
             "host": host_key,
+            "tags": dict(h).get("tags", ""),
             "source": "scanned",
             "subject": None,
             "issuer": None,
