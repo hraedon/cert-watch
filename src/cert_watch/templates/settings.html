@@ -406,7 +406,7 @@
               <td>
                 <input type="hidden" name="rule_id" value="{{ rule.rule_id }}">
                 <input type="hidden" name="category_{{ rule.rule_id }}" value="{{ rule.category }}">
-                <strong>{{ rule.rule_id | replace('_', ' ') | title }}</strong>
+                <strong>{{ rule.rule_id | humanize_label }}</strong>
                 <div class="cw-muted cw-fz-11">{{ rule.category }}</div>
               </td>
               <td>
@@ -850,15 +850,36 @@
     }
   };
 
-  function applyWebhookPreset(preset) {
-    var cfg = _WEBHOOK_PRESETS[preset];
-    if (!cfg) return;
-    document.getElementById('webhook_kind').value = cfg.kind;
-    document.getElementById('webhook_url').placeholder = cfg.url || 'https://...';
-    var ta = document.getElementById('webhook_template');
-    if (!ta.value.trim()) {
-      ta.value = cfg.template;
+  function templateMatchesAnyPreset(text) {
+    for (var k in _WEBHOOK_PRESETS) {
+      if (_WEBHOOK_PRESETS[k].template === text) { return true; }
     }
+    return false;
+  }
+
+  function applyWebhookPreset(preset) {
+    var kindEl = document.getElementById('webhook_kind');
+    var urlEl = document.getElementById('webhook_url');
+    var ta = document.getElementById('webhook_template');
+    var cfg = _WEBHOOK_PRESETS[preset];
+    // Switching presets should replace the template. Only guard a template the
+    // user hand-wrote (one that does not match any known preset) so an accidental
+    // dropdown change cannot silently discard real work.
+    var cur = ta.value.trim();
+    if (cur && !templateMatchesAnyPreset(ta.value) &&
+        !confirm('Replace the current webhook template with the selected preset?')) {
+      return;
+    }
+    if (!cfg) {
+      // Custom / generic: clear the preset-derived fields.
+      kindEl.value = 'generic';
+      urlEl.placeholder = 'https://...';
+      ta.value = '';
+      return;
+    }
+    kindEl.value = cfg.kind;
+    urlEl.placeholder = cfg.url || 'https://...';
+    ta.value = cfg.template;
   }
 
   // test-ldap and test-smtp are handled by the delegated listener in base.html
