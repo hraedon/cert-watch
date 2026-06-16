@@ -3,8 +3,9 @@
 
 {% block head %}{% endblock %}
 
+{% from "macros/settings_nav.html" import settings_nav %}
 {% block content %}
-<div class="cw-page--constrained">
+<div class="cw-page-wrap">
   <div class="cw-page-head">
     <div>
       <h1 data-testid="settings-heading">Settings</h1>
@@ -12,7 +13,10 @@
     </div>
   </div>
 
-  <div class="cw-panel" style="max-width: 52rem; margin: 0 auto; padding: 16px 22px 22px;">
+  <div class="cw-settings-grid">
+    {{ settings_nav(tab) }}
+
+    <div class="cw-panel cw-settings-content">
     {% if saved %}
       <div class="cw-alert cw-alert--success cw-mb-14">Settings saved successfully.</div>
     {% endif %}
@@ -22,17 +26,6 @@
     {% if password_changed %}
       <div class="cw-alert cw-alert--success cw-mb-14">Password rotated successfully. All previous sessions have been invalidated.</div>
     {% endif %}
-
-    <div class="cw-tabs">
-      <a href="/settings?tab=auth" class="cw-tab {% if tab == 'auth' %}active{% endif %}">Authentication</a>
-      <a href="/settings?tab=smtp" class="cw-tab {% if tab == 'smtp' %}active{% endif %}">SMTP</a>
-      <a href="/settings?tab=alerts" class="cw-tab {% if tab == 'alerts' %}active{% endif %}">Alerts</a>
-      <a href="/settings/events" class="cw-tab {% if tab == 'events' %}active{% endif %}">Events</a>
-      <a href="/settings?tab=policy" class="cw-tab {% if tab == 'policy' %}active{% endif %}">Policy</a>
-      <a href="/settings/roles" class="cw-tab {% if tab == 'roles' %}active{% endif %}">Roles</a>
-      <a href="/settings/users" class="cw-tab {% if tab == 'users' %}active{% endif %}">Users</a>
-      <a href="/settings?tab=api-keys" class="cw-tab {% if tab == 'api-keys' %}active{% endif %}" data-testid="settings-api-keys-link">API keys</a>
-    </div>
 
     <!-- Auth tab -->
     <div class="cw-tab-panel {% if tab == 'auth' %}active{% endif %}" id="tab-auth">
@@ -723,8 +716,9 @@
       </div>
       {% endif %}
     </div>
-  </div>
-</div>
+    </div>{# .cw-settings-content #}
+  </div>{# .cw-settings-grid #}
+</div>{# .cw-page-wrap #}
 {% endblock %}
 
 {% block scripts %}

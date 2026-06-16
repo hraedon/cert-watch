@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — event streaming{% endblock %}
 
+{% from "macros/settings_nav.html" import settings_nav %}
 {% block content %}
-<div class="cw-page--constrained">
+<div class="cw-page-wrap">
   <div class="cw-page-head">
     <div>
       <h1 data-testid="events-heading">Event streaming</h1>
@@ -10,6 +11,10 @@
     </div>
   </div>
 
+  <div class="cw-settings-grid">
+    {{ settings_nav('events') }}
+
+    <div>
   {% if saved %}
     <div class="cw-alert cw-alert--success cw-mb-14">Settings saved successfully.</div>
   {% endif %}
@@ -17,7 +22,7 @@
     <div class="cw-alert cw-alert--error cw-mb-14">{{ error }}</div>
   {% endif %}
 
-  <form method="post" action="/settings/events" class="cw-panel cw-mb-18">
+  <form method="post" action="/settings/events" class="cw-panel cw-settings-content">
     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
 
     <h3 class="cw-set-title cw-mb-16">Enabled event types</h3>
@@ -69,5 +74,7 @@
 
     <button type="submit" class="cw-btn primary" data-testid="events-save-btn">Save</button>
   </form>
-</div>
+    </div>
+  </div>{# .cw-settings-grid #}
+</div>{# .cw-page-wrap #}
 {% endblock %}
