@@ -255,7 +255,7 @@
       <div class="cw-panel cw-panel--p-16-18 cw-mb-16">
         <div class="cw-flex cw-justify-between cw-items-end cw-mb-12">
           <div>
-            <div class="cw-fz-11 cw-text-text-3 cw-fw-500 cw-mb-4">TIME REMAINING</div>
+            <div class="mono cw-fz-11 cw-text-text-3 cw-fw-500 cw-mb-4 cw-ls-04em">TIME REMAINING</div>
             <div class="cw-flex cw-items-baseline cw-gap-8">
               {% set _tone = 'var(--expired)' if urgency == 'expired' else 'var(--crit)' if urgency == 'critical' else 'var(--warn)' if urgency == 'warning' else 'var(--ok)' %}
               <span class="cw-fz-30 cw-fw-600 cw-ls-04em cw-tone-text" style="--tone:{{ _tone }}">
