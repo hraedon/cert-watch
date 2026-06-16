@@ -423,8 +423,11 @@ def _clamp_page(page: int, total: int, per_page: int) -> int:
     return max(1, min(page, total_pages))
 
 
-def pivot_urgency_stats(db_path: str | Path) -> dict[str, int]:
-    """Urgency-bucket counts (expired/critical/warning/healthy) over leaf certs.
+def pivot_urgency_stats(
+    db_path: str | Path,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, int]:
+    """Urgency-bucket counts (expired/critical/warning/healthy) for the pivot.
 
     Feeds the dashboard pivot summary cards (BC-048).  The not_after boundary is
     compared with ``julianday()`` rather than a string compare against
@@ -434,11 +437,12 @@ def pivot_urgency_stats(db_path: str | Path) -> dict[str, int]:
     the current UTC day.  ``CAST(... AS INTEGER)`` truncates toward zero, so the
     expired bucket must use the raw ``< now`` test, not ``days < 0``.
 
-    Note: this counts all leaf certs (``is_leaf = 1``) and is intentionally not
-    tag-scoped — it preserves the pre-existing behaviour of the inline query it
-    was extracted from.  That the summary cards are not tag-scoped while the
-    grouped rows (``list_fleet_pivot``) are is a known inconsistency tracked
-    separately; do not "fix" it here without deciding the intended semantics.
+    Population and scoping mirror :func:`list_fleet_pivot`'s scanned aggregate so
+    the summary cards agree with the grouped rows they sit above: scanned leaf
+    certs (``is_leaf = 1`` joined to a host), filtered by effective (cert ∪ host)
+    tags for ``scope_tags``.  A scoped (non-admin) user therefore sees counts only
+    for certs in their tag scope — previously the cards aggregated every leaf cert
+    globally, leaking out-of-scope counts and disagreeing with the group totals.
     """
     sql = """SELECT
             SUM(CASE WHEN julianday(c.not_after) < julianday('now') THEN 1 ELSE 0 END) AS expired,
@@ -453,10 +457,15 @@ def pivot_urgency_stats(db_path: str | Path) -> dict[str, int]:
                      AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 30
                 THEN 1 ELSE 0 END) AS healthy
         FROM certificates c
+        JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
         WHERE c.is_leaf = 1
         """
+    params: list = []
+    sql, params = _add_effective_tag_filter(
+        sql, params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
+    )
     with _connect(db_path) as conn:
-        row = conn.execute(sql).fetchone()
+        row = conn.execute(sql, params).fetchone()
     r = dict(row) if row is not None else {}
     return {
         "expired": r.get("expired") or 0,

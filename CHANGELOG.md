@@ -53,6 +53,13 @@ All notable changes to cert-watch are documented in this file.
   The fleet pivot additionally surfaces the `expired` urgency (a `THEN 0` sentinel
   plus `CAST`-toward-zero had made that bucket unreachable). The pivot urgency
   query was extracted to `pivot_urgency_stats()` and covered with regression tests.
+- **Pivot summary cards now respect tag scope (RBAC).** In a pivot view the
+  grouped rows were tag-scoped (`list_fleet_pivot`) but the urgency summary cards
+  above them aggregated *every* leaf certificate globally, so a tag-scoped
+  (non-admin) user saw — and could infer counts of — certificates outside their
+  scope, and the card totals disagreed with the scoped group totals.
+  `pivot_urgency_stats()` now applies the same scanned-host join and effective
+  (cert ∪ host) tag filter as `list_fleet_pivot`.
 - **Windows installer works in non-interactive sessions (WI-050).** The Python
   probe in `install-windows.ps1` resolved `py` / `python` / `python3` only from
   PATH, which on a Python-Install-Manager (per-user) host are Windows Store

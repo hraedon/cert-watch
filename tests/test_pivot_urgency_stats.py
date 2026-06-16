@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
-    SqliteCertificateRepository,
     SqliteHostRepository,
     init_schema,
     list_fleet_pivot,
@@ -23,6 +22,9 @@ from cert_watch.database import (
 
 
 def _add_leaf(db, subject, *, not_after):
+    """Add a scanned leaf cert (with its host) — the population the pivot counts."""
+    host, port = subject, 443
+    SqliteHostRepository(db).add(host, port)
     cert = Certificate(
         subject=subject,
         issuer="Test CA",
@@ -30,7 +32,7 @@ def _add_leaf(db, subject, *, not_after):
         not_after=not_after,
         fingerprint_sha256=subject,
     )
-    SqliteCertificateRepository(db, source="uploaded").add(cert)
+    replace_scanned(db, host, port, cert, [], True)
 
 
 def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
@@ -50,6 +52,48 @@ def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
     assert stats["healthy"] == 1
     assert stats["critical"] == 0
     assert stats["warning"] == 0
+
+
+def test_pivot_stats_are_tag_scoped(tmp_path):
+    """A scoped user's summary cards must count only certs in their tag scope.
+
+    Mirrors list_fleet_pivot's scoped population so the cards agree with the
+    grouped rows; previously the cards aggregated every leaf cert globally,
+    leaking out-of-scope counts to tag-scoped (non-admin) users.
+    """
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    now = datetime.now(UTC)
+
+    def scanned(host, *, not_after, tag):
+        host_id = hosts.add(host, 443)
+        cert = Certificate(
+            subject=host,
+            issuer="Test CA",
+            not_before=now - timedelta(days=1),
+            not_after=not_after,
+            fingerprint_sha256=host,
+        )
+        replace_scanned(db, host, 443, cert, [], True)
+        hosts.set_tags(host_id, tag)  # host tag → effective tag of its certs
+
+    scanned("team-a.example.com", not_after=now - timedelta(hours=2), tag="team-a")
+    scanned("team-b.example.com", not_after=now - timedelta(hours=2), tag="team-b")
+    scanned("team-b-2.example.com", not_after=now + timedelta(days=90), tag="team-b")
+
+    # Admin (no scope) sees everything.
+    assert pivot_urgency_stats(db) == {
+        "expired": 2, "critical": 0, "warning": 0, "healthy": 1
+    }
+    # Scoped to team-a: only the one expired team-a cert.
+    assert pivot_urgency_stats(db, scope_tags=["team-a"]) == {
+        "expired": 1, "critical": 0, "warning": 0, "healthy": 0
+    }
+    # Scoped to team-b: one expired + one healthy.
+    assert pivot_urgency_stats(db, scope_tags=["team-b"]) == {
+        "expired": 1, "critical": 0, "warning": 0, "healthy": 1
+    }
 
 
 def test_pivot_stats_bucket_boundaries(tmp_path):

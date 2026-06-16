@@ -221,10 +221,10 @@ def dashboard(
         total = sum(g["count"] for g in pivot_groups)
         page_entries: list[dict] = []
         total_pages = 1
-        # Urgency distribution via targeted SQL (julianday-safe; see
-        # pivot_urgency_stats for the not_after comparison rationale).
+        # Urgency distribution via targeted SQL (julianday-safe and tag-scoped to
+        # match the grouped rows above; see pivot_urgency_stats for the rationale).
         # Pending hosts (no cert = gray) are not counted in urgency buckets.
-        pivot_stats = pivot_urgency_stats(db)
+        pivot_stats = pivot_urgency_stats(db, scope_tags=scope_tags)
     elif grouped:
         # Grouped path: grouping by leaf fingerprint with worst urgency +
         # host count, filtered/sorted — SQL-level pagination (BC-073).
