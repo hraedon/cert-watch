@@ -13,6 +13,7 @@ from cert_watch.alerts import (
     evaluate_all_certs,
     evaluate_thresholds,
     resolve_group_recipients,
+    resolve_group_thresholds,
 )
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
@@ -463,3 +464,342 @@ class TestAlertGroupAPI:
             groups = r.json()["groups"]
             assert len(groups) == 2
             assert groups[0]["name"] == "alpha"
+
+
+# ---------- Per-group threshold & digest config (WI-056) ----------
+
+
+class TestAlertGroupConfig:
+    def test_create_with_threshold_days(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create(
+            "ops", ["ops@co.com"], ["infra"],
+            threshold_days=10, digest_cadence_days=14,
+        )
+        g = group_repo.get(gid)
+        assert g is not None
+        assert g.threshold_days == 10
+        assert g.digest_cadence_days == 14
+
+    def test_create_defaults(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create("web", ["a@b.com"], ["web"])
+        g = group_repo.get(gid)
+        assert g is not None
+        assert g.threshold_days is None
+        assert g.digest_cadence_days == 7
+
+    def test_update_threshold_days(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create("g", ["a@b.com"], [], threshold_days=10)
+        group_repo.update(gid, threshold_days=5)
+        g = group_repo.get(gid)
+        assert g.threshold_days == 5
+
+    def test_update_clear_threshold_days(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create("g", ["a@b.com"], [], threshold_days=10)
+        group_repo.update(gid, threshold_days=None)
+        g = group_repo.get(gid)
+        assert g.threshold_days is None
+
+    def test_update_digest_cadence_days(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create("g", ["a@b.com"], [], digest_cadence_days=7)
+        group_repo.update(gid, digest_cadence_days=14)
+        g = group_repo.get(gid)
+        assert g.digest_cadence_days == 14
+
+    def test_update_no_changes_leaves_config(self, group_repo: SqliteAlertGroupRepository):
+        gid = group_repo.create("g", ["a@b.com"], [], threshold_days=10, digest_cadence_days=14)
+        group_repo.update(gid)
+        g = group_repo.get(gid)
+        assert g.threshold_days == 10
+        assert g.digest_cadence_days == 14
+
+    def test_get_by_name_includes_config(self, group_repo: SqliteAlertGroupRepository):
+        group_repo.create("g", ["a@b.com"], [], threshold_days=20, digest_cadence_days=30)
+        g = group_repo.get_by_name("g")
+        assert g is not None
+        assert g.threshold_days == 20
+        assert g.digest_cadence_days == 30
+
+    def test_list_all_includes_config(self, group_repo: SqliteAlertGroupRepository):
+        group_repo.create("a", ["a@b.com"], [], threshold_days=5)
+        group_repo.create("b", ["b@b.com"], [])
+        groups = group_repo.list_all()
+        by_name = {g.name: g for g in groups}
+        assert by_name["a"].threshold_days == 5
+        assert by_name["b"].threshold_days is None
+
+
+class TestGroupThresholdOverride:
+    def test_resolve_group_thresholds_returns_matching(self, db_path: Path):
+        host_repo = SqliteHostRepository(db_path)
+        host_repo.add("h.example.com", 443, tags="team-web")
+        cert_repo = SqliteCertificateRepository(
+            db_path, hostname="h.example.com", port=443
+        )
+        cert_id = _make_cert(cert_repo)
+        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo.create("web-team", ["web@co.com"], ["team-web"], threshold_days=10)
+
+        result = resolve_group_thresholds(db_path)
+        assert cert_id in result
+        assert result[cert_id] == 10
+
+    def test_resolve_group_thresholds_ignores_null(self, db_path: Path):
+        host_repo = SqliteHostRepository(db_path)
+        host_repo.add("h.example.com", 443, tags="team-web")
+        cert_repo = SqliteCertificateRepository(
+            db_path, hostname="h.example.com", port=443
+        )
+        cert_id = _make_cert(cert_repo)
+        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo.create("web-team", ["web@co.com"], ["team-web"])
+
+        result = resolve_group_thresholds(db_path)
+        assert cert_id not in result
+
+    def test_resolve_group_thresholds_picks_most_urgent(self, db_path: Path):
+        host_repo = SqliteHostRepository(db_path)
+        host_repo.add("h.example.com", 443, tags="team-web, prod")
+        cert_repo = SqliteCertificateRepository(
+            db_path, hostname="h.example.com", port=443
+        )
+        cert_id = _make_cert(cert_repo)
+        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo.create("web-team", ["a@co.com"], ["team-web"], threshold_days=20)
+        group_repo.create("prod-team", ["b@co.com"], ["prod"], threshold_days=5)
+
+        result = resolve_group_thresholds(db_path)
+        assert result[cert_id] == 5
+
+    def test_evaluate_all_certs_uses_group_threshold(self, db_path: Path):
+        host_repo = SqliteHostRepository(db_path)
+        host_repo.add(
+            "h.example.com", 443,
+            tags="team-web",
+            owner_email="owner@co.com",
+        )
+        cert_repo = SqliteCertificateRepository(
+            db_path, hostname="h.example.com", port=443
+        )
+        _make_cert(cert_repo, not_after=datetime.now(UTC) + timedelta(days=8))
+        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo.create(
+            "web-team", ["web@co.com"], ["team-web"], threshold_days=10,
+        )
+
+        alert_repo = SqliteAlertRepository(db_path)
+        alerts = evaluate_all_certs(db_path, alert_repo)
+        assert len(alerts) > 0
+        assert any(a.threshold_days == 10 for a in alerts)
+
+    def test_evaluate_all_certs_without_group_uses_default(self, db_path: Path):
+        host_repo = SqliteHostRepository(db_path)
+        host_repo.add("h.example.com", 443, owner_email="owner@co.com")
+        cert_repo = SqliteCertificateRepository(
+            db_path, hostname="h.example.com", port=443
+        )
+        _make_cert(cert_repo, not_after=datetime.now(UTC) + timedelta(days=8))
+
+        alert_repo = SqliteAlertRepository(db_path)
+        alerts = evaluate_all_certs(db_path, alert_repo)
+        for a in alerts:
+            assert a.threshold_days in (14, 7, 3, 1)
+
+
+class TestDigestCadence:
+    def test_build_renewal_digest_cadence_days(self, db_path: Path):
+        """cadence_days controls the lookback window for renewal events."""
+        from cert_watch.database.connection import _connect, _iso
+        from cert_watch.digest import build_renewal_digest
+
+        # Seed a cert_renewed event 10 days ago
+        event_ts = _iso(datetime.now(UTC) - timedelta(days=10))
+        with _connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
+                "VALUES ('cert_renewed', ?, '', ?, ?)",
+                (event_ts, '{"hostname": "h.example.com"}', event_ts),
+            )
+
+        # With cadence_days=14, the event 10 days ago is inside the window
+        result_14 = build_renewal_digest(db_path, cadence_days=14)
+        assert len(result_14) > 0
+        assert any("h.example.com" in d.renewed_hosts for d in result_14)
+
+        # With cadence_days=5, the event 10 days ago is outside the window
+        result_5 = build_renewal_digest(db_path, cadence_days=5)
+        assert result_5 == []
+
+    def test_build_renewal_digest_default_days(self, db_path: Path):
+        """Default days=7 includes events within the last 7 days."""
+        from cert_watch.database.connection import _connect, _iso
+        from cert_watch.digest import build_renewal_digest
+
+        # Seed a cert_renewed event 3 days ago
+        event_ts = _iso(datetime.now(UTC) - timedelta(days=3))
+        with _connect(db_path) as conn:
+            conn.execute(
+                "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
+                "VALUES ('cert_renewed', ?, '', ?, ?)",
+                (event_ts, '{"hostname": "h2.example.com"}', event_ts),
+            )
+
+        result = build_renewal_digest(db_path)
+        assert len(result) > 0
+        assert any("h2.example.com" in d.renewed_hosts for d in result)
+
+
+class TestAlertGroupConfigAPI:
+    def test_create_with_config(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "ops",
+                "recipients": ["ops@co.com"],
+                "match_tags": ["infra"],
+                "threshold_days": 10,
+                "digest_cadence_days": 14,
+            })
+            assert r.status_code == 201, r.text
+            data = r.json()
+            assert data["threshold_days"] == 10
+            assert data["digest_cadence_days"] == 14
+
+    def test_create_with_null_threshold(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": None,
+            })
+            assert r.status_code == 201, r.text
+            data = r.json()
+            assert data["threshold_days"] is None
+            assert data["digest_cadence_days"] == 7
+
+    def test_create_defaults(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+            })
+            assert r.status_code == 201
+            data = r.json()
+            assert data["threshold_days"] is None
+            assert data["digest_cadence_days"] == 7
+
+    def test_create_invalid_threshold(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": 0,
+            })
+            assert r.status_code == 400
+
+            r2 = client.post("/api/alert-groups", json={
+                "name": "g2",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": -5,
+            })
+            assert r2.status_code == 400
+
+    def test_create_invalid_digest_cadence(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "digest_cadence_days": 0,
+            })
+            assert r.status_code == 400
+
+    def test_patch_config(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+            })
+            gid = r.json()["id"]
+
+            p = client.patch(f"/api/alert-groups/{gid}", json={
+                "threshold_days": 10,
+                "digest_cadence_days": 14,
+            })
+            assert p.status_code == 200
+            data = p.json()
+            assert data["threshold_days"] == 10
+            assert data["digest_cadence_days"] == 14
+
+    def test_patch_clear_threshold(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": 10,
+            })
+            gid = r.json()["id"]
+
+            p = client.patch(f"/api/alert-groups/{gid}", json={
+                "threshold_days": None,
+            })
+            assert p.status_code == 200
+            assert p.json()["threshold_days"] is None
+
+    def test_patch_invalid_threshold(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+            })
+            gid = r.json()["id"]
+
+            p = client.patch(f"/api/alert-groups/{gid}", json={
+                "threshold_days": 0,
+            })
+            assert p.status_code == 400
+
+    def test_get_includes_config(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": 10,
+                "digest_cadence_days": 14,
+            })
+            gid = r.json()["id"]
+
+            g = client.get(f"/api/alert-groups/{gid}")
+            assert g.status_code == 200
+            data = g.json()
+            assert data["threshold_days"] == 10
+            assert data["digest_cadence_days"] == 14
+
+    def test_list_includes_config(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            client.post("/api/alert-groups", json={
+                "name": "g",
+                "recipients": ["a@b.com"],
+                "match_tags": [],
+                "threshold_days": 10,
+            })
+            r = client.get("/api/alert-groups")
+            groups = r.json()["groups"]
+            assert len(groups) == 1
+            assert groups[0]["threshold_days"] == 10

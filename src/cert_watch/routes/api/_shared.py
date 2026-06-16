@@ -88,6 +88,8 @@ def _alert_group_json(g: Any) -> dict:
         "match_tags": g.match_tags,
         "webhook_url": g.webhook_url,
         "created_at": g.created_at.isoformat(),
+        "threshold_days": g.threshold_days,
+        "digest_cadence_days": g.digest_cadence_days,
     }
 
 

@@ -209,8 +209,8 @@ def evaluate_all_certs(
             "FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
-    # Batch-resolve group recipients for all certs in ≤3 queries
-    all_group_recipients = resolve_all_group_recipients(db_path)
+    # Batch-resolve group recipients and threshold overrides in a single pass
+    all_group_recipients, group_threshold_map = _resolve_group_config(db_path)
 
     # Role-based alert routing: users in a role get alerts for certs owned by
     # the role's team email (host.owner_email matches role.email).
@@ -259,8 +259,15 @@ def evaluate_all_certs(
                 custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
             owner_info = host_owners.get((hostname, port))
 
+        # Per-group threshold override: if any matching group has threshold_days
+        # set, use the most urgent (smallest) group threshold.
+        cert_id = leaf_row["id"]
+        group_td = group_threshold_map.get(cert_id)
+        if group_td is not None:
+            custom = (group_td, max(group_td // 2, 1), max(group_td // 4, 1))
+
         # Resolve alert-group recipients for this cert (batch result)
-        group_recipients = all_group_recipients.get(leaf_row["id"], [])
+        group_recipients = all_group_recipients.get(cert_id, [])
 
         # Merge group recipients with owner email into extra_recipients
         merged_extra: list[str] = list(group_recipients)
@@ -740,34 +747,38 @@ def evaluate_policy_alerts(
     return created
 
 
-def resolve_all_group_recipients(
+def _resolve_group_config(
     db_path: str | Path,
-) -> dict[str, list[str]]:
-    """Return {cert_id: [recipients]} for all leaf certs in one pass.
+) -> tuple[dict[str, list[str]], dict[str, int | None]]:
+    """Single-pass resolution of alert-group recipients and threshold overrides.
 
-    Uses three targeted SQL queries instead of per-cert N+1 resolution.
-    Results are identical to calling resolve_group_recipients() per cert.
+    Returns (recipients_map, thresholds_map) where:
+    - recipients_map: {cert_id: [deduplicated recipients]} for all matching certs
+    - thresholds_map: {cert_id: min threshold_days} for certs matching groups
+      that have threshold_days set (absent when no group with threshold_days matches)
+
+    Performs the 3 SQL queries (groups, cert tags, manual assignments) once
+    instead of duplicating them across resolve_all_group_recipients and
+    resolve_group_thresholds.
     """
     from cert_watch.database.connection import _connect
     from cert_watch.tags import merge_tags, parse_tags, tags_match
 
-    # 1. Load all groups
-    groups: list[dict] = []
     with _connect(db_path) as conn:
         groups = [
             {
                 "id": row["id"],
                 "recipients": [r.strip() for r in row["recipients"].split(",") if r.strip()],
                 "match_tags": parse_tags(row["match_tags"]),
+                "threshold_days": row["threshold_days"],
             }
             for row in conn.execute(
-                "SELECT id, recipients, match_tags FROM alert_groups"
+                "SELECT id, recipients, match_tags, threshold_days FROM alert_groups"
             ).fetchall()
         ]
         if not groups:
-            return {}
+            return {}, {}
 
-        # 2. Load all leaf certs with their own tags and host tags
         cert_tags_rows = conn.execute(
             """SELECT c.id, c.tags, h.tags AS host_tags
                FROM certificates c
@@ -779,7 +790,6 @@ def resolve_all_group_recipients(
             for row in cert_tags_rows
         }
 
-        # 3. Load all manual assignments
         manual_rows = conn.execute(
             "SELECT cert_id, group_id FROM alert_group_certs"
         ).fetchall()
@@ -787,7 +797,8 @@ def resolve_all_group_recipients(
         for row in manual_rows:
             manual_map.setdefault(row["cert_id"], set()).add(row["group_id"])
 
-    result: dict[str, list[str]] = {}
+    recipients_map: dict[str, list[str]] = {}
+    thresholds_map: dict[str, int | None] = {}
     for cert_id, effective in cert_tags.items():
         seen: set[str] = set()
         out: list[str] = []
@@ -799,9 +810,39 @@ def resolve_all_group_recipients(
                     if rc not in seen:
                         seen.add(rc)
                         out.append(r)
+                td = g["threshold_days"]
+                if td is not None:
+                    existing = thresholds_map.get(cert_id)
+                    if existing is None or td < existing:
+                        thresholds_map[cert_id] = td
         if out:
-            result[cert_id] = out
-    return result
+            recipients_map[cert_id] = out
+    return recipients_map, thresholds_map
+
+
+def resolve_all_group_recipients(
+    db_path: str | Path,
+) -> dict[str, list[str]]:
+    """Return {cert_id: [recipients]} for all leaf certs in one pass.
+
+    Uses three targeted SQL queries instead of per-cert N+1 resolution.
+    Results are identical to calling resolve_group_recipients() per cert.
+    """
+    recipients_map, _ = _resolve_group_config(db_path)
+    return recipients_map
+
+
+def resolve_group_thresholds(
+    db_path: str | Path,
+) -> dict[str, int | None]:
+    """Return {cert_id: threshold_days} for certs matching groups with threshold_days set.
+
+    When a cert matches multiple groups with threshold_days, the most urgent
+    (smallest) threshold wins. Certs matching only groups without threshold_days
+    are absent from the result (caller falls back to per-host or global defaults).
+    """
+    _, thresholds_map = _resolve_group_config(db_path)
+    return thresholds_map
 
 
 def resolve_group_recipients(
@@ -954,6 +995,8 @@ def send_expiry_digest(
     db_path: str | Path,
     config: AlertConfig | None,
     webhook_config: WebhookConfig | None = None,
+    *,
+    cadence_days: int = 30,
 ) -> bool:
     """Send expiry digest: one per owner (their certs only) + one global (all certs).
 
@@ -980,7 +1023,7 @@ def send_expiry_digest(
     for r in rows:
         na = _parse_iso(r["not_after"])
         days = (na - now).days
-        if days <= 30:
+        if days <= cadence_days:
             expiring.append({
                 "subject": r["subject"],
                 "hostname": r["hostname"] or "",
