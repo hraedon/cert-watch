@@ -36,7 +36,7 @@ INLINE_STYLE_BUDGET: dict[str, int] = {
     "host_detail.html": 2,
     "insights.html": 32,
     "readiness.html": 8,
-    "settings.html": 3,
+    "settings.html": 2,
     "setup.html": 2,
     "team_dashboard.html": 1,
 }
