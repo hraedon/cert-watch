@@ -78,6 +78,8 @@ async def api_create_alert_group(
     recipients_raw = body.get("recipients", [])
     match_tags_raw = body.get("match_tags", [])
     webhook_url = body.get("webhook_url", "")
+    threshold_days = body.get("threshold_days")
+    digest_cadence_days = body.get("digest_cadence_days", 7)
 
     if not isinstance(recipients_raw, list) or not all(isinstance(r, str) for r in recipients_raw):
         return JSONResponse(
@@ -89,6 +91,16 @@ async def api_create_alert_group(
         )
     if not isinstance(webhook_url, str):
         return JSONResponse(content={"error": "webhook_url must be a string"}, status_code=400)
+    if threshold_days is not None and (not isinstance(threshold_days, int) or threshold_days < 1):
+        return JSONResponse(
+            content={"error": "threshold_days must be a positive integer or null"},
+            status_code=400,
+        )
+    if not isinstance(digest_cadence_days, int) or digest_cadence_days < 1:
+        return JSONResponse(
+            content={"error": "digest_cadence_days must be a positive integer"},
+            status_code=400,
+        )
 
     if webhook_url:
         err = _validate_webhook_url(webhook_url)
@@ -106,14 +118,18 @@ async def api_create_alert_group(
             content={"error": f"alert group '{name}' already exists"}, status_code=409
         )
 
-    group_id = repo.create(name, recipients_raw, match_tags_raw, webhook_url)
+    group_id = repo.create(
+        name, recipients_raw, match_tags_raw, webhook_url,
+        threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
+    )
     record_audit(
         db,
         actor=resolve_actor(request),
         action="alert_group.create",
         target_type="alert_group",
         target_id=group_id,
-        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw},
+        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
+                "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
         source_ip=resolve_source_ip(request),
     )
     g = repo.get(group_id)
@@ -150,6 +166,8 @@ async def api_update_alert_group(
     recipients_raw = body.get("recipients")
     match_tags_raw = body.get("match_tags")
     webhook_url = body.get("webhook_url")
+    threshold_days = body.get("threshold_days", SqliteAlertGroupRepository._UNSET)
+    digest_cadence_days = body.get("digest_cadence_days")
 
     if name is not None and (not isinstance(name, str) or not name):
         return JSONResponse(content={"error": "name must be a non-empty string"}, status_code=400)
@@ -180,6 +198,20 @@ async def api_update_alert_group(
         err = _validate_webhook_url(webhook_url)
         if err:
             return err
+    if threshold_days is not SqliteAlertGroupRepository._UNSET and threshold_days is not None and (
+        not isinstance(threshold_days, int) or threshold_days < 1
+    ):
+        return JSONResponse(
+            content={"error": "threshold_days must be a positive integer or null"},
+            status_code=400,
+        )
+    if digest_cadence_days is not None and (
+        not isinstance(digest_cadence_days, int) or digest_cadence_days < 1
+    ):
+        return JSONResponse(
+            content={"error": "digest_cadence_days must be a positive integer"},
+            status_code=400,
+        )
 
     # Check unique name on rename
     if name is not None:
@@ -195,6 +227,8 @@ async def api_update_alert_group(
         recipients=recipients_raw,
         match_tags=match_tags_raw,
         webhook_url=webhook_url,
+        threshold_days=threshold_days,
+        digest_cadence_days=digest_cadence_days,
     )
     record_audit(
         db,
@@ -202,7 +236,7 @@ async def api_update_alert_group(
         action="alert_group.update",
         target_type="alert_group",
         target_id=group_id,
-        detail={k: v for k, v in body.items() if v is not None},
+        detail=dict(body),
         source_ip=resolve_source_ip(request),
     )
     g = repo.get(group_id)

@@ -326,6 +326,18 @@ async def lifespan(app: FastAPI):
     _iso_init = _dt_init.datetime.now(_dt_init.UTC).isocalendar()
     _expiry_digest_week: tuple[int, int] = (_iso_init[0], _iso_init[1])
 
+    def _max_group_cadence(
+        db_path: str | Path, *, default: int = 30
+    ) -> int:
+        from cert_watch.database import SqliteAlertGroupRepository
+
+        try:
+            groups = SqliteAlertGroupRepository(db_path).list_all()
+        except Exception:  # noqa: BLE001 — best-effort; schema may not be ready
+            return default
+        cadences = [g.digest_cadence_days for g in groups if g.digest_cadence_days > 0]
+        return max(cadences) if cadences else default
+
     def _alerts() -> dict:
         import datetime as _dt
 
@@ -351,7 +363,8 @@ async def lifespan(app: FastAPI):
             if this_week != _expiry_digest_week:
                 _expiry_digest_week = this_week
                 delivered = send_expiry_digest(
-                    s.db_path, alert_cfg, webhook_config=webhook_cfg
+                    s.db_path, alert_cfg, webhook_config=webhook_cfg,
+                    cadence_days=_max_group_cadence(s.db_path),
                 )
                 result["sent"] = result.get("sent", 0) + (1 if delivered else 0)
                 result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
@@ -363,7 +376,10 @@ async def lifespan(app: FastAPI):
     def _weekly_digest() -> None:
         from cert_watch.digest import send_renewal_digest
 
-        send_renewal_digest(s.db_path, alert_cfg, webhook_cfg, days=7)
+        send_renewal_digest(
+            s.db_path, alert_cfg, webhook_cfg,
+            cadence_days=_max_group_cadence(s.db_path, default=7),
+        )
 
     def _maybe_run_weekly_digest() -> dict:
         import datetime as _dt

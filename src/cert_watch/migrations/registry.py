@@ -57,6 +57,9 @@ from cert_watch.migrations.m0023_cert_history_not_before import (
 from cert_watch.migrations.m0024_role_tiers import (
     upgrade as role_tiers_upgrade,
 )
+from cert_watch.migrations.m0025_alert_group_config import (
+    upgrade as alert_group_config_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -129,4 +132,8 @@ runner.register(
 runner.register(
     "0024", "add permission_tier and scope_tag to roles (WI-050 / WI-052)",
     role_tiers_upgrade,
+)
+runner.register(
+    "0025", "add threshold_days and digest_cadence_days to alert_groups (WI-056)",
+    alert_group_config_upgrade,
 )

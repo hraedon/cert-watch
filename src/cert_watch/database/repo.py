@@ -701,6 +701,8 @@ class AlertGroup:
     match_tags: list[str] = field(default_factory=list)
     webhook_url: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    threshold_days: int | None = None
+    digest_cadence_days: int = 7
 
 
 class SqliteAlertGroupRepository:
@@ -713,6 +715,8 @@ class SqliteAlertGroupRepository:
         recipients: list[str],
         match_tags: list[str],
         webhook_url: str = "",
+        threshold_days: int | None = None,
+        digest_cadence_days: int = 7,
     ) -> str:
         from cert_watch.tags import format_tags
 
@@ -723,9 +727,11 @@ class SqliteAlertGroupRepository:
         with _connect(self.db_path) as conn:
             conn.execute(
                 "INSERT INTO alert_groups"
-                " (id, name, recipients, webhook_url, match_tags, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (group_id, name, rec_str, webhook_url, tags_str, now),
+                " (id, name, recipients, webhook_url, match_tags, created_at,"
+                "  threshold_days, digest_cadence_days)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (group_id, name, rec_str, webhook_url, tags_str, now,
+                 threshold_days, digest_cadence_days),
             )
             conn.commit()
         return group_id
@@ -746,6 +752,8 @@ class SqliteAlertGroupRepository:
             match_tags=parse_tags(row["match_tags"]),
             webhook_url=row["webhook_url"],
             created_at=_parse_iso(row["created_at"]),
+            threshold_days=row["threshold_days"],
+            digest_cadence_days=row["digest_cadence_days"],
         )
 
     def get_by_name(self, name: str) -> AlertGroup | None:
@@ -764,6 +772,8 @@ class SqliteAlertGroupRepository:
             match_tags=parse_tags(row["match_tags"]),
             webhook_url=row["webhook_url"],
             created_at=_parse_iso(row["created_at"]),
+            threshold_days=row["threshold_days"],
+            digest_cadence_days=row["digest_cadence_days"],
         )
 
     def list_all(self) -> list[AlertGroup]:
@@ -781,9 +791,13 @@ class SqliteAlertGroupRepository:
                 match_tags=parse_tags(r["match_tags"]),
                 webhook_url=r["webhook_url"],
                 created_at=_parse_iso(r["created_at"]),
+                threshold_days=r["threshold_days"],
+                digest_cadence_days=r["digest_cadence_days"],
             )
             for r in rows
         ]
+
+    _UNSET = object()
 
     def update(
         self,
@@ -793,6 +807,8 @@ class SqliteAlertGroupRepository:
         recipients: list[str] | None = None,
         match_tags: list[str] | None = None,
         webhook_url: str | None = None,
+        threshold_days: int | None | object = _UNSET,
+        digest_cadence_days: int | None = None,
     ) -> bool:
         from cert_watch.tags import format_tags
 
@@ -816,6 +832,12 @@ class SqliteAlertGroupRepository:
             if webhook_url is not None:
                 sets.append("webhook_url = ?")
                 params.append(webhook_url)
+            if threshold_days is not self._UNSET:
+                sets.append("threshold_days = ?")
+                params.append(threshold_days)
+            if digest_cadence_days is not None:
+                sets.append("digest_cadence_days = ?")
+                params.append(digest_cadence_days)
             if not sets:
                 return True
             params.append(group_id)
