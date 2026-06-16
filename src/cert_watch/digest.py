@@ -65,13 +65,16 @@ def _lifetime_trend_decreasing(entries: list[dict]) -> bool:
     return avg_second < avg_first - threshold
 
 
-def build_renewal_digest(db_path: str | Path, days: int = 7) -> list[RenewalDigest]:
+def build_renewal_digest(
+    db_path: str | Path, days: int = 7, *, cadence_days: int | None = None,
+) -> list[RenewalDigest]:
     """Query event_log for cert_renewed and renewal_overdue events from the
     last *days* days, group by owner, and produce per-owner RenewalDigest objects.
     Zero-activity periods produce an empty list (no empty noise).
     """
+    effective_days = cadence_days if cadence_days is not None else days
     init_schema(db_path)
-    cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    cutoff = (datetime.now(UTC) - timedelta(days=effective_days)).isoformat()
 
     with _connect(db_path) as conn:
         renewed_rows = conn.execute(
@@ -135,7 +138,7 @@ def build_renewal_digest(db_path: str | Path, days: int = 7) -> list[RenewalDige
     def _ensure_owner(email: str) -> RenewalDigest:
         if email not in by_owner:
             by_owner[email] = RenewalDigest(
-                days=days,
+                days=effective_days,
                 renewed_count=0,
                 renewed_hosts=[],
                 overdue_count=0,
@@ -198,6 +201,7 @@ def send_renewal_digest(
     webhook_config=None,
     *,
     days: int = 7,
+    cadence_days: int | None = None,
 ) -> bool:
     """Build and send the renewal digest through the existing alert pipeline.
 
@@ -218,7 +222,7 @@ def send_renewal_digest(
     if alert_config is None and webhook_config is None:
         return False
 
-    digests = build_renewal_digest(db_path, days=days)
+    digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
     if not digests:
         return True
 
