@@ -13,12 +13,14 @@ from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
+    SqliteCertificateRepository,
     SqliteHostRepository,
     init_schema,
     list_fleet_pivot,
     pivot_urgency_stats,
     replace_scanned,
 )
+from cert_watch.database.connection import _connect
 
 
 def _add_leaf(db, subject, *, not_after):
@@ -82,9 +84,27 @@ def test_pivot_stats_are_tag_scoped(tmp_path):
     scanned("team-b.example.com", not_after=now - timedelta(hours=2), tag="team-b")
     scanned("team-b-2.example.com", not_after=now + timedelta(days=90), tag="team-b")
 
+    # A cert tagged on the *cert* itself, with its host left untagged — exercises
+    # the cert-tag branch of the effective-tag filter (the others use host tags).
+    host_id = hosts.add("team-c.example.com", 443)  # noqa: F841 — host untagged
+    cert = Certificate(
+        subject="team-c.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=5),  # critical
+        fingerprint_sha256="team-c.example.com",
+    )
+    replace_scanned(db, "team-c.example.com", 443, cert, [], True)
+    repo = SqliteCertificateRepository(db, source="scanned")
+    with _connect(db) as conn:
+        cert_id = conn.execute(
+            "SELECT id FROM certificates WHERE subject = ?", ("team-c.example.com",)
+        ).fetchone()[0]
+    repo.set_tags(cert_id, "team-c")
+
     # Admin (no scope) sees everything.
     assert pivot_urgency_stats(db) == {
-        "expired": 2, "critical": 0, "warning": 0, "healthy": 1
+        "expired": 2, "critical": 1, "warning": 0, "healthy": 1
     }
     # Scoped to team-a: only the one expired team-a cert.
     assert pivot_urgency_stats(db, scope_tags=["team-a"]) == {
@@ -93,6 +113,10 @@ def test_pivot_stats_are_tag_scoped(tmp_path):
     # Scoped to team-b: one expired + one healthy.
     assert pivot_urgency_stats(db, scope_tags=["team-b"]) == {
         "expired": 1, "critical": 0, "warning": 0, "healthy": 1
+    }
+    # Scoped to team-c: matched via the cert's own tag (host untagged).
+    assert pivot_urgency_stats(db, scope_tags=["team-c"]) == {
+        "expired": 0, "critical": 1, "warning": 0, "healthy": 0
     }
 
 
