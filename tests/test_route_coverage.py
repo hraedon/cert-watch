@@ -994,6 +994,29 @@ def test_upload_pfx(reload_app, tmp_path, pfx_file_no_password):
     assert r.headers["location"] == "/"
 
 
+def test_upload_large_file_part_not_rejected_by_form_parser(reload_app, tmp_path):
+    """A multipart *file* part above starlette's 1MB max_part_size must still parse.
+
+    starlette 1.3.1 (CVE-2026-54283) enforces max_part_size, but it applies only
+    to non-file fields — file parts (with a filename) stream to a spooled temp
+    file and bypass it. A real cert upload is a file part, so the route's own
+    MAX_UPLOAD_BYTES (10MB) guard stays in control. This guards against a future
+    starlette bump silently capping uploads at 1MB. The 2MB blob is not a valid
+    bundle, so the route redirects with a parse error (303) — the point is that
+    form parsing did NOT raise a 400/413 "Part exceeded maximum size".
+    """
+    app_mod = reload_app()
+    blob = b"\x00" * (2 * 1024 * 1024)  # 2MB > starlette's 1MB max_part_size
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/upload",
+            files={"file": ("big.pfx", blob, "application/x-pkcs12")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303  # reached the route, not a form-parse 400/413
+    assert "Part exceeded" not in r.text
+
+
 def test_upload_p7b(reload_app, tmp_path, p7b_der_file):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(p7b_der_file, "rb") as f:

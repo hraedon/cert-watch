@@ -10,11 +10,16 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "jinja2>=3.1",
-    "python-multipart>=0.0.12",
-    "cryptography>=43.0",
+    # python-multipart>=0.0.30 fixes CVE-2026-53539 (quadratic querystring DoS)
+    "python-multipart>=0.0.30",
+    # cryptography>=48.0.1 fixes GHSA-537c-gmf6-5ccf (vulnerable OpenSSL in wheels)
+    "cryptography>=48.0.1",
     "prometheus-client>=0.21",
     "dnspython>=2.6",
     "sse-starlette>=2.0",
+    # Direct security floor: starlette>=1.3.1 fixes CVE-2026-54283 (request.form()
+    # limits silently ignored → DoS). Otherwise pulled transitively via fastapi.
+    "starlette>=1.3.1",
 ]
 
 [project.optional-dependencies]

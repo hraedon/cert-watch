@@ -55,6 +55,7 @@ from cert_watch.database.dashboard import (
     list_dashboard_rows,
     list_unified_entries,
     list_unified_entries_page,
+    pivot_urgency_stats,
 )
 
 # Drift + cert_history
@@ -231,6 +232,7 @@ __all__ = [
     "list_dashboard_rows",
     "list_unified_entries",
     "list_unified_entries_page",
+    "pivot_urgency_stats",
     # posture
     "store_scan_posture",
     "get_posture_for_cert",

@@ -674,8 +674,10 @@ async def security_headers_middleware(request: Request, call_next):
     """Add security response headers (CSP, X-Content-Type-Options, etc.).
 
     The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
-    (``request.state.csp_nonce``); ``_build_csp`` will consume it at the BC-075
-    flip. Today it's threaded into templates only (header keeps 'unsafe-inline').
+    (``request.state.csp_nonce``) and consumed here by ``_build_csp(nonce)``: the
+    emitted ``script-src`` is ``'self' 'nonce-{nonce}'`` with no ``'unsafe-inline'``
+    (BC-075 flip done). ``style-src`` intentionally retains ``'unsafe-inline'`` for
+    dynamic inline ``style=`` custom properties.
     """
     nonce = getattr(request.state, "csp_nonce", "")
     response = await call_next(request)
