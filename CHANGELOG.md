@@ -4,6 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-06-16
+
+> **Upgrade note (RBAC role tiers).** Migration `0024` adds a `permission_tier`
+> column to the `roles` table, defaulting every existing role **row** to
+> `viewer`. Built-in `admin`/`operator`/`viewer` (which have no role row) are
+> unaffected, but any custom role you created in the UI is reset to read-only on
+> upgrade — re-assign its tier under Settings → Roles afterwards. The local
+> break-glass admin retains full access, so it is your recovery path. Take a copy
+> of the SQLite DB before upgrading (the migration also writes a timestamped
+> `cert-watch-pre-migration-*.sqlite3` backup automatically).
+
 ### Added
 - **Tag management in the GUI.** The existing tag system (used for alert-group
   routing) is now editable and visible in the UI: edit a certificate's own tags
