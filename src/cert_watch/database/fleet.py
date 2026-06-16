@@ -49,7 +49,12 @@ def list_fleet_pivot(
         scanned_sql = f"""
             SELECT {group_col} AS grp,
                    CAST(MIN(CASE
-                        WHEN c.not_after < datetime('now') THEN 0
+                        -- Expired certs map to -1 so the group's worst_urgency
+                        -- reaches "expired" (min_days < 0). Using julianday keeps
+                        -- the comparison robust to the stored T-separated ISO format;
+                        -- a plain string compare against datetime('now') (space-sep)
+                        -- and CAST-toward-zero would both miss same-day expiries.
+                        WHEN julianday(c.not_after) < julianday('now') THEN -1
                         ELSE CAST(
                             (julianday(c.not_after) - julianday('now'))
                             AS INTEGER

@@ -34,7 +34,38 @@ All notable changes to cert-watch are documented in this file.
   routine heads-up thresholds (14/7-day, chain 30/14/7) are what the weekly
   digest covers. Setting label updated accordingly.
 
+### Security
+- **Dependency bumps for three HIGH advisories.** `cryptography` → 49.0.0
+  (GHSA-537c-gmf6-5ccf, vulnerable OpenSSL bundled in wheels), `python-multipart`
+  → 0.0.32 (CVE-2026-53539, quadratic querystring-parsing DoS), and `starlette`
+  → 1.3.1 (CVE-2026-54283, `request.form()` size limits silently ignored → DoS).
+  `starlette` is now a direct dependency so the security floor is explicit rather
+  than only transitively constrained. This unblocks the release image scan
+  (Trivy gate, CRITICAL/HIGH), which had started failing on the merged build.
+- **Release pipeline scans the image before publishing it.** The `release`
+  workflow pushed the multi-arch image to ghcr *before* the Trivy scan, so a
+  build with a fixable HIGH was published to the registry even though the scan
+  then failed (and the deploy-manifest bump was correctly withheld). It now
+  builds a single-arch image into the local daemon, scans that, and only pushes
+  the multi-arch image (reusing the build cache) after the scan passes.
+
 ### Fixed
+- **Dashboard urgency counts no longer miss same-day expiries.** The pivot
+  summary cards and the fleet pivot compared `not_after` against `datetime('now')`
+  with a lexicographic string compare. `not_after` is stored as a T-separated ISO
+  timestamp (`…T17:00:00+00:00`) while `datetime('now')` is space-separated, so a
+  certificate that expired earlier the *same UTC day* sorted as not-yet-expired
+  and was counted in the wrong bucket. Both paths now compare with `julianday()`.
+  The fleet pivot additionally surfaces the `expired` urgency (a `THEN 0` sentinel
+  plus `CAST`-toward-zero had made that bucket unreachable). The pivot urgency
+  query was extracted to `pivot_urgency_stats()` and covered with regression tests.
+- **Pivot summary cards now respect tag scope (RBAC).** In a pivot view the
+  grouped rows were tag-scoped (`list_fleet_pivot`) but the urgency summary cards
+  above them aggregated *every* leaf certificate globally, so a tag-scoped
+  (non-admin) user saw — and could infer counts of — certificates outside their
+  scope, and the card totals disagreed with the scoped group totals.
+  `pivot_urgency_stats()` now applies the same scanned-host join and effective
+  (cert ∪ host) tag filter as `list_fleet_pivot`.
 - **Windows installer works in non-interactive sessions (WI-050).** The Python
   probe in `install-windows.ps1` resolved `py` / `python` / `python3` only from
   PATH, which on a Python-Install-Manager (per-user) host are Windows Store
