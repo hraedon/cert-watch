@@ -43,13 +43,45 @@ jobs:
 
       - uses: docker/setup-qemu-action@06116385d9baf250c9f4dcb4858b16962ea869c3 # v4
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      # Build a single-arch (amd64) image into the local daemon and scan it
+      # BEFORE anything is published. Multi-arch builds can't be `load`ed, so the
+      # gate runs on amd64; the dependency CVEs we gate on live in arch-independent
+      # Python wheels, and the push build below reuses these exact layers from the
+      # gha cache. Nothing reaches ghcr until the scan passes.
+      - name: Build image for scanning (amd64)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          context: .
+          load: true
+          platforms: linux/amd64
+          build-args: |
+            GIT_TAG=${{ steps.tag.outputs.git_tag }}
+            GIT_COMMIT=${{ steps.tag.outputs.tag }}
+          tags: cert-watch:scan-${{ steps.tag.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: "cert-watch:scan-${{ steps.tag.outputs.tag }}"
+          format: "table"
+          exit-code: "1"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+
+      # Only after the scan has gated do we authenticate and publish the
+      # multi-arch image. The amd64 layers are reused from the gha cache, so this
+      # does not rebuild what was just scanned.
       - uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+      - name: Build and push image
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
         with:
           context: .
           push: true
@@ -60,15 +92,6 @@ jobs:
           tags: ${{ steps.tag.outputs.image_tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-      - name: Scan image for vulnerabilities
-        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
-        with:
-          image-ref: "ghcr.io/${{ github.repository_owner }}/cert-watch:${{ steps.tag.outputs.git_tag || steps.tag.outputs.tag }}"
-          format: "table"
-          exit-code: "1"
-          severity: "CRITICAL,HIGH"
-          ignore-unfixed: true
 
       - name: Bump kustomize image tag
         run: |

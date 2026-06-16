@@ -42,6 +42,12 @@ All notable changes to cert-watch are documented in this file.
   `starlette` is now a direct dependency so the security floor is explicit rather
   than only transitively constrained. This unblocks the release image scan
   (Trivy gate, CRITICAL/HIGH), which had started failing on the merged build.
+- **Release pipeline scans the image before publishing it.** The `release`
+  workflow pushed the multi-arch image to ghcr *before* the Trivy scan, so a
+  build with a fixable HIGH was published to the registry even though the scan
+  then failed (and the deploy-manifest bump was correctly withheld). It now
+  builds a single-arch image into the local daemon, scans that, and only pushes
+  the multi-arch image (reusing the build cache) after the scan passes.
 
 ### Fixed
 - **Dashboard urgency counts no longer miss same-day expiries.** The pivot
