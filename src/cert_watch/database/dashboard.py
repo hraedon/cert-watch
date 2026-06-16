@@ -423,6 +423,49 @@ def _clamp_page(page: int, total: int, per_page: int) -> int:
     return max(1, min(page, total_pages))
 
 
+def pivot_urgency_stats(db_path: str | Path) -> dict[str, int]:
+    """Urgency-bucket counts (expired/critical/warning/healthy) over leaf certs.
+
+    Feeds the dashboard pivot summary cards (BC-048).  The not_after boundary is
+    compared with ``julianday()`` rather than a string compare against
+    ``datetime('now')``: not_after is stored as a T-separated ISO timestamp
+    (e.g. ``2026-06-16T17:00:00+00:00``) while ``datetime('now')`` is
+    space-separated, so a lexicographic ``<`` misbuckets certs expiring within
+    the current UTC day.  ``CAST(... AS INTEGER)`` truncates toward zero, so the
+    expired bucket must use the raw ``< now`` test, not ``days < 0``.
+
+    Note: this counts all leaf certs (``is_leaf = 1``) and is intentionally not
+    tag-scoped — it preserves the pre-existing behaviour of the inline query it
+    was extracted from.  That the summary cards are not tag-scoped while the
+    grouped rows (``list_fleet_pivot``) are is a known inconsistency tracked
+    separately; do not "fix" it here without deciding the intended semantics.
+    """
+    sql = """SELECT
+            SUM(CASE WHEN julianday(c.not_after) < julianday('now') THEN 1 ELSE 0 END) AS expired,
+            SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
+                     AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 7
+                THEN 1 ELSE 0 END) AS critical,
+            SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
+                     AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 7
+                     AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 30
+                THEN 1 ELSE 0 END) AS warning,
+            SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
+                     AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 30
+                THEN 1 ELSE 0 END) AS healthy
+        FROM certificates c
+        WHERE c.is_leaf = 1
+        """
+    with _connect(db_path) as conn:
+        row = conn.execute(sql).fetchone()
+    r = dict(row) if row is not None else {}
+    return {
+        "expired": r.get("expired") or 0,
+        "critical": r.get("critical") or 0,
+        "warning": r.get("warning") or 0,
+        "healthy": r.get("healthy") or 0,
+    }
+
+
 def list_dashboard_page(
     db_path: str | Path,
     *,

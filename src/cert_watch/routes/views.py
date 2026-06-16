@@ -21,6 +21,7 @@ from cert_watch.database import (
     list_dashboard_page,
     list_fleet_pivot,
     list_scan_batches,
+    pivot_urgency_stats,
 )
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.middleware import (
@@ -220,33 +221,10 @@ def dashboard(
         total = sum(g["count"] for g in pivot_groups)
         page_entries: list[dict] = []
         total_pages = 1
-        # Urgency distribution via targeted SQL
-        with _connect(db) as conn:
-            row = conn.execute(
-                """SELECT
-                    SUM(CASE WHEN c.not_after < datetime('now') THEN 1 ELSE 0 END) AS expired,
-                    SUM(CASE WHEN c.not_after >= datetime('now')
-                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 7
-                        THEN 1 ELSE 0 END) AS critical,
-                    SUM(CASE WHEN c.not_after >= datetime('now')
-                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 7
-                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) < 30
-                        THEN 1 ELSE 0 END) AS warning,
-                    SUM(CASE WHEN c.not_after >= datetime('now')
-                             AND CAST((julianday(c.not_after) - julianday('now')) AS INTEGER) >= 30
-                        THEN 1 ELSE 0 END) AS healthy
-                FROM certificates c
-                WHERE c.is_leaf = 1
-                """
-            ).fetchone()
-        r = dict(row)
-        # Add pending hosts count (no cert = gray, not counted in urgency buckets)
-        pivot_stats = {
-            "expired": r.get("expired") or 0,
-            "critical": r.get("critical") or 0,
-            "warning": r.get("warning") or 0,
-            "healthy": r.get("healthy") or 0,
-        }
+        # Urgency distribution via targeted SQL (julianday-safe; see
+        # pivot_urgency_stats for the not_after comparison rationale).
+        # Pending hosts (no cert = gray) are not counted in urgency buckets.
+        pivot_stats = pivot_urgency_stats(db)
     elif grouped:
         # Grouped path: grouping by leaf fingerprint with worst urgency +
         # host count, filtered/sorted — SQL-level pagination (BC-073).
