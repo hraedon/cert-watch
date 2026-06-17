@@ -4,6 +4,54 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-06-17
+
+> **Upgrade note (RBAC tier decoupling).** A role whose scope tags are set is
+> now *scoped*: it no longer grants its permission tier. Effective tier comes
+> from your UNSCOPED (global) roles only; a user holding only scoped roles
+> defaults to `viewer`. The built-in `admin`/`operator`/`viewer` roles are
+> unscoped, so most setups are unaffected. **If you created a custom SCOPED
+> `operator` or `admin` role expecting it to grant that tier, re-assign the
+> tier via an unscoped role or clear that role's scope tags** after upgrading.
+
+### Security
+- **Tier decoupling for scoped roles (WI-061).** A role whose scope tags are
+  set is now *scoped*: it contributes its tags to visibility and alert routing
+  only, NEVER to the effective permission tier. The effective tier is the
+  highest tier among the user's UNSCOPED (global) roles; a user holding ONLY
+  scoped roles defaults to `viewer`. This fixes the footgun where adding a
+  second (scoped) role for visibility silently elevated privileges.
+- **SMTP alert delivery SSRF validation.** Alert email delivery now resolves
+  and validates the SMTP host against the same SSRF policy as webhooks
+  (honouring `CERT_WATCH_ALLOW_PRIVATE_IPS`, so internal relays keep working
+  by default). Always-blocked ranges (loopback, link-local, metadata) are
+  enforced regardless. A blocked host is a delivery failure (logged), never a
+  crash of the scan cycle.
+
+### Added
+- **Opt-in SNI mode for the Windows installer (WI-062).** `install-windows.ps1
+  -SharePort443 -HostName <host>` binds TLS per-host via SNI (`sslFlags=1`,
+  `hostnameport=<host>:443`) so sibling tools can share port 443 by hostname.
+  The catch-all `0.0.0.0:443` remains the default for single-site installs.
+  Both switch directions add the new binding before removing the old one, and
+  the SNI path only removes a catch-all whose cert is cert-watch's own (so a
+  sibling tool's catch-all is never clobbered).
+- **Team tag-subscription model (WI-061).** Roles can now optionally link to
+  an alert group: when a role has scope tags set AND a linked alert group,
+  members are alerted for certificates carrying those tags via the linked
+  group's recipients/webhook. Subscribing to a tag is now one action — see the
+  certs AND get alerted for them — with no tier change.
+- **Multi-tag scope for roles (WI-061).** The role scope field accepts
+  multiple comma-separated tags (mirroring alert-group `match_tags`); existing
+  single-tag values keep working.
+- **Alert-group tag-match preview (WI-060).** The Alert groups tab shows an
+  inline per-group "Tag matches" count and a read-only preview of how many
+  certs a candidate tag set would match before you commit it.
+
+### Changed
+- **Migration 0026** adds a nullable `alert_group_id` column to the `roles`
+  table (additive, no data loss; the existing auto-backup covers it).
+
 ## [0.9.2] - 2026-06-17
 
 ### Added
