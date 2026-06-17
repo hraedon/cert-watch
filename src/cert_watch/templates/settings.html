@@ -429,7 +429,7 @@
             {% if env_overrides.webhook_headers %}<span class="cw-override-badge">env</span>{% endif %}
           </label>
           <textarea class="cw-input" id="webhook_headers" name="webhook_headers" rows="3"
-                    placeholder='{"Authorization": "Bearer ...", "X-Scope": "certs"}'>{{ alert.webhook_headers }}</textarea>
+                    placeholder="{% if alert.webhook_headers %}•••••••• headers configured (leave empty to keep; retype to replace){% else %}{"Authorization": "Bearer ...", "X-Scope": "certs"}{% endif %}"></textarea>
           <div class="cw-muted cw-fz-11 cw-mt-3">
             A JSON object of HTTP headers added to webhook requests. Leave empty for none.
             Invalid JSON is ignored.

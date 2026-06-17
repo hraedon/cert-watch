@@ -13,4 +13,7 @@ router = APIRouter()
 
 @router.post("/settings/alerts")
 async def save_alert_config(request: Request) -> RedirectResponse:
-    return await _save_config_section(request, _ALERT_KEYS, "alerts", encrypt=False, rebuild=True)
+    # encrypt=True so webhook_headers (a SENSITIVE_SETTING_KEY) is stored
+    # encrypted at rest via kv_set_secret. Other alert keys are non-sensitive
+    # and pass through kv_set unchanged regardless of this flag.
+    return await _save_config_section(request, _ALERT_KEYS, "alerts", encrypt=True, rebuild=True)
