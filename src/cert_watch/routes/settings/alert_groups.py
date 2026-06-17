@@ -99,9 +99,105 @@ def alert_groups_page(request: Request) -> HTMLResponse | RedirectResponse:
         return redirect_resp
     db = _db_path(request)
     groups = SqliteAlertGroupRepository(db).list_all()
+    # Inline match count per existing group (WI-060): how many leaf certs would
+    # each group route to? Read-only, one COUNT query per group.
+    match_counts = {g.id: _match_preview(db, list(g.match_tags), sample_limit=0)[0] for g in groups}
     ctx = _settings_context(request, tab=_TAB)
     ctx["alert_groups"] = groups
+    ctx["alert_group_match_counts"] = match_counts
     return templates.TemplateResponse(request=request, name="settings.html", context=ctx)
+
+
+@router.get("/settings/alert-groups/preview", response_class=HTMLResponse, response_model=None)
+def alert_groups_preview(request: Request) -> HTMLResponse | RedirectResponse:
+    """Live 'which certs match these tags' preview (WI-060).
+
+    Read-only GET: the operator enters candidate match tags and sees the count
+    (and a small sample) of leaf certs whose effective (cert or host) tags
+    intersect them, before committing a group to those tags. Reuses the same
+    escaped-LIKE effective-tag matching as the dashboard scope filter.
+    """
+    redirect_resp = require_admin_form(request)
+    if redirect_resp:
+        return redirect_resp
+    db = _db_path(request)
+    raw_tags = str(request.query_params.get("match_tags") or "")
+    preview_tags = parse_tags(raw_tags)
+    count, sample = _match_preview(db, preview_tags, sample_limit=5)
+    groups = SqliteAlertGroupRepository(db).list_all()
+    match_counts = {g.id: _match_preview(db, list(g.match_tags), sample_limit=0)[0] for g in groups}
+    ctx = _settings_context(request, tab=_TAB)
+    ctx["alert_groups"] = groups
+    ctx["alert_group_match_counts"] = match_counts
+    ctx["preview_match_tags"] = ", ".join(preview_tags)
+    ctx["preview_count"] = count
+    ctx["preview_sample"] = sample
+    return templates.TemplateResponse(request=request, name="settings.html", context=ctx)
+
+
+def _match_preview(
+    db_path, match_tags: list[str], *, sample_limit: int = 5
+) -> tuple[int, list[dict]]:
+    """Count leaf certs whose effective (cert ∪ host) tags intersect *match_tags*.
+
+    Returns ``(count, sample)`` where sample is up to *sample_limit*
+    ``{hostname, subject}`` rows (empty when sample_limit <= 0). A cert matches
+    when any of its own tags or its host's tags appears in *match_tags*
+    (case-insensitive). LIKE wildcards in tags are escaped (BC-051). Read-only.
+
+    Scope (WI-060): this is a **tag-based** preview only, by design. It does NOT
+    count certs routed via manual ``alert_group_certs`` assignment nor via
+    WI-061 role-linked scope-tag routing -- the inline column and preview copy
+    are labelled "tag matches" accordingly. Operators verifying total routing
+    for a group with manual/role-linked certs must account for those separately.
+
+    Non-ASCII limitation: SQLite LIKE is ASCII-case-insensitive, so tags that
+    differ only by non-ASCII casing (e.g. Turkish dotless-i) may undercount vs
+    the alert engine's Python ``casefold()`` match. This parity gap is shared
+    with the dashboard scope filter (``_add_effective_tag_filter``); SMB tag
+    corpora are typically ASCII.
+    """
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.dashboard import _escape_like
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for tag in match_tags:
+        t = (tag or "").strip()
+        if not t or t.casefold() in seen:
+            continue
+        seen.add(t.casefold())
+        normalized.append(t)
+    if not normalized:
+        return 0, []
+    conditions: list[str] = []
+    params: list = []
+    for tag in normalized:
+        like = f"%,{_escape_like(tag)},%"
+        conditions.append(
+            "(',' || COALESCE(c.tags, '') || ',') LIKE ? ESCAPE '\\' "
+            "OR (',' || COALESCE(h.tags, '') || ',') LIKE ? ESCAPE '\\'"
+        )
+        params.extend([like, like])
+    where = " OR ".join(conditions)
+    join = (
+        "FROM certificates c "
+        "LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+        "WHERE c.is_leaf = 1"
+    )
+    with _connect(db_path) as conn:
+        count = conn.execute(
+            f"SELECT COUNT(*) {join} AND ({where})", params
+        ).fetchone()[0]
+        sample: list[dict] = []
+        if sample_limit > 0:
+            rows = conn.execute(
+                f"SELECT DISTINCT c.hostname, c.subject {join} AND ({where}) "
+                f"ORDER BY c.hostname LIMIT ?",
+                params + [sample_limit],
+            ).fetchall()
+            sample = [{"hostname": r["hostname"], "subject": r["subject"]} for r in rows]
+    return count, sample
 
 
 @router.post("/settings/alert-groups")
