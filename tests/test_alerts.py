@@ -155,6 +155,156 @@ def test_send_alert_no_starttls_with_creds_refuses():
     assert alert.error_message and "cleartext" in alert.error_message
 
 
+# ---------------------------------------------------------------------------
+# SMTP SSRF validation (BC-116 SMTP parity)
+# ---------------------------------------------------------------------------
+
+
+def test_send_alert_ssrf_loopback_blocked():
+    """SMTP to a loopback IP is blocked by SSRF policy; returns False, no raise."""
+    config = AlertConfig(
+        smtp_host="127.0.0.1",
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+        ok = send_alert(alert, config)
+    assert ok is False
+    mock_smtp.assert_not_called()
+    assert alert.error_message and "SSRF" in alert.error_message
+
+
+def test_send_alert_ssrf_metadata_blocked():
+    """SMTP to the cloud metadata endpoint is blocked; returns False, no raise."""
+    config = AlertConfig(
+        smtp_host="169.254.169.254",
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+        ok = send_alert(alert, config)
+    assert ok is False
+    mock_smtp.assert_not_called()
+
+
+def test_send_alert_ssrf_private_allowed(monkeypatch):
+    """SMTP to a private relay succeeds when allow_private=True (the default)."""
+    import socket as _socket
+
+    real_getaddrinfo = _socket.getaddrinfo
+
+    def fake(host, *args, **kwargs):
+        if host == "relay.internal":
+            return [
+                (_socket.AF_INET, _socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0))
+            ]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(_socket, "getaddrinfo", fake)
+    config = AlertConfig(
+        smtp_host="relay.internal",
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+        allow_private=True,
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    smtp_mock = MagicMock()
+    smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
+    smtp_mock.__exit__ = MagicMock(return_value=False)
+    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+        ok = send_alert(alert, config)
+    assert ok is True
+    smtp_mock.send_message.assert_called_once()
+
+
+def test_send_alert_ssrf_private_blocked_when_disallowed(monkeypatch):
+    """SMTP to a private relay is blocked when allow_private=False."""
+    import socket as _socket
+
+    real_getaddrinfo = _socket.getaddrinfo
+
+    def fake(host, *args, **kwargs):
+        if host == "relay.internal":
+            return [
+                (_socket.AF_INET, _socket.SOCK_STREAM, 0, "", ("10.0.0.5", 0))
+            ]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(_socket, "getaddrinfo", fake)
+    config = AlertConfig(
+        smtp_host="relay.internal",
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+        allow_private=False,
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+        ok = send_alert(alert, config)
+    assert ok is False
+    mock_smtp.assert_not_called()
+    assert alert.error_message and "SSRF" in alert.error_message
+
+
+def test_send_alert_ssrf_loopback_blocked_no_ip_in_error():
+    """The resolved IP must not leak into the user-facing error_message."""
+    config = AlertConfig(
+        smtp_host="127.0.0.1",
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with patch("cert_watch.alerts.smtplib.SMTP"):
+        send_alert(alert, config)
+    assert alert.error_message is not None
+    assert "127.0.0.1" not in alert.error_message
+
+
+def test_process_pending_ssrf_blocked_does_not_crash(alert_repo, expiring_cert):
+    """AC-06: a blocked SMTP host must not crash the alert delivery cycle."""
+    evaluate_thresholds(expiring_cert, alert_repo)
+    config = AlertConfig(
+        smtp_host="127.0.0.1",
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+        counts = process_pending(alert_repo, config)
+    mock_smtp.assert_not_called()
+    assert counts["sent"] == 0
+    assert counts["failed"] > 0
+
+
+def test_open_smtp_connection_ssrf_blocked_returns_none():
+    """The digest SMTP open path also blocks SSRF without raising."""
+    from cert_watch.alerts import _open_smtp_connection
+
+    config = AlertConfig(
+        smtp_host="169.254.169.254",
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+        result = _open_smtp_connection(config)
+    assert result is None
+    mock_smtp.assert_not_called()
+
+
 def test_process_pending_no_config(alert_repo):
     counts = process_pending(alert_repo, None)
     assert counts == {"sent": 0, "failed": 0}

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
-from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
+from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen, validate_smtp_host
 from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
@@ -55,6 +55,12 @@ class AlertConfig:
     from_addr: str
     recipients: list[str] = field(default_factory=list)
     smtp_port: int = 587
+    # SSRF policy for the SMTP host (BC-116 SMTP parity). Defaults mirror
+    # Settings.allow_private / CERT_WATCH_ALLOW_PRIVATE_IPS=1 so the common
+    # case of an internal relay is unaffected; populated from Settings by
+    # Settings.build_alert_config.
+    allow_private: bool = True
+    allowed_subnets: tuple[str, ...] = ()
 
 
 @dataclass
@@ -426,6 +432,26 @@ def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
     return msg
 
 
+def _check_smtp_ssrf(config: AlertConfig) -> str | None:
+    """SSRF pre-check for the SMTP host (BC-116 SMTP parity).
+
+    Returns an error string (which may include the resolved IP, for
+    admin/diagnostic logging) when the host is blocked, or None when allowed.
+    Never raises -- a blocked host is a delivery failure, not a crash (AC-06).
+
+    Contract: the returned string is NOT safe for user-visible output. It can
+    contain the resolved IP. Callers must discard it and use a fixed, IP-free
+    message for anything persisted or shown to the user (e.g.
+    ``alert.error_message``); the hostname (admin-configured, not secret) may be
+    logged separately. Do not forward this return value into error_message.
+    """
+    return validate_smtp_host(
+        config.smtp_host,
+        allow_private=config.allow_private,
+        allowed_subnets=config.allowed_subnets,
+    )
+
+
 def negotiate_starttls(s: smtplib.SMTP, port: int, has_credentials: bool) -> bool:
     """Opportunistically negotiate STARTTLS on a non-465 connection.
 
@@ -464,6 +490,11 @@ def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
 def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     """Send via SMTP. See AC-03/AC-06."""
     if config is None:
+        return False
+    ssrf_err = _check_smtp_ssrf(config)
+    if ssrf_err is not None:
+        logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
+        alert.error_message = "smtp host blocked by SSRF policy"
         return False
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
@@ -894,6 +925,10 @@ def _build_digest_message(certs: list[dict], *, owner_name: str | None = None) -
 
 
 def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
+    ssrf_err = _check_smtp_ssrf(config)
+    if ssrf_err is not None:
+        logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
+        return None
     try:
         if config.smtp_port == 465:
             s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
