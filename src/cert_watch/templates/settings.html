@@ -338,6 +338,104 @@
           </div>
         </div>
 
+        <h3 class="cw-heading-3 cw-mb-12">Alert behavior</h3>
+        <p class="cw-muted cw-fz-11 cw-mb-16">
+          These were previously environment-variable only. Env vars still take precedence;
+          a field showing an <span class="cw-override-badge">env</span> badge is locked to its
+          environment value and changes here will not take effect until the env var is unset.
+        </p>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="drift_alerts">
+            Drift alerts
+            {% if env_overrides.drift_alerts %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <select class="cw-input" id="drift_alerts" name="drift_alerts">
+            <option value="1" {% if alert.drift_alerts != '0' %}selected{% endif %}>On</option>
+            <option value="0" {% if alert.drift_alerts == '0' %}selected{% endif %}>Off</option>
+          </select>
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            Alert when a certificate's posture drifts: issuer change, key-size drop, SHA-1
+            downgrade, posture-grade drop, or TLS-version downgrade. On by default.
+          </div>
+        </div>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="renewal_window_days">
+            Renewal-stalled window (days)
+            {% if env_overrides.renewal_window_days %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <input class="cw-input" type="number" min="0" id="renewal_window_days"
+                 name="renewal_window_days"
+                 value="{{ alert.renewal_window_days if alert.renewal_window_days != '' else '30' }}">
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            Days before expiry to fire a renewal-stalled alert for a cert that has no successor.
+            Default 30. Set 0 to disable.
+          </div>
+        </div>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="alert_retention_days">
+            Alert retention (days)
+            {% if env_overrides.alert_retention_days %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <input class="cw-input" type="number" min="0" id="alert_retention_days"
+                 name="alert_retention_days"
+                 value="{{ alert.alert_retention_days if alert.alert_retention_days != '' else '90' }}">
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            Days of alert history to keep before purging. Default 90. Set 0 to disable purging.
+          </div>
+        </div>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label">
+            Daily scan time (UTC)
+            {% if env_overrides.sched_hour or env_overrides.sched_min %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <div class="cw-flex cw-items-center cw-gap-8">
+            <input class="cw-input cw-w-96" type="number" min="0" max="23" id="sched_hour"
+                   name="sched_hour"
+                   value="{{ alert.sched_hour if alert.sched_hour != '' else '6' }}"
+                   aria-label="Hour (0-23)">
+            <span class="cw-muted">:</span>
+            <input class="cw-input cw-w-96" type="number" min="0" max="59" id="sched_min"
+                   name="sched_min"
+                   value="{{ alert.sched_min if alert.sched_min != '' else '0' }}"
+                   aria-label="Minute (0-59)">
+          </div>
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            When the daily scan + alert cycle runs, in UTC. Default 06:00.
+          </div>
+        </div>
+
+        <div class="cw-field cw-mb-12">
+          <label class="cw-label" for="check_revocation">
+            OCSP/CRL revocation checks
+            {% if env_overrides.check_revocation %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <select class="cw-input" id="check_revocation" name="check_revocation">
+            <option value="0" {% if alert.check_revocation != '1' %}selected{% endif %}>Off</option>
+            <option value="1" {% if alert.check_revocation == '1' %}selected{% endif %}>On</option>
+          </select>
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            Probe OCSP/CRL during posture evaluation to flag revoked certificates.
+            Off by default (adds outbound network calls per scan).
+          </div>
+        </div>
+
+        <div class="cw-field cw-mb-16">
+          <label class="cw-label" for="webhook_headers">
+            Custom webhook headers (JSON)
+            {% if env_overrides.webhook_headers %}<span class="cw-override-badge">env</span>{% endif %}
+          </label>
+          <textarea class="cw-input" id="webhook_headers" name="webhook_headers" rows="3"
+                    placeholder='{"Authorization": "Bearer ...", "X-Scope": "certs"}'>{{ alert.webhook_headers }}</textarea>
+          <div class="cw-muted cw-fz-11 cw-mt-3">
+            A JSON object of HTTP headers added to webhook requests. Leave empty for none.
+            Invalid JSON is ignored.
+          </div>
+        </div>
+
         <button type="submit" class="cw-btn primary">Save alert settings</button>
       </form>
     </div>
