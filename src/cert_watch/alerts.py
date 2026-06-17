@@ -876,15 +876,15 @@ def _resolve_group_config(
         # scope_tags and include the linked alert_group's recipients.
         for rl in role_links:
             if tags_match(effective, rl["scope_tags"]):
-                g = group_by_id.get(rl["alert_group_id"])
-                if g is None:
+                lg = group_by_id.get(rl["alert_group_id"])
+                if lg is None:
                     continue
-                for r in g["recipients"]:
+                for r in lg["recipients"]:
                     rc = r.casefold()
                     if rc not in seen:
                         seen.add(rc)
                         out.append(r)
-                td = g["threshold_days"]
+                td = lg["threshold_days"]
                 if td is not None:
                     existing = thresholds_map.get(cert_id)
                     if existing is None or td < existing:
@@ -965,9 +965,9 @@ def resolve_group_recipients(
             if _role.alert_group_id and _role.scope_tag:
                 role_scope = parse_tags(_role.scope_tag)
                 if tags_match(effective, role_scope):
-                    g = all_groups.get(_role.alert_group_id)
-                    if g:
-                        for r in g.recipients:
+                    lg = all_groups.get(_role.alert_group_id)
+                    if lg:
+                        for r in lg.recipients:
                             rc = r.casefold()
                             if rc not in seen:
                                 seen.add(rc)
