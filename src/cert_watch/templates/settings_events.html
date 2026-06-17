@@ -60,10 +60,10 @@
     <div class="cw-field cw-mb-12" id="pagerduty-key-field">
       <label class="cw-label" for="pagerduty_routing_key">PagerDuty routing key</label>
       <input class="cw-input" type="password" id="pagerduty_routing_key" name="pagerduty_routing_key"
-             value="{{ config.pagerduty_routing_key or '' }}"
-             placeholder="Events API v2 integration routing key"
+             value="" autocomplete="new-password"
+             placeholder="{% if pagerduty_routing_key_set %}•••••••• (set; leave blank to keep){% else %}Events API v2 integration routing key{% endif %}"
              data-testid="events-pagerduty-routing-key">
-      <div class="cw-muted cw-fz-11 cw-mt-3">Required when webhook kind is PagerDuty.</div>
+      <div class="cw-muted cw-fz-11 cw-mt-3">Required when webhook kind is PagerDuty.{% if pagerduty_routing_key_set %} Leave blank to keep the current key.{% endif %}</div>
     </div>
     <div class="cw-field cw-mb-16">
       <label class="cw-label" for="rate_limit_per_second">Rate limit (events/sec)</label>

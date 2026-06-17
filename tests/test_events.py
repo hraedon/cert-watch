@@ -14,6 +14,7 @@ from cert_watch.events import (
     ALL_EVENT_TYPES,
     Event,
     EventStreamConfig,
+    _deliver_webhook,
     emit_event,
     emit_scan_failed,
     get_events,
@@ -101,11 +102,67 @@ class TestEventStreamConfig:
         assert c2.webhook_url == "https://x"
         assert c2.rate_limit_per_second == 3
 
-    def test_pagerduty_routing_key_round_trip(self):
+    def test_pagerduty_routing_key_excluded_from_json(self):
+        # WI-065: the routing key is stored as a separate enc:v1: secret, not
+        # in the EventStreamConfig JSON blob (so it is not plaintext at rest).
         c = EventStreamConfig(pagerduty_routing_key="rk-123")
         raw = c.to_json()
+        assert "pagerduty_routing_key" not in json.loads(raw)
         c2 = EventStreamConfig.from_json(raw)
-        assert c2.pagerduty_routing_key == "rk-123"
+        assert c2.pagerduty_routing_key == ""
+
+    def test_pagerduty_routing_key_legacy_plaintext_compat(self):
+        # WI-065: pre-WI-065 blobs stored the key as plaintext in the JSON;
+        # from_json still reads it so existing deployments don't lose their key
+        # on upgrade (it migrates to the encrypted secret on the next save).
+        legacy = json.dumps({
+            "enabled_event_types": ["cert_added"],
+            "webhook_url": None,
+            "webhook_kind": "generic",
+            "pagerduty_routing_key": "legacy-rk",
+            "rate_limit_per_second": 100,
+        })
+        c = EventStreamConfig.from_json(legacy)
+        assert c.pagerduty_routing_key == "legacy-rk"
+
+    def test_pagerduty_routing_key_encrypted_round_trip(self, db):
+        # WI-065: with an encryption key, the routing key is stored as enc:v1:
+        # in a dedicated kv key (not in the JSON blob) and decrypts on load.
+        from cert_watch.database.encryption import derive_encryption_key
+        from cert_watch.database.kv_store import kv_get
+
+        enc_key = derive_encryption_key("test-signing-key")
+        save_event_config(
+            db, EventStreamConfig(pagerduty_routing_key="secret-rk"), encryption_key=enc_key
+        )
+        blob = kv_get(db, "event_stream_config") or ""
+        assert "secret-rk" not in blob  # not in the JSON blob
+        raw_secret = kv_get(db, "event_stream_pagerduty_routing_key")
+        assert raw_secret is not None
+        assert raw_secret.startswith("enc:v1:")  # encrypted at rest
+        assert "secret-rk" not in raw_secret
+        loaded = load_event_config(db, encryption_key=enc_key)
+        assert loaded.pagerduty_routing_key == "secret-rk"
+
+    def test_pagerduty_routing_key_blank_preserve(self, db):
+        # WI-065: the route's blank-skip preserves the existing key. Here we
+        # emulate that flow at the save/load layer: save a key, then re-save a
+        # config whose routing key was loaded-back (preserved), and confirm it
+        # survives (would be wiped if blank meant clear).
+        from cert_watch.database.encryption import derive_encryption_key
+
+        enc_key = derive_encryption_key("test-signing-key")
+        save_event_config(
+            db, EventStreamConfig(pagerduty_routing_key="keep-me"), encryption_key=enc_key
+        )
+        existing = load_event_config(db, encryption_key=enc_key)
+        # Route passes the preserved value through on a blank submission.
+        preserved = EventStreamConfig(
+            webhook_url="https://example.com/hook",
+            pagerduty_routing_key=existing.pagerduty_routing_key,
+        )
+        save_event_config(db, preserved, encryption_key=enc_key)
+        assert load_event_config(db, encryption_key=enc_key).pagerduty_routing_key == "keep-me"
 
 
 class TestEmitEvent:
@@ -344,3 +401,65 @@ class TestPurgeOldEvents:
         count = purge_old_events(db, 0)
         assert count == 0
         assert len(get_events(db)) == 1
+
+
+class TestDeliverWebhookSSRFPolicy:
+    """WI-063: event-stream webhook delivery honors CERT_WATCH_ALLOW_PRIVATE_IPS
+    and CERT_WATCH_ALLOWED_SUBNETS (env wins, else the kv allowlist set by the
+    setup wizard), so internal event webhooks are not silently blocked."""
+
+    def _capture(self, monkeypatch, db):
+        captured: dict = {}
+
+        def _fake_send(alert, wc):  # noqa: ANN001
+            captured["allow_private"] = wc.allow_private
+            captured["allowed_subnets"] = wc.allowed_subnets
+            return True
+
+        monkeypatch.setattr("cert_watch.alerts.send_webhook", _fake_send)
+        return captured
+
+    def _emit(self, db):
+        _deliver_webhook(
+            Event(
+                event_type="cert_added",
+                timestamp=datetime.now(UTC),
+                payload={"cert_id": "1"},
+                source="scan",
+            ),
+            EventStreamConfig(webhook_url="https://mattermost.internal/hook"),
+            db,
+            row_id=1,
+        )
+
+    def test_allow_private_false_when_env_disabled(self, db, monkeypatch):
+        monkeypatch.setenv("CERT_WATCH_ALLOW_PRIVATE_IPS", "0")
+        monkeypatch.delenv("CERT_WATCH_ALLOWED_SUBNETS", raising=False)
+        captured = self._capture(monkeypatch, db)
+        self._emit(db)
+        assert captured["allow_private"] is False
+
+    def test_allow_private_true_by_default(self, db, monkeypatch):
+        monkeypatch.delenv("CERT_WATCH_ALLOW_PRIVATE_IPS", raising=False)
+        monkeypatch.delenv("CERT_WATCH_ALLOWED_SUBNETS", raising=False)
+        captured = self._capture(monkeypatch, db)
+        self._emit(db)
+        assert captured["allow_private"] is True
+
+    def test_allowed_subnets_from_kv_when_env_unset(self, db, monkeypatch):
+        from cert_watch.database import kv_set
+
+        monkeypatch.delenv("CERT_WATCH_ALLOWED_SUBNETS", raising=False)
+        kv_set(db, "allowed_subnets", "10.0.0.0/8,172.16.0.0/12")
+        captured = self._capture(monkeypatch, db)
+        self._emit(db)
+        assert captured["allowed_subnets"] == ("10.0.0.0/8", "172.16.0.0/12")
+
+    def test_env_allowed_subnets_wins_over_kv(self, db, monkeypatch):
+        from cert_watch.database import kv_set
+
+        kv_set(db, "allowed_subnets", "10.0.0.0/8")
+        monkeypatch.setenv("CERT_WATCH_ALLOWED_SUBNETS", "192.168.0.0/16")
+        captured = self._capture(monkeypatch, db)
+        self._emit(db)
+        assert captured["allowed_subnets"] == ("192.168.0.0/16",)

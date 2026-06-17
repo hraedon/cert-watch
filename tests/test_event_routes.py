@@ -161,6 +161,57 @@ def test_settings_events_save(reload_app, login_csrf, tmp_path):
     assert config.rate_limit_per_second == 5
 
 
+def test_settings_events_pagerduty_key_encrypted_and_masked(reload_app, tmp_path):
+    """WI-065: the PagerDuty routing key is encrypted at rest (enc:v1: in a
+    dedicated kv key, not in the config blob) and never rendered into the
+    Events settings page; a blank re-save preserves it (leave-unchanged)."""
+    from cert_watch.database import init_schema, kv_get
+    from cert_watch.database.encryption import derive_encryption_key
+    from cert_watch.events import load_event_config
+
+    db = str(tmp_path / "cert-watch.sqlite3")
+    init_schema(db)
+    enc_key = derive_encryption_key("test-auth-secret-for-tests")
+    with _client(reload_app) as client:
+        r = client.post(
+            "/settings/events",
+            data={
+                "_csrf_token": "x",
+                "enabled_event_types": ["cert_added"],
+                "webhook_kind": "pagerduty",
+                "webhook_url": "https://events.pagerduty.com/v2/enqueue",
+                "pagerduty_routing_key": "rk-secret-123",
+                "rate_limit_per_second": "100",
+            },
+            follow_redirects=False,
+        )
+        assert r.status_code == 303
+        # At rest: dedicated kv secret is enc:v1:, and the config blob has no key.
+        raw_secret = kv_get(db, "event_stream_pagerduty_routing_key")
+        assert raw_secret is not None
+        assert raw_secret.startswith("enc:v1:")
+        assert "rk-secret-123" not in (kv_get(db, "event_stream_config") or "")
+        # In page: the real key is never rendered into the HTML; mask is shown.
+        page = client.get("/settings/events")
+        assert page.status_code == 200
+        assert "rk-secret-123" not in page.text
+        assert "••••••••" in page.text
+        # Blank-skip: re-save without retyping the key; it is preserved.
+        client.post(
+            "/settings/events",
+            data={
+                "_csrf_token": "x",
+                "enabled_event_types": ["cert_added"],
+                "webhook_kind": "pagerduty",
+                "webhook_url": "https://events.pagerduty.com/v2/enqueue",
+                "rate_limit_per_second": "100",
+            },
+            follow_redirects=False,
+        )
+    loaded = load_event_config(db, encryption_key=enc_key)
+    assert loaded.pagerduty_routing_key == "rk-secret-123"
+
+
 # ---------- Auth-gating tests (WI-015) ----------
 
 

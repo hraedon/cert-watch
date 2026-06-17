@@ -60,13 +60,17 @@ class EventStreamConfig:
             "enabled_event_types": self.enabled_event_types,
             "webhook_url": self.webhook_url,
             "webhook_kind": self.webhook_kind,
-            "pagerduty_routing_key": self.pagerduty_routing_key,
             "rate_limit_per_second": self.rate_limit_per_second,
         })
 
     @classmethod
     def from_json(cls, raw: str) -> EventStreamConfig:
         d = json.loads(raw)
+        # ``pagerduty_routing_key`` is no longer serialized in the blob (WI-065:
+        # stored separately as an enc:v1: secret). It is still read here for
+        # backward compat with pre-WI-065 blobs that hold it as plaintext, so
+        # existing deployments do not lose their key on upgrade (it is migrated
+        # to the encrypted kv secret on the next save).
         return cls(
             enabled_event_types=d.get("enabled_event_types", list(ALL_EVENT_TYPES)),
             webhook_url=d.get("webhook_url"),
@@ -77,21 +81,73 @@ class EventStreamConfig:
 
 
 _KV_KEY = "event_stream_config"
+# The PagerDuty routing key is persisted separately as an enc:v1: secret rather
+# than inside the EventStreamConfig JSON blob, mirroring the alert-path handling
+# of ``pagerduty_routing_key`` (a SENSITIVE_SETTING_KEY). WI-065.
+_KV_ROUTING_KEY = "event_stream_pagerduty_routing_key"
 
 
-def load_event_config(db_path: str | Path) -> EventStreamConfig:
+def _resolve_encryption_key(db_path: str | Path) -> str | None:
+    """Best-effort Fernet key for the event-stream PagerDuty secret (WI-065).
+
+    Derived from the same signing material the app lifespan uses
+    (``CERT_WATCH_AUTH_SECRET`` env / ``_FILE`` / ``data_dir/.auth_secret``).
+    Read-only — never generates, so a missing secret returns ``None`` and
+    encrypted values are not decrypted (PagerDuty delivery is then skipped,
+    matching the alert path's behavior when the signing key is lost). ``db_path``
+    lives under ``data_dir``, so its parent holds ``.auth_secret``.
+    """
+    from cert_watch.config.helpers import read_secret
+
+    signing_key = read_secret("CERT_WATCH_AUTH_SECRET")
+    if not signing_key:
+        secret_file = Path(db_path).parent / ".auth_secret"
+        try:
+            signing_key = secret_file.read_text().strip() or None
+        except OSError:
+            signing_key = None
+    if not signing_key:
+        return None
+    from cert_watch.database.encryption import derive_encryption_key
+
+    return derive_encryption_key(signing_key)
+
+
+def load_event_config(
+    db_path: str | Path, *, encryption_key: str | None = None
+) -> EventStreamConfig:
     from cert_watch.database.kv_store import kv_get
 
     raw = kv_get(db_path, _KV_KEY)
-    if raw is None:
-        return EventStreamConfig()
-    return EventStreamConfig.from_json(raw)
+    cfg = EventStreamConfig.from_json(raw) if raw is not None else EventStreamConfig()
+    # PagerDuty routing key: prefer the dedicated enc:v1: secret (WI-065); fall
+    # back to the legacy plaintext field read by from_json for old blobs.
+    if encryption_key is None:
+        encryption_key = _resolve_encryption_key(db_path)
+    secret = kv_get(db_path, _KV_ROUTING_KEY, encryption_key)
+    if secret:
+        cfg.pagerduty_routing_key = secret
+    return cfg
 
 
-def save_event_config(db_path: str | Path, config: EventStreamConfig) -> None:
-    from cert_watch.database.kv_store import kv_set
+def save_event_config(
+    db_path: str | Path, config: EventStreamConfig, *, encryption_key: str | None = None
+) -> None:
+    from cert_watch.database.kv_store import kv_set, kv_set_secret
 
     kv_set(db_path, _KV_KEY, config.to_json())
+    if encryption_key is None:
+        encryption_key = _resolve_encryption_key(db_path)
+    if config.pagerduty_routing_key:
+        if encryption_key:
+            kv_set_secret(
+                db_path, _KV_ROUTING_KEY, config.pagerduty_routing_key, encryption_key
+            )
+        else:
+            # No signing key available (e.g. tests / ephemeral key): store
+            # plaintext so the value still round-trips. Production persists
+            # .auth_secret, so this branch is not reached there.
+            kv_set(db_path, _KV_ROUTING_KEY, config.pagerduty_routing_key)
 
 
 _rate_lock = threading.Lock()
@@ -158,6 +214,29 @@ def _write_event_log(
         return cur.lastrowid
 
 
+def _resolve_ssrf_policy(db_path: str | Path) -> tuple[bool, tuple[str, ...]]:
+    """Resolve the SSRF allow-policy for event-stream webhook delivery (WI-063).
+
+    Mirrors ``Settings``: ``allow_private`` is env-only
+    (``CERT_WATCH_ALLOW_PRIVATE_IPS``); ``allowed_subnets`` is env
+    (``CERT_WATCH_ALLOWED_SUBNETS``) winning over the kv_store value set by the
+    setup wizard. Resolved live at delivery time (not snapshotted into the
+    event-stream config) so a policy change takes effect without re-saving it.
+    """
+    import os
+
+    from cert_watch.database.kv_store import kv_get
+
+    allow_private = os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1"
+    env_subnets = os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "")
+    if env_subnets.strip():
+        subnets = tuple(s.strip() for s in env_subnets.split(",") if s.strip())
+    else:
+        raw = kv_get(db_path, "allowed_subnets") or ""
+        subnets = tuple(s.strip() for s in raw.split(",") if s.strip())
+    return allow_private, subnets
+
+
 def _deliver_webhook(
     event: Event,
     config: EventStreamConfig,
@@ -205,10 +284,13 @@ def _deliver_webhook(
         message=friendly_msg,
         threshold_days=None,
     )
+    allow_private, allowed_subnets = _resolve_ssrf_policy(db_path)
     wc = WebhookConfig(
         url=config.webhook_url or "",
         kind=config.webhook_kind,
         routing_key=config.pagerduty_routing_key,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
     )
     success = False
     last_error = ""
