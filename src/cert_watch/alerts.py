@@ -791,6 +791,11 @@ def _resolve_group_config(
     Performs the 3 SQL queries (groups, cert tags, manual assignments) once
     instead of duplicating them across resolve_all_group_recipients and
     resolve_group_thresholds.
+
+    Role→alert-group link (WI-061): roles with a non-empty ``scope_tag`` and
+    a linked ``alert_group_id`` also route alerts for certs whose effective
+    tags intersect the role's scope tags.  The linked alert_group's
+    recipients and threshold are included as if the group had matched.
     """
     from cert_watch.database.connection import _connect
     from cert_watch.tags import merge_tags, parse_tags, tags_match
@@ -828,6 +833,26 @@ def _resolve_group_config(
         for row in manual_rows:
             manual_map.setdefault(row["cert_id"], set()).add(row["group_id"])
 
+    # Role→alert-group links (WI-061): load roles that have both a
+    # scope_tag and a linked alert_group_id, so their linked group's
+    # recipients are included for matching certs.
+    role_links: list[dict] = []
+    try:
+        from cert_watch.database.users_roles import SqliteRoleRepository
+
+        _role_repo = SqliteRoleRepository(db_path)
+        for _role in _role_repo.list_all():
+            if _role.alert_group_id and _role.scope_tag:
+                role_links.append({
+                    "alert_group_id": _role.alert_group_id,
+                    "scope_tags": parse_tags(_role.scope_tag),
+                })
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
+        logger.debug("Role→alert-group link routing unavailable", exc_info=True)
+        role_links = []
+
+    group_by_id = {g["id"]: g for g in groups}
+
     recipients_map: dict[str, list[str]] = {}
     thresholds_map: dict[str, int | None] = {}
     for cert_id, effective in cert_tags.items():
@@ -846,6 +871,25 @@ def _resolve_group_config(
                     existing = thresholds_map.get(cert_id)
                     if existing is None or td < existing:
                         thresholds_map[cert_id] = td
+
+        # Role-linked alert groups (WI-061): match certs against role
+        # scope_tags and include the linked alert_group's recipients.
+        for rl in role_links:
+            if tags_match(effective, rl["scope_tags"]):
+                g = group_by_id.get(rl["alert_group_id"])
+                if g is None:
+                    continue
+                for r in g["recipients"]:
+                    rc = r.casefold()
+                    if rc not in seen:
+                        seen.add(rc)
+                        out.append(r)
+                td = g["threshold_days"]
+                if td is not None:
+                    existing = thresholds_map.get(cert_id)
+                    if existing is None or td < existing:
+                        thresholds_map[cert_id] = td
+
         if out:
             recipients_map[cert_id] = out
     return recipients_map, thresholds_map
@@ -885,9 +929,13 @@ def resolve_group_recipients(
     Returns de-duped list of email addresses from all matching groups.
     A group matches if the cert's effective tags intersect the group's match_tags,
     OR the cert is manually assigned to the group.
+
+    Role→alert-group link (WI-061): roles with a non-empty ``scope_tag`` and
+    a linked ``alert_group_id`` also route alerts for certs whose effective
+    tags intersect the role's scope tags.
     """
     from cert_watch.database import SqliteAlertGroupRepository, SqliteCertificateRepository
-    from cert_watch.tags import tags_match
+    from cert_watch.tags import parse_tags, tags_match
 
     cert_repo = SqliteCertificateRepository(db_path)
     group_repo = SqliteAlertGroupRepository(db_path)
@@ -897,13 +945,36 @@ def resolve_group_recipients(
 
     seen: set[str] = set()
     out: list[str] = []
-    for g in group_repo.list_all():
+    # Load the alert groups once; reused for both the match_tags path and the
+    # role-linked path below (avoids a second list_all() round-trip).
+    all_groups = {g.id: g for g in group_repo.list_all()}
+    for g in all_groups.values():
         if g.id in manual_ids or tags_match(effective, g.match_tags):
             for r in g.recipients:
                 rc = r.casefold()
                 if rc not in seen:
                     seen.add(rc)
                     out.append(r)
+
+    # Role-linked alert groups (WI-061)
+    try:
+        from cert_watch.database.users_roles import SqliteRoleRepository
+
+        _role_repo = SqliteRoleRepository(db_path)
+        for _role in _role_repo.list_all():
+            if _role.alert_group_id and _role.scope_tag:
+                role_scope = parse_tags(_role.scope_tag)
+                if tags_match(effective, role_scope):
+                    g = all_groups.get(_role.alert_group_id)
+                    if g:
+                        for r in g.recipients:
+                            rc = r.casefold()
+                            if rc not in seen:
+                                seen.add(rc)
+                                out.append(r)
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
+        logger.debug("Role→alert-group link routing unavailable", exc_info=True)
+
     return out
 
 

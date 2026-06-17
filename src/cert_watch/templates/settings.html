@@ -639,7 +639,7 @@
     <div class="cw-tab-panel {% if tab == 'roles' %}active{% endif %}" id="tab-roles">
       <div class="cw-mb-16">
         <h3 class="cw-heading-3">Roles</h3>
-        <p class="cw-muted">Roles define teams and their shared email for alerts and contact display.</p>
+        <p class="cw-muted">Roles define teams and their shared email for alerts and contact display. A role with scope tags is <em>scoped</em> — it grants visibility and alert routing for those tags but does NOT elevate the permission tier (tier comes from unscoped roles only).</p>
       </div>
       <form method="post" action="/settings/roles">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -656,9 +656,19 @@
           </select>
         </div>
         <div class="cw-field">
-          <label class="cw-label" for="role_scope_tag">Team scope tag</label>
-          <input class="cw-input" type="text" id="role_scope_tag" name="scope_tag" placeholder="e.g., platform-team">
-          <div class="cw-muted cw-fz-11 cw-mt-3">When set, members of this role only see/manage hosts and certificates carrying this tag.</div>
+          <label class="cw-label" for="role_scope_tag">Scope tags (comma-separated)</label>
+          <input class="cw-input" type="text" id="role_scope_tag" name="scope_tag" placeholder="e.g., platform-team, prod">
+          <div class="cw-muted cw-fz-11 cw-mt-3">When set, members of this role only see/manage hosts and certificates carrying these tags. A scoped role does NOT elevate the permission tier — tier comes from unscoped roles only.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="role_alert_group_id">Linked alert group</label>
+          <select class="cw-input" id="role_alert_group_id" name="alert_group_id">
+            <option value="" selected>— none —</option>
+            {% for ag in alert_groups %}
+            <option value="{{ ag.id }}">{{ ag.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="cw-muted cw-fz-11 cw-mt-3">When linked + scope tags set, members are alerted for certs carrying those tags via this alert group's recipients and webhook.</div>
         </div>
         <div class="cw-field">
           <label class="cw-label" for="role_email">Email</label>
@@ -674,7 +684,7 @@
       {% if roles %}
       <table class="cw-table cw-mt-16">
         <thead>
-          <tr><th>Name</th><th>Tier</th><th>Scope tag</th><th>Email</th><th>Description</th><th></th></tr>
+          <tr><th>Name</th><th>Tier</th><th>Scope tags</th><th>Alert group</th><th>Email</th><th>Description</th><th></th></tr>
         </thead>
         <tbody>
           {% for r in roles %}
@@ -682,6 +692,7 @@
             <td>{{ r.name }}</td>
             <td>{{ r.permission_tier }}</td>
             <td>{{ r.scope_tag or '—' }}</td>
+            <td>{% if r.alert_group_id %}{% for ag in alert_groups %}{% if ag.id == r.alert_group_id %}{{ ag.name }}{% endif %}{% endfor %}{% else %}—{% endif %}</td>
             <td>{{ r.email }}</td>
             <td>{{ r.description }}</td>
             <td>
@@ -702,8 +713,18 @@
                     </select>
                   </div>
                   <div class="cw-field">
-                    <label class="cw-label" for="edit_role_scope_tag_{{ r.id }}">Team scope tag</label>
+                    <label class="cw-label" for="edit_role_scope_tag_{{ r.id }}">Scope tags (comma-separated)</label>
                     <input class="cw-input" type="text" id="edit_role_scope_tag_{{ r.id }}" name="scope_tag" value="{{ r.scope_tag }}">
+                    <div class="cw-muted cw-fz-11 cw-mt-3">Scoped roles do NOT elevate the permission tier.</div>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_role_alert_group_id_{{ r.id }}">Linked alert group</label>
+                    <select class="cw-input" id="edit_role_alert_group_id_{{ r.id }}" name="alert_group_id">
+                      <option value="" {% if not r.alert_group_id %}selected{% endif %}>— none —</option>
+                      {% for ag in alert_groups %}
+                      <option value="{{ ag.id }}" {% if r.alert_group_id == ag.id %}selected{% endif %}>{{ ag.name }}</option>
+                      {% endfor %}
+                    </select>
                   </div>
                   <div class="cw-field">
                     <label class="cw-label" for="edit_role_email_{{ r.id }}">Email</label>

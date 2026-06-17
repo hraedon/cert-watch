@@ -33,6 +33,12 @@ def _normalize_scope_tag(tag: str) -> str:
     return format_tags(parse_tags(tag))
 
 
+def _normalize_alert_group_id(value: str) -> str | None:
+    """Normalize the alert_group_id form field: empty string → None."""
+    value = (value or "").strip()
+    return value or None
+
+
 # ---------- Role management ----------
 
 
@@ -69,12 +75,14 @@ async def create_role(request: Request) -> RedirectResponse:
     description = str(form.get("description") or "").strip()
     permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
     scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
+    alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     if not name:
         return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
 
     role = Role(
         name=name, email=email, description=description,
         permission_tier=permission_tier, scope_tag=scope_tag,
+        alert_group_id=alert_group_id,
     )
     SqliteRoleRepository(_db_path(request)).add(role)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
@@ -104,6 +112,7 @@ async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
     role.description = str(form.get("description") or "").strip()
     role.permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
     role.scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
+    role.alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     repo.update(role)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 

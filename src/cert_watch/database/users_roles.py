@@ -18,6 +18,7 @@ class Role:
     description: str = ""
     permission_tier: str = "viewer"
     scope_tag: str = ""
+    alert_group_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     updated_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
@@ -44,10 +45,11 @@ class SqliteRoleRepository:
             conn.execute(
                 "INSERT INTO roles"
                 " (id, name, email, description, permission_tier, scope_tag,"
-                " created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " alert_group_id, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (role_id, role.name, role.email, role.description,
-                 role.permission_tier or "viewer", role.scope_tag or "", now, now),
+                 role.permission_tier or "viewer", role.scope_tag or "",
+                 role.alert_group_id or None, now, now),
             )
             conn.commit()
         return role_id
@@ -56,7 +58,7 @@ class SqliteRoleRepository:
         with _connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT id, name, email, description, permission_tier,"
-                " scope_tag, created_at, updated_at "
+                " scope_tag, alert_group_id, created_at, updated_at "
                 "FROM roles WHERE id = ?",
                 (role_id,),
             ).fetchone()
@@ -69,6 +71,7 @@ class SqliteRoleRepository:
             description=row["description"],
             permission_tier=row["permission_tier"] or "viewer",
             scope_tag=row["scope_tag"] or "",
+            alert_group_id=row["alert_group_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -77,7 +80,7 @@ class SqliteRoleRepository:
         with _connect(self.db_path) as conn:
             row = conn.execute(
                 "SELECT id, name, email, description, permission_tier,"
-                " scope_tag, created_at, updated_at "
+                " scope_tag, alert_group_id, created_at, updated_at "
                 "FROM roles WHERE name = ?",
                 (name,),
             ).fetchone()
@@ -90,6 +93,7 @@ class SqliteRoleRepository:
             description=row["description"],
             permission_tier=row["permission_tier"] or "viewer",
             scope_tag=row["scope_tag"] or "",
+            alert_group_id=row["alert_group_id"],
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -98,7 +102,7 @@ class SqliteRoleRepository:
         with _connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT id, name, email, description, permission_tier,"
-                " scope_tag, created_at, updated_at "
+                " scope_tag, alert_group_id, created_at, updated_at "
                 "FROM roles ORDER BY name"
             ).fetchall()
         return [
@@ -109,6 +113,7 @@ class SqliteRoleRepository:
                 description=r["description"],
                 permission_tier=r["permission_tier"] or "viewer",
                 scope_tag=r["scope_tag"] or "",
+                alert_group_id=r["alert_group_id"],
                 created_at=datetime.fromisoformat(r["created_at"]),
                 updated_at=datetime.fromisoformat(r["updated_at"]),
             )
@@ -120,10 +125,12 @@ class SqliteRoleRepository:
         with _connect(self.db_path) as conn:
             conn.execute(
                 "UPDATE roles SET name = ?, email = ?, description = ?,"
-                " permission_tier = ?, scope_tag = ?, updated_at = ? "
+                " permission_tier = ?, scope_tag = ?,"
+                " alert_group_id = ?, updated_at = ? "
                 "WHERE id = ?",
                 (role.name, role.email, role.description,
-                 role.permission_tier or "viewer", role.scope_tag or "", now, role.id),
+                 role.permission_tier or "viewer", role.scope_tag or "",
+                 role.alert_group_id or None, now, role.id),
             )
             conn.commit()
 

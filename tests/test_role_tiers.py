@@ -100,8 +100,12 @@ class TestRoleRepositoryTierAndScope:
 
 class TestBuildAuthContextUsesTierFromDb:
     def test_role_map_name_resolves_to_db_tier(self, db: Path):
+        # Unscoped role: its DB tier flows through (option A / WI-061). A SCOPED
+        # role (non-empty scope_tag) deliberately does not grant its tier -- that
+        # decoupling (and the viewer-only fallback) is covered in
+        # test_rbac_tier_decoupling.py.
         repo = SqliteRoleRepository(db)
-        repo.add(Role(name="operators", permission_tier="operator", scope_tag="ops"))
+        repo.add(Role(name="operators", permission_tier="operator", scope_tag=""))
         role_map = {"operators": {"groups": ["cn=ops,dc=example"]}}
         ctx = build_auth_context(
             "alice",
@@ -113,7 +117,7 @@ class TestBuildAuthContextUsesTierFromDb:
         assert ctx.tier == "operator"
         assert ctx.may_write()
         assert not ctx.is_admin
-        assert ctx.scope_tag == "ops"
+        assert ctx.scope_tag == ""
 
     def test_no_role_repo_uses_legacy_name_mapping(self, db: Path):
         role_map = {"admin": {"groups": ["cn=admins,dc=example"]}}
