@@ -60,6 +60,9 @@ from cert_watch.migrations.m0024_role_tiers import (
 from cert_watch.migrations.m0025_alert_group_config import (
     upgrade as alert_group_config_upgrade,
 )
+from cert_watch.migrations.m0026_role_alert_group_link import (
+    upgrade as role_alert_group_link_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -136,4 +139,8 @@ runner.register(
 runner.register(
     "0025", "add threshold_days and digest_cadence_days to alert_groups (WI-056)",
     alert_group_config_upgrade,
+)
+runner.register(
+    "0026", "add alert_group_id to roles for joint alert routing (WI-061)",
+    role_alert_group_link_upgrade,
 )

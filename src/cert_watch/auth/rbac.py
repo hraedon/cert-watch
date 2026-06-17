@@ -241,17 +241,31 @@ def _resolve_tier_and_scope(
     resolved_role_names: list[str],
     role_tiers: dict[str, tuple[str, str]],
 ) -> tuple[str, str]:
-    """Pick the highest-privilege tier and union scope tags from resolved roles."""
+    """Pick the effective tier and union scope tags from resolved roles.
+
+    Tier decoupling (WI-061): a role with a non-empty ``scope_tag`` is
+    *scoped* — it contributes its tags to visibility and alert routing only,
+    NEVER to the effective permission tier.  The effective tier is the
+    highest tier among the user's UNSCOPED (global) roles.  A user holding
+    ONLY scoped roles defaults to ``viewer`` (least privilege).
+
+    Scope tags from ALL roles (scoped + unscoped) are unioned into the
+    effective scope.  An empty scope string means full visibility (no
+    filtering) — the existing contract.
+    """
+    from cert_watch.tags import format_tags, parse_tags
+
     order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
     chosen_tier = ROLE_VIEWER
     scope_tags: set[str] = set()
     for name in resolved_role_names:
         tier, scope = role_tiers.get(name, (ROLE_VIEWER, ""))
-        if order.get(tier, 0) > order.get(chosen_tier, 0):
+        # Union ALL roles' tags (scoped + unscoped) for visibility/alerts.
+        scope_tags.update(parse_tags(scope))
+        # Only unscoped roles (empty scope_tag) contribute to the tier.
+        if not scope and order.get(tier, 0) > order.get(chosen_tier, 0):
             chosen_tier = tier
-        if scope:
-            scope_tags.add(scope)
-    return chosen_tier, ",".join(sorted(scope_tags))
+    return chosen_tier, format_tags(scope_tags)
 
 
 def build_auth_context(

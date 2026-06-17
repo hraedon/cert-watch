@@ -856,6 +856,15 @@ class SqliteAlertGroupRepository:
             conn.execute(
                 "DELETE FROM alert_group_certs WHERE group_id = ?", (group_id,)
             )
+            # Clear the Role->AlertGroup link (WI-061). SQLite does not enforce
+            # the ON DELETE SET NULL FK unless PRAGMA foreign_keys=ON (which the
+            # app does not set), so clear it explicitly -- otherwise a deleted
+            # group leaves an orphaned roles.alert_group_id that silently stops
+            # the role's alert routing (group_by_id.get returns None).
+            conn.execute(
+                "UPDATE roles SET alert_group_id = NULL WHERE alert_group_id = ?",
+                (group_id,),
+            )
             conn.commit()
             return r.rowcount > 0
 

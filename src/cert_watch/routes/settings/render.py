@@ -77,10 +77,14 @@ def _settings_context(
 
     roles_data: list = []
     users_data: list = []
+    alert_groups_data: list = []
     if tab in ("roles", "users"):
         from cert_watch.database import SqliteRoleRepository, SqliteUserRepository
         roles_data = SqliteRoleRepository(db).list_all()
         users_data = SqliteUserRepository(db).list_all()
+        if tab == "roles":
+            from cert_watch.database import SqliteAlertGroupRepository
+            alert_groups_data = SqliteAlertGroupRepository(db).list_all()
     elif tab == "auth":
         from cert_watch.database import SqliteRoleRepository
         roles_data = SqliteRoleRepository(db).list_all()
@@ -115,6 +119,7 @@ def _settings_context(
         "policy_set": policy_set,
         "roles": roles_data,
         "users": users_data,
+        "alert_groups": alert_groups_data,
         "active_page": "settings",
         "new_token": new_token,
         "new_name": new_name,
