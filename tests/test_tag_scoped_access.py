@@ -104,6 +104,23 @@ class TestDashboardScopeFiltering:
         rows, total = list_dashboard_page(db, scope_tags=())
         assert total == 2
 
+    def test_scoped_user_non_ascii_casefold_parity(self, db: Path):
+        """WI-066: a non-ASCII case-variant scope tag matches with the same
+        parity as the Python casefold engine (SQLite LIKE is ASCII-CI only, so
+        without cw_casefold the scope filter undercounts vs tags_match)."""
+        from cert_watch.database.dashboard import list_dashboard_page
+        from cert_watch.tags import tags_match
+
+        with _connect(db) as conn:
+            _insert_host(conn, "de.example.com", tags="STRASSE")
+            _insert_cert(conn, "c1", "de.example.com")
+
+        # Engine matches via casefold (ß -> ss); the SQL scope filter must agree.
+        assert tags_match(["STRASSE"], ["Straße"]) is True
+        rows, total = list_dashboard_page(db, scope_tags=("Straße",))
+        assert total == 1
+        assert rows[0]["id"] == "c1"
+
 
 class TestHostAutoTagging:
     def test_tags_with_scope_merges_scope_tag(self):

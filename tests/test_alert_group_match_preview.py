@@ -180,6 +180,23 @@ def test_match_preview_parity_with_tags_match(db):
         )
 
 
+def test_match_preview_non_ascii_casefold_parity(db):
+    """WI-066: non-ASCII tag casing matches with the same parity as the Python
+    casefold engine. SQLite LIKE is ASCII-CI only, so without cw_casefold the
+    SQL undercounts vs tags_match for the ß/SS case-variant."""
+    from cert_watch.tags import tags_match
+
+    _seed(db, "de.example.com", host_tags="STRASSE")  # ASCII all-caps
+
+    # The engine matches the eszett case-variant via casefold (ß -> ss):
+    assert tags_match(["STRASSE"], ["Straße"]) is True
+    # The SQL preview must agree. Before WI-066 this was 0 (LIKE is ASCII-CI:
+    # "STRASSE" and "Straße" differ in the ß/ss bytes and LIKE only folds A-Z).
+    assert _match_preview(db, ["Straße"], sample_limit=0)[0] == 1
+    # The plain lower-case ASCII variant also matches.
+    assert _match_preview(db, ["strasse"], sample_limit=0)[0] == 1
+
+
 # ---------- routes (inline count + preview endpoint) ----------
 
 

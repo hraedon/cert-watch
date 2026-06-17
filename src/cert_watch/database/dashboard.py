@@ -52,17 +52,19 @@ def _add_effective_tag_filter(
     seen: set[str] = set()
     for tag in scope_tags:
         tag = tag.strip()
-        if not tag or tag in seen:
+        if not tag or tag.casefold() in seen:
             continue
-        seen.add(tag)
+        seen.add(tag.casefold())
         like = f"%,{_escape_like(tag)},%"
         if col_cert:
             conditions.append(
-                f"(',' || COALESCE({col_cert}, '') || ',') LIKE ? ESCAPE '\\'"
+                f"cw_casefold(',' || COALESCE({col_cert}, '') || ',')"
+                " LIKE cw_casefold(?) ESCAPE '\\'"
             )
             new_params.append(like)
         conditions.append(
-            f"(',' || COALESCE({col_host}, '') || ',') LIKE ? ESCAPE '\\'"
+            f"cw_casefold(',' || COALESCE({col_host}, '') || ',')"
+            " LIKE cw_casefold(?) ESCAPE '\\'"
         )
         new_params.append(like)
     if not conditions:
@@ -88,9 +90,9 @@ def _add_grouped_effective_tag_filter(
     seen: set[str] = set()
     for tag in scope_tags:
         tag = tag.strip()
-        if not tag or tag in seen:
+        if not tag or tag.casefold() in seen:
             continue
-        seen.add(tag)
+        seen.add(tag.casefold())
         like = f"%,{_escape_like(tag)},%"
         conditions.append(
             "EXISTS ("
@@ -98,8 +100,8 @@ def _add_grouped_effective_tag_filter(
             "LEFT JOIN hosts h ON h.hostname = c2.hostname AND h.port = c2.port "
             "WHERE c2.fingerprint_sha256 = c.fingerprint_sha256 "
             "AND c2.is_leaf = 1 AND c2.source = 'scanned' "
-            "AND ((',' || COALESCE(c2.tags, '') || ',') LIKE ? ESCAPE '\\' "
-            "OR (',' || COALESCE(h.tags, '') || ',') LIKE ? ESCAPE '\\'))"
+            "AND (cw_casefold(',' || COALESCE(c2.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\' "
+            "OR cw_casefold(',' || COALESCE(h.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\'))"
         )
         new_params.extend([like, like])
     if not conditions:
