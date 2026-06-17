@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from cert_watch.routes.settings.alert_groups import router as alert_groups_router
 from cert_watch.routes.settings.alerts import router as alerts_router
 from cert_watch.routes.settings.api_keys import router as api_keys_router
 from cert_watch.routes.settings.auth import router as auth_router
@@ -47,6 +48,7 @@ router.include_router(auth_router)
 router.include_router(api_keys_router)
 router.include_router(smtp_router)
 router.include_router(alerts_router)
+router.include_router(alert_groups_router)
 router.include_router(policy_router)
 router.include_router(events_router)
 router.include_router(password_router)

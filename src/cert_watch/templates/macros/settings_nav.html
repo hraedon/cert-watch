@@ -1,10 +1,11 @@
 {# Vertical settings navigation. `active` is the current section key:
-   auth | smtp | alerts | events | policy | roles | users | api-keys #}
+   auth | smtp | alerts | alert-groups | events | policy | roles | users | api-keys #}
 {% macro settings_nav(active) %}
 <nav class="cw-settings-nav" aria-label="Settings sections">
   <a href="/settings?tab=auth" class="{% if active == 'auth' %}active{% endif %}">Authentication</a>
   <a href="/settings?tab=smtp" class="{% if active == 'smtp' %}active{% endif %}">SMTP</a>
   <a href="/settings?tab=alerts" class="{% if active == 'alerts' %}active{% endif %}">Alerts</a>
+  <a href="/settings/alert-groups" class="{% if active == 'alert-groups' %}active{% endif %}">Alert groups</a>
   <a href="/settings/events" class="{% if active == 'events' %}active{% endif %}">Events</a>
   <a href="/settings?tab=policy" class="{% if active == 'policy' %}active{% endif %}">Policy</a>
   <a href="/settings/roles" class="{% if active == 'roles' %}active{% endif %}">Roles</a>
