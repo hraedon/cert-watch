@@ -23,6 +23,11 @@ SENSITIVE_SETTING_KEYS = frozenset({
     "oauth_client_secret",
     "smtp_password",
     "pagerduty_routing_key",
+    # A Bearer token or shared secret commonly lives in a custom webhook header
+    # (the UI placeholder suggests ``Authorization: Bearer ...``); treat the
+    # whole JSON blob as sensitive so it is encrypted at rest and masked in the
+    # UI rather than stored / rendered in cleartext.
+    "webhook_headers",
 })
 
 

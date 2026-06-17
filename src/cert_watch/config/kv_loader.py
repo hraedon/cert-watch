@@ -175,8 +175,13 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
     if "ALERT_WEBHOOK_HEADERS" not in os.environ:
         raw_headers = kv.get("webhook_headers", "")
         if raw_headers:
+            # webhook_headers is a SENSITIVE_SETTING_KEY: decrypt the stored
+            # blob before parsing. fernet_decrypt passes plaintext through
+            # unchanged (no ``enc:v1:`` prefix), so values written before this
+            # key became sensitive still load until they are re-saved.
+            decrypted_headers = _decrypt("webhook_headers", raw_headers)
             try:
-                webhook_headers = json.loads(raw_headers)
+                webhook_headers = json.loads(decrypted_headers)
             except (json.JSONDecodeError, ValueError):
                 webhook_headers = base.webhook_headers
 
