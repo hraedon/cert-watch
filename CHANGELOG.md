@@ -4,6 +4,35 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-06-17
+
+### Added
+- **Alert-group management UI** (WI-059). Alert groups (per-team alert routing
+  by tag) were previously CRUD-able only via the REST API. A new server-rendered
+  Settings → Alert groups tab now manages them: match tags, recipients, webhook,
+  per-group alert threshold, and digest cadence, with audit records on each
+  change. No new inline styles; the `settings.html` ratchet still holds.
+- **Six env-var-only alert settings are now editable in the GUI** (WI-058):
+  drift alerts, renewal-stalled window, alert retention days, daily scan time
+  (hour/min), custom webhook headers, and OCSP/CRL revocation checks. These were
+  backend-complete but only settable via environment variables. They now
+  round-trip through `kv_store` — previously a GUI-saved value was silently
+  ignored on load (the merge passed them straight from the env-derived base).
+  Environment variables still take precedence (shown with an "env" badge).
+
+### Security
+- **Custom webhook headers are now treated as sensitive.** `ALERT_WEBHOOK_HEADERS`
+  commonly carries a secret such as `Authorization: Bearer …` (the UI placeholder
+  suggests exactly that). It is now encrypted at rest and masked in the UI rather
+  than stored and rendered in cleartext. Values written before this release load
+  unchanged until they are re-saved (no operator action required on upgrade).
+
+### Changed
+- **UI palette retinted** to a warm-charcoal/bronze "instrument" theme
+  (token-only; all components inherit it). The Settings page now fills the window
+  via a left sidebar nav instead of a constrained horizontal tab strip, and the
+  certificate-detail "TIME REMAINING" eyebrow and wordmark are set in mono.
+
 ## [0.9.1] - 2026-06-16
 
 > **Upgrade note (RBAC role tiers).** Migration `0024` adds a `permission_tier`
