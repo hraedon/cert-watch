@@ -24,6 +24,7 @@ All-in-one, self-hosted certificate-lifecycle observability for SMBs — live sc
 uv venv && uv pip install -e ".[dev]"
 .venv/bin/pytest -q            # unit tests (excludes e2e + integration by default)
 .venv/bin/ruff check .         # lint
+.venv/bin/mypy src/cert_watch  # type check — CI runs this; run locally too (it has caught real bugs the ruff+pytest loop misses)
 
 # Auth extras (optional — tests mock these, but needed for real usage):
 uv pip install -e ".[auth-ldap]"   # LDAP/AD
