@@ -23,6 +23,21 @@ from cert_watch.database import (
 from cert_watch.database.connection import _connect
 
 
+def _earlier_same_utc_day(now: datetime) -> datetime:
+    """A timestamp on the *same UTC date* as ``now`` but strictly earlier.
+
+    The same-day bug only reproduces when the cert's not_after shares ``now``'s
+    calendar date, so the ``T`` (0x54) vs space (0x20) separator — not a date
+    difference — decides the lexicographic compare.  ``now - timedelta(hours=N)``
+    rolls back to the previous date in the first N hours after UTC midnight,
+    masking the bug and giving a false pass.  Anchoring to half-way between
+    midnight and now keeps the same date and stays strictly < now at any
+    wall-clock time.
+    """
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight + (now - midnight) / 2
+
+
 def _add_leaf(db, subject, *, not_after):
     """Add a scanned leaf cert (with its host) — the population the pivot counts."""
     host, port = subject, 443
@@ -46,7 +61,7 @@ def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     now = datetime.now(UTC)
-    _add_leaf(db, "expired-today.example.com", not_after=now - timedelta(hours=3))
+    _add_leaf(db, "expired-today.example.com", not_after=_earlier_same_utc_day(now))
     _add_leaf(db, "healthy.example.com", not_after=now + timedelta(days=90))
 
     stats = pivot_urgency_stats(db)
@@ -150,7 +165,7 @@ def test_fleet_pivot_surfaces_expired_urgency(tmp_path):
         subject="expired.example.com",
         issuer="Test CA",
         not_before=now - timedelta(days=400),
-        not_after=now - timedelta(hours=2),  # expired earlier today
+        not_after=_earlier_same_utc_day(now),  # expired earlier the same UTC day
         fingerprint_sha256="expired.example.com",
     )
     replace_scanned(db, "expired.example.com", 443, expired, [], True)
