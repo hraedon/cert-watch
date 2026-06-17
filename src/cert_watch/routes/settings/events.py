@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
@@ -18,6 +19,7 @@ from cert_watch.events import (
 from cert_watch.http_client import validate_webhook_url
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes.settings.config import _get_encryption_key
 
 templates = get_templates()
 
@@ -30,7 +32,7 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
     if admin_err:
         return admin_err
     db = _db_path(request)
-    config = load_event_config(db)
+    config = load_event_config(db, encryption_key=_get_encryption_key(request))
     from cert_watch.middleware import get_auth_context, get_csrf_context
 
     ctx = get_csrf_context(request)
@@ -40,7 +42,8 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
         name="settings_events.html",
         context={
             "version": __version__, "commit": __commit__,
-            "config": config,
+            "config": replace(config, pagerduty_routing_key=""),
+            "pagerduty_routing_key_set": bool(config.pagerduty_routing_key),
             "all_event_types": ALL_EVENT_TYPES,
             "active_page": "settings",
             **auth_ctx,
@@ -61,6 +64,7 @@ async def save_settings_events(request: Request) -> RedirectResponse:
 
     db = _db_path(request)
     form = await request.form()
+    enc_key = _get_encryption_key(request)
     enabled: list[str] = []
     for et in form.getlist("enabled_event_types"):
         if isinstance(et, str) and et:
@@ -70,6 +74,12 @@ async def save_settings_events(request: Request) -> RedirectResponse:
     webhook_url = str(form.get("webhook_url") or "").strip() or None
     webhook_kind = str(form.get("webhook_kind") or "generic").strip()
     pagerduty_routing_key = str(form.get("pagerduty_routing_key") or "").strip()
+    if not pagerduty_routing_key:
+        # Blank-skip (leave-unchanged) convention — matches the alert-path
+        # sensitive-field round-trip: a save that doesn't retype the key
+        # preserves the existing secret instead of wiping it (WI-065).
+        existing = load_event_config(db, encryption_key=enc_key)
+        pagerduty_routing_key = existing.pagerduty_routing_key
     if webhook_url:
         settings = getattr(request.app.state, "settings", None)
         err = validate_webhook_url(
@@ -94,7 +104,7 @@ async def save_settings_events(request: Request) -> RedirectResponse:
         pagerduty_routing_key=pagerduty_routing_key,
         rate_limit_per_second=rate_limit,
     )
-    save_event_config(db, config)
+    save_event_config(db, config, encryption_key=enc_key)
 
     record_audit(
         str(db),
