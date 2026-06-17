@@ -249,3 +249,49 @@ def validate_webhook_url(
     except SSRFBlockedError as exc:
         return str(exc)
     return None
+
+
+def validate_smtp_host(
+    host: str,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> str | None:
+    """Validate an SMTP host for SSRF safety (BC-116 SMTP parity).
+
+    Resolves *host* and validates every returned IP against the scan
+    blocklist. Returns an error message string if a resolved IP is blocked,
+    or None if valid.
+
+    Unlike :func:`validate_webhook_url`, a *resolution failure* is **not**
+    treated as a block: when the host cannot be resolved no blocked IP is
+    reachable, so ``smtplib`` is allowed to fail naturally on its own. This
+    also preserves the common test pattern of mocking ``smtplib`` against
+    non-resolving fake hostnames, and matches the threat model where
+    ``smtp_host`` is admin-configured (not an attacker-controlled URL).
+
+    The ``allow_private`` default is True because
+    ``CERT_WATCH_ALLOW_PRIVATE_IPS`` defaults to ``1`` and legitimate SMTP
+    relays are very often internal (10.x / 192.168.x).
+    """
+    # Literal IP — validate directly
+    try:
+        ip = ipaddress.ip_address(host)
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return f"blocked IP: {ip}"
+        return None
+    except ValueError:
+        pass
+    # Hostname — resolve and validate; resolution failure is not a block
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        return None
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        try:
+            resolved = ipaddress.ip_address(sockaddr[0])
+        except ValueError:
+            continue
+        if _is_blocked_ip(resolved, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return f"blocked resolved IP: {resolved} for hostname {host}"
+    return None

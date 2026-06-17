@@ -298,6 +298,8 @@ class Settings:
             smtp_password=self.smtp_password or "",
             from_addr=self.alert_from,
             recipients=list(self.alert_recipients),
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
         )
 
     def build_webhook_config(self) -> WebhookConfig | None:
