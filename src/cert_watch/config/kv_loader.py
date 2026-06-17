@@ -64,6 +64,25 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
             return tuple(g.strip() for g in raw.split(",") if g.strip())
         return env_val
 
+    def _kv_int(env_val: int, kv_key: str, env_name: str) -> int:
+        """Env wins when its var is set; else kv_store int; else env_val default.
+
+        Falls back to ``env_val`` (the env-derived base) when the kv value is
+        absent or not a whole number, mirroring the ldap_connect_timeout /
+        smtp_port int-parse pattern but with an explicit env-source guard so a
+        kv value can never clobber an explicitly-set env var.
+        """
+        import os
+        if env_name in os.environ:
+            return env_val
+        kv_raw = kv.get(kv_key, "")
+        if kv_raw:
+            try:
+                return int(kv_raw)
+            except ValueError:
+                return env_val
+        return env_val
+
     # Merge auth fields
     auth_provider = _kv(base.auth_provider, "auth_provider")
     ldap_server = _kv(base.ldap_server, "ldap_server")
@@ -126,6 +145,41 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
     if alert_digest_only_str and not base.alert_digest_only:
         alert_digest_only = alert_digest_only_str == "1"
 
+    # Merge the six env-var-only alert settings (WI-058). Booleans use _kv_bool
+    # (env wins, else kv "1"/"0", else base default); ints parse with fallback;
+    # webhook_headers is a JSON object string.
+    drift_alerts = _kv_bool(
+        base.drift_alerts, "drift_alerts", "CERT_WATCH_DRIFT_ALERTS"
+    )
+    check_revocation = _kv_bool(
+        base.check_revocation, "check_revocation", "CERT_WATCH_CHECK_REVOCATION"
+    )
+    renewal_window_days = _kv_int(
+        base.renewal_window_days, "renewal_window_days",
+        "CERT_WATCH_RENEWAL_WINDOW_DAYS",
+    )
+    alert_retention_days = _kv_int(
+        base.alert_retention_days, "alert_retention_days",
+        "CERT_WATCH_ALERT_RETENTION_DAYS",
+    )
+    sched_hour = _kv_int(
+        base.sched_hour, "sched_hour", "CERT_WATCH_SCHED_HOUR"
+    )
+    sched_min = _kv_int(
+        base.sched_min, "sched_min", "CERT_WATCH_SCHED_MIN"
+    )
+
+    import json
+    import os
+    webhook_headers = base.webhook_headers
+    if "ALERT_WEBHOOK_HEADERS" not in os.environ:
+        raw_headers = kv.get("webhook_headers", "")
+        if raw_headers:
+            try:
+                webhook_headers = json.loads(raw_headers)
+            except (json.JSONDecodeError, ValueError):
+                webhook_headers = base.webhook_headers
+
     # Merge local admin from kv_store
     local_admin_user = base.local_admin_user
     local_admin_password_hash = base.local_admin_password_hash
@@ -137,8 +191,8 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
     return base.__class__(
         db_path=base.db_path,
         data_dir=base.data_dir,
-        sched_hour=base.sched_hour,
-        sched_min=base.sched_min,
+        sched_hour=sched_hour,
+        sched_min=sched_min,
         smtp_host=smtp_host,
         smtp_port=smtp_port,
         smtp_user=smtp_user,
@@ -146,7 +200,7 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
         alert_from=alert_from,
         alert_recipients=alert_recipients,
         webhook_url=webhook_url,
-        webhook_headers=base.webhook_headers,
+        webhook_headers=webhook_headers,
         webhook_template=webhook_template,
         webhook_kind=webhook_kind,
         pagerduty_routing_key=pagerduty_routing_key,
@@ -158,11 +212,11 @@ def _merge_kv_settings(base, db_path: Path, encryption_key: str | None = None):
         log_format=base.log_format,
         audit_retention_days=base.audit_retention_days,
         history_retention_days=base.history_retention_days,
-        alert_retention_days=base.alert_retention_days,
+        alert_retention_days=alert_retention_days,
         event_retention_days=base.event_retention_days,
-        drift_alerts=base.drift_alerts,
-        renewal_window_days=base.renewal_window_days,
-        check_revocation=base.check_revocation,
+        drift_alerts=drift_alerts,
+        renewal_window_days=renewal_window_days,
+        check_revocation=check_revocation,
         auth_provider=auth_provider,
         ldap_server=ldap_server,
         ldap_base_dn=ldap_base_dn,

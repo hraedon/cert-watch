@@ -46,6 +46,12 @@ _ALERT_KEYS = {
     "webhook_template": "ALERT_WEBHOOK_TEMPLATE",
     "webhook_kind": "ALERT_WEBHOOK_KIND",
     "alert_digest_only": "ALERT_DIGEST_ONLY",
+    "drift_alerts": "CERT_WATCH_DRIFT_ALERTS",
+    "renewal_window_days": "CERT_WATCH_RENEWAL_WINDOW_DAYS",
+    "alert_retention_days": "CERT_WATCH_ALERT_RETENTION_DAYS",
+    "sched_hour": "CERT_WATCH_SCHED_HOUR",
+    "sched_min": "CERT_WATCH_SCHED_MIN",
+    "check_revocation": "CERT_WATCH_CHECK_REVOCATION",
 }
 
 # Single source of truth lives in config (SENSITIVE_SETTING_KEYS) so the
