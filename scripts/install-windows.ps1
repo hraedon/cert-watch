@@ -44,6 +44,13 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
 .PARAMETER HostName
     Hostname for the HTTPS binding. Default: empty (any hostname).
 
+.PARAMETER SharePort443
+    Opt-in SNI mode. When set, the IIS HTTPS binding uses sslFlags=1 and the TLS
+    certificate is bound per-host via netsh hostnameport=<HostName>:443, allowing
+    sibling tools (e.g. gpo-lens) to share port 443 by hostname. Requires -HostName.
+    When omitted (the default), the cert is bound to the catch-all ipport
+    0.0.0.0:443 with sslFlags=0, matching the original single-site behavior.
+
 .PARAMETER TlsCertThumbprint
     Thumbprint of the TLS certificate to bind to the HTTPS endpoint.
     When omitted, the binding is created without a certificate (a warning is
@@ -58,6 +65,11 @@ chain operators (&& / ||). Use if/else and -or/-and instead.
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 -TlsCertThumbprint "ABCDEF123456..."
 
+.EXAMPLE
+    powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1 `
+        -ConfigureIIS -HostName "certs.example.com" -SharePort443 `
+        -TlsCertThumbprint "ABCDEF123456..."
+
 .NOTES
     This script is not signed. If your execution policy blocks unsigned scripts,
     either bypass it per-invocation (see example above) or sign the script with
@@ -70,6 +82,7 @@ param(
     [switch]$ConfigureIIS,
     [string]$SitePath = "C:\inetpub\cert-watch",
     [string]$HostName = "",
+    [switch]$SharePort443,
     [string]$TlsCertThumbprint = "",
     [switch]$WithAuthExtras
 )
@@ -487,51 +500,113 @@ if ($ConfigureIIS) {
         # secrets/python ACLs that were skipped earlier if it was missing.
         Grant-AppPoolAcls
 
+        # --- SNI validation: SharePort443 requires a hostname ---
+        if ($SharePort443 -and -not $HostName) {
+            throw "-SharePort443 requires -HostName so IIS can route by SNI."
+        }
+
         # 4. Create IIS site
         $siteName = "cert-watch"
         $sitePathIIS = "IIS:\Sites\$siteName"
+        $bindingInfo = "*:443:$HostName"
+        $sslFlagsValue = if ($SharePort443) { 1 } else { 0 }
         $existingSite = Get-Item $sitePathIIS -ErrorAction SilentlyContinue
         if (-not $existingSite) {
             Write-Host "  Creating IIS site `"$siteName`" ..."
-            $bindingInfo = "*:443:$HostName"
-            New-Item $sitePathIIS -bindings @{protocol="https"; bindingInformation=$bindingInfo} -physicalPath $SitePath | Out-Null
+            New-Item $sitePathIIS -bindings @{protocol="https"; bindingInformation=$bindingInfo; sslFlags=$sslFlagsValue} -physicalPath $SitePath | Out-Null
             Set-ItemProperty $sitePathIIS -Name applicationPool -Value $AppPool
         } else {
             Write-Host "  IIS site `"$siteName`" already exists."
-            # Ensure pool and path are up to date
+            # Ensure pool, path, and HTTPS binding mode are up to date
             Set-ItemProperty $sitePathIIS -Name applicationPool -Value $AppPool
             Set-ItemProperty $sitePathIIS -Name physicalPath -Value $SitePath
+            $siteBindings = Get-ItemProperty $sitePathIIS -Name bindings
+            $httpsBinding = $null
+            foreach ($b in $siteBindings.Collection) {
+                if ($b.protocol -eq "https") { $httpsBinding = $b; break }
+            }
+            if ($httpsBinding) {
+                $bindingChanged = $false
+                if ($httpsBinding.bindingInformation -ne $bindingInfo) {
+                    $httpsBinding.bindingInformation = $bindingInfo
+                    $bindingChanged = $true
+                }
+                if ($httpsBinding.sslFlags -ne $sslFlagsValue) {
+                    $httpsBinding.sslFlags = $sslFlagsValue
+                    $bindingChanged = $true
+                }
+                if ($bindingChanged) {
+                    Set-ItemProperty $sitePathIIS -Name bindings -Value $siteBindings
+                    Write-Host "    Updated HTTPS binding to $bindingInfo (sslFlags=$sslFlagsValue)."
+                }
+            }
         }
 
-        # 5. TLS cert binding (idempotent: delete stale bindings, add, verify)
+        # 5. TLS cert binding
+        # Idempotent helper: ensures http.sys has the requested binding for the
+        # supplied thumbprint, and removes the opposite binding so SNI and
+        # catch-all do not coexist (the catch-all ipport shadows SNI hostnameport
+        # bindings). The new cert binding is added/verified before the stale one is
+        # deleted so HTTPS is never left unbound during a switch.
+        function Ensure-SslCertBinding {
+            param([string]$BindingArgument, [string]$Thumbprint, [string]$AppId)
+            $target = $BindingArgument
+            $show = & netsh http show sslcert $target 2>&1 | Out-String
+            if ($show -match [regex]::Escape($Thumbprint)) {
+                Write-Host "    Certificate already bound to $target."
+                return
+            }
+            & netsh http delete sslcert $target 2>$null | Out-Null
+            $addOut = & netsh http add sslcert $target certhash="$Thumbprint" appid="$AppId" certstorename=MY 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host ($addOut | Out-String)
+                throw ("Failed to bind TLS certificate to $target (netsh exit $LASTEXITCODE). " +
+                       "HTTPS will not work for that target. Verify the thumbprint exists in LocalMachine\My and has a private key.")
+            }
+            $show = & netsh http show sslcert $target 2>&1 | Out-String
+            if ($show -notmatch [regex]::Escape($Thumbprint)) {
+                throw "TLS certificate binding verification failed for $target (cert hash not present after add)."
+            }
+        }
+
         if ($TlsCertThumbprint) {
             Write-Host "  Binding TLS certificate $TlsCertThumbprint ..."
             $bindPort = "443"
             $appId = "{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}"
             $ipport = "0.0.0.0:$bindPort"
-            # Bind the cert to the catch-all ipport. The IIS site binding keeps
-            # its host header but stays non-SNI (sslFlags=0), so http.sys serves
-            # this cert for the port. We deliberately avoid the SNI hostnameport
-            # form: it requires sslFlags=1 on the binding and otherwise fails the
-            # netsh add with error 87, deleting the working binding and leaving
-            # HTTPS dead (WI-047). cert-watch is the only 443 site on its host,
-            # so a catch-all cert is correct. certstorename=MY is explicit
-            # (another common error-87 trigger when omitted).
-            & netsh http delete sslcert ipport="$ipport" 2>$null | Out-Null
-            if ($HostName) {
-                & netsh http delete sslcert hostnameport="$HostName`:$bindPort" 2>$null | Out-Null
+            $hostPort = "$HostName`:$bindPort"
+            if ($SharePort443) {
+                # SNI path: bind per-host, then conditionally remove a catch-all
+                # that would shadow it. Adding first, then deleting, keeps HTTPS
+                # up throughout the switch (WI-047 regression class).
+                Ensure-SslCertBinding -BindingArgument "hostnameport=$hostPort" -Thumbprint $TlsCertThumbprint -AppId $appId
+                # Only remove the catch-all if it carries OUR cert (we bound it on
+                # a prior default-mode run). A sibling tool (e.g. gpo-lens) may own
+                # the catch-all with its own cert; silently deleting it would break
+                # co-residency -- the very case -SharePort443 exists to enable. When
+                # a foreign cert owns the catch-all, warn instead and leave it: full
+                # port-443 sharing requires ALL co-resident tools to use SNI (none
+                # may hold the catch-all, since the catch-all shadows every SNI name).
+                $catchallShow = & netsh http show sslcert ipport="$ipport" 2>&1 | Out-String
+                if ($catchallShow -match [regex]::Escape($TlsCertThumbprint)) {
+                    & netsh http delete sslcert ipport="$ipport" 2>$null | Out-Null
+                    Write-Host "    Removed prior catch-all $ipport (was cert-watch cert)."
+                } elseif ($catchallShow -match "Certificate Hash") {
+                    Write-Warning "A catch-all $ipport exists bound to a DIFFERENT certificate (a sibling tool?). It was NOT removed and WILL shadow this SNI binding. Convert that tool to SNI too, or remove its catch-all manually."
+                }
+                Write-Host "    TLS certificate bound to hostnameport=$hostPort (SNI, store: MY)."
+            } else {
+                # Default single-site path: catch-all ipport. Add the catch-all
+                # FIRST, then remove the stale SNI binding left from a prior
+                # -SharePort443 run. Add-before-delete keeps HTTPS up throughout
+                # the switch; the reverse ordering would leave a window with no
+                # HTTPS binding at all (the WI-047 regression class).
+                Ensure-SslCertBinding -BindingArgument "ipport=$ipport" -Thumbprint $TlsCertThumbprint -AppId $appId
+                if ($HostName) {
+                    & netsh http delete sslcert hostnameport="$hostPort" 2>$null | Out-Null
+                }
+                Write-Host "    TLS certificate bound to $ipport (catch-all, store: MY)."
             }
-            $addOut = & netsh http add sslcert ipport="$ipport" certhash="$TlsCertThumbprint" appid="$appId" certstorename=MY 2>&1
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host ($addOut | Out-String)
-                throw "Failed to bind TLS certificate (netsh exit $LASTEXITCODE). HTTPS will not work. Verify the thumbprint exists in LocalMachine\My and has a private key."
-            }
-            # Verify the binding actually landed (-match is case-insensitive).
-            $show = & netsh http show sslcert ipport="$ipport" 2>&1 | Out-String
-            if ($show -notmatch [regex]::Escape($TlsCertThumbprint)) {
-                throw "TLS certificate binding verification failed for $ipport (cert hash not present after add)."
-            }
-            Write-Host "    TLS certificate bound to $ipport (store: MY)."
         } else {
             Write-Host "  [warn] No -TlsCertThumbprint provided. HTTPS binding exists but no certificate is assigned."
             Write-Host ('         Assign a certificate via IIS Manager or re-run with -TlsCertThumbprint ' + '.')

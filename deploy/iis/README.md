@@ -134,11 +134,22 @@ Then bind your TLS certificate to the 443 binding — either via IIS Manager
 (*Site Bindings → Edit → SSL certificate*) or:
 
 ```powershell
-# List available certs and bind one:
-netsh http add sslcert hostnameport=certs.example.com:443 `
+# List available certs and bind one to the catch-all 443 ipport (matches the
+# bindingInformation="*:443:certs.example.com" catch-all site binding above, the
+# correct single-site default):
+netsh http add sslcert ipport=0.0.0.0:443 `
     certhash=<THUMBPRINT> `
     appid="{GUID}"
 ```
+
+If you run `install-windows.ps1 -ConfigureIIS`, add `-SharePort443` with a
+`-HostName` (for example `-HostName certs.example.com -SharePort443`) to use
+SNI — the binding becomes `sslFlags=1` and the cert is bound per-host via
+`hostnameport=<host>:443`, letting sibling tools share port 443 by hostname.
+**Do not mix**: a catch-all `*:443` site binding (`sslFlags=0`) shadows every
+SNI `hostnameport` binding, so for co-residency all tools on 443 must use SNI
+and none may hold the catch-all. Without `-SharePort443` the installer binds to
+the catch-all `0.0.0.0:443`, the correct default for a single cert-watch site.
 
 ### 2a.4 — Configure the app pool
 
