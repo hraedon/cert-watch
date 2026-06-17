@@ -440,6 +440,110 @@
       </form>
     </div>
 
+    <!-- Alert groups tab -->
+    <div class="cw-tab-panel {% if tab == 'alert-groups' %}active{% endif %}" id="tab-alert-groups">
+      <div class="cw-mb-16">
+        <h3 class="cw-heading-3">Alert groups</h3>
+        <p class="cw-muted">
+          Per-team alert routing. A group matches certificates by tag (a team's
+          default tag) and routes their alerts to that team's recipients/webhook,
+          with an optional per-team alert threshold and digest cadence. A cert
+          with no matching group falls back to the global alert settings.
+        </p>
+      </div>
+      <form method="post" action="/settings/alert-groups">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label" for="ag_name">Name</label>
+          <input class="cw-input" type="text" id="ag_name" name="name" placeholder="e.g., platform-team" required>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="ag_match_tags">Match tags</label>
+          <input class="cw-input" type="text" id="ag_match_tags" name="match_tags" placeholder="e.g., platform-team, prod">
+          <div class="cw-muted cw-fz-11 cw-mt-3">Comma-separated. A cert routes to this group when any of its (cert or host) tags match.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="ag_recipients">Recipients</label>
+          <input class="cw-input" type="text" id="ag_recipients" name="recipients" placeholder="ops@example.com, lead@example.com">
+          <div class="cw-muted cw-fz-11 cw-mt-3">Comma-separated email addresses for this team's alerts.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="ag_webhook_url">Webhook URL (optional)</label>
+          <input class="cw-input" type="text" id="ag_webhook_url" name="webhook_url" placeholder="https://hooks.slack.com/services/...">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="ag_threshold_days">Alert threshold (days, optional)</label>
+          <input class="cw-input cw-w-96" type="number" min="1" id="ag_threshold_days" name="threshold_days">
+          <div class="cw-muted cw-fz-11 cw-mt-3">Days-to-expiry at which this team's alerts fire. Leave empty to use the global thresholds.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="ag_digest_cadence_days">Digest cadence (days)</label>
+          <input class="cw-input cw-w-96" type="number" min="1" id="ag_digest_cadence_days" name="digest_cadence_days" value="7">
+          <div class="cw-muted cw-fz-11 cw-mt-3">How often this team's digest is sent, in days. Default 7.</div>
+        </div>
+        <button type="submit" class="cw-btn primary">Add alert group</button>
+      </form>
+
+      {% if alert_groups %}
+      <table class="cw-table cw-mt-16" data-testid="alert-groups-table">
+        <thead>
+          <tr><th>Name</th><th>Match tags</th><th>Recipients</th><th>Threshold</th><th>Digest</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for g in alert_groups %}
+          <tr>
+            <td>{{ g.name }}</td>
+            <td>{{ g.match_tags | join(', ') or '—' }}</td>
+            <td>{{ g.recipients | join(', ') or '—' }}</td>
+            <td>{{ g.threshold_days if g.threshold_days is not none else '—' }}</td>
+            <td>{{ g.digest_cadence_days }}d</td>
+            <td>
+              <details class="cw-inline-edit">
+                <summary class="cw-btn ghost sm">Edit</summary>
+                <form method="post" action="/settings/alert-groups/{{ g.id }}" class="cw-mt-8">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_name_{{ g.id }}">Name</label>
+                    <input class="cw-input" type="text" id="edit_ag_name_{{ g.id }}" name="name" value="{{ g.name }}" required>
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_match_tags_{{ g.id }}">Match tags</label>
+                    <input class="cw-input" type="text" id="edit_ag_match_tags_{{ g.id }}" name="match_tags" value="{{ g.match_tags | join(', ') }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_recipients_{{ g.id }}">Recipients</label>
+                    <input class="cw-input" type="text" id="edit_ag_recipients_{{ g.id }}" name="recipients" value="{{ g.recipients | join(', ') }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_webhook_url_{{ g.id }}">Webhook URL</label>
+                    <input class="cw-input" type="text" id="edit_ag_webhook_url_{{ g.id }}" name="webhook_url" value="{{ g.webhook_url }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_threshold_days_{{ g.id }}">Alert threshold (days)</label>
+                    <input class="cw-input cw-w-96" type="number" min="1" id="edit_ag_threshold_days_{{ g.id }}" name="threshold_days"
+                           value="{{ g.threshold_days if g.threshold_days is not none else '' }}">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="edit_ag_digest_cadence_days_{{ g.id }}">Digest cadence (days)</label>
+                    <input class="cw-input cw-w-96" type="number" min="1" id="edit_ag_digest_cadence_days_{{ g.id }}" name="digest_cadence_days" value="{{ g.digest_cadence_days }}">
+                  </div>
+                  <button type="submit" class="cw-btn primary sm">Save changes</button>
+                </form>
+              </details>
+              <form method="post" action="/settings/alert-groups/{{ g.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this alert group?">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="cw-btn ghost sm">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="cw-muted cw-mt-16">No alert groups yet. Create one above to route a team's alerts by tag.</p>
+      {% endif %}
+    </div>
+
     <!-- Policy tab -->
     <div class="cw-tab-panel {% if tab == 'policy' %}active{% endif %}" id="tab-policy">
       {% if policy_set %}
