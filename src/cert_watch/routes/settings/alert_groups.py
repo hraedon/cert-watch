@@ -151,11 +151,10 @@ def _match_preview(
     are labelled "tag matches" accordingly. Operators verifying total routing
     for a group with manual/role-linked certs must account for those separately.
 
-    Non-ASCII limitation: SQLite LIKE is ASCII-case-insensitive, so tags that
-    differ only by non-ASCII casing (e.g. Turkish dotless-i) may undercount vs
-    the alert engine's Python ``casefold()`` match. This parity gap is shared
-    with the dashboard scope filter (``_add_effective_tag_filter``); SMB tag
-    corpora are typically ASCII.
+    Matching is Unicode-case-insensitive via the ``cw_casefold`` SQL function
+    (WI-066), so it agrees with the alert engine's Python ``casefold()`` match
+    for non-ASCII tags (Turkish dotless-i, German ß, etc.) as well as the
+    dashboard scope filter.
     """
     from cert_watch.database.connection import _connect
     from cert_watch.database.dashboard import _escape_like
@@ -175,8 +174,8 @@ def _match_preview(
     for tag in normalized:
         like = f"%,{_escape_like(tag)},%"
         conditions.append(
-            "(',' || COALESCE(c.tags, '') || ',') LIKE ? ESCAPE '\\' "
-            "OR (',' || COALESCE(h.tags, '') || ',') LIKE ? ESCAPE '\\'"
+            "cw_casefold(',' || COALESCE(c.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\' "
+            "OR cw_casefold(',' || COALESCE(h.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\'"
         )
         params.extend([like, like])
     where = " OR ".join(conditions)

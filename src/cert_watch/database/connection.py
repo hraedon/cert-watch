@@ -29,6 +29,21 @@ def get_write_lock() -> threading.Lock:
     return _write_lock
 
 
+def _cw_casefold(value: object) -> str:
+    """Unicode casefold exposed to SQL (WI-066).
+
+    SQLite ``LIKE`` and ``LOWER()`` are ASCII-case-insensitive only, so the
+    dashboard scope filter and alert-group match-preview (which use ``LIKE``)
+    undercount vs the Python ``tags_match`` engine (which uses ``casefold()``)
+    for non-ASCII tags (e.g. Turkish dotless-i, German ß). Tag-filter queries
+    wrap both sides of the ``LIKE`` in ``cw_casefold(...)`` so the SQL match is
+    Unicode-case-insensitive, matching the engine. Inert unless referenced.
+    """
+    if value is None:
+        return ""
+    return str(value).casefold()
+
+
 class _ThreadConnections:
     """Per-thread connection cache that closes its connections when dropped.
 
@@ -131,6 +146,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
 
     conn = sqlite3.connect(path_str, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.create_function("cw_casefold", 1, _cw_casefold)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
     cache[path_str] = conn
