@@ -38,6 +38,19 @@ def kv_set(db_path: str | Path, key: str, value: str) -> None:
         conn.commit()
 
 
+def kv_set_multi(db_path: str | Path, pairs: dict[str, str]) -> None:
+    """Set multiple key-value pairs atomically in a single transaction."""
+    init_schema(db_path)
+    now = _iso(datetime.now(UTC))
+    with _connect(db_path) as conn:
+        for key, value in pairs.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO kv_store (key, value, updated_at) VALUES (?, ?, ?)",
+                (key, value, now),
+            )
+        conn.commit()
+
+
 def kv_set_secret(db_path: str | Path, key: str, value: str, encryption_key: str) -> None:
     """Encrypt and store a sensitive value in kv_store (BC-082)."""
     kv_set(db_path, key, fernet_encrypt(value, encryption_key))

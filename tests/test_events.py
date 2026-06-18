@@ -164,6 +164,25 @@ class TestEventStreamConfig:
         save_event_config(db, preserved, encryption_key=enc_key)
         assert load_event_config(db, encryption_key=enc_key).pagerduty_routing_key == "keep-me"
 
+    def test_pagerduty_routing_key_no_decrypt_without_key(self, db):
+        # When the signing key is absent (encryption_key resolves to None) and
+        # the stored value is enc:v1: ciphertext, load_event_config must NOT
+        # load the raw ciphertext as the routing key (which would corrupt on
+        # re-save). The key should appear unset.
+        from cert_watch.database.encryption import derive_encryption_key
+        from cert_watch.database.kv_store import kv_set_secret
+
+        enc_key = derive_encryption_key("test-signing-key")
+        # Write an encrypted secret directly (simulates a save that happened
+        # when the signing key was available).
+        kv_set_secret(db, "event_stream_pagerduty_routing_key", "real-key", enc_key)
+        # Now load without an encryption key — signing key absent.
+        cfg = load_event_config(db, encryption_key=None)
+        # Must NOT be the raw ciphertext.
+        assert not cfg.pagerduty_routing_key.startswith("enc:v1:")
+        # Must be empty (key is undecryptable).
+        assert cfg.pagerduty_routing_key == ""
+
 
 class TestEmitEvent:
     def test_writes_to_event_log(self, db):
@@ -463,3 +482,54 @@ class TestDeliverWebhookSSRFPolicy:
         captured = self._capture(monkeypatch, db)
         self._emit(db)
         assert captured["allowed_subnets"] == ("192.168.0.0/16",)
+
+
+class TestDeliverWebhookErrorHandling:
+    """_deliver_webhook must catch exceptions and mark the event as failed
+    rather than leaving it stuck in 'pending' status forever."""
+
+    def test_exception_in_delivery_marks_event_failed(self, db, monkeypatch):
+        from cert_watch.database.connection import _connect
+
+        # Write the event row so the UPDATE at the end has something to update.
+        with _connect(db) as conn:
+            cur = conn.execute(
+                "INSERT INTO event_log"
+                " (event_type, timestamp, source, payload,"
+                " delivery_status, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    "cert_added",
+                    datetime.now(UTC).isoformat(),
+                    "scan",
+                    '{"cert_id": "1"}',
+                    "pending",
+                    datetime.now(UTC).isoformat(),
+                ),
+            )
+            conn.commit()
+            row_id = cur.lastrowid
+
+        # Force _resolve_ssrf_policy to raise.
+        monkeypatch.setattr(
+            "cert_watch.events._resolve_ssrf_policy",
+            lambda db_path: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+        _deliver_webhook(
+            Event(
+                event_type="cert_added",
+                timestamp=datetime.now(UTC),
+                payload={"cert_id": "1"},
+                source="scan",
+            ),
+            EventStreamConfig(webhook_url="https://example.com/hook"),
+            db,
+            row_id=row_id,
+        )
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT delivery_status, error_message FROM event_log WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+        assert row["delivery_status"] == "failed"
+        assert "boom" in (row["error_message"] or "")

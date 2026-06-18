@@ -125,7 +125,7 @@ def load_event_config(
     if encryption_key is None:
         encryption_key = _resolve_encryption_key(db_path)
     secret = kv_get(db_path, _KV_ROUTING_KEY, encryption_key)
-    if secret:
+    if secret and not (encryption_key is None and secret.startswith("enc:v1:")):
         cfg.pagerduty_routing_key = secret
     return cfg
 
@@ -133,21 +133,24 @@ def load_event_config(
 def save_event_config(
     db_path: str | Path, config: EventStreamConfig, *, encryption_key: str | None = None
 ) -> None:
-    from cert_watch.database.kv_store import kv_set, kv_set_secret
+    from cert_watch.database.kv_store import kv_set_multi
 
-    kv_set(db_path, _KV_KEY, config.to_json())
     if encryption_key is None:
         encryption_key = _resolve_encryption_key(db_path)
+    pairs: dict[str, str] = {_KV_KEY: config.to_json()}
     if config.pagerduty_routing_key:
         if encryption_key:
-            kv_set_secret(
-                db_path, _KV_ROUTING_KEY, config.pagerduty_routing_key, encryption_key
+            from cert_watch.database.encryption import fernet_encrypt
+
+            pairs[_KV_ROUTING_KEY] = fernet_encrypt(
+                config.pagerduty_routing_key, encryption_key
             )
         else:
             # No signing key available (e.g. tests / ephemeral key): store
             # plaintext so the value still round-trips. Production persists
             # .auth_secret, so this branch is not reached there.
-            kv_set(db_path, _KV_ROUTING_KEY, config.pagerduty_routing_key)
+            pairs[_KV_ROUTING_KEY] = config.pagerduty_routing_key
+    kv_set_multi(db_path, pairs)
 
 
 _rate_lock = threading.Lock()
@@ -284,23 +287,27 @@ def _deliver_webhook(
         message=friendly_msg,
         threshold_days=None,
     )
-    allow_private, allowed_subnets = _resolve_ssrf_policy(db_path)
-    wc = WebhookConfig(
-        url=config.webhook_url or "",
-        kind=config.webhook_kind,
-        routing_key=config.pagerduty_routing_key,
-        allow_private=allow_private,
-        allowed_subnets=allowed_subnets,
-    )
-    success = False
-    last_error = ""
-    for _ in backoff_range(2, 1.0, strategy="exponential"):
-        if send_webhook(alert, wc):
-            success = True
-            break
-        last_error = alert.error_message or "unknown"
-    new_status = "delivered" if success else "failed"
-    err = None if success else last_error
+    try:
+        allow_private, allowed_subnets = _resolve_ssrf_policy(db_path)
+        wc = WebhookConfig(
+            url=config.webhook_url or "",
+            kind=config.webhook_kind,
+            routing_key=config.pagerduty_routing_key,
+            allow_private=allow_private,
+            allowed_subnets=allowed_subnets,
+        )
+        success = False
+        last_error = ""
+        for _ in backoff_range(2, 1.0, strategy="exponential"):
+            if send_webhook(alert, wc):
+                success = True
+                break
+            last_error = alert.error_message or "unknown"
+        new_status = "delivered" if success else "failed"
+        err = None if success else last_error
+    except Exception as exc:
+        new_status = "failed"
+        err = str(exc)[:500]
     with _connect(db_path) as conn:
         conn.execute(
             "UPDATE event_log SET delivery_status = ?, error_message = ? WHERE id = ?",
