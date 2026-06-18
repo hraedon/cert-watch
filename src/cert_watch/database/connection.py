@@ -29,7 +29,7 @@ def get_write_lock() -> threading.Lock:
     return _write_lock
 
 
-def _cw_casefold(value: object) -> str:
+def _cw_casefold(value: str | None) -> str:
     """Unicode casefold exposed to SQL (WI-066).
 
     SQLite ``LIKE`` and ``LOWER()`` are ASCII-case-insensitive only, so the

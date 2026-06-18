@@ -773,8 +773,8 @@ def _entry_matches_scope_tag(
     if not scope_tags:
         return True
     entry_tags = entry.get("tags", "")
-    entry_set = set(t.strip().lower() for t in entry_tags.split(",") if t.strip())
-    return any(t.strip().lower() in entry_set for t in scope_tags)
+    entry_set = set(t.strip().casefold() for t in entry_tags.split(",") if t.strip())
+    return any(t.strip().casefold() in entry_set for t in scope_tags)
 
 
 def list_dashboard_grouped_page(

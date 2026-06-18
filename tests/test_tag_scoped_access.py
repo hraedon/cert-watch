@@ -30,7 +30,7 @@ def _insert_host(conn, hostname, port=443, tags=""):
     )
 
 
-def _insert_cert(conn, cert_id, hostname, port=443, tags=""):
+def _insert_cert(conn, cert_id, hostname, port=443, tags="", source="scanned"):
     now = datetime.now(UTC)
     conn.execute(
         """
@@ -44,7 +44,7 @@ def _insert_cert(conn, cert_id, hostname, port=443, tags=""):
         (
             cert_id, hostname, f"issuer-{hostname}",
             now.isoformat(), (now + timedelta(days=30)).isoformat(),
-            "[]", f"fp-{cert_id}", b"der", "scanned", hostname,
+            "[]", f"fp-{cert_id}", b"der", source, hostname,
             port, 1, None, 1, None, "", tags,
             now.isoformat(), now.isoformat(),
         ),
@@ -120,6 +120,24 @@ class TestDashboardScopeFiltering:
         rows, total = list_dashboard_page(db, scope_tags=("Straße",))
         assert total == 1
         assert rows[0]["id"] == "c1"
+
+    def test_grouped_dashboard_non_ascii_casefold_parity(self, db: Path):
+        """WI-066: the grouped dashboard's Python-side filter
+        (_entry_matches_scope_tag) uses casefold() not lower(), so uploaded
+        entries with non-ASCII tags match scope tags the same way scanned
+        entries do via SQL cw_casefold."""
+        from cert_watch.database.dashboard import list_dashboard_grouped_page
+        from cert_watch.tags import tags_match
+
+        with _connect(db) as conn:
+            _insert_host(conn, "de.example.com", tags="STRASSE")
+            _insert_cert(conn, "c1", "de.example.com", source="uploaded")
+
+        assert tags_match(["STRASSE"], ["Straße"]) is True
+        rows, total = list_dashboard_grouped_page(
+            db, scope_tags=("Straße",), per_page=0
+        )
+        assert total == 1
 
 
 class TestHostAutoTagging:
