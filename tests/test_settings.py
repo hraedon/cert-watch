@@ -1570,6 +1570,116 @@ def test_test_smtp_ssrf_blocked_ip(reload_app):
     assert "blocked" in data["error"].lower()
 
 
+def test_test_smtp_private_hostname_allowed_by_default(reload_app, monkeypatch):
+    """Regression: a hostname resolving to a private IP (10.x) must not be
+    blocked when CERT_WATCH_ALLOW_PRIVATE_IPS is unset (defaults to 1).
+
+    Previously the test-smtp route hardcoded allow_private=False, blocking
+    all internal SMTP relays even though the real alert-delivery path
+    allowed them (BC-116 SMTP parity).
+    """
+    import smtplib
+    import socket as _socket
+
+    real_getaddrinfo = _socket.getaddrinfo
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        if host == "mail.internal.example":
+            return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("10.5.101.151", 0))]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(_socket, "getaddrinfo", fake_getaddrinfo)
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=10):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self):
+            pass
+
+        def send_message(self, msg):
+            self.sent_to = msg["To"]
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "mail.internal.example",
+                "smtp_port": "587",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+
+def test_test_smtp_private_hostname_blocked_when_disallowed(reload_app, monkeypatch):
+    """When CERT_WATCH_ALLOW_PRIVATE_IPS=0, a private SMTP host is blocked."""
+    import socket as _socket
+
+    real_getaddrinfo = _socket.getaddrinfo
+
+    def fake_getaddrinfo(host, *args, **kwargs):
+        if host == "mail.internal.example":
+            return [(_socket.AF_INET, _socket.SOCK_STREAM, 6, "", ("10.5.101.151", 0))]
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(_socket, "getaddrinfo", fake_getaddrinfo)
+
+    app_mod = reload_app(CERT_WATCH_ALLOW_PRIVATE_IPS="0")
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "mail.internal.example",
+                "smtp_port": "587",
+                "smtp_user": "",
+                "smtp_password": "",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["ok"] is False
+    assert "blocked" in data["error"].lower()
+
+
+def test_check_ldap_ssrf_allows_private_when_allowed(monkeypatch):
+    """Regression: _check_ldap_ssrf must allow private IPs when allow_private=True."""
+    from cert_watch.routes.settings.auth import _check_ldap_ssrf
+
+    def fake_resolve(host, port=443, *, allow_private=True, **kwargs):
+        if not allow_private:
+            return (
+                "hostname resolves to blocked address 10.5.101.151. "
+                "Set CERT_WATCH_ALLOW_PRIVATE_IPS=1 to allow scanning private IPs.",
+                None,
+            )
+        return None, "10.5.101.151"
+
+    monkeypatch.setattr(
+        "cert_watch.scan_resolver.resolve_and_validate_host", fake_resolve
+    )
+
+    assert _check_ldap_ssrf("ldap.internal.example", allow_private=True) is None
+
+    blocked = _check_ldap_ssrf("ldap.internal.example", allow_private=False)
+    assert blocked is not None
+    assert b"blocked" in blocked.body.lower()
+
+
 # ---------- _probe_tls_chain native chain / openssl fallback ----------
 
 

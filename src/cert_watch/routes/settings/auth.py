@@ -124,7 +124,12 @@ def _parse_ldap_form(form) -> tuple[str, str, str, str, str, bool, int] | JSONRe
     return server, base_dn, bind_dn, bind_password, ca_cert, start_tls, connect_timeout
 
 
-def _check_ldap_ssrf(server: str) -> JSONResponse | None:
+def _check_ldap_ssrf(
+    server: str,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> JSONResponse | None:
     from cert_watch.scan import _is_blocked_ip
     from cert_watch.scan_resolver import resolve_and_validate_host
 
@@ -132,12 +137,14 @@ def _check_ldap_ssrf(server: str) -> JSONResponse | None:
         host_part = s.split("://", 1)[-1].split(":")[0].split("/")[0]
         try:
             ip = ipaddress.ip_address(host_part)
-            if _is_blocked_ip(ip):
+            if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
                 return JSONResponse(
                     {"ok": False, "error": f"LDAP server IP blocked: {ip}"},
                 )
         except ValueError:
-            err, _ = resolve_and_validate_host(host_part, allow_private=False)
+            err, _ = resolve_and_validate_host(
+                host_part, allow_private=allow_private, allowed_subnets=allowed_subnets
+            )
             if err:
                 return JSONResponse({"ok": False, "error": f"LDAP server blocked: {err}"})
     return None
@@ -291,7 +298,12 @@ async def test_ldap_connection(
         return parsed
 
     server = parsed[0]
-    ssrf_err = _check_ldap_ssrf(server)
+    settings = _get_settings(request)
+    ssrf_err = _check_ldap_ssrf(
+        server,
+        allow_private=settings.allow_private,
+        allowed_subnets=settings.allowed_subnets,
+    )
     if ssrf_err:
         return ssrf_err
 
