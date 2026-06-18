@@ -22,14 +22,13 @@ async def test_smtp_connection(
     request: Request,
     _auth: str = Depends(require_admin_write),
 ) -> JSONResponse:
-    import ipaddress as _ip
     import logging
     import smtplib
     from email.message import EmailMessage
 
     from cert_watch.alerts import negotiate_starttls
-    from cert_watch.scan import _is_blocked_ip
-    from cert_watch.scan_resolver import resolve_and_validate_host
+    from cert_watch.http_client import validate_smtp_host
+    from cert_watch.routes._deps import _get_settings
 
     logger = logging.getLogger("cert_watch.routes.settings")
 
@@ -55,16 +54,16 @@ async def test_smtp_connection(
         return JSONResponse({"ok": False, "error": "SMTP host is required"})
 
     # SSRF guard: block connections to loopback/link-local/metadata addresses.
-    try:
-        ip = _ip.ip_address(host)
-        if _is_blocked_ip(ip):
-            return JSONResponse(
-                {"ok": False, "error": f"SMTP host IP blocked: {ip}"},
-            )
-    except ValueError:
-        err, _ = resolve_and_validate_host(host, allow_private=False)
-        if err:
-            return JSONResponse({"ok": False, "error": f"SMTP host blocked: {err}"})
+    # Uses the actual CERT_WATCH_ALLOW_PRIVATE_IPS / ALLOWED_SUBNETS settings so
+    # the test path matches the real alert-delivery path (BC-116 SMTP parity).
+    settings = _get_settings(request)
+    ssrf_err = validate_smtp_host(
+        host,
+        allow_private=settings.allow_private,
+        allowed_subnets=settings.allowed_subnets,
+    )
+    if ssrf_err:
+        return JSONResponse({"ok": False, "error": f"SMTP host blocked: {ssrf_err}"})
 
     if not from_addr or not recipients:
         return JSONResponse({
