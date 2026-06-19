@@ -61,7 +61,7 @@ def test_chain_status_with_intermediates(chain_triplet, monkeypatch):
         "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
     )
     cs = chain_status(leaf, [intermediate, root], [])
-    assert cs == "public"
+    assert cs == "incomplete"
 
 
 def test_chain_status_incomplete_chain(chain_triplet, monkeypatch):

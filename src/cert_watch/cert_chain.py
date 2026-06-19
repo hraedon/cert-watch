@@ -140,6 +140,35 @@ def _load_system_ca_cache() -> tuple[set[bytes], dict[bytes, list[x509.Certifica
             pem_data = pem_data[end:]
         continue
 
+    if not subjects:
+        # Fallback to certifi bundle (present on all platforms as a
+        # transitive dependency; critical on Windows where the Linux
+        # system-CA paths above do not exist — WI-073).
+        try:
+            import certifi
+
+            pem_path = Path(certifi.where())
+            if pem_path.exists():
+                pem_data = pem_path.read_bytes()
+                while pem_data:
+                    start = pem_data.find(b"-----BEGIN CERTIFICATE-----")
+                    if start == -1:
+                        break
+                    end = pem_data.find(b"-----END CERTIFICATE-----", start)
+                    if end == -1:
+                        break
+                    end += len(b"-----END CERTIFICATE-----")
+                    try:
+                        cert = x509.load_pem_x509_certificate(pem_data[start:end])
+                        subj = cert.subject.public_bytes(Encoding.DER)
+                        subjects.add(subj)
+                        by_subject.setdefault(subj, []).append(cert)
+                    except (ValueError, TypeError):
+                        pass
+                    pem_data = pem_data[end:]
+        except ImportError:
+            pass
+
     logger.debug("loaded %d system CA subjects from trust store", len(subjects))
     _system_ca_cache = (subjects, by_subject)
     return _system_ca_cache
@@ -369,9 +398,13 @@ def chain_status(
         return "private"
     last = chain[-1]
     if _subject_bytes(last) == _issuer_bytes(last) and _is_signed_by(last, last):
-        # Self-signed root: only "public" if it actually self-signs (a real
-        # trust anchor), not merely if its names happen to match.
-        return "public"
+        # Self-signed root: only "public" if the system CA store actually
+        # contains a matching root that verifies the signature.  A self-signed
+        # cert that is not in any trust store (e.g. a private CA root that was
+        # not uploaded as a user anchor) is "incomplete", not "public".
+        if _is_anchored_by_system_root(full):
+            return "public"
+        return "incomplete"
     if _is_anchored_by_system_root(full):
         return "public"
     return "incomplete"

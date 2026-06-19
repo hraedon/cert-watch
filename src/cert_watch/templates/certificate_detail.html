@@ -121,12 +121,6 @@
                 {% endif %}
               </div>
             </div>
-            {% if host_info.notes %}
-            <div class="cw-col-span-2">
-              <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
-              <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host_info.notes }}</div>
-            </div>
-            {% endif %}
           </div>
         </div>
         {% if may_write and host_id %}
@@ -154,6 +148,12 @@
             <button class="cw-btn primary sm" type="button" data-action="save-host-notes">Save</button>
           </div>
         </div>
+        {% elif host_info.notes %}
+        <div class="cw-mt-10">
+          <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
+          <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host_info.notes }}</div>
+        </div>
+        {% endif %}
         <div id="owner-edit" class="cw-hidden">
           <div class="cw-grid-2-16-22">
             <div>
@@ -189,7 +189,6 @@
             <button class="cw-btn primary sm" type="button" data-action="save-owner" data-testid="owner-save-btn">Save</button>
           </div>
         </div>
-        {% endif %}
       </div>
       {% endif %}
 
@@ -266,7 +265,6 @@
           </div>
         </div>
         {# Progress bar #}
-        {% set issued_days = cert.not_before | int if cert.not_before else 0 %}
         {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
         {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
         {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}

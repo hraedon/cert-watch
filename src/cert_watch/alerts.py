@@ -1232,7 +1232,7 @@ def send_expiry_digest(
     if any_smtp_success and not any_smtp_failure:
         return True
 
-    if not any_smtp_success and webhook_config is not None:
+    if webhook_config is not None:
         return _send_digest_webhook(expiring, webhook_config)
 
     return False

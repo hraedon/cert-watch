@@ -118,6 +118,7 @@ async def add_host(
             dns_servers=s.dns_servers,
             pinned_ip=pinned_ip,
             max_output_bytes=s.scan_max_output_bytes,
+            hsts_timeout=s.hsts_timeout,
         )
         if not isinstance(result, ScanError):
             async with _store_sem:
@@ -268,6 +269,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             dns_servers=dns_srv,
             pinned_ip=pinned,
             max_output_bytes=s.scan_max_output_bytes,
+            hsts_timeout=s.hsts_timeout,
         )
         return hostname, port, result
 
@@ -487,6 +489,7 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                 allowed_subnets=s.allowed_subnets,
                 dns_servers=s.dns_servers,
                 max_output_bytes=s.scan_max_output_bytes,
+                hsts_timeout=s.hsts_timeout,
             )
 
     for h, result in await asyncio.gather(*[_limited_scan(h) for h in hosts]):
@@ -572,6 +575,7 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
         allowed_subnets=s.allowed_subnets,
         dns_servers=s.dns_servers,
         max_output_bytes=s.scan_max_output_bytes,
+        hsts_timeout=s.hsts_timeout,
     )
     if not isinstance(result, ScanError):
         async with _store_sem:
