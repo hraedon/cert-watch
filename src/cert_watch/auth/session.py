@@ -235,8 +235,6 @@ def decode_session(
     if not token or ":" not in token:
         return None
     last_colon = token.rfind(":")
-    if last_colon < 0:
-        return None
     payload = token[:last_colon]
     sig = token[last_colon + 1 :]
     key = _key(security).encode()

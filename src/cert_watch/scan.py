@@ -103,6 +103,7 @@ def scan_host(
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
+    hsts_timeout: float = 5.0,
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06.
 
@@ -115,6 +116,7 @@ def scan_host(
             hostname, port, timeout=timeout, verify=verify,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, max_output_bytes=max_output_bytes,
+            hsts_timeout=hsts_timeout,
         )
         if isinstance(result, ScannedEntry):
             return result
@@ -138,6 +140,7 @@ def _scan_host_once(
     dns_servers: tuple[str, ...] = (),
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
+    hsts_timeout: float = 5.0,
 ) -> ScannedEntry | ScanError:
     """Single TLS handshake attempt — no retry logic.
 
@@ -168,6 +171,7 @@ def _scan_host_once(
             hostname, port, timeout=timeout,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, verify=verify, max_output_bytes=max_output_bytes,
+            hsts_timeout=hsts_timeout,
         )
 
     try:
@@ -209,7 +213,7 @@ def _scan_host_once(
             cp.is_leaf = False
             chain_certs.append(cp)
 
-    hsts = _probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify)
+    hsts = _probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify, timeout=hsts_timeout)
 
     return ScannedEntry(
         host=hostname,
@@ -234,6 +238,7 @@ def _scan_host_via_openssl(
     pinned_ip: str | None = None,
     verify: bool = False,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
+    hsts_timeout: float = 5.0,
 ) -> ScannedEntry | ScanError:
     """Scan using openssl s_client only — one connection for both leaf and chain.
 
@@ -266,7 +271,9 @@ def _scan_host_via_openssl(
                 chain=chain_certs,
                 scanned_at=datetime.now(UTC),
                 protocol_version=protocol_version,
-                hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify),
+                hsts=_probe_hsts(
+                    hostname, port, pinned_ip=pinned_ip, verify=verify, timeout=hsts_timeout,
+                ),
                 verify_requested=verify,
             )
 
@@ -313,7 +320,7 @@ def _scan_host_via_openssl(
         chain=[],
         scanned_at=datetime.now(UTC),
         protocol_version=protocol_version_fb,
-        hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify),
+        hsts=_probe_hsts(hostname, port, pinned_ip=pinned_ip, verify=verify, timeout=hsts_timeout),
         verify_requested=verify,
         chain_incomplete=True,
     )
@@ -626,6 +633,7 @@ def store_scanned(
                 raise
 
         pending_for_resolve: list | None = None
+        old_leaf_id: str | None = None
         leaf_id: str = ""
         replaced_cert_id: str | None = None
         posture_grade: str = ""
@@ -634,11 +642,18 @@ def store_scanned(
         previous_grade: str | None = None
 
         with contextlib.suppress(Exception):
-            pending_for_resolve, _ = _stage(
+            pending_for_resolve, old_leaf_id = _stage(
                 "resolve_pending_alerts",
                 _stage_resolve_pending_alerts,
                 repo_path_or_repo, entry, webhook_config,
             )
+
+        with contextlib.suppress(Exception):
+            if old_leaf_id:
+                previous_grade = _stage(
+                    "previous_grade", _stage_previous_grade,
+                    repo_path_or_repo, old_leaf_id,
+                )
 
         try:
             leaf_id, replaced_cert_id = _stage(
@@ -665,11 +680,6 @@ def store_scanned(
                 check_revocation=check_revocation,
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
-            )
-
-        with contextlib.suppress(Exception):
-            previous_grade = _stage(
-                "previous_grade", _stage_previous_grade, repo_path_or_repo, leaf_id,
             )
 
         with contextlib.suppress(Exception):
@@ -817,6 +827,7 @@ async def scan_host_async(
     retries: int = SCAN_RETRIES,
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
+    hsts_timeout: float = 5.0,
 ) -> ScannedEntry | ScanError:
     """Async wrapper around scan_host — runs the blocking TLS scan in a thread."""
     return await asyncio.to_thread(
@@ -831,6 +842,7 @@ async def scan_host_async(
         retries=retries,
         pinned_ip=pinned_ip,
         max_output_bytes=max_output_bytes,
+        hsts_timeout=hsts_timeout,
     )
 
 

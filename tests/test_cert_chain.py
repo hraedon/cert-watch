@@ -116,8 +116,11 @@ def test_chain_status_unknown_no_chain(chain_triplet):
     assert chain_status(leaf, [], []) == "unknown"
 
 
-def test_chain_status_public_root(chain_pem_bytes):
+def test_chain_status_public_root(chain_pem_bytes, monkeypatch):
     certs = extract_chain_from_pem(chain_pem_bytes.decode())
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: True
+    )
     assert chain_status(certs[0], certs[1:], []) == "public"
 
 
@@ -285,11 +288,15 @@ def test_chain_status_genuine_chain_private_with_anchor(chain_triplet):
     assert chain_status(leaf, [intermediate, root], [root]) == "private"
 
 
-def test_chain_status_genuine_chain_public_root(chain_triplet):
-    """A genuinely-signed chain ending at its self-signed root is 'public'."""
+def test_chain_status_genuine_chain_public_root(chain_triplet, monkeypatch):
+    """A genuinely-signed chain ending at its self-signed root is 'public'
+    when the root is verified against the system CA store."""
     leaf = parse_certificate(chain_triplet["leaf"].der)
     intermediate = parse_certificate(chain_triplet["intermediate"].der)
     root = parse_certificate(chain_triplet["root"].der)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: True
+    )
     assert chain_status(leaf, [intermediate, root], []) == "public"
 
 

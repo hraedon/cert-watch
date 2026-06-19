@@ -33,12 +33,6 @@ def _parse_event_payload(payload_raw: str) -> dict:
         return {}
 
 
-def _median(values: list[float]) -> float | None:
-    if not values:
-        return None
-    return statistics.median(values)
-
-
 def _lifetime_trend_decreasing(entries: list[dict]) -> bool:
     if len(entries) < 2:
         return False

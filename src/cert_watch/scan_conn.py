@@ -49,6 +49,7 @@ def _probe_hsts(
     *,
     require_443: bool = True,
     verify: bool = False,
+    timeout: float = HSTS_TIMEOUT,
 ) -> bool | None:
     """Check if an HTTPS server sends Strict-Transport-Security.
 
@@ -71,17 +72,17 @@ def _probe_hsts(
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         if pinned_ip:
-            sock = socket.create_connection((pinned_ip, port), timeout=HSTS_TIMEOUT)
+            sock = socket.create_connection((pinned_ip, port), timeout=timeout)
             try:
                 ssl_sock = ctx.wrap_socket(sock, server_hostname=hostname)
             except Exception:  # cleanup: close raw socket on SSL wrap failure, then re-raise
                 sock.close()
                 raise
-            conn = http.client.HTTPSConnection(hostname, port, timeout=HSTS_TIMEOUT, context=ctx)
+            conn = http.client.HTTPSConnection(hostname, port, timeout=timeout, context=ctx)
             conn.sock = ssl_sock
         else:
             conn = http.client.HTTPSConnection(
-                hostname, port, timeout=HSTS_TIMEOUT, context=ctx,
+                hostname, port, timeout=timeout, context=ctx,
             )
         try:
             conn.request("HEAD", "/", headers={"Host": hostname})
