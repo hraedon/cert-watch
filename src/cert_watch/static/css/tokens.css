@@ -558,6 +558,9 @@ body {
 }
 .cw-expiry-bar-wrap { width: 130px; }
 .cw-no-decoration { text-decoration: none; color: inherit; }
+/* Compact toolbar button (page-head action links). Replaces the repeated
+   inline `padding:5px 11px;font-size:12.5px` on these links. */
+.cw-toolbtn { padding: 5px 11px; font-size: 12.5px; }
 .cw-trust-anchors-header {
   display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
 }
