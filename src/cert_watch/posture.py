@@ -40,14 +40,20 @@ def tls_version_meets_1_2(protocol_version: str | None) -> bool:
     openssl ``s_client`` both report TLS 1.0 as the bare ``"TLSv1"`` (not
     ``"TLSv1.0"``), so a naive ``"1.0" in proto`` / ``startswith("TLSv1.0")``
     check misses it. SSLv2/SSLv3 and TLS 1.0/1.1 are all sub-1.2; TLS 1.2/1.3
-    (and any future TLS 1.4+) pass.
+    (and any future TLS 1.4+ or 2.0+) pass.
     """
     if not protocol_version:
         return False
     p = protocol_version.strip().lower()
-    return p in ("tlsv1.2", "tlsv1.3") or (
-        p.startswith("tlsv1.") and p not in ("tlsv1.0", "tlsv1.1")
-    )
+    if p in ("sslv2", "sslv3", "tlsv1", "tlsv1.0", "tlsv1.1"):
+        return False
+    # Parse "tlsvX.Y" or bare "tlsvX" → compare (major, minor) numerically.
+    import re
+    m = re.match(r"tlsv(\d+)(?:\.(\d+))?$", p)
+    if m:
+        major, minor = int(m.group(1)), int(m.group(2) or 0)
+        return (major, minor) >= (1, 2)
+    return False
 
 
 # ---------- Revocation endpoint health (Plan 017 A1) ----------
@@ -509,11 +515,12 @@ def evaluate_posture(
             message="Not self-signed",
         ))
 
+    must_staple = False
     try:
         ext = x509_cert.extensions.get_extension_for_oid(ExtensionOID.TLS_FEATURE)
         must_staple = any(feature.value == 5 for feature in ext.value)  # type: ignore[attr-defined]
     except (x509.ExtensionNotFound, ValueError, TypeError):  # must-staple extension
-        must_staple = False
+        pass
     if must_staple:
         if ocsp_stapling is False:
             findings.append(Finding(

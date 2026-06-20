@@ -323,7 +323,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             result = evaluate_posture(
                 cert=cert,
                 chain_status=cs,
-                chain_incomplete=bool(_posture.get('chain_incomplete')) if _posture else False,
+                chain_incomplete=False,
             )
             posture_data = {
                 "grade": result.grade,

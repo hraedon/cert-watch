@@ -34,7 +34,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
-from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -271,10 +271,8 @@ def dashboard(
             g = r["grade"]
             counts[g] = r["cnt"]
             worst = max(worst, grade_order.get(g, 0))
-        has_f = counts.get("F", 0)
-        has_c = counts.get("C", 0)
-        has_b = counts.get("B", 0)
-        fleet_g = "C" if has_f else ("B" if has_c or has_b else "A")
+        _GRADE_BY_ORDINAL = {v: k for k, v in grade_order.items()}
+        fleet_g = _GRADE_BY_ORDINAL.get(worst, "F")
         fleet_grade = {"grade": fleet_g, "counts": counts, "worst": worst}
 
     return templates.TemplateResponse(
@@ -438,16 +436,24 @@ def caa_check_view(request: Request, domain: str) -> dict:
     }
 
 
-@router.post("/api/alerts/{alert_id}/read")
+@router.post("/api/alerts/{alert_id}/read", response_model=None)
 async def mark_alert_read(
     request: Request,
     alert_id: IdParam,
     _auth: str = Depends(require_write),
-) -> dict:
+) -> dict | JSONResponse:
     """Mark an alert as read."""
     db = _db_path(request)
-    from cert_watch.database import _connect
     with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT cert_id FROM alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+        if not row:
+            return {"ok": False, "error": "alert not found"}
+        denied = scope_write_denied(request, db, cert_id=row["cert_id"])
+        if denied:
+            return JSONResponse({"ok": False, "error": denied}, status_code=403)
         cur = conn.execute(
             "UPDATE alerts SET read = 1 WHERE id = ?",
             (alert_id,),
@@ -516,7 +522,6 @@ async def mark_all_alerts_read(request: Request) -> RedirectResponse:
             status_code=303,
         )
     db = _db_path(request)
-    from cert_watch.database import _connect
 
     with _connect(db) as conn:
         cur = conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
@@ -642,6 +647,7 @@ def insights_view(
         context={
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
+            **get_csrf_context(request),
             "active_page": "insights",
             "tab": tab,
             "calendar_data": calendar_data,
@@ -879,15 +885,10 @@ def metrics(request: Request) -> PlainTextResponse:
             cert_expiry_gauge.labels(
                 host=host_label, subject=r["subject"], fingerprint=fp_short,
             ).set(days)
+            from cert_watch.filters import compute_urgency
+            urgency_counts[compute_urgency(days)] += 1
             if days < 0:
-                urgency_counts["expired"] += 1
                 expired += 1
-            elif days < 7:
-                urgency_counts["critical"] += 1
-            elif days < 30:
-                urgency_counts["warning"] += 1
-            else:
-                urgency_counts["healthy"] += 1
             grade = posture_map.get(r["id"], "unknown")
             if grade not in grade_counts:
                 grade_counts[grade] = 0
@@ -950,6 +951,7 @@ def compliance_report_view(
         context={
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
+            **get_csrf_context(request),
             "active_page": "insights",
             "report": report_to_dict(report),
             "tag": tag,

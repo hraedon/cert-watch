@@ -136,6 +136,10 @@ class SqliteRoleRepository:
 
     def delete(self, role_id: str) -> None:
         with _connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE users SET role_id = '' WHERE role_id = ?",
+                (role_id,),
+            )
             conn.execute("DELETE FROM roles WHERE id = ?", (role_id,))
             conn.commit()
 
