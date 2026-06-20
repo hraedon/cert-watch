@@ -189,6 +189,104 @@ def _build_digest_message(digest: RenewalDigest) -> str:
     return "\n".join(lines)
 
 
+def _admin_emails(db_path: str | Path) -> list[str]:
+    """Emails of users whose role is permission_tier == 'admin' (deduped, order
+    preserved). Empty if local auth / roles are unavailable.
+    """
+    try:
+        from cert_watch.database.users_roles import (
+            SqliteRoleRepository,
+            SqliteUserRepository,
+        )
+
+        admin_role_ids = {
+            r.id
+            for r in SqliteRoleRepository(db_path).list_all()
+            if (r.permission_tier or "viewer") == "admin"
+        }
+        seen: set[str] = set()
+        emails: list[str] = []
+        for u in SqliteUserRepository(db_path).list_all():
+            if u.role_id in admin_role_ids and u.email and u.email.casefold() not in seen:
+                seen.add(u.email.casefold())
+                emails.append(u.email)
+        return emails
+    except Exception:  # noqa: BLE001 — roles optional; degrade to no admin notice
+        logger.debug("admin email lookup unavailable", exc_info=True)
+        return []
+
+
+def _build_orphan_message(orphans: list[dict]) -> str:
+    lines = [
+        f"[cert-watch] Orphaned certificates — no alert routing ({len(orphans)})",
+        "",
+        "These certificates match no alert group and have no host owner, so they",
+        "route to no specific recipient — they fall back to the global recipient",
+        "list and are the ones most likely to be silently missed. Assign a tag /",
+        "alert group or a host owner to route them deliberately.",
+        "",
+    ]
+    for o in orphans:
+        host = o.get("hostname") or "?"
+        port = o.get("port")
+        where = f"{host}:{port}" if port else host
+        lines.append(f"  - [orphan] {where} — {o.get('subject') or '(no subject)'}")
+    return "\n".join(lines)
+
+
+def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
+    """Email admin-tier users a flagged list of orphaned certs (no alert routing).
+
+    Part of the weekly digest run (Plan 050, decision pinned 2026-06-20): admins
+    get standing visibility into certs that resolve to nobody specific, even in a
+    week with no renewal activity. Returns ``None`` when there is nothing to send
+    (no orphans, no admin recipients, or no SMTP config), ``True`` on delivery,
+    ``False`` on SMTP failure. Delivers nothing else; mutates nothing.
+    """
+    import contextlib
+    from email.message import EmailMessage
+
+    from cert_watch.alerts import (
+        AlertConfig,
+        _open_smtp_connection,
+        _sanitize_smtp_error,
+        find_orphan_certs,
+    )
+
+    if not isinstance(alert_config, AlertConfig):
+        return None
+    orphans = find_orphan_certs(db_path)
+    if not orphans:
+        return None
+    admins = _admin_emails(db_path)
+    if not admins:
+        return None
+
+    msg = EmailMessage()
+    msg["Subject"] = (
+        f"[cert-watch] {len(orphans)} orphaned certificate(s) — no alert routing"
+    )
+    msg["From"] = alert_config.from_addr
+    msg["To"] = ", ".join(admins)
+    msg.set_content(_build_orphan_message(orphans))
+
+    conn = _open_smtp_connection(alert_config)
+    if conn is None:
+        return False
+    try:
+        conn.send_message(msg)
+        return True
+    except Exception as exc:  # noqa: BLE001 — SMTP failures must not raise
+        logger.warning(
+            "orphan notice delivery failed: %s",
+            _sanitize_smtp_error(str(exc), alert_config),
+        )
+        return False
+    finally:
+        with contextlib.suppress(Exception):
+            conn.quit()
+
+
 def send_renewal_digest(
     db_path: str | Path,
     alert_config,
@@ -215,6 +313,11 @@ def send_renewal_digest(
 
     if alert_config is None and webhook_config is None:
         return False
+
+    # Surface orphaned certs (no alert routing) to admins as part of the digest
+    # run — independent of renewal activity, so a quiet week still flags them.
+    # Logs its own failures; does not gate the renewal-digest return value.
+    send_orphan_notice(db_path, alert_config)
 
     digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
     if not digests:
