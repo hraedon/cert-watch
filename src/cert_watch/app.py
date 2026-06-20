@@ -295,7 +295,11 @@ async def lifespan(app: FastAPI):
     def _scan_all() -> dict:
         with get_write_lock():
             host_repo = SqliteHostRepository(s.db_path)
-            hosts = [(h.hostname, h.port) for h in host_repo.list_all()]
+            all_hosts = host_repo.list_all()
+            hosts = [(h.hostname, h.port) for h in all_hosts]
+            starttls_by_host = {
+                (h.hostname, h.port): h.starttls_mode for h in all_hosts
+            }
             return run_scan_now(
                 scan_fn=lambda host, port: scan_host(
                     host, port, verify=s.tls_verify, timeout=s.scan_timeout,
@@ -304,6 +308,7 @@ async def lifespan(app: FastAPI):
                     dns_servers=s.dns_servers,
                     max_output_bytes=s.scan_max_output_bytes,
                     hsts_timeout=s.hsts_timeout,
+                    starttls_mode=starttls_by_host.get((host, port), ""),
                 ),
                 alert_fn=lambda: {"sent": 0, "failed": 0},
                 db_path=s.db_path,

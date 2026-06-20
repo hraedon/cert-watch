@@ -178,6 +178,15 @@ _PEM_CERT_PATTERN = re.compile(
 
 _PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNORECASE)
 
+# Protocols whose certificate is served after a cleartext STARTTLS upgrade.
+# Mirrors the `-starttls` values openssl s_client accepts; the value is only ever
+# forwarded to openssl after membership in this set is confirmed (no raw input
+# reaches the argv), and an empty mode means implicit/wrapped TLS (the default).
+STARTTLS_MODES: frozenset[str] = frozenset({
+    "smtp", "pop3", "imap", "ftp", "xmpp", "xmpp-server", "irc",
+    "postgres", "mysql", "lmtp", "nntp", "sieve", "ldap",
+})
+
 
 def _run_openssl(
     cmd: list[str],
@@ -296,9 +305,15 @@ def _scan_via_openssl(
     allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (), pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
+    starttls_mode: str = "",
 ) -> tuple[list[bytes], str]:
     """Extract the full certificate chain and protocol version using a single
     openssl s_client call.
+
+    When *starttls_mode* is a recognised protocol (see ``STARTTLS_MODES``), the
+    ``-starttls`` flag negotiates the protocol-specific cleartext upgrade before
+    the TLS handshake, so the scanner can read certs served behind SMTP/IMAP/
+    LDAP/Postgres/etc. rather than only implicit (wrapped) TLS.
 
     Returns (der_chain, protocol_version). protocol_version is e.g.
     'TLSv1.3' or empty string if not detected.
@@ -322,14 +337,20 @@ def _scan_via_openssl(
     if hostname.startswith("-"):
         return [], ""
     connect_host = _format_connect_host(host)
+    openssl_cmd = [
+        "openssl", "s_client",
+        "-connect", f"{connect_host}:{port}",
+        "-servername", hostname,
+        "-showcerts",
+    ]
+    # STARTTLS: only pass a value from the validated allowlist, never raw input,
+    # so nothing operator-supplied can become an arbitrary openssl argument.
+    mode = starttls_mode.strip().lower()
+    if mode and mode in STARTTLS_MODES:
+        openssl_cmd += ["-starttls", mode]
     try:
         stdout, stderr, returncode = _run_openssl(
-            [
-                "openssl", "s_client",
-                "-connect", f"{connect_host}:{port}",
-                "-servername", hostname,
-                "-showcerts",
-            ],
+            openssl_cmd,
             b"Q\n",
             max_output_bytes=max_output_bytes,
             timeout=timeout,
