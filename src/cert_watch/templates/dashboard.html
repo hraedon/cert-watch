@@ -510,6 +510,18 @@
             <input class="cw-input mono" type="number" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
           </div>
         </div>
+        <div class="cw-field">
+          <label class="cw-label" for="scan-starttls">TLS mode</label>
+          <select class="cw-input" name="starttls_mode" id="scan-starttls" data-testid="scan-starttls-select">
+            <option value="">Implicit TLS (default)</option>
+            <option value="smtp">STARTTLS — SMTP (587)</option>
+            <option value="imap">STARTTLS — IMAP (143)</option>
+            <option value="pop3">STARTTLS — POP3 (110)</option>
+            <option value="ldap">STARTTLS — LDAP (389)</option>
+            <option value="postgres">STARTTLS — Postgres (5432)</option>
+            <option value="mysql">STARTTLS — MySQL (3306)</option>
+          </select>
+        </div>
         <label class="cw-checkbox-label">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
         </label>

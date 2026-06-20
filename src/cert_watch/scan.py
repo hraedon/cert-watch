@@ -22,6 +22,7 @@ from cert_watch.scan_conn import (  # noqa: F401
     _PROTOCOL_RE,
     DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     HSTS_TIMEOUT,
+    STARTTLS_MODES,
     ScanOutputTooLargeError,
     _der_enc,
     _get_chain_der,
@@ -104,11 +105,16 @@ def scan_host(
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     hsts_timeout: float = 5.0,
+    starttls_mode: str = "",
 ) -> ScannedEntry | ScanError:
     """Perform a TLS handshake and return ScannedEntry or ScanError. See AC-01..AC-06.
 
     When pinned_ip is None, the hostname is resolved once per attempt and the
     resulting IP is pinned for the entire scan (DNS-rebinding hardening, BC-063).
+
+    When *starttls_mode* is set (e.g. ``smtp``, ``imap``, ``ldap``), the scan
+    negotiates a protocol STARTTLS upgrade before reading the certificate,
+    instead of assuming implicit (wrapped) TLS.
     """
     last_error: ScanError | None = None
     for _ in backoff_range(retries, SCAN_RETRY_BACKOFF, strategy="exponential"):
@@ -116,7 +122,7 @@ def scan_host(
             hostname, port, timeout=timeout, verify=verify,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, max_output_bytes=max_output_bytes,
-            hsts_timeout=hsts_timeout,
+            hsts_timeout=hsts_timeout, starttls_mode=starttls_mode,
         )
         if isinstance(result, ScannedEntry):
             return result
@@ -141,6 +147,7 @@ def _scan_host_once(
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     hsts_timeout: float = 5.0,
+    starttls_mode: str = "",
 ) -> ScannedEntry | ScanError:
     """Single TLS handshake attempt — no retry logic.
 
@@ -166,12 +173,15 @@ def _scan_host_once(
                 error_message=f"DNS resolution failed: {_friendly_scan_error(exc)}",
             )
 
-    if not _has_native_chain_api():
+    # The native ssl path can only do implicit (wrapped) TLS, so any STARTTLS
+    # scan must go through openssl s_client (-starttls), regardless of Python
+    # version — not just the <3.13 chain-API fallback.
+    if starttls_mode or not _has_native_chain_api():
         return _scan_host_via_openssl(
             hostname, port, timeout=timeout,
             allow_private=allow_private, allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, verify=verify, max_output_bytes=max_output_bytes,
-            hsts_timeout=hsts_timeout,
+            hsts_timeout=hsts_timeout, starttls_mode=starttls_mode,
         )
 
     try:
@@ -239,18 +249,22 @@ def _scan_host_via_openssl(
     verify: bool = False,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     hsts_timeout: float = 5.0,
+    starttls_mode: str = "",
 ) -> ScannedEntry | ScanError:
     """Scan using openssl s_client only — one connection for both leaf and chain.
 
-    Used on Python < 3.13 where SSLSocket lacks native chain methods.
-    If openssl is unavailable or fails, falls back to the Python TLS
-    connection (leaf-only, no chain).
+    Used on Python < 3.13 where SSLSocket lacks native chain methods, and for
+    every STARTTLS scan (the native ssl path can't negotiate STARTTLS).
+    If openssl is unavailable or fails, falls back to the Python TLS connection
+    (leaf-only, no chain) — except for STARTTLS scans, where a wrapped-TLS
+    fallback would target the wrong handshake, so a clear error is returned.
     """
     try:
         der_chain, protocol_version = _scan_via_openssl(
             hostname, port, timeout, allow_private=allow_private,
             allowed_subnets=allowed_subnets, dns_servers=dns_servers,
             pinned_ip=pinned_ip, max_output_bytes=max_output_bytes,
+            starttls_mode=starttls_mode,
         )
     except ScanOutputTooLargeError as exc:
         return ScanError(hostname=hostname, port=port, error_message=str(exc))
@@ -276,6 +290,18 @@ def _scan_host_via_openssl(
                 ),
                 verify_requested=verify,
             )
+
+    # A STARTTLS scan can't fall back to a wrapped-TLS handshake — that would
+    # connect to a cleartext protocol port expecting immediate TLS and fail or
+    # mislead. Surface the real cause instead (openssl missing or upgrade failed).
+    if starttls_mode:
+        return ScanError(
+            hostname=hostname, port=port,
+            error_message=(
+                f"STARTTLS scan ({starttls_mode}) failed: openssl s_client "
+                "unavailable or the server did not complete the STARTTLS upgrade"
+            ),
+        )
 
     logger.warning(
         "openssl scan degraded for %s:%s — certificate chain will be incomplete",
@@ -828,6 +854,7 @@ async def scan_host_async(
     pinned_ip: str | None = None,
     max_output_bytes: int = DEFAULT_SCAN_MAX_OUTPUT_BYTES,
     hsts_timeout: float = 5.0,
+    starttls_mode: str = "",
 ) -> ScannedEntry | ScanError:
     """Async wrapper around scan_host — runs the blocking TLS scan in a thread."""
     return await asyncio.to_thread(
@@ -843,6 +870,7 @@ async def scan_host_async(
         pinned_ip=pinned_ip,
         max_output_bytes=max_output_bytes,
         hsts_timeout=hsts_timeout,
+        starttls_mode=starttls_mode,
     )
 
 

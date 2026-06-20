@@ -24,6 +24,7 @@ from cert_watch.middleware import (
 from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
 from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
 from cert_watch.scan import (
+    STARTTLS_MODES,
     ScanError,
     ScannedEntry,
     resolve_and_validate_host,
@@ -58,6 +59,7 @@ async def add_host(
     scan_interval_hours: int | None = Form(None),
     common_ports: bool = Form(False),
     notes: str = Form(""),
+    starttls_mode: str = Form(""),
 ) -> RedirectResponse:
     write_err = await require_write_form(request)
     if write_err:
@@ -66,6 +68,16 @@ async def add_host(
         return RedirectResponse(
             url=f"/?error={quote('port must be between 1 and 65535')}", status_code=303
         )
+    # STARTTLS only makes sense for a single explicit port; the common-ports
+    # sweep targets standard wrapped-TLS ports, so ignore the mode there.
+    starttls_mode = starttls_mode.strip().lower()
+    if starttls_mode and starttls_mode not in STARTTLS_MODES:
+        return RedirectResponse(
+            url=f"/?error={quote(f'unsupported starttls mode: {starttls_mode}')}",
+            status_code=303,
+        )
+    if common_ports:
+        starttls_mode = ""
     if threshold_days is not None and threshold_days < 1:
         return RedirectResponse(
             url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
@@ -96,6 +108,7 @@ async def add_host(
             tags=tags_with_scope(request, tags),
             scan_interval_hours=scan_interval_hours,
             notes=notes,
+            starttls_mode=starttls_mode,
         )
         record_audit(
             db,
@@ -119,6 +132,7 @@ async def add_host(
             pinned_ip=pinned_ip,
             max_output_bytes=s.scan_max_output_bytes,
             hsts_timeout=s.hsts_timeout,
+            starttls_mode=starttls_mode,
         )
         if not isinstance(result, ScanError):
             async with _store_sem:
@@ -188,7 +202,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     s = _get_settings(request)
     # Parse and validate all rows first, collecting scan jobs
     errors: list[str] = []
-    scan_jobs: list[tuple[str, int, int | None, str | None]] = []
+    scan_jobs: list[tuple[str, int, int | None, str | None, str]] = []
     for i, row in enumerate(reader, start=2):
         hostname = row.get("hostname", "").strip()
         if not hostname:
@@ -230,6 +244,10 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid scan_interval_hours '{interval_str}'")
                 continue
+        row_starttls = row.get("starttls_mode", "").strip().lower()
+        if row_starttls and row_starttls not in STARTTLS_MODES:
+            errors.append(f"row {i}: unsupported starttls_mode '{row_starttls}'")
+            continue
         host_repo.add(
             hostname,
             port,
@@ -237,8 +255,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             tags=tags_with_scope(request, row_tags),
             scan_interval_hours=interval_hours,
             notes=row_notes,
+            starttls_mode=row_starttls,
         )
-        scan_jobs.append((hostname, port, threshold, row_pinned_ip))
+        scan_jobs.append((hostname, port, threshold, row_pinned_ip, row_starttls))
 
     allow_priv = s.allow_private
     allowed_nets = s.allowed_subnets
@@ -256,9 +275,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     )
 
     async def _scan_one(
-        job: tuple[str, int, int | None, str | None],
+        job: tuple[str, int, int | None, str | None, str],
     ) -> tuple[str, int, ScanResult]:
-        hostname, port, _, pinned = job
+        hostname, port, _, pinned, row_starttls = job
         result = await scan_host_async(
             hostname,
             port,
@@ -270,6 +289,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             pinned_ip=pinned,
             max_output_bytes=s.scan_max_output_bytes,
             hsts_timeout=s.hsts_timeout,
+            starttls_mode=row_starttls,
         )
         return hostname, port, result
 
@@ -490,6 +510,7 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
                 dns_servers=s.dns_servers,
                 max_output_bytes=s.scan_max_output_bytes,
                 hsts_timeout=s.hsts_timeout,
+                starttls_mode=h.starttls_mode,
             )
 
     for h, result in await asyncio.gather(*[_limited_scan(h) for h in hosts]):
@@ -576,6 +597,7 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
         dns_servers=s.dns_servers,
         max_output_bytes=s.scan_max_output_bytes,
         hsts_timeout=s.hsts_timeout,
+        starttls_mode=host.starttls_mode,
     )
     if not isinstance(result, ScanError):
         async with _store_sem:
@@ -648,6 +670,7 @@ def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -
             "owner_slack",
             "renewal_status",
             "notes",
+            "starttls_mode",
             "added_at",
         ]
     )
@@ -664,6 +687,7 @@ def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -
                 _csv_safe(h.owner_slack),
                 _csv_safe(h.renewal_status),
                 _csv_safe(h.notes),
+                _csv_safe(h.starttls_mode),
                 _csv_safe(h.added_at.isoformat()),
             ]
         )

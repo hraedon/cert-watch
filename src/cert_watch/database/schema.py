@@ -268,6 +268,11 @@ def ensure_base(db_path: str | Path) -> None:
                 "ALTER TABLE hosts ADD COLUMN expected_issuers"
                 " TEXT NOT NULL DEFAULT ''"
             )
+        if "starttls_mode" not in host_cols:
+            conn.execute(
+                "ALTER TABLE hosts ADD COLUMN starttls_mode"
+                " TEXT NOT NULL DEFAULT ''"
+            )
         sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
         if "chain_incomplete" not in sp_cols:
             conn.execute(

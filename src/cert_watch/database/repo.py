@@ -58,6 +58,7 @@ class HostEntry:
     runbook_url: str = ""
     notes: str = ""
     expected_issuers: str = ""
+    starttls_mode: str = ""
     added_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -444,6 +445,7 @@ class SqliteHostRepository:
         runbook_url: str = "",
         notes: str = "",
         expected_issuers: str = "",
+        starttls_mode: str = "",
     ) -> str:
         import sqlite3
         host_id = str(uuid.uuid4())
@@ -453,13 +455,15 @@ class SqliteHostRepository:
                     "INSERT INTO hosts"
                     " (id, hostname, port, threshold_days, tags, scan_interval_hours,"
                     "  owner_name, owner_email, owner_slack, renewal_status,"
-                    "  renewal_method, runbook_url, notes, expected_issuers, added_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "  renewal_method, runbook_url, notes, expected_issuers,"
+                    "  starttls_mode, added_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         host_id, hostname, port, threshold_days, tags,
                         scan_interval_hours, owner_name, owner_email,
                         owner_slack, renewal_status, renewal_method,
-                        runbook_url, notes, expected_issuers, _iso(datetime.now(UTC)),
+                        runbook_url, notes, expected_issuers, starttls_mode,
+                        _iso(datetime.now(UTC)),
                     ),
                 )
                 conn.commit()
@@ -493,6 +497,7 @@ class SqliteHostRepository:
             runbook_url=dict(r).get("runbook_url", ""),
             notes=dict(r).get("notes", ""),
             expected_issuers=dict(r).get("expected_issuers", ""),
+            starttls_mode=dict(r).get("starttls_mode", ""),
             added_at=_parse_iso(r["added_at"]),
         )
 

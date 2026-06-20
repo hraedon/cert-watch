@@ -63,6 +63,9 @@ from cert_watch.migrations.m0025_alert_group_config import (
 from cert_watch.migrations.m0026_role_alert_group_link import (
     upgrade as role_alert_group_link_upgrade,
 )
+from cert_watch.migrations.m0027_host_starttls import (
+    upgrade as host_starttls_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -143,4 +146,8 @@ runner.register(
 runner.register(
     "0026", "add alert_group_id to roles for joint alert routing (WI-061)",
     role_alert_group_link_upgrade,
+)
+runner.register(
+    "0027", "add starttls_mode to hosts for STARTTLS scanning",
+    host_starttls_upgrade,
 )
