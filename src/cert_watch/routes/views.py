@@ -976,3 +976,23 @@ def readiness_report_view(request: Request) -> HTMLResponse:
             "report": readiness_report_to_dict(report),
         },
     )
+
+
+@router.get("/crypto", response_class=HTMLResponse)
+def crypto_posture_view(request: Request) -> HTMLResponse:
+    """Fleet crypto inventory & agility lens (informational, non-grade-affecting)."""
+    from cert_watch.crypto_posture import analyze_fleet_crypto, crypto_posture_to_dict
+
+    db = _db_path(request)
+    posture = crypto_posture_to_dict(analyze_fleet_crypto(db))
+    return templates.TemplateResponse(
+        request=request,
+        name="crypto.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            **get_csrf_context(request),
+            "active_page": "insights",
+            "posture": posture,
+        },
+    )
