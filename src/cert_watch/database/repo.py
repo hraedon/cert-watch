@@ -570,6 +570,17 @@ class SqliteHostRepository:
                 "DELETE FROM cert_history WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
+            # event_log has no host column; match the JSON payload's hostname
+            # field. Escape LIKE metacharacters so a hostname containing '_' or
+            # '%' (legal in internal/AD names) can't widen the match and purge
+            # unrelated hosts' events.
+            esc_host = (
+                hostname.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            )
+            conn.execute(
+                "DELETE FROM event_log WHERE payload LIKE ? ESCAPE '\\'",
+                (f'%"hostname": "{esc_host}"%',),
+            )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
             conn.commit()
         return True

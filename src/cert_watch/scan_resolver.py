@@ -25,6 +25,10 @@ _PRIVATE_NETWORKS = [
     ipaddress.ip_network("fc00::/7"),
 ]
 
+# IPv6 transition mechanisms that tunnel an IPv4 address.
+_SIXTO4_NETWORK = ipaddress.ip_network("2002::/16")
+_TEREDO_NETWORK = ipaddress.ip_network("2001::/32")
+
 
 @lru_cache(maxsize=64)
 def _parse_allowed_subnets(allowed_subnets: tuple[str, ...]) -> tuple:
@@ -52,18 +56,38 @@ def _is_blocked_ip(
       unspecified, and other always-blocked ranges are ALWAYS blocked, regardless
       of policy.
     - Public IPs are allowed (scanning public certs is the baseline function).
-    - Private (RFC 1918 / ULA) IPs: when ``allowed_subnets`` is configured, a
-      private IP is allowed only if it falls inside one of those CIDRs (the
-      explicit-allowlist model); otherwise governed by ``allow_private``.
+    - Private (RFC 1918 / ULA) IPs, including 6to4 (2002::/16) and Teredo
+      (2001::/32) with embedded private IPv4: when ``allowed_subnets`` is
+      configured, a private IP is allowed only if it falls inside one of those
+      CIDRs (the explicit-allowlist model); otherwise governed by
+      ``allow_private``.
+
+    The check extracts embedded IPv4 from 6to4/Teredo/IPv4-mapped addresses
+    to determine if the *effective* address is private.
     """
-    check_ip = (
-        ip.ipv4_mapped
-        if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped
-        else ip
-    )
+    # Resolve the *effective* address first. IPv6 transition mechanisms tunnel an
+    # IPv4 address that traffic ultimately reaches, so every check below must run
+    # against that embedded address — otherwise a 6to4 / IPv4-mapped wrapper around
+    # loopback or cloud-metadata (e.g. 2002:a9fe:a9fe:: → 169.254.169.254) slips
+    # past the always-blocked guard (WI-079).
+    check_ip: ipaddress.IPv4Address | ipaddress.IPv6Address = ip
+    if isinstance(ip, ipaddress.IPv6Address):
+        if ip.ipv4_mapped:
+            check_ip = ip.ipv4_mapped
+        elif ip in _SIXTO4_NETWORK:
+            # 6to4 (2002:WWXX:YYZZ::/48): bytes 2–5 hold the embedded IPv4.
+            check_ip = ipaddress.IPv4Address(int.from_bytes(ip.packed[2:6], "big"))
+        elif ip in _TEREDO_NETWORK:
+            # Teredo (2001::/32): the embedded client IPv4 is XOR-obfuscated and not
+            # a sound basis for a policy decision — block the whole range (RFC 4380).
+            return True
+
+    # Always-blocked ranges (loopback, link-local / cloud metadata, unspecified)
+    # are blocked regardless of policy, evaluated on the effective address.
     if any(check_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
         return True
-    if not any(check_ip in net for net in _PRIVATE_NETWORKS):
+
+    if not check_ip.is_private:
         return False  # public — allowed
     if allowed_subnets:
         nets = _parse_allowed_subnets(tuple(allowed_subnets))

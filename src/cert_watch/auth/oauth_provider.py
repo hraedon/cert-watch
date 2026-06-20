@@ -77,6 +77,7 @@ class OAuthConfig:
 _JWKS_MAX_BYTES = 256 * 1024  # 256 KiB — a JWKS response should be a few KB
 _TOKEN_MAX_BYTES = 65536       # 64 KiB — token responses are typically <10 KiB
 _TOKEN_ERROR_MAX_BYTES = 512   # Snippet of error body for debugging
+_USERINFO_MAX_BYTES = 256 * 1024  # 256 KiB — userinfo should be small
 
 
 class OAuthProvider(AuthProvider):
@@ -414,7 +415,7 @@ class OAuthProvider(AuthProvider):
                         )
                         with userinfo_resp:
                             if 200 <= userinfo_resp.status < 300:
-                                info = json.loads(userinfo_resp.read())
+                                info = json.loads(userinfo_resp.read(_USERINFO_MAX_BYTES))
                             else:
                                 logger.warning(
                                     "OAuth userinfo endpoint returned %s",
