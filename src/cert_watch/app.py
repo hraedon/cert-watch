@@ -396,13 +396,15 @@ async def lifespan(app: FastAPI):
         return {"sent": 0, "failed": 0}
 
     def _maintenance() -> None:
-        """Daily housekeeping: trim audit log, cert history, alerts, and events."""
+        """Daily housekeeping: trim audit log, cert history, scan history, alerts, and events."""
         from cert_watch.audit import purge_old_audit
+        from cert_watch.database.drift import purge_old_scan_history
         from cert_watch.database.queries import purge_old_alerts, purge_old_history
         from cert_watch.events import purge_old_events
 
         purge_old_audit(s.db_path, s.audit_retention_days)
         purge_old_history(s.db_path, s.history_retention_days)
+        purge_old_scan_history(s.db_path, s.history_retention_days)
         purge_old_alerts(s.db_path, s.alert_retention_days)
         purge_old_events(s.db_path, s.event_retention_days)
 

@@ -214,14 +214,5 @@ document.addEventListener('click', function(e) {
   var btn = e.target.closest('[data-action="toggle-owner"]');
   if (btn) toggleOwner();
 });
-document.addEventListener('submit', function(e) {
-  var form = e.target;
-  if (form.classList.contains('confirm-form')) {
-    var msg = form.getAttribute('data-confirm') || 'Are you sure?';
-    if (!confirm(msg)) {
-      e.preventDefault();
-    }
-  }
-});
 </script>
 {% endblock %}

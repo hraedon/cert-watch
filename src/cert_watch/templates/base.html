@@ -106,16 +106,18 @@
   </script>
   {# Health banner — fetches /api/health every 30s #}
   <script nonce="{{ request.state.csp_nonce }}">
+    /* WI-080: Single global escHtml — used by all page scripts. */
+    function escHtml(s) {
+      var d = document.createElement('div');
+      d.appendChild(document.createTextNode(s == null ? '' : String(s)));
+      return d.innerHTML;
+    }
+  </script>
+  <script nonce="{{ request.state.csp_nonce }}">
     (function() {
       var BANNER = document.getElementById('cw-health-banner');
       var TEXT = document.getElementById('cw-health-text');
       if (!BANNER || !TEXT) return;
-
-      function esc(s) {
-        var d = document.createElement('div');
-        d.appendChild(document.createTextNode(s == null ? '' : String(s)));
-        return d.innerHTML;
-      }
 
       function dismissHealth() {
         BANNER.style.display = 'none';
@@ -135,11 +137,11 @@
           parts.push('Scheduler is <b>not running</b>');
         }
         if (data.last_scan_status === 'failure') {
-          var when = data.last_scan_at ? ' at ' + esc(data.last_scan_at) : '';
+          var when = data.last_scan_at ? ' at ' + escHtml(data.last_scan_at) : '';
           parts.push('Last scan <b>failed</b>' + when);
         }
         if (data.failed_alerts_24h > 0) {
-          parts.push(esc(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
+          parts.push(escHtml(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
         }
         if (data.overall === 'ok') {
           parts = ['All systems operational'];
@@ -149,25 +151,44 @@
         BANNER.style.display = '';
       }
 
+      // WI-069: pause polling when the tab is hidden and back off on
+      // consecutive failures (double the delay up to 5 min, reset on
+      // success). Operators leave the dashboard open in a background tab
+      // all day; a fixed 30s interval wastes requests and hammers a
+      // failing backend instead of backing off.
+      var BASE_DELAY = 30000, MAX_DELAY = 300000, pollFailures = 0, pollTimer = null;
+
+      function schedulePoll(delay) {
+        clearTimeout(pollTimer);
+        pollTimer = setTimeout(poll, delay);
+      }
+
       function poll() {
+        if (document.hidden) return; // visibilitychange resumes polling
         try {
           if (sessionStorage.getItem('cw-health-dismissed') === '1') {
             BANNER.style.display = 'none';
+            schedulePoll(BASE_DELAY);
             return;
           }
         } catch(e) {}
         fetch('/api/health')
           .then(function(r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
-          .then(render)
+          .then(function(data) { pollFailures = 0; render(data); schedulePoll(BASE_DELAY); })
           .catch(function(e) {
+            pollFailures++;
             BANNER.className = 'cw-health-banner cw-health-critical';
             TEXT.textContent = 'Health check unavailable';
             BANNER.style.display = '';
+            schedulePoll(Math.min(BASE_DELAY * Math.pow(2, pollFailures), MAX_DELAY));
           });
       }
 
+      document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) poll(); // refresh immediately on return
+      });
+
       poll();
-      setInterval(poll, 30000);
     })();
   </script>
   {# BC-075: Global delegation for data-action handlers — replaces inline on*= attributes #}
@@ -223,6 +244,16 @@
       if (!el) return;
       if (el.getAttribute('data-action') === 'toggle-provider') {
         if (typeof toggleProvider === 'function') toggleProvider();
+      }
+    });
+    /* WI-080: Single global confirm-form handler. */
+    document.addEventListener('submit', function(e) {
+      var form = e.target;
+      if (form.classList.contains('confirm-form')) {
+        var msg = form.getAttribute('data-confirm') || 'Are you sure?';
+        if (!confirm(msg)) {
+          e.preventDefault();
+        }
       }
     });
   </script>
