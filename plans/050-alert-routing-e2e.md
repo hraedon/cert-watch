@@ -148,15 +148,33 @@ Full scope: **Phase 1 + 2 + 3.** Phase 3 was confirmed in (2026-06-18 session) �
 it's cheap because the matcher already exists, and it's the part that actually
 answers the question that motivated the plan.
 
-## Decisions that must be pinned *before* Phase 1 implementation
+## Decisions — PINNED (2026-06-20 session with user)
 
-These are specification choices, not code — the team should not guess them, because
-a factory + matrix test built on a guess will lock in possibly-wrong behavior with
-full green confidence:
+Both specification choices are now resolved. The matrix test asserts these.
 
-- **Multi-match:** a cert matching N alert groups → **one alert** (deduped) or
-  **N alerts** (one per group/recipient set)? The matrix test asserts this either
-  way; it must assert the *intended* way.
-- **Orphan:** a cert matching **zero** groups → silently un-alerted, or routed to a
-  default/catch-all? Today's behavior should be confirmed and then locked, or
-  changed deliberately — not discovered by accident.
+- **Multi-match → ONE alert.** A cert matching N alert groups produces a single
+  alert per crossed threshold, whose recipients are the **deduped union** across
+  all matching groups (plus host owner + role members). This is already the
+  behavior (`evaluate_thresholds` returns one most-urgent alert; recipients are
+  deduped in `evaluate_all_certs` and again in `send_alert`). Locked as the
+  contract: no duplicate delivery to a recipient who matches a cert via two
+  groups. The matrix test asserts exactly-one and no-duplicates.
+- **Orphan → surfaced in the weekly digest to admin-tier users.** "Orphan" = a
+  leaf cert that resolves to **zero specific recipients** (no matching alert
+  group AND no host `owner_email`, so no role members either). Delivery is NOT
+  changed — such a cert still falls back to the global `AlertConfig.recipients`
+  at send time. The risk being addressed is *silent* fallback (the cert with the
+  least routing metadata is the one most likely to be forgotten, and if the
+  global list is empty it goes to nobody). Resolution: the renewal digest sent to
+  **`permission_tier == 'admin'`** users gains an **"Orphaned — no alert routing"**
+  section listing these certs, flagged as orphans. Visibility, not silent reroute.
+  Non-admin / per-owner digests are unchanged.
+
+### Routing-resolution: one source of truth
+
+The orphan classification, the matrix test, and the Phase-3 dry-run all need to
+answer "who receives this cert's alert." That logic currently lives inline in
+`evaluate_all_certs`. Extract it into a shared `resolve_cert_recipients(...)`
+helper so there is a single truthful resolver; `evaluate_all_certs`, the orphan
+finder, and the dry-run all call it. A second copy of the merge logic that drifts
+from the delivery path would make the orphan report lie.

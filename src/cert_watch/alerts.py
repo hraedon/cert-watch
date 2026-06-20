@@ -220,24 +220,7 @@ def evaluate_all_certs(
 
     # Role-based alert routing: users in a role get alerts for certs owned by
     # the role's team email (host.owner_email matches role.email).
-    from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
-
-    role_user_emails: dict[str, list[str]] = {}
-    try:
-        _role_repo = SqliteRoleRepository(db_path)
-        _user_repo = SqliteUserRepository(db_path)
-        _all_users = _user_repo.list_all()
-        for _role in _role_repo.list_all():
-            if _role.email:
-                _users_in_role = [
-                    u for u in _all_users
-                    if u.role_id == _role.id and u.email
-                ]
-                if _users_in_role:
-                    role_user_emails[_role.email.casefold()] = [u.email for u in _users_in_role]
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
-        logger.debug("Role-based alert routing unavailable", exc_info=True)
-        role_user_emails = {}
+    role_user_emails = _load_role_user_emails(db_path)
 
     all_alerts: list[Alert] = []
     for leaf_row in leaves:
@@ -272,22 +255,13 @@ def evaluate_all_certs(
         if group_td is not None:
             custom = (group_td, max(group_td // 2, 1), max(group_td // 4, 1))
 
-        # Resolve alert-group recipients for this cert (batch result)
+        # Resolve alert-group recipients for this cert (batch result), then merge
+        # with owner + role members through the shared resolver (single source of
+        # truth shared with orphan detection — see resolve_cert_recipients).
         group_recipients = all_group_recipients.get(cert_id, [])
-
-        # Merge group recipients with owner email into extra_recipients
-        merged_extra: list[str] = list(group_recipients)
-        if owner_info and owner_info.get("owner_email"):
-            oe = owner_info["owner_email"]
-            if oe not in merged_extra:
-                merged_extra.append(oe)
-
-        # Add user emails from the role whose email matches the host's owner_email
-        if owner_info and owner_info.get("owner_email"):
-            role_emails = role_user_emails.get(owner_info["owner_email"].casefold(), [])
-            for re in role_emails:
-                if re not in merged_extra:
-                    merged_extra.append(re)
+        merged_extra = resolve_cert_recipients(
+            group_recipients, owner_info, role_user_emails
+        )
 
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
@@ -296,6 +270,105 @@ def evaluate_all_certs(
         )
         all_alerts.extend(alerts)
     return all_alerts
+
+
+def _load_role_user_emails(db_path: str | Path) -> dict[str, list[str]]:
+    """Map a role's team email (casefolded) → emails of users in that role.
+
+    Used to fan alert routing out to the human members of a team whose address
+    matches a host's ``owner_email``. Returns an empty map if the users/roles
+    tables are unavailable (local-auth disabled), so routing degrades quietly.
+    """
+    role_user_emails: dict[str, list[str]] = {}
+    try:
+        from cert_watch.database.users_roles import (
+            SqliteRoleRepository,
+            SqliteUserRepository,
+        )
+
+        all_users = SqliteUserRepository(db_path).list_all()
+        for role in SqliteRoleRepository(db_path).list_all():
+            if not role.email:
+                continue
+            members = [u.email for u in all_users if u.role_id == role.id and u.email]
+            if members:
+                role_user_emails[role.email.casefold()] = members
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError,
+            AttributeError, KeyError):
+        logger.debug("Role-based alert routing unavailable", exc_info=True)
+        return {}
+    return role_user_emails
+
+
+def resolve_cert_recipients(
+    group_recipients: list[str],
+    owner_info: dict | None,
+    role_user_emails: dict[str, list[str]],
+) -> list[str]:
+    """Merge a cert's alert-group recipients, host owner, and role members into a
+    single order-preserving, deduplicated recipient list.
+
+    This is the **one source of truth** for *who* an expiry alert for a cert
+    reaches (beyond the global ``AlertConfig.recipients`` applied at send time).
+    ``evaluate_all_certs`` uses it to populate ``extra_recipients``; orphan
+    detection uses it to decide whether a cert routes to anyone specific. Keep
+    dedup exact-string to match the downstream dedup in ``send_alert``.
+    """
+    merged: list[str] = list(group_recipients)
+    owner_email = owner_info.get("owner_email") if owner_info else None
+    if owner_email:
+        if owner_email not in merged:
+            merged.append(owner_email)
+        for member in role_user_emails.get(owner_email.casefold(), []):
+            if member not in merged:
+                merged.append(member)
+    return merged
+
+
+def find_orphan_certs(db_path: str | Path) -> list[dict]:
+    """Return leaf certs that resolve to **zero** specific recipients.
+
+    An orphan matches no alert group and has no host ``owner_email`` (so no role
+    members either). Such a cert is not dropped — at send time it still falls
+    back to the global ``AlertConfig.recipients`` — but nothing routes it to a
+    *named* owner or team, so it is the cert most likely to be silently
+    forgotten. Surfaced in the admin renewal digest (Plan 050, decision pinned
+    2026-06-20).
+
+    Returns a list of ``{"cert_id", "hostname", "port", "subject"}`` dicts,
+    ordered by hostname then subject, using the same routing resolver as the
+    delivery path so the report can't drift from reality.
+    """
+    from cert_watch.database import _connect
+
+    all_group_recipients, _ = _resolve_group_config(db_path)
+    role_user_emails = _load_role_user_emails(db_path)
+
+    with _connect(db_path) as conn:
+        host_owners: dict[tuple[str, int], dict] = {}
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            host_owners[(row["hostname"], row["port"])] = {
+                "owner_email": dict(row).get("owner_email", "") or "",
+            }
+        leaves = conn.execute(
+            "SELECT id, subject, hostname, port FROM certificates WHERE is_leaf = 1"
+        ).fetchall()
+
+    orphans: list[dict] = []
+    for row in leaves:
+        owner_info = host_owners.get((row["hostname"], row["port"]))
+        recipients = resolve_cert_recipients(
+            all_group_recipients.get(row["id"], []), owner_info, role_user_emails
+        )
+        if not recipients:
+            orphans.append({
+                "cert_id": row["id"],
+                "hostname": row["hostname"] or "",
+                "port": row["port"],
+                "subject": row["subject"] or "",
+            })
+    orphans.sort(key=lambda o: (o["hostname"], o["subject"]))
+    return orphans
 
 
 def evaluate_renewal_window(
