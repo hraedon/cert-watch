@@ -209,7 +209,7 @@ def create_session(
             # Still too long without any groups — try stripping roles too
             test_payload = (
                 f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
-                f"::{encoded_roles}"
+                f"::"
             )
             if email:
                 test_payload += f":{email}"

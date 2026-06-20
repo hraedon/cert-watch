@@ -28,6 +28,9 @@ def audit_page(
 ) -> HTMLResponse:
     db = _db_path(request)
     limit = 50
+    total = count_audit(db, target_type=target_type or None, actor=actor or None)
+    total_pages = max((total + limit - 1) // limit, 1)
+    page = max(1, min(page, total_pages))
     rows = list_audit(
         db,
         target_type=target_type or None,
@@ -35,8 +38,6 @@ def audit_page(
         page=page,
         limit=limit,
     )
-    total = count_audit(db, target_type=target_type or None, actor=actor or None)
-    total_pages = max((total + limit - 1) // limit, 1)
     return templates.TemplateResponse(
         request=request,
         name="audit.html",

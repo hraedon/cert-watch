@@ -137,7 +137,7 @@
     var alertId = el.getAttribute('data-alert-id');
     if (!alertId) return;
     e.preventDefault();
-    fetch('/api/alerts/' + alertId + '/read', {method: 'POST', headers: {'x-csrf-token': {{ csrf_token | tojson }}})
+    fetch('/api/alerts/' + alertId + '/read', {method: 'POST', headers: {'x-csrf-token': {{ csrf_token | tojson }}}})
       .then(function(r) { return r.json(); })
       .then(function(data) {
         if (data.ok) {
