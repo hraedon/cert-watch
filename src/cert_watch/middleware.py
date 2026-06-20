@@ -406,8 +406,8 @@ def get_auth_context(request: Request) -> dict:
                 user = user_repo.get_by_username(username)
                 if user:
                     user_email = user.email
-        except (OSError, ValueError, Exception):
-            pass
+        except Exception:
+            logger.debug("failed to resolve user email for %s", username, exc_info=True)
 
     auth_provider = getattr(request.app.state, "auth_provider", None)
     no_auth = auth_provider is None or isinstance(auth_provider, NoAuthProvider)
@@ -436,7 +436,7 @@ def get_csrf_context(request: Request) -> dict:
 # ---------- Middleware functions ----------
 
 _PUBLIC_PATHS = frozenset({
-    "/healthz", "/login", "/auth/callback", "/auth/logout", "/setup",
+    "/healthz", "/readyz", "/login", "/auth/callback", "/auth/logout", "/setup",
 })
 
 _METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None

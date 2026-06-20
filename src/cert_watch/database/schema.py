@@ -194,8 +194,6 @@ CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
     ON cert_history(hostname, port, scanned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cert_history_fp
     ON cert_history(fingerprint_sha256);
-CREATE INDEX IF NOT EXISTS idx_session_versions_username
-    ON session_versions(username);
 """
 
 _initialized_paths: set[str] = set()
@@ -321,7 +319,6 @@ def init_schema(db_path: str | Path) -> None:
     with _init_lock:
         if path_str in _initialized_paths:
             return
-        _initialized_paths.add(path_str)
 
     ensure_base(db_path)
 
@@ -330,3 +327,6 @@ def init_schema(db_path: str | Path) -> None:
     from cert_watch.migrations.runner import run_pending_migrations
 
     run_pending_migrations(db_path, backup=True)
+
+    with _init_lock:
+        _initialized_paths.add(path_str)

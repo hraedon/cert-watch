@@ -611,12 +611,6 @@ function cwUrgency(daysRemaining) {
 
 var _VALID_URGENCIES = { expired:1, critical:1, warning:1, healthy:1, gray:1 };
 
-function escHtml(s) {
-  var d = document.createElement('div');
-  d.appendChild(document.createTextNode(s == null ? '' : String(s)));
-  return d.innerHTML;
-}
-
 /* Reports dropdown menu */
 (function() {
   var wrap = document.getElementById('reports-menu-wrap');
@@ -636,7 +630,7 @@ function escHtml(s) {
     + '<div style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
     + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>'
     + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Hosts</div><div style="font-size:11px;color:var(--text-3)">owners · renewal · tags</div></div>'
-    + '<div style="display:flex;gap:5px"><a href="/api/hosts?format=csv" class="cw-btn sm" style="padding:3px 8px">CSV</a></div></div>'
+    + '<div style="display:flex;gap:5px"><a href="/api/export/hosts.csv" class="cw-btn sm" style="padding:3px 8px">CSV</a></div></div>'
     + '<div class="cw-divider" style="margin:4px 0"></div>'
     + '<div style="padding:6px 10px 8px;font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:6px">'
     + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>'
@@ -720,15 +714,6 @@ function capChips(containerSelector, maxChips) {
 document.addEventListener('DOMContentLoaded', function() {
   capChips('.cw-cert-chips', 4);
 });
-document.addEventListener('submit', function(e) {
-  var form = e.target;
-  if (form.classList.contains('confirm-form')) {
-    var msg = form.getAttribute('data-confirm') || 'Are you sure?';
-    if (!confirm(msg)) {
-      e.preventDefault();
-     }
-   }
- });
 
 /* BC-021: inline note editing */
 document.addEventListener('click', function(e) {

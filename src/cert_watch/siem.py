@@ -137,7 +137,8 @@ class SiemExporter:
     def _to_eventlog(self, event: dict) -> None:
         try:
             _evlog = self._eventlog
-            assert _evlog is not None
+            if _evlog is None:
+                return
             win32evtlogutil, win32evtlog = _evlog
             win32evtlogutil.ReportEvent(
                 self.eventlog_source,
@@ -151,7 +152,8 @@ class SiemExporter:
     def _to_syslog(self, event: dict) -> None:
         try:
             _syslog = self._syslog
-            assert _syslog is not None
+            if _syslog is None:
+                return
             _syslog.info(json.dumps(event, default=str, sort_keys=True))
         except Exception:
             logger.warning("syslog export failed", exc_info=True)

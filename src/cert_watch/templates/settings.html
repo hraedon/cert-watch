@@ -972,12 +972,6 @@
 
 {% block scripts %}
 <script nonce="{{ request.state.csp_nonce }}">
-  function escHtml(s) {
-    var div = document.createElement('div');
-    div.textContent = s;
-    return div.innerHTML;
-  }
-
   // Parse a test-endpoint response defensively. The handlers normally return
   // JSON, but an unexpected 500 yields a plain-text body ("Internal Server
   // Error") that JSON.parse() would choke on, surfacing a cryptic

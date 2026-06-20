@@ -315,6 +315,32 @@ def purge_old_history(db_path: str | Path, retention_days: int) -> int:
         return 0
 
 
+def purge_old_scan_history(db_path: str | Path, retention_days: int) -> int:
+    """Delete scan_history rows older than *retention_days*. Returns count deleted.
+
+    A non-positive ``retention_days`` disables purging (returns 0).
+    """
+    if retention_days <= 0:
+        return 0
+    cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
+    try:
+        init_schema(db_path)
+        with _connect(db_path) as conn:
+            cur = conn.execute("DELETE FROM scan_history WHERE scanned_at < ?", (cutoff,))
+            deleted = cur.rowcount
+            conn.commit()
+        if deleted:
+            import logging
+            logging.getLogger("cert_watch.database").info(
+                "purged %d scan_history rows older than %d days", deleted, retention_days
+            )
+        return deleted
+    except Exception:
+        import logging
+        logging.getLogger("cert_watch.database").warning("scan_history purge failed", exc_info=True)
+        return 0
+
+
 def list_cert_history(
     db_path: str | Path,
     hostname: str,
