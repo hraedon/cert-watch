@@ -76,6 +76,48 @@ def test_is_not_blocked_ipv6_public():
     assert not _is_blocked_ip(ipaddress.ip_address("2606:4700::1"))
 
 
+# 6to4 / Teredo transition addresses (WI-079): the always-blocked guard must
+# apply to the *embedded* IPv4, even when allow_private=True — otherwise a 6to4
+# wrapper tunnels loopback / cloud-metadata past the SSRF filter.
+
+def test_is_blocked_ip_6to4_wrapped_loopback_always():
+    from cert_watch.scan import _is_blocked_ip
+    # 2002:7f00:0001:: embeds 127.0.0.1
+    addr = ipaddress.ip_address("2002:7f00:0001::")
+    assert _is_blocked_ip(addr, allow_private=False)
+    assert _is_blocked_ip(addr, allow_private=True)
+
+
+def test_is_blocked_ip_6to4_wrapped_metadata_always():
+    from cert_watch.scan import _is_blocked_ip
+    # 2002:a9fe:a9fe:: embeds 169.254.169.254 (cloud metadata)
+    addr = ipaddress.ip_address("2002:a9fe:a9fe::")
+    assert _is_blocked_ip(addr, allow_private=False)
+    assert _is_blocked_ip(addr, allow_private=True)
+
+
+def test_is_blocked_ip_6to4_wrapped_private_follows_policy():
+    from cert_watch.scan import _is_blocked_ip
+    # 2002:0a00:0001:: embeds 10.0.0.1 (RFC1918) — governed by allow_private
+    addr = ipaddress.ip_address("2002:0a00:0001::")
+    assert _is_blocked_ip(addr, allow_private=False)
+    assert not _is_blocked_ip(addr, allow_private=True)
+
+
+def test_is_not_blocked_ip_6to4_wrapped_public():
+    from cert_watch.scan import _is_blocked_ip
+    # 2002:0808:0808:: embeds 8.8.8.8 (public) — allowed
+    assert not _is_blocked_ip(ipaddress.ip_address("2002:0808:0808::"))
+
+
+def test_is_blocked_ip_teredo_always_blocked():
+    from cert_watch.scan import _is_blocked_ip
+    # Teredo (2001::/32) is blocked wholesale regardless of policy.
+    addr = ipaddress.ip_address("2001:0:4136:e378:8000:63bf:3fff:fdd2")
+    assert _is_blocked_ip(addr, allow_private=False)
+    assert _is_blocked_ip(addr, allow_private=True)
+
+
 # ── SSRF: scan._resolve_host rejects blocked hosts ─────────────────────────
 
 def test_resolve_host_blocks_loopback_when_private_disallowed(monkeypatch):
