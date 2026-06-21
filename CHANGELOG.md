@@ -4,6 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Security
+- **Tag-scope enforcement for bulk operations (WI-078).** The three bulk routes
+  — scan-all-hosts, flush-alert-queue, and mark-all-alerts-read — now honour the
+  caller's tag scope. Previously a scoped user could scan every host, flush the
+  entire alert queue, or mark all alerts read regardless of their team scope;
+  these operations now act only on in-scope resources, while admins / unscoped
+  users are unchanged. The scoped SQL lives in repository methods
+  (`SqliteHostRepository.list_scoped`, `SqliteAlertRepository.list_pending_scoped`
+  / `mark_all_read`) and a `ScopedAlertRepository` decorator, with route-level
+  regression tests that drive real scoped sessions end-to-end.
+
 ## [0.9.3] - 2026-06-17
 
 > **Upgrade note (RBAC tier decoupling).** A role whose scope tags are set is
