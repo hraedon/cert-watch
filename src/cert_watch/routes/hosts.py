@@ -22,7 +22,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
-from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
+from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied, tags_with_scope
 from cert_watch.scan import (
     STARTTLS_MODES,
     ScanError,
@@ -482,7 +482,13 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
         )
     db = _db_path(request)
     s = _get_settings(request)
-    hosts = SqliteHostRepository(db).list_all()
+
+    # Tag-scoped access control (WI-078): a scoped user only scans hosts inside
+    # their team scope; admins / unscoped users scan everything.
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+    hosts = SqliteHostRepository(db).list_scoped(scope_tags)
+
     if not hosts:
         return RedirectResponse(url="/scan-history", status_code=303)
     record_audit(
