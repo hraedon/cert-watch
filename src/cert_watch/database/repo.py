@@ -319,6 +319,67 @@ class SqliteAlertRepository(AlertRepository):
             ).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
+    def list_pending_scoped(
+        self, scope_tags: tuple[str, ...] | list[str]
+    ) -> list[Alert]:
+        """Return pending alerts whose effective (cert ∪ host) tags intersect
+        *scope_tags* (WI-078).
+
+        Empty *scope_tags* means no restriction — equivalent to
+        :meth:`list_pending`. Joins each alert to its certificate and host so a
+        tag-scoped user only flushes alerts inside their team scope.
+        """
+        if not scope_tags:
+            return self.list_pending()
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        sql = """
+            SELECT a.* FROM alerts a
+            JOIN certificates c ON c.id = a.cert_id
+            JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+            WHERE a.status = 'pending'
+        """
+        sql, params = _add_effective_tag_filter(
+            sql, [], scope_tags, col_cert="c.tags", col_host="h.tags"
+        )
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_alert(r) for r in rows]
+
+    def mark_all_read(self, scope_tags: tuple[str, ...] | list[str] = ()) -> int:
+        """Mark all unread alerts as read; return the number updated (WI-078).
+
+        When *scope_tags* is non-empty, only alerts whose certificate/host
+        effective tags intersect the scope are marked — a tag-scoped user does
+        not clear alerts outside their team scope. Empty *scope_tags* marks all.
+        """
+        with _connect(self.db_path) as conn:
+            if scope_tags:
+                from cert_watch.database.dashboard import _add_effective_tag_filter
+
+                # Select every in-scope cert (not just leaf certs) so the SCOPE
+                # of this mark-read matches list_pending_scoped's scope exactly.
+                # The row predicates differ by design — mark-read acts on
+                # read=0, flush acts on status='pending' (orthogonal columns) —
+                # so a scoped user can clear any in-scope alert they can flush.
+                inner_sql = """
+                    SELECT c.id FROM certificates c
+                    JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+                    WHERE 1=1
+                """
+                inner_sql, params = _add_effective_tag_filter(
+                    inner_sql, [], scope_tags, col_cert="c.tags", col_host="h.tags"
+                )
+                cur = conn.execute(
+                    f"UPDATE alerts SET read = 1 WHERE read = 0 "
+                    f"AND cert_id IN ({inner_sql})",
+                    params,
+                )
+            else:
+                cur = conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
+            conn.commit()
+            return cur.rowcount
+
     def mark_sent(self, alert_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(
@@ -357,6 +418,33 @@ class SqliteAlertRepository(AlertRepository):
             hostname=row["hostname"] if "hostname" in row_dict else "",
             subject=row["subject"] if "subject" in row_dict else "",
         )
+
+
+class ScopedAlertRepository(AlertRepository):
+    """Tag-scope decorator over SqliteAlertRepository (WI-078).
+
+    Used by ``flush_alert_queue`` so ``process_pending`` only sends alerts a
+    scoped user is allowed to see. ``list_pending`` is narrowed to the scope;
+    every other operation delegates unchanged to the wrapped repository. Because
+    ``mark_sent`` / ``mark_failed`` only ever receive alert IDs returned by the
+    scoped ``list_pending``, the mutating surface stays in-scope by construction.
+    """
+
+    def __init__(self, db_path: str | Path, scope_tags: tuple[str, ...]) -> None:
+        self._repo = SqliteAlertRepository(db_path)
+        self._scope_tags = scope_tags
+
+    def list_pending(self) -> list[Alert]:
+        return self._repo.list_pending_scoped(self._scope_tags)
+
+    def create(self, alert: Alert) -> str:
+        return self._repo.create(alert)
+
+    def mark_sent(self, alert_id: str) -> None:
+        self._repo.mark_sent(alert_id)
+
+    def mark_failed(self, alert_id: str, error_message: str) -> None:
+        self._repo.mark_failed(alert_id, error_message)
 
 
 # ---------- Trust Anchors ----------
@@ -478,6 +566,26 @@ class SqliteHostRepository:
     def list_all(self) -> list[HostEntry]:
         with _connect(self.db_path) as conn:
             rows = conn.execute("SELECT * FROM hosts ORDER BY added_at").fetchall()
+        return [self._row_to_host(r) for r in rows]
+
+    def list_scoped(self, scope_tags: tuple[str, ...] | list[str]) -> list[HostEntry]:
+        """Return hosts whose tags intersect *scope_tags* (WI-078).
+
+        Empty *scope_tags* means no scope restriction — equivalent to
+        :meth:`list_all`. Used by bulk operations (scan-all) so a tag-scoped
+        user only acts on hosts inside their team scope.
+        """
+        if not scope_tags:
+            return self.list_all()
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        sql = "SELECT * FROM hosts WHERE 1=1"
+        sql, params = _add_effective_tag_filter(
+            sql, [], scope_tags, col_cert=None, col_host="tags"
+        )
+        sql += " ORDER BY added_at"
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
         return [self._row_to_host(r) for r in rows]
 
     @staticmethod
