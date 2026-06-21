@@ -12,6 +12,7 @@ from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
 from cert_watch import __commit__, __version__
 from cert_watch.database import (
+    AlertRepository,
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
     distinct_tags,
@@ -477,10 +478,21 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
         )
     db = _db_path(request)
     s = _get_settings(request)
-    from cert_watch.alerts import process_pending
-    from cert_watch.database import SqliteAlertRepository
 
-    alert_repo = SqliteAlertRepository(db)
+    # Tag-scoped access control: filter alerts by user's scope tags
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
+    from cert_watch.alerts import process_pending
+    from cert_watch.database import ScopedAlertRepository, SqliteAlertRepository
+
+    # Scoped users flush only their in-scope alerts; everyone else flushes all.
+    alert_repo: AlertRepository = (
+        ScopedAlertRepository(db, scope_tags)
+        if scope_tags
+        else SqliteAlertRepository(db)
+    )
+
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
     result = process_pending(alert_repo, alert_config, webhook_config)
@@ -523,10 +535,15 @@ async def mark_all_alerts_read(request: Request) -> RedirectResponse:
         )
     db = _db_path(request)
 
-    with _connect(db) as conn:
-        cur = conn.execute("UPDATE alerts SET read = 1 WHERE read = 0")
-        conn.commit()
-    count = cur.rowcount
+    # Tag-scoped access control (WI-078): a scoped user only clears alerts inside
+    # their team scope; admins / unscoped users clear everything.
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
+    from cert_watch.database import SqliteAlertRepository
+
+    count = SqliteAlertRepository(db).mark_all_read(scope_tags)
+
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 
     record_audit(
