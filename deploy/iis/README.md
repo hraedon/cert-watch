@@ -279,6 +279,38 @@ Add `-Markdown` for a readable report, or `-Json` to stream it to stdout (handy
 for feeding the result to an automated triage step). Each remediation string
 points back to the relevant step in this document.
 
+## Uninstall / teardown
+
+To remove a deployment, run the uninstaller from an **elevated** PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-windows.ps1
+```
+
+It stops and removes the IIS app pool and site, removes the physical site
+directory, and deletes **only the TLS cert binding this deployment owns**. The
+script inspects the cert-watch site's own HTTPS binding to decide which binding
+that is:
+
+- **Catch-all install** (default) — removes `ipport=0.0.0.0:443`.
+- **SNI install** (`-SharePort443`) — removes `hostnameport=<host>:443` only and
+  **leaves the catch-all untouched**, since a sibling tool sharing port 443
+  (e.g. gpo-lens) may own it. If the site is already gone, pass `-HostName` so
+  the SNI binding can still be targeted.
+
+Re-running is safe — missing resources are skipped. The cert-watch installer
+creates no firewall rule, so none is removed.
+
+The **data directory is preserved by default** (`C:\ProgramData\cert-watch`), so
+a re-install resumes where it left off. To also delete it, pass `-RemoveData` —
+this is **destructive**: it removes the signing keys (invalidating every active
+session) and the cert-history database. It prompts for confirmation; add
+`-Force` to skip the prompt in automation.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\uninstall-windows.ps1 -RemoveData
+```
+
 ## Troubleshooting
 
 - **502.5 / process failed to start:** check `logs\stdout*.log`. Usually a wrong

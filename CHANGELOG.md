@@ -4,6 +4,24 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Windows uninstaller (`scripts/uninstall-windows.ps1`).** Tears down a
+  Windows/IIS deployment created by `install-windows.ps1`: stops/removes the
+  app pool and site, removes the physical site directory, and deletes **only
+  the TLS cert binding this deployment owns**. Port-443 sharing is respected —
+  the script reads the site's own HTTPS binding to decide ownership: a catch-all
+  install removes `ipport=0.0.0.0:443`; an SNI install (`-SharePort443`) removes
+  `hostnameport=<host>:443` only and leaves the catch-all alone (a sibling tool
+  such as gpo-lens may own it). The catch-all/SNI decision keys on `sslFlags`
+  (bit 1), not hostname presence, since a catch-all binding can carry a host
+  header. The site directory removed is the site's own `physicalPath` (not a
+  fixed path), so a non-default `-SiteName` cannot delete another site's
+  directory. Data is preserved by default; `-RemoveData` (gated behind a typed
+  confirmation or `-Force`) also deletes the signing keys and cert-history DB.
+  Validated end-to-end on a real IIS host with disposable sibling sites; covered
+  by `tests/test_uninstall_windows_ps1.py` and documented in
+  `deploy/iis/README.md`.
+
 ### Security
 - **Tag-scope enforcement for bulk operations (WI-078).** The three bulk routes
   — scan-all-hosts, flush-alert-queue, and mark-all-alerts-read — now honour the
