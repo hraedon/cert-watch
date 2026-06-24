@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -697,8 +698,8 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
         has_role = role is not None and bool(role.email)
         role_name = role.name if role else ""
         role_email = role.email if role else ""
-    except Exception:
-        logger.debug("Team dashboard: user/role lookup failed", exc_info=True)
+    except (ImportError, sqlite3.Error):
+        logger.warning("Team dashboard: user/role lookup failed", exc_info=True)
         has_role = False
 
     entries: list[dict] = []

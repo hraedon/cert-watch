@@ -1,6 +1,7 @@
 """Alert and scan history pagination helpers."""
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -229,7 +230,7 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
                 "purged %d alert rows older than %d days", deleted, retention_days
             )
         return deleted
-    except Exception:
+    except (sqlite3.Error, OSError):
         import logging
         logging.getLogger("cert_watch.database").warning("alert purge failed", exc_info=True)
         return 0

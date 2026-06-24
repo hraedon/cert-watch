@@ -289,9 +289,8 @@ def _load_role_user_emails(db_path: str | Path) -> dict[str, list[str]]:
             members = [u.email for u in all_users if u.role_id == role.id and u.email]
             if members:
                 role_user_emails[role.email.casefold()] = members
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError,
-            AttributeError, KeyError):
-        logger.debug("Role-based alert routing unavailable", exc_info=True)
+    except (ImportError, sqlite3.Error):
+        logger.warning("Role-based alert routing unavailable", exc_info=True)
         return {}
     return role_user_emails
 

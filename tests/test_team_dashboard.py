@@ -351,7 +351,7 @@ def test_team_route_handles_missing_users_table(tmp_path):
 
 
 def test_alert_routing_logs_on_failure(tmp_path, caplog):
-    """Role-based alert routing should log debug on exception."""
+    """Role-based alert routing should log a warning on exception."""
     import logging
 
     from cert_watch.alerts import evaluate_all_certs
