@@ -127,11 +127,7 @@ def evaluate_thresholds(
     # thresholds. Exclude failed alerts so SMTP delivery failures get retried
     # on the next daily cycle instead of permanently blocking the threshold.
     current_type = "expired" if days < 0 else "expiry_warning"
-    cert_alerts = (
-        alert_repo.list_for_cert(cid)
-        if hasattr(alert_repo, "list_for_cert")
-        else [a for a in alert_repo.list_pending() if a.cert_id == cid]
-    )
+    cert_alerts = alert_repo.list_for_cert(cid)
     existing_for_type: set[int] = {
         a.threshold_days
         for a in cert_alerts
@@ -420,11 +416,7 @@ def evaluate_renewal_window(
             continue
         if days < 0 or days > window_days:
             continue  # expired (expiry_warning owns it) or outside the window
-        existing = (
-            alert_repo.list_for_cert(cid)
-            if hasattr(alert_repo, "list_for_cert")
-            else [a for a in alert_repo.list_pending() if a.cert_id == cid]
-        )
+        existing = alert_repo.list_for_cert(cid)
         if any(
             a.alert_type == "renewal_stalled" and a.status == "pending"
             for a in existing
@@ -697,33 +689,6 @@ def send_webhook_resolve(
         return False
 
 
-def send_pagerduty_resolve(
-    cert_id: str,
-    alert_type: str,
-    threshold_days: int | None,
-    config: WebhookConfig,
-    *,
-    summary: str = "",
-) -> bool:
-    """Send a PagerDuty resolve event to auto-close an incident.
-
-    Deprecated: prefer ``send_webhook_resolve``, which dispatches
-    through the adapter registry and also supports Alertmanager.
-    """
-    import warnings
-
-    warnings.warn(
-        "send_pagerduty_resolve is deprecated; use send_webhook_resolve instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if config.kind != "pagerduty":
-        return False
-    return send_webhook_resolve(
-        cert_id, alert_type, threshold_days, config, summary=summary,
-    )
-
-
 def resolve_webhook_for_renewed_cert(
     db_path: str | Path,
     old_cert_id: str,
@@ -769,29 +734,6 @@ def resolve_webhook_for_renewed_cert(
         ):
             resolved += 1
     return resolved
-
-
-def resolve_pagerduty_for_renewed_cert(
-    db_path: str | Path,
-    old_cert_id: str,
-    webhook_config: WebhookConfig | None = None,
-) -> int:
-    """Resolve all PagerDuty incidents for a cert that has been renewed.
-
-    Delegates to ``resolve_webhook_for_renewed_cert``. Kept for backward
-    compatibility with callers that import by the old name.
-    """
-    import warnings
-
-    warnings.warn(
-        "resolve_pagerduty_for_renewed_cert is deprecated; "
-        "use resolve_webhook_for_renewed_cert instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if webhook_config is not None and webhook_config.kind != "pagerduty":
-        return 0
-    return resolve_webhook_for_renewed_cert(db_path, old_cert_id, webhook_config)
 
 
 ALERT_MAX_RETRIES = 3

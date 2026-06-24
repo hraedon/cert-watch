@@ -448,8 +448,8 @@ class TestPagerDutyResolve:
         resolve_body = json.loads(resolve_req.body)
         assert trigger_body["dedup_key"] == resolve_body["dedup_key"]
 
-    def test_send_pagerduty_resolve(self):
-        from cert_watch.alerts import send_pagerduty_resolve
+    def test_send_webhook_resolve_pagerduty(self):
+        from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
@@ -458,14 +458,13 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            with pytest.warns(DeprecationWarning, match="deprecated"):
-                ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
+            ok = send_webhook_resolve("cert-1", "expiry_warning", 7, config)
         assert ok is True
         body = json.loads(mock_urlopen.call_args[1]["data"])
         assert body["event_action"] == "resolve"
 
-    def test_send_pagerduty_resolve_non_202_is_failure(self):
-        from cert_watch.alerts import send_pagerduty_resolve
+    def test_send_webhook_resolve_non_202_is_failure(self):
+        from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
@@ -474,12 +473,11 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            with pytest.warns(DeprecationWarning, match="deprecated"):
-                ok = send_pagerduty_resolve("cert-1", "expiry_warning", 7, config)
+            ok = send_webhook_resolve("cert-1", "expiry_warning", 7, config)
         assert ok is False
 
-    def test_resolve_pagerduty_for_renewed_cert(self, tmp_path):
-        from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
+    def test_resolve_webhook_for_renewed_cert_pagerduty(self, tmp_path):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
         from cert_watch.database import SqliteAlertRepository, init_schema
 
         db = tmp_path / "cw_resolve.sqlite3"
@@ -500,23 +498,20 @@ class TestPagerDutyResolve:
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
-            with pytest.warns(DeprecationWarning, match="deprecated"):
-                resolved = resolve_pagerduty_for_renewed_cert(db, "old-cert-1", config)
+            resolved = resolve_webhook_for_renewed_cert(db, "old-cert-1", config)
         assert resolved == 2
 
-    def test_resolve_pagerduty_noops_for_non_pagerduty(self):
-        from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
+    def test_resolve_webhook_noops_for_non_pagerduty(self):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
 
         config = _config(kind="discord")
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", config)
+        resolved = resolve_webhook_for_renewed_cert(None, "cert-1", config)
         assert resolved == 0
 
-    def test_resolve_pagerduty_noops_for_none_config(self):
-        from cert_watch.alerts import resolve_pagerduty_for_renewed_cert
+    def test_resolve_webhook_noops_for_none_config(self):
+        from cert_watch.alerts import resolve_webhook_for_renewed_cert
 
-        with pytest.warns(DeprecationWarning, match="deprecated"):
-            resolved = resolve_pagerduty_for_renewed_cert(None, "cert-1", None)
+        resolved = resolve_webhook_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
 
 

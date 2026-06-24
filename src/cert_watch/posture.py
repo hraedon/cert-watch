@@ -98,14 +98,15 @@ def _extract_crl_urls(cert_der: bytes) -> list[str]:
     return urls
 
 
-def _check_ocsp_reachable(
+def _check_endpoint_reachable(
     url: str,
+    method: str,
     timeout: int = 5,
     *,
     allow_private: bool = False,
     allowed_subnets: tuple[str, ...] = (),
 ) -> tuple[bool, str]:
-    """Check if an OCSP responder URL is reachable (HTTP HEAD).
+    """Check if a URL is reachable via HTTP.
 
     Returns (reachable, message). When blocked by SSRF policy, returns
     (False, "endpoint blocked by SSRF policy").
@@ -114,35 +115,7 @@ def _check_ocsp_reachable(
         resp = ssrf_safe_urlopen(
             url,
             timeout=timeout,
-            method="HEAD",
-            allow_private=allow_private,
-            allowed_subnets=allowed_subnets,
-        )
-        with resp:
-            return 200 <= resp.status < 500, ""
-    except SSRFBlockedError:
-        return False, "endpoint blocked by SSRF policy"
-    except Exception:
-        return False, ""
-
-
-def _check_crl_reachable(
-    url: str,
-    timeout: int = 5,
-    *,
-    allow_private: bool = False,
-    allowed_subnets: tuple[str, ...] = (),
-) -> tuple[bool, str]:
-    """Check if a CRL distribution point URL is reachable (HTTP GET, minimal).
-
-    Returns (reachable, message). When blocked by SSRF policy, returns
-    (False, "endpoint blocked by SSRF policy").
-    """
-    try:
-        resp = ssrf_safe_urlopen(
-            url,
-            timeout=timeout,
-            method="GET",
+            method=method,
             allow_private=allow_private,
             allowed_subnets=allowed_subnets,
         )
@@ -171,8 +144,8 @@ def check_revocation_endpoints(
 
     ocsp_url = _extract_ocsp_url(cert_der)
     if ocsp_url:
-        reachable, block_msg = _check_ocsp_reachable(
-            ocsp_url, timeout=timeout,
+        reachable, block_msg = _check_endpoint_reachable(
+            ocsp_url, method="HEAD", timeout=timeout,
             allow_private=allow_private, allowed_subnets=allowed_subnets,
         )
         if reachable:
@@ -199,8 +172,8 @@ def check_revocation_endpoints(
     crl_urls = _extract_crl_urls(cert_der)
     if crl_urls:
         for url in crl_urls:
-            reachable, block_msg = _check_crl_reachable(
-                url, timeout=timeout,
+            reachable, block_msg = _check_endpoint_reachable(
+                url, method="GET", timeout=timeout,
                 allow_private=allow_private, allowed_subnets=allowed_subnets,
             )
             if reachable:

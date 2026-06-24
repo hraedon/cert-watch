@@ -31,10 +31,7 @@ from cert_watch.database.dashboard import _build_host_filter
 from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.http_client import SSRFBlockedError, _validate_url, validate_webhook_url
 from cert_watch.middleware import _request_security
-from cert_watch.posture import (
-    _check_crl_reachable,
-    _check_ocsp_reachable,
-)
+from cert_watch.posture import _check_endpoint_reachable
 
 # ---------- 1. _CompositeProvider always-calls-primary assertion ----------
 
@@ -312,16 +309,16 @@ def test_build_webhook_config_skips_invalid_env_url(monkeypatch, tmp_path):
 # ---------- 8. BC-117 OCSP/CRL SSRF blocked path ----------
 
 
-def test_check_ocsp_reachable_blocked_by_ssrf():
-    """_check_ocsp_reachable returns blocked message for SSRF-blocked URLs."""
-    reachable, msg = _check_ocsp_reachable("http://127.0.0.1/ocsp")
+def test_check_endpoint_reachable_ocsp_blocked_by_ssrf():
+    """_check_endpoint_reachable returns blocked message for SSRF-blocked URLs."""
+    reachable, msg = _check_endpoint_reachable("http://127.0.0.1/ocsp", method="HEAD")
     assert reachable is False
     assert "blocked by SSRF policy" in msg
 
 
-def test_check_crl_reachable_blocked_by_ssrf():
-    """_check_crl_reachable returns blocked message for SSRF-blocked URLs."""
-    reachable, msg = _check_crl_reachable("http://169.254.169.254/crl.pem")
+def test_check_endpoint_reachable_crl_blocked_by_ssrf():
+    """_check_endpoint_reachable returns blocked message for SSRF-blocked URLs."""
+    reachable, msg = _check_endpoint_reachable("http://169.254.169.254/crl.pem", method="GET")
     assert reachable is False
     assert "blocked by SSRF policy" in msg
 
@@ -330,7 +327,7 @@ def test_check_revocation_endpoints_finds_blocked_ocsp():
     """check_revocation_endpoints surfaces a clear warning when OCSP is blocked."""
     # A dummy certificate with no OCSP/CRL won't exercise the path,
     # so we test the helper directly.
-    reachable, msg = _check_ocsp_reachable("http://192.168.1.1/ocsp")
+    reachable, msg = _check_endpoint_reachable("http://192.168.1.1/ocsp", method="HEAD")
     assert reachable is False
     assert "blocked by SSRF policy" in msg
 
