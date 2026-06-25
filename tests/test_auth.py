@@ -1831,7 +1831,7 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow handles token endpoint error."""
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, OSError("connection reset"))
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1857,7 +1857,7 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1869,7 +1869,7 @@ class TestOAuthJWKSVerification:
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["userinfo_endpoint"] = ""
         self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1880,7 +1880,7 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow returns failure when token_endpoint is not configured."""
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["token_endpoint"] = ""
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2069,7 +2069,7 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2109,7 +2109,7 @@ class TestOAuthJWKSVerification:
         from cert_watch.http_client import SSRFBlockedError
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, SSRFBlockedError("blocked"))
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2128,6 +2128,7 @@ class TestOAuthJWKSVerification:
             "preferred_username": "alice@example.com",
             "exp": int(time.time()) + 3600,
             "iat": int(time.time()),
+            "nonce": "nonce0",
         }
         id_token = _sign_jwt(claims, key)
 
@@ -2136,7 +2137,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2160,6 +2161,7 @@ class TestOAuthJWKSVerification:
             "groups": [admins_guid],
             "exp": int(time.time()) + 3600,
             "iat": int(time.time()),
+            "nonce": "nonce0",
         }
         id_token = _sign_jwt(claims, key)
 
@@ -2168,7 +2170,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2203,7 +2205,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2215,7 +2217,7 @@ class TestOAuthJWKSVerification:
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         # Bypass SSRF validation and HTTP open in test (DNS resolution won't work
         # for fake host)
         monkeypatch.setattr(

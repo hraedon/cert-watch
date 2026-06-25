@@ -77,7 +77,7 @@ def _request_db_path(request: Request) -> str | None:
 
 def make_csrf_token(session_id: str, security: SecurityContext | None = None) -> str:
     payload = f"{session_id}:{int(datetime.now(UTC).timestamp())}"
-    sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(_csrf_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
     return f"{payload}:{sig}"
 
 
@@ -92,7 +92,7 @@ def validate_csrf_token(
     ts_str, sig = parts[1], parts[2]
     payload = f"{session_id}:{ts_str}"
     key = _csrf_key(security).encode()
-    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:32]
+    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]
     if not hmac.compare_digest(sig, expected):
         return False
     try:

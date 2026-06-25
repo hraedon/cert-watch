@@ -66,17 +66,15 @@ def test_composite_provider_returns_primary_success_when_local_fails():
     assert result.username == "alice"
 
 
-# ---------- 2. validate_session with 3/4/5-part token shapes ----------
+# ---------- 2. validate_session token shapes (WI-088: v0 rejected) ----------
 
 
-def test_validate_session_3_part_old_format():
-    """Old-format tokens (username:ts:nonce) validate without version field."""
+def test_validate_session_3_part_rejected():
+    """Old-format 3-part tokens (username:ts:nonce) are rejected (WI-088)."""
     set_signing_key("test-key-3part")
-    # Strip the version field to simulate old format: manually craft
     payload = "bob:1234567890:abcdef12"
     sig = "fake"
     old_token = f"{payload}:{sig}"
-    # Since sig is fake, this should return None
     assert validate_session(old_token) is None
 
 
@@ -111,13 +109,22 @@ def test_validate_session_6_part_with_groups_and_roles():
     assert validate_session(token) == "alice"
 
 
-def test_validate_session_3_part_valid_shape():
-    """A genuine 3-part signed token (old format) still validates."""
+def test_validate_session_3_part_rejected_even_when_signed():
+    """A genuine 3-part signed token (old format) is rejected (WI-088)."""
     set_signing_key("test-key-old")
     payload = f"bob:{int(time.time())}:nonce1234"
-    sig = hmac.new(b"test-key-old", payload.encode(), hashlib.sha256).hexdigest()[:32]
+    sig = hmac.new(b"test-key-old", payload.encode(), hashlib.sha256).hexdigest()[:64]
     token = f"{payload}:{sig}"
-    assert validate_session(token) == "bob"
+    assert validate_session(token) is None
+
+
+def test_validate_session_4_part_rejects_32char_sig():
+    """4-part tokens with legacy 32-char signatures are rejected (WI-088)."""
+    set_signing_key("test-key-32char")
+    payload = f"bob:0:{int(time.time())}:nonce1234"
+    sig = hmac.new(b"test-key-32char", payload.encode(), hashlib.sha256).hexdigest()[:32]
+    token = f"{payload}:{sig}"
+    assert validate_session(token) is None
 
 
 # ---------- 3. bump_session_version concurrent-call race ----------

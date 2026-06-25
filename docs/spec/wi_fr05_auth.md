@@ -49,7 +49,7 @@ Sessions must be:
 - Embed a per-user `version` field (BC-081): `{username}:{version}:{timestamp}:{nonce}:{sig}`.
 - Checked against `session_versions` DB table on validation.
 - Invalidated on logout / credential change (bump stored version).
-- Old-format tokens (no version field) accepted with version 0.
+- Legacy old-format tokens (no version field, 3-part) and 32-char signatures are rejected (WI-088 hardening); only 4/6/7-part tokens with 64-char HMAC signatures validate.
 - `Secure` and `HttpOnly` flags set on the `cw_auth` cookie.
 - `SameSite=strict` on the `cw_auth` cookie.
 

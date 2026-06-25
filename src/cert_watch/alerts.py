@@ -83,7 +83,6 @@ def evaluate_thresholds(
     *,
     cert_id: str | None = None,
     custom_thresholds: tuple[int, ...] | None = None,
-    cooldown_hours: int = 24,
     owner_info: dict | None = None,
     extra_recipients: list[str] | None = None,
     hostname: str = "",
@@ -96,9 +95,6 @@ def evaluate_thresholds(
     threshold that the cert has crossed but hasn't yet been alerted for produces
     an alert. This prevents users from receiving a separate email for every
     threshold stage when a cert is already past several of them.
-
-    ``cooldown_hours`` is accepted for backward compatibility but has no effect
-    — thresholds do not re-fire after cooldown.
 
     The spec talks about cert_id as the link to existing alerts; we accept it as
     a kwarg so callers that persisted the cert can pass the row id. If omitted we
@@ -861,8 +857,8 @@ def _resolve_group_config(
                     "alert_group_id": _role.alert_group_id,
                     "scope_tags": parse_tags(_role.scope_tag),
                 })
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
-        logger.debug("Role→alert-group link routing unavailable", exc_info=True)
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError):
+        logger.warning("Role→alert-group link routing unavailable", exc_info=True)
         role_links = []
 
     group_by_id = {g["id"]: g for g in groups}
