@@ -44,6 +44,8 @@ _WHITELIST = frozenset({
     "cw-health-dismissed",
     "cw-health-text",
     "cw-theme",
+    "cw-note-chip",
+    "cw-note-inline-form",
 })
 
 

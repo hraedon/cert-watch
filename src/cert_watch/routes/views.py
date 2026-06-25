@@ -130,6 +130,12 @@ def readyz(request: Request):
     }
 
 
+@router.get("/favicon.ico")
+def favicon() -> RedirectResponse:
+    """Redirect legacy browser /favicon.ico requests to the SVG favicon."""
+    return RedirectResponse(url="/static/favicon.svg", status_code=301)
+
+
 @router.get("/api/health", dependencies=[Depends(require_auth)])
 def api_health(request: Request) -> JSONResponse:
     """Structured health data for the dashboard banner."""

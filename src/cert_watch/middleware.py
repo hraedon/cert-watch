@@ -443,6 +443,7 @@ def get_csrf_context(request: Request) -> dict:
 
 _PUBLIC_PATHS = frozenset({
     "/healthz", "/readyz", "/login", "/auth/callback", "/auth/logout", "/setup",
+    "/favicon.ico",
 })
 
 _METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None

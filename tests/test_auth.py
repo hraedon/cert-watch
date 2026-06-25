@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from cert_watch.app import create_app
 from cert_watch.auth import (
     AuthResult,
     LDAPAuthProvider,
@@ -23,7 +24,7 @@ from cert_watch.auth import (
     validate_session,
     verify_scrypt_hash,
 )
-from cert_watch.config import read_secret
+from cert_watch.config import Settings, read_secret
 
 _HAS_JOSE = importlib.util.find_spec("joserfc") is not None
 _HAS_AUTHLIB = importlib.util.find_spec("authlib") is not None
@@ -474,6 +475,34 @@ def test_login_page_redirects_when_no_auth(reload_app):
         assert r.headers["location"] in ("/", "http://testserver/")
 
 
+def test_login_page_oauth_label(tmp_path):
+    class _OAuthProvider:
+        provider_name = "oauth"
+        supports_form_login = False
+
+    s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
+    app = create_app(auth_provider=_OAuthProvider(), settings=s)
+    with TestClient(app) as client:
+        r = client.get("/login")
+    assert r.status_code == 200
+    assert "Sign in with OAuth" in r.text
+    assert "Sign in with Oauth" not in r.text
+
+
+def test_login_page_oidc_label(tmp_path):
+    class _OidcProvider:
+        provider_name = "oidc"
+        supports_form_login = False
+
+    s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
+    app = create_app(auth_provider=_OidcProvider(), settings=s)
+    with TestClient(app) as client:
+        r = client.get("/login")
+    assert r.status_code == 200
+    assert "Sign in with OIDC" in r.text
+    assert "Sign in with Oidc" not in r.text
+
+
 def test_logout_clears_cookie(reload_app, _mock_ldap3):
     app_mod = reload_app(
         AUTH_PROVIDER="ldap",
@@ -484,6 +513,20 @@ def test_logout_clears_cookie(reload_app, _mock_ldap3):
         r = client.post("/auth/logout", follow_redirects=False)
         assert r.status_code == 303
         assert "cw_auth" in r.headers.get("set-cookie", "")
+
+
+def test_favicon_ico_is_public_under_auth(reload_app, _mock_ldap3):
+    """The /favicon.ico redirect must stay reachable for unauthenticated browser
+    probes (login/setup pages) — it is a public path, not auth-gated."""
+    app_mod = reload_app(
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.get("/favicon.ico", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/static/favicon.svg"
 
 
 def test_auth_user_displayed_in_header(reload_app, _mock_ldap3):

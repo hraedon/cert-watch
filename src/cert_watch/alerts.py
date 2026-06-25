@@ -173,6 +173,32 @@ def evaluate_thresholds(
     return [alert]
 
 
+def _load_host_owner_maps(
+    db_path: str | Path,
+) -> tuple[dict[tuple[str, int], int | None], dict[tuple[str, int], dict]]:
+    """Load per-host threshold and owner/contact maps in a single query.
+
+    Shared by ``evaluate_all_certs`` and ``evaluate_renewal_window`` so the
+    ``hosts`` table is read once per evaluation path with consistent shaping.
+    """
+    from cert_watch.database import _connect
+
+    host_thresholds: dict[tuple[str, int], int | None] = {}
+    host_owners: dict[tuple[str, int], dict] = {}
+    with _connect(db_path) as conn:
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            key = (row["hostname"], row["port"])
+            d = dict(row)
+            host_thresholds[key] = d.get("threshold_days")
+            host_owners[key] = {
+                "owner_name": d.get("owner_name", ""),
+                "owner_email": d.get("owner_email", ""),
+                "owner_slack": d.get("owner_slack", ""),
+                "renewal_status": d.get("renewal_status", "pending"),
+            }
+    return host_thresholds, host_owners
+
+
 def evaluate_all_certs(
     db_path: str | Path, alert_repo: AlertRepository, *, urgent_only: bool = False
 ) -> list[Alert]:
@@ -188,19 +214,9 @@ def evaluate_all_certs(
     """
     from cert_watch.database import _connect, _parse_iso
 
-    with _connect(db_path) as conn:
-        host_thresholds: dict[tuple[str, int], int | None] = {}
-        host_owners: dict[tuple[str, int], dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            key = (row["hostname"], row["port"])
-            host_thresholds[key] = row["threshold_days"]
-            host_owners[key] = {
-                "owner_name": dict(row).get("owner_name", ""),
-                "owner_email": dict(row).get("owner_email", ""),
-                "owner_slack": dict(row).get("owner_slack", ""),
-                "renewal_status": dict(row).get("renewal_status", "pending"),
-            }
+    host_thresholds, host_owners = _load_host_owner_maps(db_path)
 
+    with _connect(db_path) as conn:
         leaves = conn.execute(
             "SELECT id, subject, issuer, not_before, not_after, "
             "san_dns_names, fingerprint_sha256, hostname, port "
@@ -389,17 +405,12 @@ def evaluate_renewal_window(
                 "WHERE replaces_cert_id IS NOT NULL"
             ).fetchall()
         }
-        host_owners: dict[tuple, dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            host_owners[(row["hostname"], row["port"])] = {
-                "owner_name": dict(row).get("owner_name", ""),
-                "owner_email": dict(row).get("owner_email", ""),
-            }
         leaves = conn.execute(
             "SELECT id, subject, hostname, port, not_after "
             "FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
+    _host_thresholds, host_owners = _load_host_owner_maps(db_path)
     created: list[Alert] = []
     for leaf in leaves:
         cid = leaf["id"]

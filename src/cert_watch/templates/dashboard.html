@@ -263,7 +263,7 @@
                     <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
                   {% endif %}
                   {% if h.notes %}
-                    <span class="cw-chip cw-chip-muted" title="{{ h.notes }}" id="note-chip-{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                    <span class="cw-chip cw-chip-muted cw-note-chip" title="{{ h.notes }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
                   {% endif %}
                   {% if may_write and h.host_id %}
                     <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ h.host_id }}" data-note="{{ h.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
@@ -302,7 +302,7 @@
                   <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
                 {% endif %}
                 {% if e.notes %}
-                  <span class="cw-chip cw-chip-muted" title="{{ e.notes }}" id="note-chip-{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                  <span class="cw-chip cw-chip-muted cw-note-chip" title="{{ e.notes }}" data-host-id="{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
                 {% endif %}
                 {% if may_write and e.host_id %}
                   <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ e.host_id }}" data-note="{{ e.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
@@ -723,14 +723,15 @@ document.addEventListener('click', function(e) {
   var hostId = btn.getAttribute('data-host-id');
   var csrf = btn.getAttribute('data-csrf');
   var existingNote = btn.getAttribute('data-note') || '';
-  var existing = document.getElementById('note-inline-form-' + hostId);
+  var row = btn.closest('tr');
+  var existing = row ? row.querySelector('.cw-note-inline-form[data-host-id="' + hostId + '"]') : null;
   if (existing) {
     existing.remove();
     return;
   }
   var form = document.createElement('form');
-  form.id = 'note-inline-form-' + hostId;
-  form.className = 'cw-inline';
+  form.className = 'cw-inline cw-note-inline-form';
+  form.setAttribute('data-host-id', hostId);
   form.style.cssText = 'margin-left:6px;';
   form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + escHtml(csrf) + '">' +
     '<input type="text" name="notes" class="cw-input" style="width:200px;padding:3px 8px;font-size:12px;" placeholder="Add note…" value="' + escHtml(existingNote) + '">' +
@@ -752,12 +753,16 @@ document.addEventListener('click', function(e) {
       return r.json();
     }).then(function() {
       form.remove();
-      var chip = document.getElementById('note-chip-' + hostId);
+      // WI-105: scope the chip lookup to the clicked button's row so two certs
+      // sharing a host_id each update their own chip (duplicate DOM ids removed;
+      // chips are selected by .cw-note-chip[data-host-id] within btn's row).
+      var row = btn.closest('tr');
+      var chip = row ? row.querySelector('.cw-note-chip[data-host-id="' + hostId + '"]') : null;
       if (note.trim()) {
         if (!chip) {
           chip = document.createElement('span');
-          chip.id = 'note-chip-' + hostId;
-          chip.className = 'cw-chip cw-chip-muted';
+          chip.className = 'cw-chip cw-chip-muted cw-note-chip';
+          chip.setAttribute('data-host-id', hostId);
           chip.innerHTML = '{{ icons.svg_icon("file", 11, 1.6) | safe | replace("\n", "") }}note';
           btn.parentNode.insertBefore(chip, btn);
         }
