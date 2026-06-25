@@ -72,6 +72,7 @@ class OAuthConfig:
     allow_private: bool = False
     allowed_subnets: tuple[str, ...] = ()
     jwks_cache_ttl: int = 86400
+    provider_label: str = "OAuth"
 
 
 _JWKS_MAX_BYTES = 256 * 1024  # 256 KiB — a JWKS response should be a few KB
@@ -482,6 +483,10 @@ class OAuthProvider(AuthProvider):
     @property
     def provider_name(self) -> str:
         return "oauth"
+
+    @property
+    def provider_label(self) -> str:
+        return self.config.provider_label
 
     @property
     def supports_form_login(self) -> bool:

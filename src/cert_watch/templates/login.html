@@ -58,11 +58,10 @@
           </form>
         {% endif %}
 
-        {% set provider_labels = {"oauth": "OAuth", "entra": "Entra ID", "azure": "Entra ID", "oidc": "OIDC"} %}
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
           <div class="cw-login-oauth-wrap">
             <a href="/auth/login" class="cw-btn primary cw-btn--expand cw-no-decoration">
-              Sign in with {{ provider_labels.get(provider, provider | upper) }}
+              Sign in with {{ provider_label }}
             </a>
           </div>
         {% endif %}

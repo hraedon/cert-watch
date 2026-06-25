@@ -337,15 +337,19 @@ class Settings:
         env vars are unset (Plan 014 Slice 2).
         """
         from cert_watch.auth import build_auth_provider
+        from cert_watch.config.kv_loader import (
+            LOCAL_ADMIN_PASSWORD_HASH,
+            LOCAL_ADMIN_USER,
+        )
         from cert_watch.database import kv_get
 
         local_admin_user = self.local_admin_user
         local_admin_password_hash = self.local_admin_password_hash
         if not local_admin_user:
-            local_admin_user = kv_get(self.db_path, "local_admin_user") or ""
+            local_admin_user = kv_get(self.db_path, LOCAL_ADMIN_USER) or ""
         if not local_admin_password_hash:
             local_admin_password_hash = kv_get(
-                self.db_path, "local_admin_password_hash"
+                self.db_path, LOCAL_ADMIN_PASSWORD_HASH
             ) or ""
 
         return build_auth_provider(

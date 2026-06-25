@@ -213,6 +213,10 @@ class _CompositeProvider(AuthProvider):
         return self._primary.provider_name
 
     @property
+    def provider_label(self) -> str:
+        return self._primary.provider_label
+
+    @property
     def supports_form_login(self) -> bool:
         return True
 

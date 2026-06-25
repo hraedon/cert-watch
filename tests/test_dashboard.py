@@ -683,3 +683,37 @@ def test_dashboard_grouped_disabled(reload_app, tmp_path):
     assert "cw-group-header" not in r.text
     assert "host1.example.com" in r.text
     assert "host2.example.com" in r.text
+
+
+def test_dashboard_pivot_disables_urgency_cards(reload_app, tmp_path):
+    """WI-110: urgency stat cards are non-interactive on the pivot view."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
+
+    init_schema(db)
+    hosts = SqliteHostRepository(db)
+    hosts.add("host1.example.com", 443)
+
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="*.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        san_dns_names=["*.example.com"],
+        fingerprint_sha256="a" * 64,
+    )
+
+    replace_scanned(db, "host1.example.com", 443, cert, [], True)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/?view=issuer")
+    assert r.status_code == 200
+    assert "cw-stat-disabled" in r.text
+    assert 'aria-disabled="true"' in r.text
+    assert 'class="cw-stat cw-stat-link"' not in r.text

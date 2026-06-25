@@ -35,3 +35,12 @@ secrets/
 # The Hraedon lab root CA is supplied at deploy time, not committed.
 hraedon_root.cer
 *.cer
+
+# UI-review screenshot artifacts (kimi/visual-review sessions). Transient eyeballing
+# aids, not source — keep them out of an accidental `git add -A` sweep.
+ui-review/
+*-dark.png
+*-light.png
+dashboard-*.png
+insights-*.png
+review-*.png

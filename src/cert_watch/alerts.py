@@ -350,13 +350,9 @@ def find_orphan_certs(db_path: str | Path) -> list[dict]:
 
     all_group_recipients, _ = _resolve_group_config(db_path)
     role_user_emails = _load_role_user_emails(db_path)
+    _host_thresholds, host_owners = _load_host_owner_maps(db_path)
 
     with _connect(db_path) as conn:
-        host_owners: dict[tuple[str, int], dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            host_owners[(row["hostname"], row["port"])] = {
-                "owner_email": dict(row).get("owner_email", "") or "",
-            }
         leaves = conn.execute(
             "SELECT id, subject, hostname, port FROM certificates WHERE is_leaf = 1"
         ).fetchall()
@@ -562,11 +558,6 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     """Send via SMTP. See AC-03/AC-06."""
     if config is None:
         return False
-    ssrf_err = _check_smtp_ssrf(config)
-    if ssrf_err is not None:
-        logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
-        alert.error_message = "smtp host blocked by SSRF policy"
-        return False
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
     msg["From"] = config.from_addr
@@ -575,27 +566,18 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     ]
     msg["To"] = ", ".join(all_recipients)
     msg.set_content(alert.message)
+    conn = _open_smtp_connection(config, alert=alert)
+    if conn is None:
+        return False
     try:
-        if config.smtp_port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
-                config.smtp_host, config.smtp_port, timeout=15,
-            )
-        else:
-            s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
-        with s:
-            if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
-                alert.error_message = (
-                    "STARTTLS not supported by SMTP server; "
-                    "refusing to send credentials in cleartext"
-                )
-                return False
-            if config.smtp_user:
-                s.login(config.smtp_user, config.smtp_password)
-            s.send_message(msg)
+        conn.send_message(msg)
         return True
     except Exception as exc:  # noqa: BLE001 — AC-06: never raise; SMTP is an external service with unpredictable failure modes
         alert.error_message = _sanitize_smtp_error(str(exc), config)
         return False
+    finally:
+        with contextlib.suppress(Exception):
+            conn.quit()
 
 
 def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
@@ -633,6 +615,17 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
         return False
 
 
+def _adapter_has_build_resolve(kind: str) -> bool:
+    """True when the adapter for *kind* exposes a ``build_resolve`` method."""
+    from cert_watch.alert_adapters import get_adapter
+
+    try:
+        adapter = get_adapter(kind)
+    except ValueError:
+        return False
+    return hasattr(adapter, "build_resolve")
+
+
 def send_webhook_resolve(
     cert_id: str,
     alert_type: str,
@@ -647,19 +640,20 @@ def send_webhook_resolve(
     """Send a resolve event through the appropriate adapter.
 
     Dispatches ``build_resolve`` on the adapter matching ``config.kind``.
-    PagerDuty returns True on HTTP 202; Alertmanager and generic return
-    True on 2xx. Returns False if the adapter has no ``build_resolve``.
+    Returns False if the adapter has no ``build_resolve`` method.
     """
     from cert_watch.alert_adapters import get_adapter
 
-    if config.kind not in ("pagerduty", "alertmanager"):
+    try:
+        adapter = get_adapter(config.kind)
+    except ValueError:
+        return False
+
+    build_resolve = getattr(adapter, "build_resolve", None)
+    if build_resolve is None:
         return False
 
     try:
-        adapter = get_adapter(config.kind)
-        build_resolve = getattr(adapter, "build_resolve", None)
-        if build_resolve is None:
-            return False
         req = build_resolve(
             cert_id, alert_type, threshold_days, config,
             summary=summary, hostname=hostname, subject=subject,
@@ -704,17 +698,17 @@ def resolve_webhook_for_renewed_cert(
 ) -> int:
     """Resolve all open incidents/alerts for a cert that has been renewed.
 
-    Works for PagerDuty and Alertmanager webhook kinds. Looks up pending
-    alerts for the old cert and sends a resolve event for each unique
-    (alert_type, threshold_days) combination. Returns the number of
-    resolve events sent.
+    Works for any webhook kind whose adapter exposes ``build_resolve``.
+    Looks up pending alerts for the old cert and sends a resolve event for
+    each unique (alert_type, threshold_days) combination. Returns the
+    number of resolve events sent.
 
     When *pending_alerts* is provided (a pre-fetched list from
     :class:`SqliteAlertRepository`), uses that instead of querying the
     database — necessary when the caller knows the alert rows will be
     deleted before this function runs (e.g. ``replace_scanned``).
     """
-    if webhook_config is None or webhook_config.kind not in ("pagerduty", "alertmanager"):
+    if webhook_config is None or not _adapter_has_build_resolve(webhook_config.kind):
         return 0
     if pending_alerts is None:
         from cert_watch.database import SqliteAlertRepository
@@ -1016,23 +1010,33 @@ def _build_digest_message(certs: list[dict], *, owner_name: str | None = None) -
     return message, subject
 
 
-def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
+def _open_smtp_connection(
+    config: AlertConfig, *, alert: Alert | None = None
+) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
     ssrf_err = _check_smtp_ssrf(config)
     if ssrf_err is not None:
         logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
+        if alert is not None:
+            alert.error_message = "smtp host blocked by SSRF policy"
         return None
+    s: smtplib.SMTP_SSL | smtplib.SMTP | None = None
     try:
         if config.smtp_port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
+            s = smtplib.SMTP_SSL(
                 config.smtp_host, config.smtp_port, timeout=15,
             )
         else:
             s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
             logger.warning(
-                "digest email aborted: STARTTLS not supported by %s:%s",
+                "SMTP send aborted: STARTTLS not supported by %s:%s",
                 config.smtp_host, config.smtp_port,
             )
+            if alert is not None:
+                alert.error_message = (
+                    "STARTTLS not supported by SMTP server; "
+                    "refusing to send credentials in cleartext"
+                )
             with contextlib.suppress(Exception):
                 s.quit()
             return None
@@ -1040,10 +1044,13 @@ def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SS
             s.login(config.smtp_user, config.smtp_password)
         return s
     except Exception as exc:  # noqa: BLE001 — SMTP is an external service with unpredictable failure modes
-        logger.warning(
-            "SMTP connect failed: %s",
-            _sanitize_smtp_error(str(exc), config),
-        )
+        sanitized = _sanitize_smtp_error(str(exc), config)
+        logger.warning("SMTP connect failed: %s", sanitized)
+        if alert is not None:
+            alert.error_message = sanitized
+        if s is not None:
+            with contextlib.suppress(Exception):
+                s.quit()
         return None
 
 

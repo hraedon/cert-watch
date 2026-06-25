@@ -3,11 +3,11 @@
 
 {% import "macros/icons.html" as icons %}
 
-{% macro stat_card(tone, icon, label, value, sub, href=None, active=False) %}
-  {% if href %}
+{% macro stat_card(tone, icon, label, value, sub, href=None, active=False, disabled=False) %}
+  {% if href and not disabled %}
     <a class="cw-stat cw-stat-link{% if active %} cw-stat-active{% endif %}" href="{{ href }}">
   {% else %}
-    <div class="cw-stat">
+    <div class="cw-stat{% if disabled %} cw-stat-disabled{% endif %}"{% if disabled %} aria-disabled="true"{% endif %}>
   {% endif %}
     {% if tone == 'default' %}
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
@@ -24,7 +24,7 @@
     </div>
     <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
     {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
-  {% if href %}
+  {% if href and not disabled %}
     </a>
   {% else %}
     </div>
@@ -78,11 +78,11 @@
 
   {# ---- Stat cards ---- #}
   <div class="cw-stats cw-stats-5 cw-mb-18">
-    {{ stat_card('default', 'shield', 'Tracked certificates', ns.expired + ns.critical + ns.warning + ns.healthy, '', href=filter_link(''), active=not filter_urgency) }}
-    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none', href=filter_link('expired'), active=filter_urgency == 'expired') }}
-    {{ stat_card('attention' if ns.critical else 'neutral', 'alert', 'Critical', ns.critical, '< 7 days' if ns.critical else 'none', href=filter_link('critical'), active=filter_urgency == 'critical') }}
-    {{ stat_card('warning' if ns.warning else 'neutral', 'clock', 'Warning', ns.warning, '7\u201329 days' if ns.warning else 'none', href=filter_link('warning'), active=filter_urgency == 'warning') }}
-    {{ stat_card('ok' if ns.healthy else 'neutral', 'check-circle', 'Healthy', ns.healthy, 'no action needed' if ns.healthy else 'none', href=filter_link('healthy'), active=filter_urgency == 'healthy') }}
+    {{ stat_card('default', 'shield', 'Tracked certificates', ns.expired + ns.critical + ns.warning + ns.healthy, '', href=filter_link(''), active=not filter_urgency, disabled=pivot_view) }}
+    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none', href=filter_link('expired'), active=filter_urgency == 'expired', disabled=pivot_view) }}
+    {{ stat_card('attention' if ns.critical else 'neutral', 'alert', 'Critical', ns.critical, '< 7 days' if ns.critical else 'none', href=filter_link('critical'), active=filter_urgency == 'critical', disabled=pivot_view) }}
+    {{ stat_card('warning' if ns.warning else 'neutral', 'clock', 'Warning', ns.warning, '7\u201329 days' if ns.warning else 'none', href=filter_link('warning'), active=filter_urgency == 'warning', disabled=pivot_view) }}
+    {{ stat_card('ok' if ns.healthy else 'neutral', 'check-circle', 'Healthy', ns.healthy, 'no action needed' if ns.healthy else 'none', href=filter_link('healthy'), active=filter_urgency == 'healthy', disabled=pivot_view) }}
   </div>
 
   {# ---- Toolbar ---- #}

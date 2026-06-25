@@ -792,3 +792,9 @@ class TestAlertmanagerAdapter:
 
         resolved = resolve_webhook_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
+
+
+def test_adapter_has_build_resolve_unknown_kind():
+    from cert_watch.alerts import _adapter_has_build_resolve
+
+    assert _adapter_has_build_resolve("nonexistent") is False

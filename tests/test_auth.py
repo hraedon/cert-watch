@@ -478,6 +478,7 @@ def test_login_page_redirects_when_no_auth(reload_app):
 def test_login_page_oauth_label(tmp_path):
     class _OAuthProvider:
         provider_name = "oauth"
+        provider_label = "OAuth"
         supports_form_login = False
 
     s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
@@ -490,17 +491,24 @@ def test_login_page_oauth_label(tmp_path):
 
 
 def test_login_page_oidc_label(tmp_path):
-    class _OidcProvider:
-        provider_name = "oidc"
-        supports_form_login = False
+    from cert_watch.auth import OAuthConfig
+
+    provider = OAuthProvider.__new__(OAuthProvider)
+    provider.config = OAuthConfig(
+        client_id="c",
+        client_secret="s",
+        issuer_url="https://login.example.com",
+        provider_label="OIDC",
+    )
 
     s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
-    app = create_app(auth_provider=_OidcProvider(), settings=s)
+    app = create_app(auth_provider=provider, settings=s)
     with TestClient(app) as client:
         r = client.get("/login")
     assert r.status_code == 200
     assert "Sign in with OIDC" in r.text
-    assert "Sign in with Oidc" not in r.text
+    assert provider.provider_label == "OIDC"
+    assert provider.provider_name == "oauth"
 
 
 def test_logout_clears_cookie(reload_app, _mock_ldap3):
