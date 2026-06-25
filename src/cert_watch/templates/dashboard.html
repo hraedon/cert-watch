@@ -3,8 +3,12 @@
 
 {% import "macros/icons.html" as icons %}
 
-{% macro stat_card(tone, icon, label, value, sub) %}
-  <div class="cw-stat">
+{% macro stat_card(tone, icon, label, value, sub, href=None, active=False) %}
+  {% if href %}
+    <a class="cw-stat cw-stat-link{% if active %} cw-stat-active{% endif %}" href="{{ href }}">
+  {% else %}
+    <div class="cw-stat">
+  {% endif %}
     {% if tone == 'default' %}
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
     {% elif tone == 'attention' %}
@@ -20,7 +24,11 @@
     </div>
     <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
     {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
-  </div>
+  {% if href %}
+    </a>
+  {% else %}
+    </div>
+  {% endif %}
 {% endmacro %}
 
 {% macro sort_link(column, label) %}
@@ -29,30 +37,17 @@
   {% if sort_by == column %}<span class="cw-sort-arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
 {% endmacro %}
 
+{% macro filter_link(urgency='') %}{% if urgency %}/?urgency={{ urgency }}{% else %}/?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if pivot_view %}&view={{ pivot_view }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
+
 {% block content %}
-{# ---- Compute stats ---- #}
-{% if pivot_stats %}
-  {# Pivot view: stats from SQL aggregation (BC-048) #}
-  {% set ns = namespace(
-      expired=pivot_stats.expired,
-      critical=pivot_stats.critical,
-      warning=pivot_stats.warning,
-      healthy=pivot_stats.healthy,
-      total=total_entries
-  ) %}
-{% else %}
-  {% set _stat_entries = all_entries if all_entries is defined else entries %}
-  {% set ns = namespace(expired=0, critical=0, warning=0, healthy=0, total=0) %}
-  {% for e in _stat_entries %}
-    {% set u = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-    {% set ns.total = ns.total + 1 %}
-    {% if u == 'expired' %}{% set ns.expired = ns.expired + 1 %}
-    {% elif u == 'critical' %}{% set ns.critical = ns.critical + 1 %}
-    {% elif u == 'warning' %}{% set ns.warning = ns.warning + 1 %}
-    {% elif u == 'healthy' %}{% set ns.healthy = ns.healthy + 1 %}
-    {% endif %}
-  {% endfor %}
-{% endif %}
+{# ---- Compute stats (SQL aggregation; pivot_stats is always populated by the route) ---- #}
+{% set ns = namespace(
+    expired=pivot_stats.expired,
+    critical=pivot_stats.critical,
+    warning=pivot_stats.warning,
+    healthy=pivot_stats.healthy,
+    total=total_entries
+) %}
 
 <div class="cw-page-wrap">
   {# ---- Page header ---- #}
@@ -82,11 +77,12 @@
   </div>
 
   {# ---- Stat cards ---- #}
-  <div class="cw-stats cw-mb-18">
-    {{ stat_card('default', 'shield', 'Tracked certificates', total_entries, '') }}
-    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none') }}
-    {{ stat_card('warning' if (ns.critical + ns.warning) else 'neutral', 'clock', 'Expiring within 30 days', ns.critical + ns.warning, 'action needed' if (ns.critical + ns.warning) else 'all clear') }}
-    {{ stat_card('ok', 'check-circle', 'Healthy', ns.healthy, 'no action needed') }}
+  <div class="cw-stats cw-stats-5 cw-mb-18">
+    {{ stat_card('default', 'shield', 'Tracked certificates', ns.expired + ns.critical + ns.warning + ns.healthy, '', href=filter_link(''), active=not filter_urgency) }}
+    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none', href=filter_link('expired'), active=filter_urgency == 'expired') }}
+    {{ stat_card('attention' if ns.critical else 'neutral', 'alert', 'Critical', ns.critical, '< 7 days' if ns.critical else 'none', href=filter_link('critical'), active=filter_urgency == 'critical') }}
+    {{ stat_card('warning' if ns.warning else 'neutral', 'clock', 'Warning', ns.warning, '7\u201329 days' if ns.warning else 'none', href=filter_link('warning'), active=filter_urgency == 'warning') }}
+    {{ stat_card('ok' if ns.healthy else 'neutral', 'check-circle', 'Healthy', ns.healthy, 'no action needed' if ns.healthy else 'none', href=filter_link('healthy'), active=filter_urgency == 'healthy') }}
   </div>
 
   {# ---- Toolbar ---- #}
@@ -97,13 +93,6 @@
       <datalist id="dash-all-tags">
         {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
       </datalist>
-    </div>
-    <div class="cw-seg">
-      <button type="submit" name="urgency" value="" class="{% if not filter_urgency %}on{% endif %}">All<span class="cnt">{{ total_entries }}</span></button>
-      <button type="submit" name="urgency" value="expired" class="{% if filter_urgency == 'expired' %}on{% endif %}">Expired<span class="cnt">{{ ns.expired }}</span></button>
-      <button type="submit" name="urgency" value="critical" class="{% if filter_urgency == 'critical' %}on{% endif %}">Critical<span class="cnt">{{ ns.critical }}</span></button>
-      <button type="submit" name="urgency" value="warning" class="{% if filter_urgency == 'warning' %}on{% endif %}">Warning<span class="cnt">{{ ns.warning }}</span></button>
-      <button type="submit" name="urgency" value="healthy" class="{% if filter_urgency == 'healthy' %}on{% endif %}">Healthy<span class="cnt">{{ ns.healthy }}</span></button>
     </div>
     <div class="cw-seg cw-seg-sm">
       <button type="submit" name="view" value="" class="{% if not pivot_view %}on{% endif %}">All</button>
@@ -223,7 +212,7 @@
             <td class="cw-td-minw-150">
               <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
               {% if e.days_remaining is not none %}
-                {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+                {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
                 <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
@@ -250,7 +239,7 @@
             </td>
             <td data-action="stop-propagation">
               <div class="cw-rowact">
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-w-30 cw-no-decoration">
                   {{ icons.svg_icon('chevron-right', 14) }}
                 </a>
               </div>
@@ -370,7 +359,7 @@
             <td class="cw-td-minw-150">
               <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
               {% if e.days_remaining is not none %}
-                {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+                {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
                 <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
@@ -405,7 +394,7 @@
                     </button>
                   </form>
                 {% endif %}
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-w-30 cw-no-decoration">
                   {{ icons.svg_icon('chevron-right', 14) }}
                 </a>
               </div>
@@ -432,7 +421,7 @@
       {% if has_prev %}
         <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">&laquo; Prev</a>
       {% endif %}
-      <span class="cw-muted">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entries)</span>
+      <span class="cw-muted">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entr{{ 'y' if total_entries == 1 else 'ies' }})</span>
       {% if has_next %}
         <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">Next &raquo;</a>
       {% endif %}

@@ -16,6 +16,7 @@ from cert_watch.database import (
     AlertRepository,
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
+    dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
     list_alerts_with_subject,
@@ -249,6 +250,11 @@ def dashboard(
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
 
+    if not pivot_groups:
+        pivot_stats = dashboard_urgency_stats(
+            db, q=q, source=source, scope_tags=scope_tags
+        )
+
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
@@ -282,7 +288,6 @@ def dashboard(
         name="dashboard.html",
         context={
             "entries": display_entries,
-            "all_entries": page_entries,
             "all_tags": distinct_tags(db),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,

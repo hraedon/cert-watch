@@ -2,6 +2,7 @@ from fastapi.testclient import TestClient
 
 from cert_watch.app import app
 from cert_watch.upload import store_uploaded, upload_certificate
+from tests.conftest import _make_cert
 
 
 def test_dashboard_empty_state():
@@ -134,6 +135,56 @@ def test_dashboard_filter_clear_link(reload_app, tmp_path, leaf_pem_file):
     assert r.status_code == 200
     # The search filter is applied; the q value should be in the input
     assert 'value="leaf"' in r.text
+
+
+def test_dashboard_stat_cards_are_urgency_filters(
+    reload_app, tmp_path, leaf_pem_file, expiring_soon_leaf
+):
+    """Stat cards link to urgency filters and reflect the active state."""
+    import re
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    store_uploaded(upload_certificate(leaf_pem_file), db)
+    store_uploaded(upload_certificate_from_bytes(expiring_soon_leaf.der, "expiring.der"), db)
+    expired = _make_cert("expired.example.com", days_valid=-1, san_dns=["expired.example.com"])
+    store_uploaded(upload_certificate_from_bytes(expired.der, "expired.der"), db)
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert r.status_code == 200
+    assert 'class="cw-stat cw-stat-link"' in r.text
+    assert 'href="/?urgency=expired"' in r.text
+    assert 'href="/?urgency=critical"' in r.text
+    assert 'href="/?urgency=warning"' in r.text
+    assert 'href="/?urgency=healthy"' in r.text
+
+    def _stat_value(text: str, label: str) -> int:
+        pattern = (
+            r'<span class="cw-stat-label[^"]*">'
+            + re.escape(label)
+            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+        )
+        match = re.search(pattern, text, re.S)
+        assert match, f"stat card {label!r} not found"
+        return int(match.group(1))
+
+    assert _stat_value(r.text, "Tracked certificates") == 3
+    assert _stat_value(r.text, "Expired") == 1
+    assert _stat_value(r.text, "Critical") == 1
+    assert _stat_value(r.text, "Warning") == 0
+    assert _stat_value(r.text, "Healthy") == 1
+
+    assert r.text.count("cw-stat-active") == 1
+    assert 'cw-stat-active" href="/?urgency=' not in r.text
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/?urgency=expired")
+    assert r.status_code == 200
+    assert r.text.count("cw-stat-active") == 1
+    assert 'cw-stat-active" href="/?urgency=expired"' in r.text
+    assert "expired.example.com" in r.text
+    assert "leaf.example.com" not in r.text
 
 
 def test_dashboard_chain_tree_view(reload_app, tmp_path, chain_pem_file):
@@ -274,6 +325,70 @@ def upload_certificate_from_bytes(der_bytes, filename):
         return upload_certificate(tmp_path)
     finally:
         tmp_path.unlink(missing_ok=True)
+
+
+def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
+    """Stat-card urgency counts must reflect the full fleet, not only page 2."""
+    import re
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.serialization import Encoding
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database.repo import SqliteCertificateRepository
+    from cert_watch.database.schema import init_schema
+    from tests.conftest import _make_cert
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+
+    repo = SqliteCertificateRepository(db, source="uploaded")
+    plan = [
+        (-1, 1),    # expired
+        (3, 3),     # critical
+        (15, 5),    # warning
+        (365, 21),  # healthy
+    ]
+    index = 0
+    for days_valid, count in plan:
+        for _ in range(count):
+            subject = f"cert{index}.example.com"
+            gc = _make_cert(subject, days_valid=days_valid, not_before_days_ago=1)
+            cert = Certificate(
+                subject=subject,
+                issuer="Test CA",
+                not_before=gc.cert.not_valid_before_utc,
+                not_after=gc.cert.not_valid_after_utc,
+                fingerprint_sha256=gc.cert.fingerprint(hashes.SHA256()).hex(),
+                raw_der=gc.cert.public_bytes(Encoding.DER),
+                is_leaf=True,
+                san_dns_names=[subject],
+            )
+            repo.add(cert)
+            index += 1
+
+    def _stat_value(text: str, label: str) -> int:
+        pattern = (
+            r'<span class="cw-stat-label[^"]*">'
+            + re.escape(label)
+            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+        )
+        match = re.search(pattern, text, re.S)
+        assert match, f"stat card {label!r} not found"
+        return int(match.group(1))
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/?page=2")
+    assert r.status_code == 200
+    assert "Page 2 of" in r.text
+    # Page 2 rows are the 5 healthiest certs; the stat-card counters
+    # must still reflect the full filtered fleet distribution.
+    assert _stat_value(r.text, "Expired") == 1
+    assert _stat_value(r.text, "Healthy") == 21
+    assert _stat_value(r.text, "Critical") == 3
+    assert _stat_value(r.text, "Warning") == 5
+    assert _stat_value(r.text, "Tracked certificates") == 30
 
 
 def test_group_entries_by_fingerprint():

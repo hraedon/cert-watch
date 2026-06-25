@@ -297,7 +297,7 @@ def test_urgency_considers_chain_child_expiry(tmp_path):
 
 
 def test_stat_card_label_says_30_days(tmp_path):
-    """The warning stat card should say '< 30 days', not '≤ 14 days'."""
+    """The warning stat card should be labelled Warning and not use '≤ 14 days'."""
     app, db = _make_authed_app(tmp_path)
 
     from cert_watch.auth import SESSION_COOKIE, create_session
@@ -307,7 +307,7 @@ def test_stat_card_label_says_30_days(tmp_path):
         client.cookies.set(SESSION_COOKIE, token)
         r = client.get("/team")
     assert r.status_code == 200
-    assert "Expiring &lt; 30 days" in r.text
+    assert "Warning" in r.text
     assert "≤ 14 days" not in r.text
 
 

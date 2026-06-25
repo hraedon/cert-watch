@@ -481,7 +481,7 @@
             <div class="cw-spacer"></div>
             <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ _tone }}">
               <span class="cw-status-dot__mark"></span>
-              <span class="cw-fw-500">{% if days_remaining < 0 %}expired{% else %}{{ days_remaining }}d{% endif %}</span>
+              <span class="cw-fw-500">{% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}d{% endif %}</span>
             </span>
           </div>
         </div>
@@ -506,7 +506,7 @@
               {% set c_tone = 'var(--expired)' if c_urg == 'expired' else 'var(--crit)' if c_urg == 'critical' else 'var(--warn)' if c_urg == 'warning' else 'var(--ok)' %}
               <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ c_tone }}">
                 <span class="cw-status-dot__mark"></span>
-                <span class="cw-fw-500">{% if c_days < 0 %}expired{% else %}{{ c_days }}d{% endif %}</span>
+                <span class="cw-fw-500">{% if c_days < 0 %}Expired{% else %}{{ c_days }}d{% endif %}</span>
               </span>
             </div>
           </div>
