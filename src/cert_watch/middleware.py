@@ -475,6 +475,9 @@ async def rate_limit_headers_middleware(request: Request, call_next):
     """Enforce rate limits on API routes and add X-RateLimit headers."""
     if not request.url.path.startswith("/api/"):
         return await call_next(request)
+    # Health checks are polled frequently (UI banner, k8s probes) — exempt.
+    if request.url.path == "/api/health":
+        return await call_next(request)
     client = _extract_client_ip(request)
     key = f"api:{client}"
     if not check_rate_limit(key, 60, 60):
