@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -255,9 +256,41 @@ class SqliteAlertRepository(AlertRepository):
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
 
-    def create(self, alert: Alert) -> str:
+    def create(
+        self,
+        alert: Alert,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> str:
         alert_id = alert.id or str(uuid.uuid4())
-        with _connect(self.db_path) as conn:
+        params = (
+            alert_id,
+            alert.cert_id,
+            alert.alert_type,
+            alert.status,
+            alert.message,
+            alert.threshold_days,
+            json.dumps(alert.extra_recipients or []),
+            _iso(alert.created_at),
+            _iso(alert.sent_at) if alert.sent_at else None,
+            alert.error_message,
+            alert.hostname,
+            alert.subject,
+        )
+        if conn is None:
+            with _connect(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO alerts
+                    (id, cert_id, alert_type, status, message, threshold_days,
+                     extra_recipients, created_at, sent_at, error_message,
+                     hostname, subject)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    params,
+                )
+                conn.commit()
+        else:
             conn.execute(
                 """
                 INSERT INTO alerts
@@ -266,22 +299,8 @@ class SqliteAlertRepository(AlertRepository):
                  hostname, subject)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (
-                    alert_id,
-                    alert.cert_id,
-                    alert.alert_type,
-                    alert.status,
-                    alert.message,
-                    alert.threshold_days,
-                    json.dumps(alert.extra_recipients or []),
-                    _iso(alert.created_at),
-                    _iso(alert.sent_at) if alert.sent_at else None,
-                    alert.error_message,
-                    alert.hostname,
-                    alert.subject,
-                ),
+                params,
             )
-            conn.commit()
         return alert_id
 
     def list_pending(self) -> list[Alert]:
@@ -296,8 +315,18 @@ class SqliteAlertRepository(AlertRepository):
             rows = conn.execute("SELECT * FROM alerts").fetchall()
         return [self._row_to_alert(r) for r in rows]
 
-    def list_for_cert(self, cert_id: str) -> list[Alert]:
-        with _connect(self.db_path) as conn:
+    def list_for_cert(
+        self,
+        cert_id: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[Alert]:
+        if conn is None:
+            with _connect(self.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT * FROM alerts WHERE cert_id = ?", (cert_id,)
+                ).fetchall()
+        else:
             rows = conn.execute(
                 "SELECT * FROM alerts WHERE cert_id = ?", (cert_id,)
             ).fetchall()
@@ -440,11 +469,21 @@ class ScopedAlertRepository(AlertRepository):
     def list_pending(self) -> list[Alert]:
         return self._repo.list_pending_scoped(self._scope_tags)
 
-    def list_for_cert(self, cert_id: str) -> list[Alert]:
-        return self._repo.list_for_cert(cert_id)
+    def list_for_cert(
+        self,
+        cert_id: str,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> list[Alert]:
+        return self._repo.list_for_cert(cert_id, conn=conn)
 
-    def create(self, alert: Alert) -> str:
-        return self._repo.create(alert)
+    def create(
+        self,
+        alert: Alert,
+        *,
+        conn: sqlite3.Connection | None = None,
+    ) -> str:
+        return self._repo.create(alert, conn=conn)
 
     def mark_sent(self, alert_id: str) -> None:
         self._repo.mark_sent(alert_id)
@@ -493,8 +532,13 @@ class SqliteTrustAnchorRepository:
             rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
         return [_row_to_cert(r) for r in rows]
 
-    def list_entries(self) -> list[TrustAnchorEntry]:
-        with _connect(self.db_path) as conn:
+    def list_entries(
+        self, *, conn: sqlite3.Connection | None = None
+    ) -> list[TrustAnchorEntry]:
+        if conn is None:
+            with _connect(self.db_path) as conn:
+                rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
+        else:
             rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
         return [
             TrustAnchorEntry(

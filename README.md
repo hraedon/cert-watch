@@ -391,7 +391,6 @@ only); they remain subject to the same per-IP rate limits as the rest of `/api/*
 | `CERT_WATCH_COOKIE_SECURE` | `1` | Cookies are `Secure`-flagged by default. Set `0` only for plain-HTTP local dev |
 | `CERT_WATCH_SESSION_TTL` | `28800` | Session-cookie lifetime in seconds (default 8 hours) |
 | `CERT_WATCH_CSP_REPORT_URI` | — | URL for CSP violation reports (added to the `report-uri` / `report-to` directives) |
-| `CERT_WATCH_CSRF_DISABLED` | `0` | Set `1` to disable CSRF (testing only) |
 
 > Rotating `CERT_WATCH_AUTH_SECRET` invalidates existing sessions and requires
 > re-encrypting stored secrets — run `cert-watch re-encrypt <old_key>` after

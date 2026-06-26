@@ -63,10 +63,9 @@ def test_csp_nonce_rendered_and_per_request(tmp_path, monkeypatch):
 # ── BC-070: CSRF token no longer accepted via query parameter ───────────────
 
 
-def test_csrf_query_param_token_rejected(tmp_path, monkeypatch):
+def test_csrf_query_param_token_rejected(csrf_strict, tmp_path, monkeypatch):
     """A CSRF token supplied only in the query string must be rejected."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     from cert_watch.app import create_app
     from cert_watch.config import Settings

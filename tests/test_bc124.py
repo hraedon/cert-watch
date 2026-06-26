@@ -170,7 +170,6 @@ def test_bump_session_version_concurrent_race(tmp_path):
 def test_change_password_env_override_redirects(reload_app, tmp_path, monkeypatch):
     """When CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH is set, UI rotation is blocked."""
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv(
         "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH",
         _scrypt_hash("testpassword"),

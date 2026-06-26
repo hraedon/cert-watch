@@ -96,18 +96,13 @@ class TestLoginCsrf:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        # The cw_sid cookie defaults to Secure; TestClient speaks http, so flip
-        # it off here or the double-submit cookie never round-trips in the test.
         monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
-        # CSRF is globally disabled in the test env (autouse fixture); re-enable
-        # it here so we actually exercise the new enforcement.
         return reload_app(
-            CERT_WATCH_CSRF_DISABLED="0",
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
         )
 
-    def test_post_without_token_rejected(self, reload_app, monkeypatch):
+    def test_post_without_token_rejected(self, reload_app, csrf_strict, monkeypatch):
         app_mod = self._app(reload_app, monkeypatch)
         with TestClient(app_mod.app, raise_server_exceptions=False) as client:
             r = client.post(
@@ -118,7 +113,7 @@ class TestLoginCsrf:
             assert r.status_code == 303
             assert "login" in r.headers["location"]  # bounced back, not signed in
 
-    def test_post_with_valid_token_succeeds(self, reload_app, login_csrf, monkeypatch):
+    def test_post_with_valid_token_succeeds(self, reload_app, csrf_strict, login_csrf, monkeypatch):
         app_mod = self._app(reload_app, monkeypatch)
         with TestClient(app_mod.app, raise_server_exceptions=False) as client:
             token = login_csrf(client)

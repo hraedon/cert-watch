@@ -163,13 +163,27 @@ def detect_drift(
     protocol_version: str = "",
     key_algo: str = "",
     sig_algo: str = "",
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> list[DriftEvent]:
     """Look up the most recent cert_history row for host:port and compare with the new scan.
 
-    Returns DriftEvents (empty if no previous history or no changes).
+    Returns DriftEvents (empty if no previous history or no changes). When
+    *conn* is provided it is used directly and the caller owns commit/rollback.
     """
-    init_schema(db_path)
-    with _connect(db_path) as conn:
+    if conn is None:
+        init_schema(db_path)
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                """SELECT fingerprint_sha256, issuer, not_after, key_algo, sig_algo,
+                          posture_grade, protocol_version, san_count
+                   FROM cert_history
+                   WHERE hostname = ? AND port = ?
+                   ORDER BY scanned_at DESC
+                   LIMIT 1""",
+                (hostname, port),
+            ).fetchone()
+    else:
         row = conn.execute(
             """SELECT fingerprint_sha256, issuer, not_after, key_algo, sig_algo,
                       posture_grade, protocol_version, san_count
@@ -209,10 +223,13 @@ def create_drift_alert(
     port: int,
     events: list[DriftEvent],
     extra_recipients: list[str] | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> str | None:
     """Create a drift alert if any high-severity events exist.
 
-    Returns the alert id if created, None otherwise.
+    Returns the alert id if created, None otherwise. When *conn* is provided
+    it is used directly and the caller owns commit/rollback.
     """
     from cert_watch.database.repo import Alert, SqliteAlertRepository
 
@@ -224,10 +241,18 @@ def create_drift_alert(
     message = f"{hostname}:{port} — {summary}"
 
     subject = ""
-    with _connect(db_path) as conn:
+    if conn is None:
+        with _connect(db_path) as c:
+            row = c.execute("SELECT subject FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+            if row:
+                subject = row["subject"] or ""
+        # Let the repository open its own connection so it can commit.
+        alert_conn = None
+    else:
         row = conn.execute("SELECT subject FROM certificates WHERE id = ?", (cert_id,)).fetchone()
         if row:
             subject = row["subject"] or ""
+        alert_conn = conn
 
     alert = Alert(
         cert_id=cert_id,
@@ -239,7 +264,7 @@ def create_drift_alert(
         subject=subject,
     )
     alert_repo = SqliteAlertRepository(db_path)
-    return alert_repo.create(alert)
+    return alert_repo.create(alert, conn=alert_conn)
 
 
 def record_cert_history(
@@ -250,12 +275,16 @@ def record_cert_history(
     posture_grade: str = "",
     protocol_version: str = "",
     scanned_at: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """Append a per-scan snapshot row to cert_history.
 
-    Called after every successful leaf scan. Returns the new row id.
+    Called after every successful leaf scan. Returns the new row id. When
+    *conn* is provided it is used directly and the caller owns commit/rollback.
     """
-    init_schema(db_path)
+    if conn is None:
+        init_schema(db_path)
     row_id = str(uuid.uuid4())
     if scanned_at is None:
         scanned_at = _iso(datetime.now(UTC))
@@ -263,30 +292,42 @@ def record_cert_history(
     key_algo = _extract_key_algo(leaf.raw_der) if leaf.raw_der else ""
     sig_algo = _extract_sig_algo(leaf.raw_der) if leaf.raw_der else ""
 
-    with _connect(db_path) as conn:
+    params = (
+        row_id,
+        hostname,
+        port,
+        leaf.fingerprint_sha256,
+        leaf.issuer,
+        _iso(leaf.not_after),
+        key_algo,
+        sig_algo,
+        posture_grade,
+        protocol_version,
+        len(leaf.san_dns_names),
+        scanned_at,
+        _iso(leaf.not_before),
+    )
+
+    if conn is None:
+        with _connect(db_path) as conn:
+            conn.execute(
+                """INSERT INTO cert_history
+                (id, hostname, port, fingerprint_sha256, issuer, not_after,
+                 key_algo, sig_algo, posture_grade, protocol_version, san_count,
+                 scanned_at, not_before)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                params,
+            )
+            conn.commit()
+    else:
         conn.execute(
             """INSERT INTO cert_history
             (id, hostname, port, fingerprint_sha256, issuer, not_after,
              key_algo, sig_algo, posture_grade, protocol_version, san_count,
              scanned_at, not_before)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                row_id,
-                hostname,
-                port,
-                leaf.fingerprint_sha256,
-                leaf.issuer,
-                _iso(leaf.not_after),
-                key_algo,
-                sig_algo,
-                posture_grade,
-                protocol_version,
-                len(leaf.san_dns_names),
-                scanned_at,
-                _iso(leaf.not_before),
-            ),
+            params,
         )
-        conn.commit()
     return row_id
 
 

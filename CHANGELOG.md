@@ -23,6 +23,14 @@ All notable changes to cert-watch are documented in this file.
   `deploy/iis/README.md`.
 
 ### Security
+- **Removed `CERT_WATCH_CSRF_DISABLED` env var (WI-097).** CSRF protection can
+  no longer be disabled at runtime via environment variable. The deprecated env
+  var (which globally disabled CSRF on all routes) has been removed from
+  `middleware.check_csrf` and the startup lifespan. Deployments that set
+  `CERT_WATCH_CSRF_DISABLED=1` must remove it — CSRF is now always enforced.
+  The unit test suite uses an internal test-only flag (not env-var settable) to
+  bypass CSRF for form-POST convenience; `csrf_strict` fixture re-enables real
+  validation for tests that assert CSRF enforcement.
 - **Tag-scope enforcement for bulk operations (WI-078).** The three bulk routes
   — scan-all-hosts, flush-alert-queue, and mark-all-alerts-read — now honour the
   caller's tag scope. Previously a scoped user could scan every host, flush the

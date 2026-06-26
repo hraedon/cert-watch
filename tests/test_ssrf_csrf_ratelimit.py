@@ -237,9 +237,8 @@ def test_csrf_rejects_malformed_token():
 
 # ── CSRF: hidden field accepted in POST ────────────────────────────────────
 
-def test_csrf_hidden_field_accepted(tmp_path, monkeypatch, reload_app):
+def test_csrf_hidden_field_accepted(csrf_strict, tmp_path, monkeypatch, reload_app):
     """POST with _csrf_token in form body should pass CSRF check."""
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     app_mod = reload_app()
 
     with TestClient(app_mod.app) as client:
@@ -265,9 +264,8 @@ def test_csrf_hidden_field_accepted(tmp_path, monkeypatch, reload_app):
     assert "csrf" not in (r.headers.get("location", "").lower())
 
 
-def test_csrf_missing_token_rejected(tmp_path, monkeypatch, reload_app):
+def test_csrf_missing_token_rejected(csrf_strict, tmp_path, monkeypatch, reload_app):
     """POST without CSRF token should be rejected when CSRF is enabled."""
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     app_mod = reload_app()
 
     with TestClient(app_mod.app, cookies={"cw_sid": "fake-session"}) as client:

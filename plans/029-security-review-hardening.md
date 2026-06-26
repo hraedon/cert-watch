@@ -82,7 +82,7 @@ previously render a CSRF token (`login_page` didn't pass `get_csrf_context`, and
 `login.html` had no field), so naively adding only `check_csrf` would have
 rejected *every* login. The real change was three touch-points (handler context +
 both form fields + the check). Existing login tests are unaffected because the
-test env sets `CERT_WATCH_CSRF_DISABLED=1`.
+test env sets `_CSRF_BYPASS=True` (was `CERT_WATCH_CSRF_DISABLED=1`, removed in WI-097).
 
 ### F. scrypt parameters (#11) — Low
 - **F#1 timing leak — DONE.** `_dummy_verify` hardcoded `n=2**14` while the

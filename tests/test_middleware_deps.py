@@ -9,15 +9,7 @@ from fastapi.exceptions import HTTPException
 from cert_watch.auth import NoAuthProvider, create_session
 from cert_watch.middleware import require_auth, require_write
 
-
-@pytest.fixture(autouse=True)
-def _enable_csrf(monkeypatch):
-    """conftest.py globally disables CSRF via CERT_WATCH_CSRF_DISABLED=1.
-
-    These tests exercise CSRF validation, so we re-enable it.
-    """
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
-    yield
+pytestmark = pytest.mark.usefixtures("csrf_strict")
 
 
 class _FakeApp:

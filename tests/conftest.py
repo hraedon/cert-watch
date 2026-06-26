@@ -214,7 +214,6 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     round-trip helpers and OAuth state signing) that don't go through a request.
     """
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
 
@@ -224,6 +223,7 @@ def _isolated_data_dir(tmp_path, monkeypatch):
 
     set_signing_key("test-auth-secret-for-tests")
     set_csrf_secret("test-csrf-secret-for-tests")
+    monkeypatch.setattr(_mw, "_CSRF_BYPASS", True)
     # Reset rate-limit state between tests. The limiter's in-memory cache and
     # SQLite-path globals are process-wide; without this, calls accumulate
     # across the whole session and trip the 60/min /api cap on a fast (no
@@ -234,6 +234,20 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     _mw._rate_db_path = None
     _mw._rate_db_initialized = False
     yield
+
+
+@pytest.fixture
+def csrf_strict(monkeypatch):
+    """Re-enable real CSRF validation for a single test.
+
+    The autouse ``_isolated_data_dir`` fixture sets ``_CSRF_BYPASS = True`` so
+    the bulk of the suite (267+ form-POST call sites) can exercise route logic
+    without minting tokens.  Tests that specifically verify CSRF enforcement
+    depend on this fixture to flip the flag back to ``False``.
+    """
+    from cert_watch import middleware as _mw
+
+    monkeypatch.setattr(_mw, "_CSRF_BYPASS", False)
 
 
 @pytest.fixture(autouse=True)

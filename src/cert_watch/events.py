@@ -194,27 +194,40 @@ def _write_event_log(
     event: Event,
     delivery_status: str,
     error_message: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> int | None:
     from cert_watch.database import init_schema
 
-    init_schema(db_path)
+    if conn is None:
+        init_schema(db_path)
     ts = event.timestamp.isoformat()
     created_at = datetime.now(UTC).isoformat()
     payload_json = json.dumps(event.payload, default=str)
-    with _connect(db_path) as conn:
-        cur = conn.execute(
-            "INSERT INTO event_log"
-            " (event_type, timestamp, source, payload,"
-            " delivery_status, error_message, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                event.event_type, ts, event.source,
-                payload_json, delivery_status, error_message,
-                created_at,
-            ),
-        )
-        conn.commit()
-        return cur.lastrowid
+    params = (
+        event.event_type, ts, event.source,
+        payload_json, delivery_status, error_message,
+        created_at,
+    )
+    if conn is None:
+        with _connect(db_path) as conn:
+            cur = conn.execute(
+                "INSERT INTO event_log"
+                " (event_type, timestamp, source, payload,"
+                " delivery_status, error_message, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                params,
+            )
+            conn.commit()
+            return cur.lastrowid
+    cur = conn.execute(
+        "INSERT INTO event_log"
+        " (event_type, timestamp, source, payload,"
+        " delivery_status, error_message, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params,
+    )
+    return cur.lastrowid
 
 
 def _resolve_ssrf_policy(db_path: str | Path) -> tuple[bool, tuple[str, ...]]:
@@ -320,9 +333,13 @@ def emit_event(
     event: Event,
     db_path: str | Path,
     config: EventStreamConfig | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> int | None:
     try:
         if config is None:
+            if conn is not None:
+                raise ValueError("config is required when conn is provided")
             config = load_event_config(db_path)
         if event.event_type not in config.enabled_event_types:
             return None
@@ -332,7 +349,7 @@ def emit_event(
         delivery_status = "pending"
         if not config.webhook_url:
             delivery_status = "delivered"
-        row_id = _write_event_log(db_path, event, delivery_status)
+        row_id = _write_event_log(db_path, event, delivery_status, conn=conn)
         if config.webhook_url and row_id is not None:
             try:
                 _get_pool().submit(_deliver_webhook, event, config, str(db_path), row_id)
@@ -340,6 +357,8 @@ def emit_event(
                 logger.warning("event webhook submit failed", exc_info=True)
         return row_id
     except (sqlite3.DatabaseError, TypeError, ValueError):
+        if conn is not None:
+            raise
         logger.warning("emit_event failed", exc_info=True)
         return None
 

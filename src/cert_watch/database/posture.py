@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,14 +28,18 @@ def store_scan_posture(
     caa_present: bool | None = None,
     caa_records: list[str] | None = None,
     scanned_at: str | None = None,
+    *,
+    conn: sqlite3.Connection | None = None,
 ) -> str:
     """Store a posture evaluation result in the scan_posture table.
 
-    Returns the posture entry id.
+    Returns the posture entry id. When *conn* is provided it is used
+    directly and the caller owns commit/rollback.
     """
     from cert_watch.posture import Finding
 
-    init_schema(db_path)
+    if conn is None:
+        init_schema(db_path)
     posture_id = str(uuid.uuid4())
     if scanned_at is None:
         scanned_at = _iso(datetime.now(UTC))
@@ -45,7 +50,38 @@ def store_scan_posture(
         for f in findings
     ])
 
-    with _connect(db_path) as conn:
+    params = (
+        posture_id,
+        cert_id,
+        hostname,
+        port,
+        grade,
+        protocol_version,
+        1 if ocsp_stapling is True else (0 if ocsp_stapling is False else None),
+        1 if hsts is True else (0 if hsts is False else None),
+        1 if must_staple else 0,
+        1 if verify_requested is True else (0 if verify_requested is False else None),
+        1 if chain_incomplete else 0,
+        chain_status,
+        1 if caa_present is True else (0 if caa_present is False else None),
+        json.dumps(caa_records or []),
+        findings_json,
+        scanned_at,
+    )
+
+    if conn is None:
+        with _connect(db_path) as conn:
+            conn.execute(
+                """INSERT INTO scan_posture
+                (id, cert_id, hostname, port, grade, protocol_version,
+                 ocsp_stapling, hsts, must_staple, verify_requested,
+                 chain_incomplete, chain_status, caa_present, caa_records,
+                 findings, scanned_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                params,
+            )
+            conn.commit()
+    else:
         conn.execute(
             """INSERT INTO scan_posture
             (id, cert_id, hostname, port, grade, protocol_version,
@@ -53,26 +89,8 @@ def store_scan_posture(
              chain_incomplete, chain_status, caa_present, caa_records,
              findings, scanned_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                posture_id,
-                cert_id,
-                hostname,
-                port,
-                grade,
-                protocol_version,
-                1 if ocsp_stapling is True else (0 if ocsp_stapling is False else None),
-                1 if hsts is True else (0 if hsts is False else None),
-                1 if must_staple else 0,
-                1 if verify_requested is True else (0 if verify_requested is False else None),
-                1 if chain_incomplete else 0,
-                chain_status,
-                1 if caa_present is True else (0 if caa_present is False else None),
-                json.dumps(caa_records or []),
-                findings_json,
-                scanned_at,
-            ),
+            params,
         )
-        conn.commit()
     return posture_id
 
 

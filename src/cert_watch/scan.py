@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from cert_watch.database import CertificateRepository
+    from cert_watch.events import EventStreamConfig
+    from cert_watch.policy import PolicySet
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import init_schema, replace_scanned
@@ -382,6 +384,7 @@ def _stage_resolve_pending_alerts(
 def _stage_replace(
     repo_path: str | Path,
     entry: ScannedEntry,
+    conn: sqlite3.Connection,
 ) -> tuple[str, str | None]:
     """Persist leaf + chain, removing previous certs for the same (hostname, port)."""
     return replace_scanned(
@@ -391,6 +394,7 @@ def _stage_replace(
         leaf=entry.leaf,
         chain=entry.chain,
         chain_valid=None,
+        conn=conn,
     )
 
 
@@ -423,6 +427,7 @@ def _stage_posture(
     leaf_id: str,
     entry: ScannedEntry,
     *,
+    conn: sqlite3.Connection,
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
@@ -430,6 +435,7 @@ def _stage_posture(
     """Evaluate TLS posture and store the result. Returns (grade, findings, chain_status)."""
     return _evaluate_and_store_posture(
         repo_path, leaf_id, entry,
+        conn=conn,
         check_revocation=check_revocation,
         allow_private=allow_private,
         allowed_subnets=allowed_subnets,
@@ -457,14 +463,16 @@ def _stage_policy(
     posture_grade: str,
     original_findings: list[dict],
     stored_chain_status: str | None,
+    *,
+    conn: sqlite3.Connection,
+    ruleset: PolicySet,
 ) -> str:
     """Evaluate policy overrides and fire policy violation alerts.
 
     Returns the (possibly updated) grade.
     """
-    from cert_watch.policy import apply_policy_overrides, evaluate_policy, load_policy_set
+    from cert_watch.policy import apply_policy_overrides, evaluate_policy
     from cert_watch.posture import Finding as _Finding
-    ruleset = load_policy_set(str(repo_path))
     posture_finding_objs: list[_Finding] | None = None
     if original_findings:
         posture_finding_objs = [
@@ -506,6 +514,7 @@ def _stage_policy(
                 chain_incomplete=entry.chain_incomplete,
                 chain_status=stored_chain_status,
                 scanned_at=None,
+                conn=conn,
             )
         from cert_watch.alerts import evaluate_policy_alerts
         evaluate_policy_alerts(
@@ -514,6 +523,7 @@ def _stage_policy(
             violations=violations,
             db_path=str(repo_path),
             subject=entry.leaf.subject,
+            conn=conn,
         )
     return posture_grade
 
@@ -524,6 +534,8 @@ def _stage_drift(
     entry: ScannedEntry,
     posture_grade: str,
     drift_alerts: bool,
+    *,
+    conn: sqlite3.Connection,
 ) -> None:
     """Detect drift from previous cert and optionally create alerts."""
     from cert_watch.database.queries import (
@@ -543,6 +555,7 @@ def _stage_drift(
         protocol_version=entry.protocol_version,
         key_algo=key_algo,
         sig_algo=sig_algo,
+        conn=conn,
     )
     if drift_events and drift_alerts:
         create_drift_alert(
@@ -551,6 +564,7 @@ def _stage_drift(
             hostname=entry.host,
             port=entry.port,
             events=drift_events,
+            conn=conn,
         )
 
 
@@ -558,6 +572,8 @@ def _stage_history(
     repo_path: str | Path,
     entry: ScannedEntry,
     posture_grade: str,
+    *,
+    conn: sqlite3.Connection,
 ) -> None:
     """Record cert history entry."""
     from cert_watch.database.queries import record_cert_history
@@ -568,6 +584,7 @@ def _stage_history(
         leaf=entry.leaf,
         posture_grade=posture_grade,
         protocol_version=entry.protocol_version,
+        conn=conn,
     )
 
 
@@ -578,6 +595,9 @@ def _stage_events(
     replaced_cert_id: str | None,
     posture_grade: str,
     previous_grade: str | None,
+    *,
+    conn: sqlite3.Connection,
+    event_config: EventStreamConfig,
 ) -> None:
     """Emit cert_added/cert_renewed and posture_changed events."""
     from cert_watch.events import Event, emit_event
@@ -596,6 +616,8 @@ def _stage_events(
             source="scan",
         ),
         repo_path,
+        config=event_config,
+        conn=conn,
     )
     if posture_grade and previous_grade is not None and previous_grade != posture_grade:
         emit_event(
@@ -612,6 +634,8 @@ def _stage_events(
                 source="scan",
             ),
             repo_path,
+            config=event_config,
+            conn=conn,
         )
 
 
@@ -632,25 +656,29 @@ def store_scanned(
     avoid accumulation on repeated scans. Also evaluates and stores TLS posture.
     See AC-07.
 
+    All DB-writing stages (replace, posture, policy, drift, history, events) run
+    inside a single SQLite transaction on the cached per-thread connection so a
+    failure in any stage rolls back the whole scan result. The PagerDuty/Alertmanager
+    resolve webhook runs after commit and is best-effort.
+
     When ``webhook_config`` is a ``WebhookConfig`` with ``kind="pagerduty"``
     or ``kind="alertmanager"``, sends resolve events for any open incidents
     on the replaced cert.
     """
     if isinstance(repo_path_or_repo, str | Path):
-        init_schema(repo_path_or_repo)
+        repo_path = repo_path_or_repo
+        init_schema(repo_path)
         if entry.chain_incomplete:
             logger.warning(
                 "stored scan for %s:%s with incomplete chain (openssl degraded)",
                 entry.host, entry.port,
             )
 
-        # --- Stage sequencer: each stage is independently caught and tagged ---
-
         def _stage(name: str, fn, *args, **kwargs):
             """Run a stage; on failure log with stage name and re-raise."""
             try:
                 return fn(*args, **kwargs)
-            except Exception:  # logs + re-raises; outer suppress() handles non-critical stages
+            except Exception:
                 logger.warning(
                     "store_scanned [%s] failed for %s:%s",
                     name, entry.host, entry.port,
@@ -660,78 +688,94 @@ def store_scanned(
 
         pending_for_resolve: list | None = None
         old_leaf_id: str | None = None
-        leaf_id: str = ""
-        replaced_cert_id: str | None = None
-        posture_grade: str = ""
-        original_findings: list[dict] = []
-        stored_chain_status: str | None = None
         previous_grade: str | None = None
 
         with contextlib.suppress(Exception):
             pending_for_resolve, old_leaf_id = _stage(
                 "resolve_pending_alerts",
                 _stage_resolve_pending_alerts,
-                repo_path_or_repo, entry, webhook_config,
+                repo_path, entry, webhook_config,
             )
 
         with contextlib.suppress(Exception):
             if old_leaf_id:
                 previous_grade = _stage(
                     "previous_grade", _stage_previous_grade,
-                    repo_path_or_repo, old_leaf_id,
+                    repo_path, old_leaf_id,
                 )
 
+        # Pre-load configurations that read kv_store so they do not issue inner
+        # commits while the scan transaction is active.
+        from cert_watch.events import EventStreamConfig, load_event_config
+        from cert_watch.policy import default_policy_set, load_policy_set
         try:
+            event_config = load_event_config(repo_path)
+        except Exception:
+            event_config = EventStreamConfig()
+        try:
+            ruleset = load_policy_set(str(repo_path))
+        except Exception:
+            ruleset = default_policy_set()
+
+        from cert_watch.database.connection import _connect
+        conn = _connect(repo_path)
+        leaf_id: str = ""
+        replaced_cert_id: str | None = None
+        posture_grade: str = ""
+        original_findings: list[dict] = []
+        stored_chain_status: str | None = None
+
+        try:
+            conn.execute("BEGIN")
             leaf_id, replaced_cert_id = _stage(
-                "replace", _stage_replace, repo_path_or_repo, entry,
+                "replace", _stage_replace, repo_path, entry, conn,
             )
-        except sqlite3.DatabaseError:
-            logger.warning(
-                "store_scanned [replace] DB error for %s:%s",
-                entry.host, entry.port, exc_info=True,
-            )
-            return ""
-
-        with contextlib.suppress(Exception):
-            _stage(
-                "webhook_resolve",
-                _stage_webhook_resolve,
-                repo_path_or_repo, entry, replaced_cert_id,
-                webhook_config, pending_for_resolve,
-            )
-
-        with contextlib.suppress(Exception):
             posture_grade, original_findings, stored_chain_status = _stage(
-                "posture", _stage_posture, repo_path_or_repo, leaf_id, entry,
+                "posture", _stage_posture, repo_path, leaf_id, entry,
+                conn=conn,
                 check_revocation=check_revocation,
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
             )
-
-        with contextlib.suppress(Exception):
             posture_grade = _stage(
                 "policy", _stage_policy,
-                repo_path_or_repo, leaf_id, entry,
+                repo_path, leaf_id, entry,
                 posture_grade, original_findings, stored_chain_status,
+                conn=conn, ruleset=ruleset,
             )
-
-        with contextlib.suppress(Exception):
             _stage(
                 "drift", _stage_drift,
-                repo_path_or_repo, leaf_id, entry, posture_grade, drift_alerts,
+                repo_path, leaf_id, entry, posture_grade, drift_alerts,
+                conn=conn,
             )
-
-        with contextlib.suppress(Exception):
             _stage(
                 "history", _stage_history,
-                repo_path_or_repo, entry, posture_grade,
+                repo_path, entry, posture_grade,
+                conn=conn,
             )
-
-        with contextlib.suppress(Exception):
             _stage(
                 "events", _stage_events,
-                repo_path_or_repo, leaf_id, entry,
+                repo_path, leaf_id, entry,
                 replaced_cert_id, posture_grade, previous_grade,
+                conn=conn, event_config=event_config,
+            )
+            conn.commit()
+        except Exception:
+            logger.warning(
+                "store_scanned transaction failed for %s:%s",
+                entry.host, entry.port, exc_info=True,
+            )
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            return ""
+
+        # Post-transaction HTTP: failures must not invalidate the scan.
+        with contextlib.suppress(Exception):
+            _stage(
+                "webhook_resolve",
+                _stage_webhook_resolve,
+                repo_path, entry, replaced_cert_id,
+                webhook_config, pending_for_resolve,
             )
 
         return leaf_id
@@ -748,6 +792,7 @@ def _evaluate_and_store_posture(
     cert_id: str,
     entry: ScannedEntry,
     *,
+    conn: sqlite3.Connection | None = None,
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
@@ -763,14 +808,23 @@ def _evaluate_and_store_posture(
     cert = entry.leaf
     chain = entry.chain
 
-    init_schema(db_path)
-    anchors = [_Cert(
-        subject=a.subject, issuer=a.issuer,
-        not_before=a.not_before, not_after=a.not_after,
-        san_dns_names=a.san_dns_names,
-        fingerprint_sha256=a.fingerprint_sha256,
-        raw_der=a.raw_der,
-    ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
+    if conn is None:
+        init_schema(db_path)
+        anchors = [_Cert(
+            subject=a.subject, issuer=a.issuer,
+            not_before=a.not_before, not_after=a.not_after,
+            san_dns_names=a.san_dns_names,
+            fingerprint_sha256=a.fingerprint_sha256,
+            raw_der=a.raw_der,
+        ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
+    else:
+        anchors = [_Cert(
+            subject=a.subject, issuer=a.issuer,
+            not_before=a.not_before, not_after=a.not_after,
+            san_dns_names=a.san_dns_names,
+            fingerprint_sha256=a.fingerprint_sha256,
+            raw_der=a.raw_der,
+        ) for a in SqliteTrustAnchorRepository(db_path).list_entries(conn=conn)]
 
     cs = chain_status(cert, chain, anchors) if chain else None
 
@@ -787,8 +841,14 @@ def _evaluate_and_store_posture(
 
     scan_interval_days: int | None = None
     if entry.host:
-        from cert_watch.database.connection import _connect
-        with _connect(db_path) as conn:
+        if conn is None:
+            from cert_watch.database.connection import _connect
+            with _connect(db_path) as c:
+                row = c.execute(
+                    "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
+                    (entry.host, entry.port),
+                ).fetchone()
+        else:
             row = conn.execute(
                 "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
                 (entry.host, entry.port),
@@ -837,6 +897,7 @@ def _evaluate_and_store_posture(
         caa_present=caa_present,
         caa_records=caa_records,
         scanned_at=_iso(entry.scanned_at),
+        conn=conn,
     )
     return result.grade, typing.cast("list[dict]", result.findings), cs
 
