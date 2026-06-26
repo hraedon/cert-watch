@@ -305,3 +305,47 @@ def test_dashboard_host_row_shows_notes_indicator(
         r = client.get("/")
     assert r.status_code == 200
     assert "dashboard note" in r.text
+
+
+def test_dashboard_note_chip_uses_data_attr_not_duplicate_id(reload_app, tmp_path):
+    """WI-105: note chips must not use id="note-chip-<host_id>".
+
+    The old id-based pattern produced duplicate DOM ids whenever multiple
+    rendered chips shared a host_id (invalid HTML; the JS only updated the
+    first). The chip now carries a ``cw-note-chip`` class + ``data-host-id``
+    attribute, and the edit-note JS scopes its lookup to the clicked row.
+    Verified across both the grouped (host-row) and non-grouped (cert-row)
+    chip locations.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from tests._helpers import seed_scanned
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    host_id = repo.add("note.example.com", 443, notes="a host note")
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="note.example.com",
+        issuer="Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=90),
+        fingerprint_sha256="n" * 64,
+    )
+    seed_scanned(db, "note.example.com", 443, cert)
+
+    with TestClient(app_mod.app) as client:
+        # Exercise both chip locations: non-grouped (cert-row) and grouped
+        # (host-row) render paths.
+        for url in ["/?grouped=0", "/?grouped=1"]:
+            r = client.get(url)
+            assert r.status_code == 200
+            # The legacy id-based pattern is gone entirely.
+            assert 'id="note-chip-' not in r.text
+            # The chip is selectable by class + data-host-id (JS uses this scope).
+            assert "cw-note-chip" in r.text
+            assert f'data-host-id="{host_id}"' in r.text
+            assert "a host note" in r.text

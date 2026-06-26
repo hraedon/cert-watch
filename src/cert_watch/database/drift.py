@@ -1,6 +1,7 @@
 """Drift detection and certificate history queries."""
 from __future__ import annotations
 
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -63,7 +64,7 @@ def _extract_key_algo(raw_der: bytes) -> str:
         if isinstance(key, ec.EllipticCurvePublicKey):
             return f"EC-{key.curve.name}"
         return type(key).__name__
-    except Exception:
+    except (ValueError, TypeError, ImportError):
         return ""
 
 
@@ -75,7 +76,7 @@ def _extract_sig_algo(raw_der: bytes) -> str:
         cert = x509.load_der_x509_certificate(raw_der)
         oid = cert.signature_algorithm_oid
         return oid._name if hasattr(oid, "_name") else oid.dotted_string
-    except Exception:
+    except (ValueError, TypeError, ImportError):
         return ""
 
 
@@ -309,7 +310,7 @@ def purge_old_history(db_path: str | Path, retention_days: int) -> int:
                 "purged %d cert_history rows older than %d days", deleted, retention_days
             )
         return deleted
-    except Exception:
+    except (sqlite3.Error, OSError):
         import logging
         logging.getLogger("cert_watch.database").warning("cert_history purge failed", exc_info=True)
         return 0
@@ -335,7 +336,7 @@ def purge_old_scan_history(db_path: str | Path, retention_days: int) -> int:
                 "purged %d scan_history rows older than %d days", deleted, retention_days
             )
         return deleted
-    except Exception:
+    except (sqlite3.Error, OSError):
         import logging
         logging.getLogger("cert_watch.database").warning("scan_history purge failed", exc_info=True)
         return 0

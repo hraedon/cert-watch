@@ -297,7 +297,7 @@ def split_leaf_intermediates(
     if not certificates:
         return None, []
     leaf_idx = next(
-        (i for i, c in enumerate(certificates) if getattr(c, "is_leaf", True)),
+        (i for i, c in enumerate(certificates) if c.is_leaf),
         None,
     )
     if leaf_idx is None:

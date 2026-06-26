@@ -3,8 +3,12 @@
 
 {% import "macros/icons.html" as icons %}
 
-{% macro stat_card(tone, icon, label, value, sub) %}
-  <div class="cw-stat">
+{% macro stat_card(tone, icon, label, value, sub, href=None, active=False) %}
+  {% if href %}
+    <a class="cw-stat cw-stat-link{% if active %} cw-stat-active{% endif %}" href="{{ href }}">
+  {% else %}
+    <div class="cw-stat">
+  {% endif %}
     {% if tone == 'default' %}
       <div class="cw-stat-rail cw-stat-rail-accent"></div>
     {% elif tone == 'attention' %}
@@ -20,7 +24,11 @@
     </div>
     <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
     {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
-  </div>
+  {% if href %}
+    </a>
+  {% else %}
+    </div>
+  {% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -55,11 +63,12 @@
     </div>
   </div>
   {% else %}
-  <div class="cw-stats cw-mb-18">
+  <div class="cw-stats cw-stats-5 cw-mb-18">
     {{ stat_card('default', 'shield', 'Team certificates', total_entries, '') }}
-    {{ stat_card('attention', 'alert', 'Expired', stats.expired, 'needs attention' if stats.expired else 'none') }}
-    {{ stat_card('warning', 'clock', 'Expiring < 30 days', stats.critical + stats.warning, 'action needed' if (stats.critical + stats.warning) else 'all clear') }}
-    {{ stat_card('ok', 'check-circle', 'Healthy', stats.healthy, 'no action needed') }}
+    {{ stat_card('attention' if stats.expired else 'neutral', 'alert', 'Expired', stats.expired, 'needs attention' if stats.expired else 'none') }}
+    {{ stat_card('attention' if stats.critical else 'neutral', 'alert', 'Critical', stats.critical, '≤ 7 days' if stats.critical else 'none') }}
+    {{ stat_card('warning' if stats.warning else 'neutral', 'clock', 'Warning', stats.warning, '≤ 30 days' if stats.warning else 'none') }}
+    {{ stat_card('ok' if stats.healthy else 'neutral', 'check-circle', 'Healthy', stats.healthy, 'no action needed' if stats.healthy else 'none') }}
   </div>
 
   <div class="cw-panel cw-table-wrap">
@@ -93,7 +102,7 @@
           <td class="cw-td-minw-150">
             <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
             {% if e.days_remaining is not none %}
-              {% set _c = 'var(--expired)' if e.days_remaining < 0 else 'var(--crit)' if e.days_remaining <= 7 else 'var(--warn)' if e.days_remaining <= 14 else 'var(--ok)' %}
+              {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
               <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
             {% endif %}
           </td>
@@ -105,7 +114,7 @@
           </td>
           <td data-action="stop-propagation">
             <div class="cw-rowact">
-              <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-iconbtn cw-w-30 cw-no-decoration">
+              <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-w-30 cw-no-decoration">
                 {{ icons.svg_icon('chevron-right', 14) }}
               </a>
             </div>

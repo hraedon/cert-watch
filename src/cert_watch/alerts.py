@@ -83,7 +83,6 @@ def evaluate_thresholds(
     *,
     cert_id: str | None = None,
     custom_thresholds: tuple[int, ...] | None = None,
-    cooldown_hours: int = 24,
     owner_info: dict | None = None,
     extra_recipients: list[str] | None = None,
     hostname: str = "",
@@ -96,9 +95,6 @@ def evaluate_thresholds(
     threshold that the cert has crossed but hasn't yet been alerted for produces
     an alert. This prevents users from receiving a separate email for every
     threshold stage when a cert is already past several of them.
-
-    ``cooldown_hours`` is accepted for backward compatibility but has no effect
-    — thresholds do not re-fire after cooldown.
 
     The spec talks about cert_id as the link to existing alerts; we accept it as
     a kwarg so callers that persisted the cert can pass the row id. If omitted we
@@ -127,11 +123,7 @@ def evaluate_thresholds(
     # thresholds. Exclude failed alerts so SMTP delivery failures get retried
     # on the next daily cycle instead of permanently blocking the threshold.
     current_type = "expired" if days < 0 else "expiry_warning"
-    cert_alerts = (
-        alert_repo.list_for_cert(cid)
-        if hasattr(alert_repo, "list_for_cert")
-        else [a for a in alert_repo.list_pending() if a.cert_id == cid]
-    )
+    cert_alerts = alert_repo.list_for_cert(cid)
     existing_for_type: set[int] = {
         a.threshold_days
         for a in cert_alerts
@@ -181,6 +173,32 @@ def evaluate_thresholds(
     return [alert]
 
 
+def _load_host_owner_maps(
+    db_path: str | Path,
+) -> tuple[dict[tuple[str, int], int | None], dict[tuple[str, int], dict]]:
+    """Load per-host threshold and owner/contact maps in a single query.
+
+    Shared by ``evaluate_all_certs`` and ``evaluate_renewal_window`` so the
+    ``hosts`` table is read once per evaluation path with consistent shaping.
+    """
+    from cert_watch.database import _connect
+
+    host_thresholds: dict[tuple[str, int], int | None] = {}
+    host_owners: dict[tuple[str, int], dict] = {}
+    with _connect(db_path) as conn:
+        for row in conn.execute("SELECT * FROM hosts").fetchall():
+            key = (row["hostname"], row["port"])
+            d = dict(row)
+            host_thresholds[key] = d.get("threshold_days")
+            host_owners[key] = {
+                "owner_name": d.get("owner_name", ""),
+                "owner_email": d.get("owner_email", ""),
+                "owner_slack": d.get("owner_slack", ""),
+                "renewal_status": d.get("renewal_status", "pending"),
+            }
+    return host_thresholds, host_owners
+
+
 def evaluate_all_certs(
     db_path: str | Path, alert_repo: AlertRepository, *, urgent_only: bool = False
 ) -> list[Alert]:
@@ -196,19 +214,9 @@ def evaluate_all_certs(
     """
     from cert_watch.database import _connect, _parse_iso
 
-    with _connect(db_path) as conn:
-        host_thresholds: dict[tuple[str, int], int | None] = {}
-        host_owners: dict[tuple[str, int], dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            key = (row["hostname"], row["port"])
-            host_thresholds[key] = row["threshold_days"]
-            host_owners[key] = {
-                "owner_name": dict(row).get("owner_name", ""),
-                "owner_email": dict(row).get("owner_email", ""),
-                "owner_slack": dict(row).get("owner_slack", ""),
-                "renewal_status": dict(row).get("renewal_status", "pending"),
-            }
+    host_thresholds, host_owners = _load_host_owner_maps(db_path)
 
+    with _connect(db_path) as conn:
         leaves = conn.execute(
             "SELECT id, subject, issuer, not_before, not_after, "
             "san_dns_names, fingerprint_sha256, hostname, port "
@@ -293,9 +301,8 @@ def _load_role_user_emails(db_path: str | Path) -> dict[str, list[str]]:
             members = [u.email for u in all_users if u.role_id == role.id and u.email]
             if members:
                 role_user_emails[role.email.casefold()] = members
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError,
-            AttributeError, KeyError):
-        logger.debug("Role-based alert routing unavailable", exc_info=True)
+    except (ImportError, sqlite3.Error):
+        logger.warning("Role-based alert routing unavailable", exc_info=True)
         return {}
     return role_user_emails
 
@@ -343,13 +350,9 @@ def find_orphan_certs(db_path: str | Path) -> list[dict]:
 
     all_group_recipients, _ = _resolve_group_config(db_path)
     role_user_emails = _load_role_user_emails(db_path)
+    _host_thresholds, host_owners = _load_host_owner_maps(db_path)
 
     with _connect(db_path) as conn:
-        host_owners: dict[tuple[str, int], dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            host_owners[(row["hostname"], row["port"])] = {
-                "owner_email": dict(row).get("owner_email", "") or "",
-            }
         leaves = conn.execute(
             "SELECT id, subject, hostname, port FROM certificates WHERE is_leaf = 1"
         ).fetchall()
@@ -398,17 +401,12 @@ def evaluate_renewal_window(
                 "WHERE replaces_cert_id IS NOT NULL"
             ).fetchall()
         }
-        host_owners: dict[tuple, dict] = {}
-        for row in conn.execute("SELECT * FROM hosts").fetchall():
-            host_owners[(row["hostname"], row["port"])] = {
-                "owner_name": dict(row).get("owner_name", ""),
-                "owner_email": dict(row).get("owner_email", ""),
-            }
         leaves = conn.execute(
             "SELECT id, subject, hostname, port, not_after "
             "FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
+    _host_thresholds, host_owners = _load_host_owner_maps(db_path)
     created: list[Alert] = []
     for leaf in leaves:
         cid = leaf["id"]
@@ -420,11 +418,7 @@ def evaluate_renewal_window(
             continue
         if days < 0 or days > window_days:
             continue  # expired (expiry_warning owns it) or outside the window
-        existing = (
-            alert_repo.list_for_cert(cid)
-            if hasattr(alert_repo, "list_for_cert")
-            else [a for a in alert_repo.list_pending() if a.cert_id == cid]
-        )
+        existing = alert_repo.list_for_cert(cid)
         if any(
             a.alert_type == "renewal_stalled" and a.status == "pending"
             for a in existing
@@ -564,11 +558,6 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     """Send via SMTP. See AC-03/AC-06."""
     if config is None:
         return False
-    ssrf_err = _check_smtp_ssrf(config)
-    if ssrf_err is not None:
-        logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
-        alert.error_message = "smtp host blocked by SSRF policy"
-        return False
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
     msg["From"] = config.from_addr
@@ -577,27 +566,18 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     ]
     msg["To"] = ", ".join(all_recipients)
     msg.set_content(alert.message)
+    conn = _open_smtp_connection(config, alert=alert)
+    if conn is None:
+        return False
     try:
-        if config.smtp_port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
-                config.smtp_host, config.smtp_port, timeout=15,
-            )
-        else:
-            s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
-        with s:
-            if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
-                alert.error_message = (
-                    "STARTTLS not supported by SMTP server; "
-                    "refusing to send credentials in cleartext"
-                )
-                return False
-            if config.smtp_user:
-                s.login(config.smtp_user, config.smtp_password)
-            s.send_message(msg)
+        conn.send_message(msg)
         return True
     except Exception as exc:  # noqa: BLE001 — AC-06: never raise; SMTP is an external service with unpredictable failure modes
         alert.error_message = _sanitize_smtp_error(str(exc), config)
         return False
+    finally:
+        with contextlib.suppress(Exception):
+            conn.quit()
 
 
 def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
@@ -635,6 +615,17 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
         return False
 
 
+def _adapter_has_build_resolve(kind: str) -> bool:
+    """True when the adapter for *kind* exposes a ``build_resolve`` method."""
+    from cert_watch.alert_adapters import get_adapter
+
+    try:
+        adapter = get_adapter(kind)
+    except ValueError:
+        return False
+    return hasattr(adapter, "build_resolve")
+
+
 def send_webhook_resolve(
     cert_id: str,
     alert_type: str,
@@ -649,19 +640,20 @@ def send_webhook_resolve(
     """Send a resolve event through the appropriate adapter.
 
     Dispatches ``build_resolve`` on the adapter matching ``config.kind``.
-    PagerDuty returns True on HTTP 202; Alertmanager and generic return
-    True on 2xx. Returns False if the adapter has no ``build_resolve``.
+    Returns False if the adapter has no ``build_resolve`` method.
     """
     from cert_watch.alert_adapters import get_adapter
 
-    if config.kind not in ("pagerduty", "alertmanager"):
+    try:
+        adapter = get_adapter(config.kind)
+    except ValueError:
+        return False
+
+    build_resolve = getattr(adapter, "build_resolve", None)
+    if build_resolve is None:
         return False
 
     try:
-        adapter = get_adapter(config.kind)
-        build_resolve = getattr(adapter, "build_resolve", None)
-        if build_resolve is None:
-            return False
         req = build_resolve(
             cert_id, alert_type, threshold_days, config,
             summary=summary, hostname=hostname, subject=subject,
@@ -697,33 +689,6 @@ def send_webhook_resolve(
         return False
 
 
-def send_pagerduty_resolve(
-    cert_id: str,
-    alert_type: str,
-    threshold_days: int | None,
-    config: WebhookConfig,
-    *,
-    summary: str = "",
-) -> bool:
-    """Send a PagerDuty resolve event to auto-close an incident.
-
-    Deprecated: prefer ``send_webhook_resolve``, which dispatches
-    through the adapter registry and also supports Alertmanager.
-    """
-    import warnings
-
-    warnings.warn(
-        "send_pagerduty_resolve is deprecated; use send_webhook_resolve instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if config.kind != "pagerduty":
-        return False
-    return send_webhook_resolve(
-        cert_id, alert_type, threshold_days, config, summary=summary,
-    )
-
-
 def resolve_webhook_for_renewed_cert(
     db_path: str | Path,
     old_cert_id: str,
@@ -733,17 +698,17 @@ def resolve_webhook_for_renewed_cert(
 ) -> int:
     """Resolve all open incidents/alerts for a cert that has been renewed.
 
-    Works for PagerDuty and Alertmanager webhook kinds. Looks up pending
-    alerts for the old cert and sends a resolve event for each unique
-    (alert_type, threshold_days) combination. Returns the number of
-    resolve events sent.
+    Works for any webhook kind whose adapter exposes ``build_resolve``.
+    Looks up pending alerts for the old cert and sends a resolve event for
+    each unique (alert_type, threshold_days) combination. Returns the
+    number of resolve events sent.
 
     When *pending_alerts* is provided (a pre-fetched list from
     :class:`SqliteAlertRepository`), uses that instead of querying the
     database — necessary when the caller knows the alert rows will be
     deleted before this function runs (e.g. ``replace_scanned``).
     """
-    if webhook_config is None or webhook_config.kind not in ("pagerduty", "alertmanager"):
+    if webhook_config is None or not _adapter_has_build_resolve(webhook_config.kind):
         return 0
     if pending_alerts is None:
         from cert_watch.database import SqliteAlertRepository
@@ -769,29 +734,6 @@ def resolve_webhook_for_renewed_cert(
         ):
             resolved += 1
     return resolved
-
-
-def resolve_pagerduty_for_renewed_cert(
-    db_path: str | Path,
-    old_cert_id: str,
-    webhook_config: WebhookConfig | None = None,
-) -> int:
-    """Resolve all PagerDuty incidents for a cert that has been renewed.
-
-    Delegates to ``resolve_webhook_for_renewed_cert``. Kept for backward
-    compatibility with callers that import by the old name.
-    """
-    import warnings
-
-    warnings.warn(
-        "resolve_pagerduty_for_renewed_cert is deprecated; "
-        "use resolve_webhook_for_renewed_cert instead",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if webhook_config is not None and webhook_config.kind != "pagerduty":
-        return 0
-    return resolve_webhook_for_renewed_cert(db_path, old_cert_id, webhook_config)
 
 
 ALERT_MAX_RETRIES = 3
@@ -920,8 +862,8 @@ def _resolve_group_config(
                     "alert_group_id": _role.alert_group_id,
                     "scope_tags": parse_tags(_role.scope_tag),
                 })
-    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError, AttributeError, KeyError):
-        logger.debug("Role→alert-group link routing unavailable", exc_info=True)
+    except (sqlite3.OperationalError, sqlite3.DatabaseError, ImportError):
+        logger.warning("Role→alert-group link routing unavailable", exc_info=True)
         role_links = []
 
     group_by_id = {g["id"]: g for g in groups}
@@ -1068,23 +1010,33 @@ def _build_digest_message(certs: list[dict], *, owner_name: str | None = None) -
     return message, subject
 
 
-def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
+def _open_smtp_connection(
+    config: AlertConfig, *, alert: Alert | None = None
+) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
     ssrf_err = _check_smtp_ssrf(config)
     if ssrf_err is not None:
         logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
+        if alert is not None:
+            alert.error_message = "smtp host blocked by SSRF policy"
         return None
+    s: smtplib.SMTP_SSL | smtplib.SMTP | None = None
     try:
         if config.smtp_port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(
+            s = smtplib.SMTP_SSL(
                 config.smtp_host, config.smtp_port, timeout=15,
             )
         else:
             s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
             logger.warning(
-                "digest email aborted: STARTTLS not supported by %s:%s",
+                "SMTP send aborted: STARTTLS not supported by %s:%s",
                 config.smtp_host, config.smtp_port,
             )
+            if alert is not None:
+                alert.error_message = (
+                    "STARTTLS not supported by SMTP server; "
+                    "refusing to send credentials in cleartext"
+                )
             with contextlib.suppress(Exception):
                 s.quit()
             return None
@@ -1092,10 +1044,13 @@ def _open_smtp_connection(config: AlertConfig) -> smtplib.SMTP | smtplib.SMTP_SS
             s.login(config.smtp_user, config.smtp_password)
         return s
     except Exception as exc:  # noqa: BLE001 — SMTP is an external service with unpredictable failure modes
-        logger.warning(
-            "SMTP connect failed: %s",
-            _sanitize_smtp_error(str(exc), config),
-        )
+        sanitized = _sanitize_smtp_error(str(exc), config)
+        logger.warning("SMTP connect failed: %s", sanitized)
+        if alert is not None:
+            alert.error_message = sanitized
+        if s is not None:
+            with contextlib.suppress(Exception):
+                s.quit()
         return None
 
 

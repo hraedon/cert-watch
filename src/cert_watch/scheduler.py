@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
@@ -289,16 +290,32 @@ def run_scan_now(
                         db_path,
                     )
                 except Exception:  # noqa: BLE001 — best-effort event emission; must not crash scan loop
-                    pass
+                    logger.debug("scan_failed event suppressed", exc_info=True)
             continue
 
+        scanned += 1
         if store_fn is not None:
             try:
                 store_fn(result)
-            except Exception:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
+            except Exception as exc:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
                 logger.exception("store_fn failed for %s:%s", hostname, port)
-
-        scanned += 1
+                if db_path is not None:
+                    try:
+                        record_scan_history(
+                            db_path,
+                            ScanHistory(
+                                hostname=hostname,
+                                port=port,
+                                status="failure",
+                                error_message=str(exc),
+                            ),
+                        )
+                    except sqlite3.Error:
+                        logger.warning(
+                            "could not record scan failure for %s:%s",
+                            hostname, port, exc_info=True,
+                        )
+                continue
         if db_path is not None:
             record_scan_history(
                 db_path,

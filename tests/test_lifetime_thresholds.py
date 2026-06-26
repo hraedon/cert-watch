@@ -257,21 +257,21 @@ class TestCustomThresholdsOverride:
         assert alerts == []
 
 
-class TestEscalationCooldownUnchanged:
-    def test_no_duplicates_within_cooldown(self, alert_repo):
+class TestEscalationOnceOnly:
+    def test_no_duplicates_on_re_eval(self, alert_repo):
         cert = _cert(validity_days=47, days_remaining=4)
-        first = evaluate_thresholds(cert, alert_repo, cooldown_hours=24)
+        first = evaluate_thresholds(cert, alert_repo)
         assert len(first) > 0
-        second = evaluate_thresholds(cert, alert_repo, cooldown_hours=24)
+        second = evaluate_thresholds(cert, alert_repo)
         assert second == []
 
-    def test_thresholds_never_refire_after_cooldown(self, alert_repo):
-        """Each threshold fires exactly once — cooldown_hours has no effect."""
+    def test_thresholds_never_refire(self, alert_repo):
+        """Each threshold fires exactly once."""
         cert = _cert(validity_days=47, days_remaining=4)
-        first = evaluate_thresholds(cert, alert_repo, cooldown_hours=24)
+        first = evaluate_thresholds(cert, alert_repo)
         first_ids = {a.id for a in first}
-        third = evaluate_thresholds(cert, alert_repo, cooldown_hours=0)
-        assert third == []
+        second = evaluate_thresholds(cert, alert_repo)
+        assert second == []
         assert first_ids
 
     def test_expired_alert_type(self, alert_repo):

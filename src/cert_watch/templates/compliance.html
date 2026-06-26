@@ -52,10 +52,10 @@
       <div class="cw-page-head-sub">Point-in-time posture summary for auditors. Print or export as PDF.</div>
     </div>
     <div class="cw-seg no-print">
-      <a href="/reports/compliance{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">Refresh</a>
-      <a href="/api/reports/compliance.json{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">JSON</a>
-      <a href="/api/reports/compliance.csv{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">CSV</a>
-      <button type="button" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px" data-action="print">Print / PDF</button>
+      <a href="/reports/compliance{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration cw-toolbtn">Refresh</a>
+      <a href="/api/reports/compliance.json{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration cw-toolbtn">JSON</a>
+      <a href="/api/reports/compliance.csv{% if tag %}?tag={{ tag }}{% endif %}" class="cw-btn cw-no-decoration cw-toolbtn">CSV</a>
+      <button type="button" class="cw-btn cw-no-decoration cw-toolbtn" data-action="print">Print / PDF</button>
     </div>
   </div>
 

@@ -121,6 +121,7 @@ def build_auth_provider(
                 "OAuth misconfigured: OAUTH_CLIENT_ID and OAUTH_ISSUER_URL are required "
                 "when AUTH_PROVIDER=oauth. Either configure OAuth or set AUTH_PROVIDER=none."
             )
+        _label_map = {"entra": "Entra ID", "azure": "Entra ID", "oidc": "OIDC", "oauth": "OAuth"}
         primary = OAuthProvider(
             OAuthConfig(
                 client_id=oauth_client_id,
@@ -133,6 +134,7 @@ def build_auth_provider(
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
                 jwks_cache_ttl=jwks_cache_ttl,
+                provider_label=_label_map.get(provider, "OAuth"),
             )
         )
         if local_admin:
