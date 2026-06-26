@@ -210,3 +210,29 @@
   {% endif %}
 </div>
 {% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+  /* WI-068: arrow-key tab switching on the Insights tablist (WAI-ARIA tab pattern).
+     These are navigation tabs (<a href=?tab=...>); Left/Right/Home/End jump to the
+     adjacent tab's URL, auto-activating it. */
+  (function() {
+    var tl = document.querySelector('[role="tablist"][aria-label="Insights view"]');
+    if (!tl) return;
+    var tabs = Array.prototype.slice.call(tl.querySelectorAll('[role="tab"]'));
+    if (!tabs.length) return;
+    tl.addEventListener('keydown', function(e) {
+      var cur = document.activeElement;
+      if (!cur || !tl.contains(cur)) return;
+      var idx = tabs.indexOf(cur);
+      if (idx < 0) return;
+      var target = null;
+      if (e.key === 'ArrowRight') target = tabs[idx + 1 >= tabs.length ? 0 : idx + 1];
+      else if (e.key === 'ArrowLeft') target = tabs[idx - 1 < 0 ? tabs.length - 1 : idx - 1];
+      else if (e.key === 'Home') target = tabs[0];
+      else if (e.key === 'End') target = tabs[tabs.length - 1];
+      if (target) { e.preventDefault(); window.location.href = target.href; }
+    });
+  })();
+</script>
+{% endblock %}
