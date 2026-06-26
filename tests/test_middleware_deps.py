@@ -375,6 +375,29 @@ def test_write_denied_rbac_matrix(tmp_path):
     assert _write_denied(request, "carol") is False
 
 
+def test_write_denied_rbac_missing_auth_context_denies(tmp_path):
+    """WI-117: missing AuthContext under a role_map must deny write."""
+    from cert_watch.middleware import _write_denied
+
+    app, Provider = _app_with_role_map(tmp_path)
+    request = _make_request(auth_provider=Provider())
+    request.scope["app"] = app
+    request.state.__dict__.pop("auth_context", None)
+    assert _write_denied(request, "someone") is True
+
+
+def test_write_denied_api_key_missing_auth_context_denies(tmp_path):
+    """WI-117: API-key auth with missing AuthContext must deny write."""
+    from cert_watch.middleware import _write_denied
+
+    app, Provider = _app_with_role_map(tmp_path)
+    request = _make_request(auth_provider=Provider())
+    request.scope["app"] = app
+    request.state.api_key_auth = True
+    request.state.__dict__.pop("auth_context", None)
+    assert _write_denied(request, "someone") is True
+
+
 @pytest.mark.anyio
 async def test_require_write_form_rbac_viewer_denied(tmp_path):
     """The bug: a viewer must be blocked at the form-POST routes, not just the API."""

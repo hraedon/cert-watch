@@ -94,6 +94,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     from cryptography import x509
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
     # Parse key type and signature algorithm from raw DER
@@ -115,7 +116,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         sig_alg = x509_cert.signature_algorithm_oid._name
         serial = format(x509_cert.serial_number, "X")
         serial = ":".join(serial[i : i + 2] for i in range(0, len(serial), 2))
-    except (ValueError, TypeError):  # x509 DER parse
+    except (ValueError, TypeError, UnsupportedAlgorithm):  # x509 DER parse
         key_type_str = "unknown"
         sig_alg = "unknown"
         serial = "unknown"
@@ -149,7 +150,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 kt = "Ed25519"
             elif isinstance(k, ed448.Ed448PublicKey):
                 kt = "Ed448"
-        except (ValueError, TypeError):  # crypto key access
+        except (ValueError, TypeError, UnsupportedAlgorithm):  # crypto key access
             pass
         chain_certs.append(
             {
@@ -336,9 +337,8 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 "hsts": result.hsts,
                 "must_staple": result.must_staple,
             }
-        except Exception:  # noqa: BLE001
+        except (ValueError, TypeError, UnsupportedAlgorithm):
             logger.exception("posture evaluation failed for cert %s", cert_id)
-            pass
 
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)

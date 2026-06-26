@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import sqlite3
+import ssl
 import typing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -194,17 +195,19 @@ def _scan_host_once(
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
-    except Exception as exc:  # noqa: BLE001 — unexpected TLS errors (e.g. ssl.SSLError subtypes, ValueError); defensive catch to return ScanError
+    except ValueError as exc:
+        # The OSError family (timeouts, socket/SSL handshake failures) is caught
+        # above. This handles the remaining non-OSError input errors from TLS setup.
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
     protocol_version = ""
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(ssl.SSLError, OSError, ValueError):
         protocol_version = ssl_sock.version() or ""
 
     try:
         der_chain = _get_chain_der(ssl_sock, hostname)
     finally:
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(ssl.SSLError, OSError, ValueError):
             ssl_sock.close()
 
     if not der_chain:
@@ -317,17 +320,19 @@ def _scan_host_via_openssl(
         )
     except (TimeoutError, OSError) as exc:
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
-    except Exception as exc:  # noqa: BLE001 — unexpected TLS errors; defensive catch to return ScanError
+    except ValueError as exc:
+        # The OSError family is caught above; this guards the remaining
+        # non-OSError input errors in the openssl fallback path.
         return ScanError(hostname=hostname, port=port, error_message=_friendly_scan_error(exc))
 
     protocol_version_fb = ""
-    with contextlib.suppress(Exception):
+    with contextlib.suppress(ssl.SSLError, OSError, ValueError):
         protocol_version_fb = ssl_sock.version() or ""
 
     try:
         leaf = ssl_sock.getpeercert(binary_form=True)
     finally:
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(ssl.SSLError, OSError, ValueError):
             ssl_sock.close()
 
     if not leaf:

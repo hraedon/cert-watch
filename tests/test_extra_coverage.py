@@ -185,6 +185,67 @@ def test_certificate_detail_ecdsa_key(reload_app, tmp_path):
     assert "ECDSA" in r.text
 
 
+def test_certificate_detail_posture_value_error_still_renders(
+    reload_app, tmp_path, leaf_pem_file, monkeypatch,
+):
+    """Malformed cert data (ValueError) in posture eval is swallowed so the page renders."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema
+
+    init_schema(db)
+    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
+    monkeypatch.setattr(
+        "cert_watch.posture.evaluate_posture",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad cert")),
+    )
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert "Security posture" not in r.text
+
+
+def test_certificate_detail_posture_runtime_error_propagates(
+    reload_app, tmp_path, leaf_pem_file, monkeypatch,
+):
+    """RuntimeError (a code bug) in posture eval must not be silently swallowed."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema
+
+    init_schema(db)
+    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
+    monkeypatch.setattr(
+        "cert_watch.posture.evaluate_posture",
+        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    with TestClient(app_mod.app) as client, pytest.raises(RuntimeError, match="boom"):
+        client.get(f"/certificates/{cert_id}")
+
+
+def test_certificate_detail_posture_unsupported_algorithm_still_renders(
+    reload_app, tmp_path, leaf_pem_file, monkeypatch,
+):
+    """UnsupportedAlgorithm from public_key() in posture eval is caught so the
+    page renders without posture (WI-089)."""
+    from cryptography.exceptions import UnsupportedAlgorithm
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema
+
+    init_schema(db)
+    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
+    monkeypatch.setattr(
+        "cert_watch.posture.evaluate_posture",
+        lambda *a, **kw: (_ for _ in ()).throw(UnsupportedAlgorithm("unknown key type")),
+    )
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 200
+    assert "Security posture" not in r.text
+
+
 # ---------- routes/certificates.py upload paths ----------
 
 

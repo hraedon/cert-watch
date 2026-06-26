@@ -196,8 +196,20 @@ CREATE INDEX IF NOT EXISTS idx_cert_history_fp
     ON cert_history(fingerprint_sha256);
 """
 
-_initialized_paths: set[str] = set()
+# Maps resolved path → (st_ino, st_size, st_mtime) from the last successful
+# init. Keyed on the file's identity tuple (not just the path string) so a
+# restored backup with an older schema is detected and migrations re-run
+# (WI-091). Mirrors the connection-layer cache in connection._connect.
+_initialized: dict[str, tuple[int, int, float] | None] = {}
 _init_lock = threading.Lock()
+
+
+def _stat_tuple(db_path: str | Path) -> tuple[int, int, float] | None:
+    """Return (st_ino, st_size, st_mtime) or None if the file doesn't exist yet."""
+    with contextlib.suppress(OSError):
+        st = Path(db_path).stat()
+        return (st.st_ino, st.st_size, st.st_mtime)
+    return None
 
 
 def ensure_base(db_path: str | Path) -> None:
@@ -317,21 +329,29 @@ def init_schema(db_path: str | Path) -> None:
     """Initialize the database schema and run pending migrations.
 
     Idempotent: repeat calls for the same path return immediately after the
-    first successful initialization. Creates core tables via ``ensure_base``,
-    then applies any pending numbered migrations via the migration runner.
+    first successful initialization, as long as the database file has not been
+    replaced (e.g. by a restore from backup). File replacement is detected by
+    comparing the inode/size/mtime tuple (WI-091), mirroring the connection
+    layer. Creates core tables via ``ensure_base``, then applies any pending
+    numbered migrations via the migration runner.
     """
     path_str = str(Path(db_path).resolve())
     with _init_lock:
-        if path_str in _initialized_paths:
-            return
+        cached = _initialized.get(path_str)
+        if cached is not None:
+            current = _stat_tuple(db_path)
+            if current is not None and current == cached:
+                return
 
-    ensure_base(db_path)
+        ensure_base(db_path)
 
-    # Import the registry to register all migrations, then run pending.
-    import cert_watch.migrations.registry  # noqa: F401 — side-effect: registers migrations
-    from cert_watch.migrations.runner import run_pending_migrations
+        # Import the registry to register all migrations, then run pending.
+        import cert_watch.migrations.registry  # noqa: F401 — side-effect: registers migrations
+        from cert_watch.migrations.runner import run_pending_migrations
 
-    run_pending_migrations(db_path, backup=True)
+        run_pending_migrations(db_path, backup=True)
 
-    with _init_lock:
-        _initialized_paths.add(path_str)
+        # Recompute the stat tuple AFTER migrations complete (the file now
+        # exists and may have been written to), so subsequent calls match
+        # and no-op.
+        _initialized[path_str] = _stat_tuple(db_path)

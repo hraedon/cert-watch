@@ -726,19 +726,20 @@ def _write_denied(request: Request, username: str) -> bool:
     (API, raises) and ``require_write_form`` (HTML forms, redirects), so the
     two paths cannot diverge. When a role map is configured (Plan 035 RBAC),
     the request's AuthContext permissions decide; otherwise the legacy
-    write_users/admin_users lists apply.
+    write_users/admin_users lists apply. A missing AuthContext under the
+    role-map or API-key paths is treated as deny-by-default.
     """
     # API-key auth (Plan 039) always carries an explicit scope-derived
     # AuthContext, so its scope governs regardless of whether a role map is set
     # — otherwise a read-scoped key could write when no role map is configured.
     if getattr(request.state, "api_key_auth", False):
         api_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-        return api_ctx is not None and not api_ctx.may_write()
+        return api_ctx is None or not api_ctx.may_write()
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     if role_map:
         auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-        return auth_ctx is not None and not auth_ctx.may_write()
+        return auth_ctx is None or not auth_ctx.may_write()
     return not _may_write(request, username)
 
 
