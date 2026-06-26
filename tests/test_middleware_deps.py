@@ -868,3 +868,24 @@ def test_get_auth_context_no_auth_context_is_admin_true(tmp_path):
     ctx = get_auth_context(request)
     assert ctx["is_admin"] is True
 
+
+# ── _admin_allowed: legacy admin_users fail-closed (WI-116) ───────────────
+
+
+def test_admin_allowed_legacy_empty_admin_users_fail_closed(tmp_path):
+    """Empty admin_users list must NOT grant admin to everyone (WI-116).
+
+    Legacy branch (use_legacy=True, no role_map): when the AuthContext is
+    non-admin and admin_users is empty, _admin_allowed must return False.
+    Before the fix the ``not admin_list`` condition granted admin to any
+    caller that reached this branch.
+    """
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import _admin_allowed
+
+    app = _AppWithAdmin(role_map={}, admin_users=[])
+    request = _make_request()
+    request.scope["app"] = app
+    request.state.auth_context = AuthContext.from_tier("anyuser", "viewer")
+    assert _admin_allowed(request, "anyuser", use_legacy=True) is False
+

@@ -38,10 +38,6 @@ from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.hosts")
 
-# Serialize concurrent store_scanned_async calls — SQLite WAL handles writers
-# but concurrent writes beyond busy_timeout raise OperationalError.
-_store_sem = asyncio.Semaphore(1)
-
 
 async def _scan_and_store(
     hostname: str,
@@ -84,28 +80,27 @@ async def _scan_and_store(
         except Exception:
             logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
         return "scan_error", result.error_message
-    async with _store_sem:
-        try:
-            leaf_id = await store_scanned_async(
-                result,
-                db,
-                check_revocation=settings.check_revocation,
-                allow_private=settings.allow_private,
-                allowed_subnets=settings.allowed_subnets,
-                webhook_config=webhook_config,
-            )
-        except _store_error_types:
-            logger.exception("store_scanned_async failed for %s:%d", hostname, port)
-            record_scan_history(
-                db,
-                ScanHistory(
-                    hostname=hostname,
-                    port=port,
-                    status="failure",
-                    error_message="store failed",
-                ),
-            )
-            return "store_error", "store failed"
+    try:
+        leaf_id = await store_scanned_async(
+            result,
+            db,
+            check_revocation=settings.check_revocation,
+            allow_private=settings.allow_private,
+            allowed_subnets=settings.allowed_subnets,
+            webhook_config=webhook_config,
+        )
+    except _store_error_types:
+        logger.exception("store_scanned_async failed for %s:%d", hostname, port)
+        record_scan_history(
+            db,
+            ScanHistory(
+                hostname=hostname,
+                port=port,
+                status="failure",
+                error_message="store failed",
+            ),
+        )
+        return "store_error", "store failed"
     if not leaf_id:
         logger.warning(
             "store_scanned returned empty (transaction rolled back) for %s:%d",

@@ -757,6 +757,12 @@ def _admin_redirect_target(request: Request) -> str:
 
 
 def _admin_allowed(request: Request, user: str, *, use_legacy: bool = False) -> bool:
+    """Check whether *user* may perform admin actions.
+
+    The legacy ``admin_users`` list is an explicit allowlist only — an empty
+    list never grants admin (fail-closed), so a misconfigured deployment
+    cannot silently widen admin access.
+    """
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     ctx: AuthContext | None = getattr(request.state, "auth_context", None)
@@ -765,7 +771,7 @@ def _admin_allowed(request: Request, user: str, *, use_legacy: bool = False) -> 
     admin_ok = ctx is not None and ctx.is_admin
     if not admin_ok:
         admin_list = getattr(settings, "admin_users", None) if settings else None
-        if not admin_list or user in admin_list:
+        if admin_list and user in admin_list:
             admin_ok = True
     return admin_ok
 

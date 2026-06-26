@@ -1460,6 +1460,55 @@ def test_store_scanned_async(tmp_path, self_signed_leaf):
     assert result
 
 
+def test_store_scanned_async_acquires_write_lock(tmp_path, self_signed_leaf):
+    """store_scanned_async must serialize on get_write_lock (WI-092).
+
+    A request-handler store must not interleave with the scheduler's locked
+    scan cycle. We hold the write lock from a background thread and confirm
+    the async store cannot complete until the lock is released. Without the
+    fix (lock inside the worker thread), the store completes immediately
+    regardless of the held lock and the first assertion fails.
+    """
+    import threading
+
+    from cert_watch.database.connection import get_write_lock
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    repo = SqliteCertificateRepository(db, source="scanned")
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    lock = get_write_lock()
+    held = threading.Event()
+    release = threading.Event()
+
+    def _hold_lock() -> None:
+        with lock:
+            held.set()
+            release.wait(timeout=5.0)
+
+    holder = threading.Thread(target=_hold_lock, daemon=True)
+    holder.start()
+    assert held.wait(timeout=5.0), "background thread failed to acquire lock"
+
+    async def _store() -> str:
+        return await store_scanned_async(entry, repo, drift_alerts=False)
+
+    loop = asyncio.new_event_loop()
+    try:
+        with pytest.raises(asyncio.TimeoutError):
+            loop.run_until_complete(asyncio.wait_for(_store(), timeout=0.5))
+
+        release.set()
+        result = loop.run_until_complete(asyncio.wait_for(_store(), timeout=5.0))
+    finally:
+        release.set()
+        loop.close()
+    assert result
+
+
 # ---------- additional edge-case coverage ----------
 
 

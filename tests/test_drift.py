@@ -324,3 +324,25 @@ class TestDriftAlertsConfig:
         from cert_watch.config import Settings
         s = Settings.from_env()
         assert s.drift_alerts is False
+
+
+# ---------- WI-118: UnsupportedAlgorithm handling ----------
+
+
+def test_extract_key_algo_handles_unsupported_algorithm(monkeypatch):
+    """WI-118: UnsupportedAlgorithm from public_key() must return safe default."""
+    from unittest.mock import MagicMock
+
+    from cryptography import x509
+    from cryptography.exceptions import UnsupportedAlgorithm
+
+    from cert_watch.database.drift import _extract_key_algo
+
+    fake_cert = MagicMock()
+    fake_cert.public_key.side_effect = UnsupportedAlgorithm(
+        "unsupported public key",
+    )
+    monkeypatch.setattr(
+        x509, "load_der_x509_certificate", lambda _data: fake_cert,
+    )
+    assert _extract_key_algo(b"any-der") == ""

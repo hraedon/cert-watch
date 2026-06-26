@@ -335,6 +335,28 @@ class TestPostureEvaluation:
         )
         assert result.grade == "A"
 
+    def test_unsupported_algorithm_key_is_info(self, monkeypatch):
+        """WI-118: UnsupportedAlgorithm from public_key() must not crash."""
+        from unittest.mock import MagicMock
+
+        from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        fake_cert = MagicMock()
+        fake_cert.public_key.side_effect = UnsupportedAlgorithm(
+            "unsupported public key",
+        )
+        monkeypatch.setattr(
+            x509, "load_der_x509_certificate", lambda _data: fake_cert,
+        )
+        result = evaluate_posture(cert=cert)
+        assert result.grade == "A"
+        key_type = [f for f in result.findings if f.check == "key_type"]
+        assert len(key_type) == 1
+        assert key_type[0].status == "warn"
+
     def test_a_plus_grade_for_tls13_non_443_no_hsts(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)
