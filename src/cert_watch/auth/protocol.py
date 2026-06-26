@@ -36,6 +36,10 @@ class AuthProvider(ABC):
     def provider_name(self) -> str: ...
 
     @property
+    def provider_label(self) -> str:
+        return self.provider_name
+
+    @property
     @abstractmethod
     def supports_form_login(self) -> bool:
         """Whether this provider supports username/password form login."""

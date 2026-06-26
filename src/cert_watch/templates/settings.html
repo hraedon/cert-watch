@@ -495,7 +495,7 @@
 
       {% if preview_count is defined %}
       <div class="cw-mt-8 cw-p-20" data-testid="ag-preview-result">
-        <strong>{{ preview_count }}</strong> cert{{ 's' if preview_count != 1 else '' }} match{{ 'es' if preview_count != 1 else '' }}{% if preview_match_tags %} <span class="cw-muted">“{{ preview_match_tags }}”</span>{% endif %}
+        <strong>{{ preview_count }}</strong> cert{{ 's' if preview_count != 1 else '' }} match{% if preview_match_tags %} <span class="cw-muted">“{{ preview_match_tags }}”</span>{% endif %}
         {% if preview_sample %}
         <ul class="cw-muted cw-fz-12 cw-mt-6">
           {% for s in preview_sample %}
@@ -794,6 +794,8 @@
           {% endfor %}
         </tbody>
       </table>
+      {% else %}
+      <p class="cw-muted cw-mt-16">No roles yet. Create one above to define a team.</p>
       {% endif %}
     </div>
 
@@ -882,6 +884,8 @@
           {% endfor %}
         </tbody>
       </table>
+      {% else %}
+      <p class="cw-muted cw-mt-16">No users yet. Create one above to grant access.</p>
       {% endif %}
     </div>
 

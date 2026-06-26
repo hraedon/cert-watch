@@ -215,18 +215,18 @@ def test_bc116_validate_webhook_url_ok():
 
 def test_bc117_ocsp_blocks_private_url():
     """OCSP probe to a private IP must be refused, not probed."""
-    from cert_watch.posture import _check_ocsp_reachable
+    from cert_watch.posture import _check_endpoint_reachable
 
-    reachable, msg = _check_ocsp_reachable("http://10.0.0.5/ocsp")
+    reachable, msg = _check_endpoint_reachable("http://10.0.0.5/ocsp", method="HEAD")
     assert reachable is False
     assert "SSRF" in msg or "blocked" in msg
 
 
 def test_bc117_crl_blocks_loopback_url():
     """CRL probe to loopback must be refused."""
-    from cert_watch.posture import _check_crl_reachable
+    from cert_watch.posture import _check_endpoint_reachable
 
-    reachable, msg = _check_crl_reachable("http://127.0.0.1/crl.crl")
+    reachable, msg = _check_endpoint_reachable("http://127.0.0.1/crl.crl", method="GET")
     assert reachable is False
     assert "SSRF" in msg or "blocked" in msg
 

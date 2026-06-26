@@ -66,7 +66,7 @@
                 </span>
               </div>
               <div class="cw-fz-12-5 cw-text-text-2">
-                {{ b.successes }}/{{ b.total }} hosts scanned
+                {{ b.successes }}/{{ b.total }} host{{ '' if b.total == 1 else 's' }} scanned
                 {% if b.failures > 0 %}
                   · <span class="cw-text-text-crit">{{ b.failures }} failed</span>
                 {% endif %}

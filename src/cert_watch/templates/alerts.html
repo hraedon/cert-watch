@@ -5,6 +5,10 @@
 
 {% block content %}
 <div class="cw-page--constrained">
+  {# WI-104: default to [] so membership/boolean tests below don't raise if a
+     route ever omits the key. Works under both the lenient default Undefined
+     and StrictUndefined. #}
+  {% set alert_channels = alert_channels|default([]) %}
   {# ---- Page header ---- #}
   <div class="cw-page-head">
     <div>

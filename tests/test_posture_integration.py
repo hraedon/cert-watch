@@ -19,8 +19,7 @@ from cryptography.x509.oid import (
 )
 
 from cert_watch.posture import (
-    _check_crl_reachable,
-    _check_ocsp_reachable,
+    _check_endpoint_reachable,
     _extract_crl_urls,
     _extract_ocsp_url,
 )
@@ -84,11 +83,15 @@ def test_ocsp_and_crl_reachable_with_transport_override(monkeypatch):
         assert _extract_ocsp_url(cert_der) == ocsp_url
         assert crl_url in _extract_crl_urls(cert_der)
 
-        reachable, msg = _check_ocsp_reachable(ocsp_url, timeout=5, allow_private=True)
+        reachable, msg = _check_endpoint_reachable(
+            ocsp_url, method="HEAD", timeout=5, allow_private=True,
+        )
         assert reachable is True
         assert msg == ""
 
-        reachable, msg = _check_crl_reachable(crl_url, timeout=5, allow_private=True)
+        reachable, msg = _check_endpoint_reachable(
+            crl_url, method="GET", timeout=5, allow_private=True,
+        )
         assert reachable is True
         assert msg == ""
 
@@ -103,10 +106,14 @@ def test_ocsp_and_crl_blocked_because_loopback_always_blocked():
         assert _extract_ocsp_url(cert_der) == ocsp_url
         assert crl_url in _extract_crl_urls(cert_der)
 
-        reachable, msg = _check_ocsp_reachable(ocsp_url, timeout=5, allow_private=True)
+        reachable, msg = _check_endpoint_reachable(
+            ocsp_url, method="HEAD", timeout=5, allow_private=True,
+        )
         assert reachable is False
         assert "blocked by SSRF policy" in msg
 
-        reachable, msg = _check_crl_reachable(crl_url, timeout=5, allow_private=True)
+        reachable, msg = _check_endpoint_reachable(
+            crl_url, method="GET", timeout=5, allow_private=True,
+        )
         assert reachable is False
         assert "blocked by SSRF policy" in msg

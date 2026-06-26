@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from cert_watch.app import create_app
 from cert_watch.auth import (
     AuthResult,
     LDAPAuthProvider,
@@ -23,7 +24,7 @@ from cert_watch.auth import (
     validate_session,
     verify_scrypt_hash,
 )
-from cert_watch.config import read_secret
+from cert_watch.config import Settings, read_secret
 
 _HAS_JOSE = importlib.util.find_spec("joserfc") is not None
 _HAS_AUTHLIB = importlib.util.find_spec("authlib") is not None
@@ -474,6 +475,42 @@ def test_login_page_redirects_when_no_auth(reload_app):
         assert r.headers["location"] in ("/", "http://testserver/")
 
 
+def test_login_page_oauth_label(tmp_path):
+    class _OAuthProvider:
+        provider_name = "oauth"
+        provider_label = "OAuth"
+        supports_form_login = False
+
+    s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
+    app = create_app(auth_provider=_OAuthProvider(), settings=s)
+    with TestClient(app) as client:
+        r = client.get("/login")
+    assert r.status_code == 200
+    assert "Sign in with OAuth" in r.text
+    assert "Sign in with Oauth" not in r.text
+
+
+def test_login_page_oidc_label(tmp_path):
+    from cert_watch.auth import OAuthConfig
+
+    provider = OAuthProvider.__new__(OAuthProvider)
+    provider.config = OAuthConfig(
+        client_id="c",
+        client_secret="s",
+        issuer_url="https://login.example.com",
+        provider_label="OIDC",
+    )
+
+    s = Settings(db_path=tmp_path / "db.sqlite3", data_dir=tmp_path)
+    app = create_app(auth_provider=provider, settings=s)
+    with TestClient(app) as client:
+        r = client.get("/login")
+    assert r.status_code == 200
+    assert "Sign in with OIDC" in r.text
+    assert provider.provider_label == "OIDC"
+    assert provider.provider_name == "oauth"
+
+
 def test_logout_clears_cookie(reload_app, _mock_ldap3):
     app_mod = reload_app(
         AUTH_PROVIDER="ldap",
@@ -484,6 +521,20 @@ def test_logout_clears_cookie(reload_app, _mock_ldap3):
         r = client.post("/auth/logout", follow_redirects=False)
         assert r.status_code == 303
         assert "cw_auth" in r.headers.get("set-cookie", "")
+
+
+def test_favicon_ico_is_public_under_auth(reload_app, _mock_ldap3):
+    """The /favicon.ico redirect must stay reachable for unauthenticated browser
+    probes (login/setup pages) — it is a public path, not auth-gated."""
+    app_mod = reload_app(
+        AUTH_PROVIDER="ldap",
+        LDAP_SERVER="ldap://dc.example.com",
+        LDAP_BASE_DN="DC=example,DC=com",
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.get("/favicon.ico", follow_redirects=False)
+    assert r.status_code == 301
+    assert r.headers["location"] == "/static/favicon.svg"
 
 
 def test_auth_user_displayed_in_header(reload_app, _mock_ldap3):
@@ -1831,7 +1882,7 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow handles token endpoint error."""
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, OSError("connection reset"))
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1857,7 +1908,7 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1869,7 +1920,7 @@ class TestOAuthJWKSVerification:
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["userinfo_endpoint"] = ""
         self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -1880,7 +1931,7 @@ class TestOAuthJWKSVerification:
         """complete_oauth_flow returns failure when token_endpoint is not configured."""
         provider = _make_oauth_provider(jwks=None)
         provider._discovered["token_endpoint"] = ""
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2069,7 +2120,7 @@ class TestOAuthJWKSVerification:
         monkeypatch.setattr("cert_watch.auth.oauth_provider.ssrf_safe_urlopen", fake_userinfo)
         monkeypatch.setattr("cert_watch.http_client._validate_url", lambda *a, **kw: None)
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2109,7 +2160,7 @@ class TestOAuthJWKSVerification:
         from cert_watch.http_client import SSRFBlockedError
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, SSRFBlockedError("blocked"))
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2128,6 +2179,7 @@ class TestOAuthJWKSVerification:
             "preferred_username": "alice@example.com",
             "exp": int(time.time()) + 3600,
             "iat": int(time.time()),
+            "nonce": "nonce0",
         }
         id_token = _sign_jwt(claims, key)
 
@@ -2136,7 +2188,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2160,6 +2212,7 @@ class TestOAuthJWKSVerification:
             "groups": [admins_guid],
             "exp": int(time.time()) + 3600,
             "iat": int(time.time()),
+            "nonce": "nonce0",
         }
         id_token = _sign_jwt(claims, key)
 
@@ -2168,7 +2221,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2203,7 +2256,7 @@ class TestOAuthJWKSVerification:
             "token_type": "Bearer",
             "id_token": id_token,
         })
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         result = provider.complete_oauth_flow(
             "auth-code", "http://localhost/callback", state=signed_state,
         )
@@ -2215,7 +2268,7 @@ class TestOAuthJWKSVerification:
         provider = _make_oauth_provider(jwks=None)
         self._mock_fetch_token(provider, {"access_token": "at-123", "token_type": "Bearer"})
 
-        signed_state = _sign_state("test-state")
+        signed_state = _sign_state("test-state", nonce="nonce0")
         # Bypass SSRF validation and HTTP open in test (DNS resolution won't work
         # for fake host)
         monkeypatch.setattr(

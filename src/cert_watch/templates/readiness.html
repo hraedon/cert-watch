@@ -31,7 +31,7 @@
 .rdy-class-chip { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
 .rdy-class-chip.auto { background: var(--ok); color: #fff; }
 .rdy-class-chip.manual { background: var(--warn); color: #fff; }
-.rdy-class-chip.unknown { background: var(--border); color: #333; }
+.rdy-class-chip.unknown { background: var(--border); color: var(--text-2); }
 .rdy-risk-chip { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
 .rdy-risk-chip.late { background: var(--crit); color: #fff; }
 .rdy-risk-chip.ok { background: var(--ok); color: #fff; }
@@ -54,9 +54,9 @@
       <div class="cw-page-head-sub">Milestone timeline and per-host readiness for shortened certificate lifetimes.</div>
     </div>
     <div class="cw-seg no-print">
-      <a href="/readiness" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">Refresh</a>
-      <a href="/api/readiness.json" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px">JSON</a>
-      <button type="button" class="cw-btn cw-no-decoration" style="padding:5px 11px;font-size:12.5px" data-action="print">Print / PDF</button>
+      <a href="/readiness" class="cw-btn cw-no-decoration cw-toolbtn">Refresh</a>
+      <a href="/api/readiness.json" class="cw-btn cw-no-decoration cw-toolbtn">JSON</a>
+      <button type="button" class="cw-btn cw-no-decoration cw-toolbtn" data-action="print">Print / PDF</button>
     </div>
   </div>
 

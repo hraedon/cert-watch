@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
 
@@ -15,6 +16,7 @@ from cert_watch.database import (
     AlertRepository,
     SqliteTrustAnchorRepository,
     _count_alerts_by_filter,
+    dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
     list_alerts_with_subject,
@@ -126,6 +128,12 @@ def readyz(request: Request):
         "commit": __commit__,
         "checks": checks,
     }
+
+
+@router.get("/favicon.ico")
+def favicon() -> RedirectResponse:
+    """Redirect legacy browser /favicon.ico requests to the SVG favicon."""
+    return RedirectResponse(url="/static/favicon.svg", status_code=301)
 
 
 @router.get("/api/health", dependencies=[Depends(require_auth)])
@@ -248,6 +256,11 @@ def dashboard(
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
 
+    if not pivot_groups:
+        pivot_stats = dashboard_urgency_stats(
+            db, q=q, source=source, scope_tags=scope_tags
+        )
+
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
@@ -281,7 +294,6 @@ def dashboard(
         name="dashboard.html",
         context={
             "entries": display_entries,
-            "all_entries": page_entries,
             "all_tags": distinct_tags(db),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
@@ -697,8 +709,8 @@ def team_dashboard(request: Request, page: int = 1) -> HTMLResponse:
         has_role = role is not None and bool(role.email)
         role_name = role.name if role else ""
         role_email = role.email if role else ""
-    except Exception:
-        logger.debug("Team dashboard: user/role lookup failed", exc_info=True)
+    except (ImportError, sqlite3.Error):
+        logger.warning("Team dashboard: user/role lookup failed", exc_info=True)
         has_role = False
 
     entries: list[dict] = []

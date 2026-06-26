@@ -315,6 +315,88 @@ def test_run_scan_now_store_fn_exception(tmp_path):
     assert result["scanned"] == 1
 
 
+def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
+    from cert_watch.database import _connect, init_schema
+    from cert_watch.scheduler import run_scan_now
+
+    db = tmp_path / "test.sqlite3"
+    init_schema(db)
+    hosts = [("store-err-status.example.com", 443)]
+
+    def scan_fn(hostname, port):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeResult:
+            host: str
+            port: int
+
+        return FakeResult(host=hostname, port=port)
+
+    def store_fn(result):
+        raise RuntimeError("store failed")
+
+    result = run_scan_now(
+        scan_fn,
+        lambda: {"sent": 0, "failed": 0},
+        db_path=db,
+        host_provider=lambda: hosts,
+        store_fn=store_fn,
+    )
+    assert result["scanned"] == 1
+
+    with _connect(db) as conn:
+        rows = conn.execute(
+            "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
+            (hosts[0][0], hosts[0][1]),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "failure"
+    assert rows[0][1] and "store failed" in rows[0][1]
+
+
+def test_run_scan_now_store_fn_returns_none_records_success(tmp_path):
+    """A store_fn that returns None (no leaf id) is NOT a failure — only a
+    raised exception is. Guards the loose store_fn contract used by tests and
+    ensures run_scan_now records "success" so fast-retry isn't falsely tripped.
+    """
+    from cert_watch.database import _connect, init_schema
+    from cert_watch.scheduler import run_scan_now
+
+    db = tmp_path / "test.sqlite3"
+    init_schema(db)
+    hosts = [("store-none.example.com", 443)]
+
+    def scan_fn(hostname, port):
+        from dataclasses import dataclass
+
+        @dataclass
+        class FakeResult:
+            host: str
+            port: int
+
+        return FakeResult(host=hostname, port=port)
+
+    def store_fn(result):
+        return None  # explicit no-return; must not be treated as a failure
+
+    run_scan_now(
+        scan_fn,
+        lambda: {"sent": 0, "failed": 0},
+        db_path=db,
+        host_provider=lambda: hosts,
+        store_fn=store_fn,
+    )
+
+    with _connect(db) as conn:
+        rows = conn.execute(
+            "SELECT status FROM scan_history WHERE hostname=? AND port=?",
+            (hosts[0][0], hosts[0][1]),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "success"
+
+
 def test_run_scan_now_alert_counts(tmp_path):
     from cert_watch.database import init_schema
     from cert_watch.scheduler import run_scan_now

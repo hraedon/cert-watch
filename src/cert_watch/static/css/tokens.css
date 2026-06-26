@@ -58,6 +58,7 @@
      for links, focus, the wordmark, and active nav -- never for status. */
   --accent: #c9a25a;
   --accent-2: #c9a25a;
+  --accent-fg: #0e0d0b;
   --accent-soft: rgba(201, 162, 90, 0.13);
   --accent-line: rgba(201, 162, 90, 0.42);
 
@@ -122,6 +123,7 @@
   /* Bronze ink for the seal accent in light mode. */
   --accent: #8a6a28;
   --accent-2: #8a6a28;
+  --accent-fg: #ffffff;
   --accent-soft: rgba(138, 106, 40, 0.10);
   --accent-line: rgba(138, 106, 40, 0.38);
 
@@ -244,8 +246,13 @@ body {
   overflow: hidden;
 }
 .cw-stats.cw-stats-3 { grid-template-columns: repeat(3, 1fr); }
+.cw-stats.cw-stats-5 { grid-template-columns: repeat(5, 1fr); }
 .cw-stat { position: relative; overflow: hidden; padding: 13px 18px 12px; border-left: 1px solid var(--border); }
 .cw-stat:first-child { border-left: none; }
+.cw-stat-link { text-decoration: none; color: inherit; display: block; }
+.cw-stat-link:hover { background: var(--panel-2); }
+.cw-stat-active { box-shadow: inset 0 0 0 2px var(--accent); }
+.cw-stat-disabled { opacity: .45; pointer-events: none; }
 .cw-stat-rail { display: none; }
 .cw-stat-top { display: flex; align-items: center; gap: 7px; }
 .cw-stat-top svg { width: 13px; height: 13px; opacity: .85; }
@@ -1223,7 +1230,7 @@ body {
 }
 
 /* ---------- NEW badge ---------- */
-.cw-badge-new { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
+.cw-badge-new { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
 
 /* ---------- Responsive layout ---------- */
 @media (max-width: 960px) {

@@ -546,32 +546,32 @@ def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):
 
 
 def test_evaluate_thresholds_each_threshold_fires_once(alert_repo, expiring_cert):
-    """Each threshold fires exactly once — no re-alerting after cooldown."""
-    first = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    """Each threshold fires exactly once — no re-alerting."""
+    first = evaluate_thresholds(expiring_cert, alert_repo)
     assert len(first) == 1
 
     # Second call immediately — no new alerts (already alerted)
-    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    second = evaluate_thresholds(expiring_cert, alert_repo)
     assert second == []
 
-    # Third call with cooldown=0 — still no new alerts (each fires exactly once)
-    third = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
+    # Third call — still no new alerts (each fires exactly once)
+    third = evaluate_thresholds(expiring_cert, alert_repo)
     assert third == []
 
 
-def test_evaluate_thresholds_no_escalation_within_cooldown(alert_repo, expiring_cert):
-    """FEAT-004: alerts should NOT re-fire within cooldown window."""
-    evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+def test_evaluate_thresholds_no_escalation(alert_repo, expiring_cert):
+    """FEAT-004: alerts should NOT re-fire after first alert."""
+    evaluate_thresholds(expiring_cert, alert_repo)
     # Immediate re-evaluation should produce no new alerts
-    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=24)
+    second = evaluate_thresholds(expiring_cert, alert_repo)
     assert second == []
 
 
 def test_evaluate_thresholds_thresholds_never_refire(alert_repo, expiring_cert):
-    """cooldown_hours has no effect: each threshold fires exactly once."""
-    evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
-    # All thresholds already have alerts, cooldown=0 is irrelevant
-    second = evaluate_thresholds(expiring_cert, alert_repo, cooldown_hours=0)
+    """Each threshold fires exactly once."""
+    evaluate_thresholds(expiring_cert, alert_repo)
+    # All thresholds already have alerts
+    second = evaluate_thresholds(expiring_cert, alert_repo)
     assert second == []
 
 

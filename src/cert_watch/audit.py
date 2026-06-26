@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import typing
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from fastapi import Request
 
 from cert_watch.database.connection import _connect
 
@@ -94,7 +97,7 @@ def purge_old_audit(db_path: str | Path, retention_days: int) -> int:
                 "purged %d audit rows older than %d days", deleted, retention_days
             )
         return deleted
-    except Exception:
+    except (sqlite3.Error, OSError):
         logger.warning("audit purge failed", exc_info=True)
         return 0
 
@@ -155,15 +158,12 @@ def count_audit(
     return row[0] if row else 0
 
 
-def resolve_actor(request: object) -> str:
+def resolve_actor(request: Request) -> str:
     """Resolve the actor from a FastAPI Request object.
 
     Falls back to "anonymous" when auth is off or no user is set.
     """
-    try:
-        return getattr(request, "scope", {}).get("auth_user", "") or "anonymous"
-    except Exception:
-        return "anonymous"
+    return request.scope.get("auth_user", "") or "anonymous"
 
 
 def resolve_source_ip(request: typing.Any) -> str | None:

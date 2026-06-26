@@ -49,6 +49,7 @@ def login_page(request: Request, error: str | None = None) -> HTMLResponse | Red
         context={
             "version": __version__, "commit": __commit__,
             "provider": auth.provider_name,
+            "provider_label": getattr(auth, "provider_label", auth.provider_name),
             "supports_form_login": auth.supports_form_login,
             "local_admin_configured": local_admin_configured,
             "error": error,

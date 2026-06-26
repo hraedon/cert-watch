@@ -128,31 +128,22 @@ def _verify_state(
     """Verify a signed OAuth state token.
 
     Returns ``(state, nonce)`` on success, ``None`` on failure.
-    Handles both the new ``state:nonce:sig`` format and the legacy
-    ``state:sig`` format (nonce returned as ``None``).
+    Only the ``state:nonce:sig`` format (3+ colon-separated parts) is
+    accepted; the legacy ``state:sig`` format is rejected (WI-088).
     """
     if not token or ":" not in token:
         return None
-    # Try new format first: state:nonce:sig (3+ colon-separated parts)
     parts = token.split(":")
-    if len(parts) >= 3:
-        sig = parts[-1]
-        nonce = parts[-2]
-        state = ":".join(parts[:-2])
-        expected = hmac.new(
-            _key(security).encode(), f"{state}:{nonce}".encode(), hashlib.sha256
-        ).hexdigest()[:64]
-        if hmac.compare_digest(sig, expected):
-            return state, nonce
-    # Fallback: legacy format state:sig
-    last_colon = token.rfind(":")
-    state = token[:last_colon]
-    sig = token[last_colon + 1:]
+    if len(parts) < 3:
+        return None
+    sig = parts[-1]
+    nonce = parts[-2]
+    state = ":".join(parts[:-2])
     expected = hmac.new(
-        _key(security).encode(), state.encode(), hashlib.sha256
+        _key(security).encode(), f"{state}:{nonce}".encode(), hashlib.sha256
     ).hexdigest()[:64]
     if hmac.compare_digest(sig, expected):
-        return state, None
+        return state, nonce
     return None
 
 
@@ -231,6 +222,10 @@ def decode_session(
 
     Does **not** check TTL or session-version revocation — use
     :func:`validate_session` for the full validation gate.
+
+    WI-088: legacy 3-part tokens (username:ts:nonce, no version field) and
+    32-char signatures are rejected. Only 4/6/7-part tokens with 64-char
+    HMAC signatures are accepted.
     """
     if not token or ":" not in token:
         return None
@@ -240,20 +235,16 @@ def decode_session(
     key = _key(security).encode()
     expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]
     if not hmac.compare_digest(sig, expected):
-        # Legacy fallback: tokens created before the truncation change use 32-char sigs
-        expected_legacy = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:32]
-        if not hmac.compare_digest(sig, expected_legacy):
-            return None
+        return None
     parts = payload.split(":")
     if len(parts) < 3:
         return None
 
-    # Supported formats:
-    #   3 parts: username:ts:nonce                (old format, version=0)
+    # Supported formats (WI-088: legacy 3-part tokens are rejected):
     #   4 parts: username:version:ts:nonce          (BC-081)
     #   6 parts: username:version:ts:nonce:groups:roles  (BC-145)
     #   7 parts: username:version:ts:nonce:groups:roles:email  (Plan 040)
-    #   5 parts is rejected as malformed.
+    #   3 and 5 parts are rejected as malformed/legacy.
     if len(parts) == 7:
         username = parts[0]
         try:
@@ -297,27 +288,9 @@ def decode_session(
         try:
             version = int(parts[1])
         except ValueError:
-            # Not a version field — treat as old-format (username:ts:nonce)
-            username = parts[0]
-            version = 0
-            ts = _parse_ts(parts, start=1)
-            nonce = parts[3] if len(parts) > 3 else ""
-        else:
-            ts = _parse_ts(parts, start=2)
-            nonce = parts[3]
-        return SessionInfo(
-            username=username,
-            version=version,
-            timestamp=ts,
-            nonce=nonce,
-            groups=[],
-            roles=[],
-        )
-    if len(parts) == 3:
-        username = parts[0]
-        version = 0
-        ts = _parse_ts(parts, start=1)
-        nonce = parts[2] if len(parts) > 2 else ""
+            return None
+        ts = _parse_ts(parts, start=2)
+        nonce = parts[3]
         return SessionInfo(
             username=username,
             version=version,

@@ -11,6 +11,7 @@
     } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
   </script>
   <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 </head>
 <body>
   <div class="cw-app">
@@ -60,7 +61,7 @@
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
           <div class="cw-login-oauth-wrap">
             <a href="/auth/login" class="cw-btn primary cw-btn--expand cw-no-decoration">
-              Sign in with {{ provider | title }}
+              Sign in with {{ provider_label }}
             </a>
           </div>
         {% endif %}

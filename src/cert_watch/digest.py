@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -211,8 +212,8 @@ def _admin_emails(db_path: str | Path) -> list[str]:
                 seen.add(u.email.casefold())
                 emails.append(u.email)
         return emails
-    except Exception:  # noqa: BLE001 — roles optional; degrade to no admin notice
-        logger.debug("admin email lookup unavailable", exc_info=True)
+    except (ImportError, sqlite3.Error):  # roles table missing or local-auth extra absent
+        logger.warning("admin email lookup unavailable", exc_info=True)
         return []
 
 

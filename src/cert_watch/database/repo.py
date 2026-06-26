@@ -242,6 +242,9 @@ class AlertRepository(ABC):
     def list_pending(self) -> list[Alert]: ...
 
     @abstractmethod
+    def list_for_cert(self, cert_id: str) -> list[Alert]: ...
+
+    @abstractmethod
     def mark_sent(self, alert_id: str) -> None: ...
 
     @abstractmethod
@@ -436,6 +439,9 @@ class ScopedAlertRepository(AlertRepository):
 
     def list_pending(self) -> list[Alert]:
         return self._repo.list_pending_scoped(self._scope_tags)
+
+    def list_for_cert(self, cert_id: str) -> list[Alert]:
+        return self._repo.list_for_cert(cert_id)
 
     def create(self, alert: Alert) -> str:
         return self._repo.create(alert)
