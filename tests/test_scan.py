@@ -949,7 +949,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -989,7 +989,7 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -1057,7 +1057,7 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
     # Don't mock replace_scanned — let the real code run so pre-fetch is exercised
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -1127,7 +1127,7 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
 
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -1177,7 +1177,7 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
     )
 
     leaf_id = store_scanned(entry, db)
-    assert leaf_id == "leaf-id-1"
+    assert leaf_id == ""
 
 
 def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_leaf):
@@ -1194,7 +1194,7 @@ def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_l
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events
@@ -1232,7 +1232,7 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr("cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events)
     monkeypatch.setattr("cert_watch.database.queries._extract_key_algo", lambda x: "RSA")
@@ -1247,7 +1247,7 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
     )
 
     leaf_id = store_scanned(entry, db)
-    assert leaf_id == "leaf-id-1"
+    assert leaf_id == ""
 
 
 def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_signed_leaf):
@@ -1261,7 +1261,7 @@ def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_sig
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries._extract_key_algo",
@@ -1273,7 +1273,7 @@ def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_sig
     )
 
     leaf_id = store_scanned(entry, db)
-    assert leaf_id == "leaf-id-1"
+    assert leaf_id == ""
 
 
 def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed_leaf):
@@ -1287,7 +1287,7 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -1299,7 +1299,7 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
     )
 
     leaf_id = store_scanned(entry, db)
-    assert leaf_id == "leaf-id-1"
+    assert leaf_id == ""
 
 
 def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_signed_leaf):
@@ -1313,7 +1313,7 @@ def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_sign
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_and_store_posture",
-        lambda *a, **kw: "A",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.queries.detect_drift",
@@ -1713,3 +1713,163 @@ def test_run_openssl_stderr_reader_stops_at_cap():
     assert stderr == b"x" * 65536
     # The child got a broken stderr pipe, so rc is unlikely to be 0; do not
     # assert a specific returncode.
+
+
+# ---------- store_scanned transaction boundary (WI-084) ----------
+
+
+def _scanned_entry_for(leaf: Certificate, host: str = "x", port: int = 443) -> ScannedEntry:
+    return ScannedEntry(host=host, port=port, leaf=leaf, chain=[])
+
+
+def test_store_scanned_rolls_back_replace_when_posture_fails(
+    tmp_path, self_signed_leaf, monkeypatch,
+):
+    from cert_watch.database import SqliteCertificateRepository
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    repo = SqliteCertificateRepository(db, source="scanned")
+    first_id = store_scanned(entry, db)
+    assert first_id
+    initial = repo.list_all()
+    assert len(initial) == 1
+    initial_fp = initial[0].fingerprint_sha256
+
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_and_store_posture",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("posture boom")),
+    )
+
+    result = store_scanned(entry, db)
+    assert result == ""
+    certs = repo.list_all()
+    assert len(certs) == 1
+    assert certs[0].fingerprint_sha256 == initial_fp
+
+
+def test_store_scanned_rolls_back_replace_and_posture_when_drift_fails(
+    tmp_path, self_signed_leaf, monkeypatch,
+):
+    from cert_watch.database import SqliteCertificateRepository
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    repo = SqliteCertificateRepository(db, source="scanned")
+    store_scanned(entry, db)
+    initial_fp = repo.list_all()[0].fingerprint_sha256
+
+    monkeypatch.setattr(
+        "cert_watch.database.queries.detect_drift",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("drift boom")),
+    )
+
+    result = store_scanned(entry, db)
+    assert result == ""
+    certs = repo.list_all()
+    assert len(certs) == 1
+    assert certs[0].fingerprint_sha256 == initial_fp
+
+
+def test_store_scanned_rolls_back_prior_writes_when_history_fails(
+    tmp_path, self_signed_leaf, monkeypatch,
+):
+    from cert_watch.database import SqliteCertificateRepository
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    repo = SqliteCertificateRepository(db, source="scanned")
+    store_scanned(entry, db)
+    initial_fp = repo.list_all()[0].fingerprint_sha256
+
+    def failing_record(*args, conn=None, **kwargs):
+        raise Exception("history boom")
+
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        failing_record,
+    )
+
+    result = store_scanned(entry, db)
+    assert result == ""
+    certs = repo.list_all()
+    assert len(certs) == 1
+    assert certs[0].fingerprint_sha256 == initial_fp
+
+
+def test_store_scanned_webhook_resolve_failure_does_not_roll_back(
+    tmp_path, self_signed_leaf, monkeypatch,
+):
+    from cert_watch.alerts import Alert, WebhookConfig
+    from cert_watch.database import SqliteAlertRepository
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    repo = SqliteCertificateRepository(db, source="scanned")
+    first_id = store_scanned(entry, db)
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring soon",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+
+    monkeypatch.setattr(
+        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("pagerduty down")),
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://events.pagerduty.com/v2/enqueue",
+        kind="pagerduty",
+        routing_key="rk",
+    )
+
+    second_id = store_scanned(entry, db, webhook_config=webhook_config)
+    assert second_id
+    assert second_id != first_id
+    certs = repo.list_all()
+    assert len(certs) == 1
+    assert certs[0].fingerprint_sha256 == leaf.fingerprint_sha256
+
+
+def test_store_scanned_returns_empty_string_on_transaction_failure(
+    tmp_path, self_signed_leaf, monkeypatch,
+):
+    from cert_watch.database.schema import init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    first_id = store_scanned(entry, db)
+    assert first_id
+
+    monkeypatch.setattr(
+        "cert_watch.database.queries.record_cert_history",
+        lambda *a, **kw: (_ for _ in ()).throw(Exception("history boom")),
+    )
+
+    result = store_scanned(entry, db)
+    assert result == ""

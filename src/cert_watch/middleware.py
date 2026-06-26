@@ -47,6 +47,7 @@ if not _csrf_secret_val:
 _CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 2  # 2 hours
 _SID_COOKIE_TTL = 3600 * 8  # 8 hours — matches session cookie TTL
+_CSRF_BYPASS = False
 
 
 def set_csrf_secret(value: str) -> None:
@@ -349,15 +350,8 @@ async def check_csrf(request: Request) -> str | None:
     The query-string fallback was removed (BC-070): query-param tokens leak
     into browser history, access logs, and Referer headers, weakening the
     double-submit pattern on state-changing routes.
-    Skipped when CERT_WATCH_CSRF_DISABLED=1 (for testing).
     """
-    if os.environ.get("CERT_WATCH_CSRF_DISABLED") == "1":
-        # DEPRECATED: this env var will be removed in a future version.
-        # Disabling CSRF globally weakens form-POST protection on all routes.
-        logger.critical(
-            "CERT_WATCH_CSRF_DISABLED=1 — CSRF protection is globally disabled. "
-            "This is deprecated and will be removed in a future release."
-        )
+    if _CSRF_BYPASS:
         return None
     token = request.headers.get("x-csrf-token") or ""
     if not token:

@@ -39,7 +39,6 @@ def test_security_headers(reload_app):
 def test_rate_limit_in_memory_fallback(monkeypatch, tmp_path):
     """Test in-memory rate limit fallback when no DB is configured."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -54,7 +53,6 @@ def test_rate_limit_in_memory_fallback(monkeypatch, tmp_path):
 def test_rate_limit_db_path(monkeypatch, tmp_path):
     """Test SQLite-backed rate limiting."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -73,7 +71,6 @@ def test_rate_limit_db_path(monkeypatch, tmp_path):
 def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
     """Test fallback to in-memory when DB errors."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -89,7 +86,6 @@ def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
 def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     """Test that cache is used within TTL."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -109,7 +105,6 @@ def test_rate_limit_cache_hit(monkeypatch, tmp_path):
 def test_get_rate_remaining(monkeypatch, tmp_path):
     """Test get_rate_remaining returns correct values."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -166,7 +161,6 @@ def test_rate_limit_concurrent_different_keys_no_deadlock():
 
 def test_csrf_token_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -180,7 +174,6 @@ def test_csrf_token_roundtrip(monkeypatch, tmp_path):
 
 def test_csrf_token_expired(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
 
@@ -321,9 +314,8 @@ def test_metrics_token_wrong_bearer(reload_app, monkeypatch):
 # ---------- CSRF on form POST ----------
 
 
-def test_csrf_rejected_when_missing(monkeypatch, tmp_path):
+def test_csrf_rejected_when_missing(csrf_strict, monkeypatch, tmp_path):
     """When CSRF is enabled, a request without token should be rejected."""
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "0")
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     import asyncio
     from unittest.mock import MagicMock

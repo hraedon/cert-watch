@@ -747,6 +747,7 @@ def evaluate_policy_alerts(
     db_path: str | Path,
     *,
     subject: str = "",
+    conn: sqlite3.Connection | None = None,
 ) -> list[Alert]:
     """Create pending alerts for critical or warning policy violations.
 
@@ -757,12 +758,13 @@ def evaluate_policy_alerts(
     pair, check whether a pending ``policy_violation`` alert already exists
     for the same cert and rule_id. Only create a new alert if no matching
     pending alert is found (mirrors the cooldown logic in
-    ``evaluate_thresholds``).
+    ``evaluate_thresholds``). When *conn* is provided it is used directly
+    and the caller owns commit/rollback.
     """
     from cert_watch.database import SqliteAlertRepository
 
     alert_repo = SqliteAlertRepository(db_path)
-    existing = alert_repo.list_for_cert(cert_id)
+    existing = alert_repo.list_for_cert(cert_id, conn=conn)
     existing_rule_ids: set[str] = set()
     for a in existing:
         if a.alert_type == "policy_violation" and a.status == "pending":
@@ -788,7 +790,7 @@ def evaluate_policy_alerts(
             hostname=hostname,
             subject=subject,
         )
-        alert.id = alert_repo.create(alert)
+        alert.id = alert_repo.create(alert, conn=conn)
         created.append(alert)
     return created
 

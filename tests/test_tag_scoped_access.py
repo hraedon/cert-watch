@@ -429,7 +429,6 @@ class TestScanAllHostsRoute:
     """WI-078: POST /hosts/all/scan only scans the caller's in-scope hosts."""
 
     def _run(self, db, tmp_path, monkeypatch, scope_tag):
-        monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
         _seed_two_teams(db)
 
         scanned: list[str] = []
@@ -462,7 +461,6 @@ class TestMarkAllAlertsReadRoute:
     """WI-078: POST /alerts/mark-all-read only clears the caller's alerts."""
 
     def _run(self, db, tmp_path, monkeypatch, scope_tag):
-        monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
         _seed_two_teams(db)
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
@@ -484,7 +482,6 @@ class TestFlushAlertQueueRoute:
     """WI-078: POST /alerts/flush only sends the caller's in-scope alerts."""
 
     def _run(self, db, tmp_path, monkeypatch, scope_tag):
-        monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
         _seed_two_teams(db)
 
         seen: list[str] = []

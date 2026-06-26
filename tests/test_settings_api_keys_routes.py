@@ -72,7 +72,6 @@ def _read_audit_rows(db_path):
 
 def test_get_api_keys_authenticated_admin_redirects(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -94,7 +93,6 @@ def test_get_api_keys_unauthenticated_redirects_to_login(reload_app, tmp_path, m
 
 def test_get_api_keys_non_admin_redirected_via_route(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     _seed_local_admin(tmp_path)
     monkeypatch.setenv("CERT_WATCH_ROLE_MAP", '{"viewer": {"groups": ["viewers"], "roles": []}}')
     app_mod = reload_app()
@@ -110,7 +108,6 @@ def test_get_api_keys_non_admin_redirected_via_route(reload_app, tmp_path, monke
 
 def test_create_api_key_happy_path(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -148,7 +145,6 @@ def test_create_api_key_happy_path(reload_app, tmp_path, monkeypatch):
 
 def test_create_api_key_raw_token_shown_once(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -164,7 +160,6 @@ def test_create_api_key_raw_token_shown_once(reload_app, tmp_path, monkeypatch):
 
 def test_create_api_key_empty_name(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -183,9 +178,10 @@ def test_create_api_key_empty_name(reload_app, tmp_path, monkeypatch):
     assert not any(r["action"] == "api_key.create" for r in rows)
 
 
-def test_create_api_key_csrf_error_does_not_mutate_db(reload_app, tmp_path, monkeypatch):
+def test_create_api_key_csrf_error_does_not_mutate_db(
+    reload_app, csrf_strict, tmp_path, monkeypatch,
+):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -206,7 +202,6 @@ def test_create_api_key_csrf_error_does_not_mutate_db(reload_app, tmp_path, monk
 
 def test_create_api_key_whitespace_name(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -224,7 +219,6 @@ def test_create_api_key_whitespace_name(reload_app, tmp_path, monkeypatch):
 
 def test_create_api_key_invalid_scope(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -242,7 +236,6 @@ def test_create_api_key_invalid_scope(reload_app, tmp_path, monkeypatch):
 
 def test_create_api_key_default_scope_is_read(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -261,7 +254,6 @@ def test_create_api_key_default_scope_is_read(reload_app, tmp_path, monkeypatch)
 
 def test_create_api_key_admin_gate(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -276,7 +268,6 @@ def test_create_api_key_admin_gate(reload_app, tmp_path, monkeypatch):
 
 def test_create_api_key_non_admin_redirected(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     _seed_local_admin(tmp_path)
     monkeypatch.setenv("CERT_WATCH_ROLE_MAP", '{"viewer": {"groups": ["viewers"], "roles": []}}')
     app_mod = reload_app()
@@ -296,7 +287,6 @@ def test_create_api_key_non_admin_redirected(reload_app, tmp_path, monkeypatch):
 
 def test_revoke_api_key_happy_path(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
 
@@ -325,7 +315,6 @@ def test_revoke_api_key_happy_path(reload_app, tmp_path, monkeypatch):
 
 def test_revoke_api_key_unknown_key_id(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
 
@@ -345,9 +334,8 @@ def test_revoke_api_key_unknown_key_id(reload_app, tmp_path, monkeypatch):
     assert revoke_rows[0]["target_id"] == fake_id
 
 
-def test_revoke_api_key_csrf_error(reload_app, tmp_path, monkeypatch):
+def test_revoke_api_key_csrf_error(reload_app, csrf_strict, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
 
@@ -368,7 +356,6 @@ def test_revoke_api_key_csrf_error(reload_app, tmp_path, monkeypatch):
 
 def test_revoke_api_key_admin_gate(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
 
@@ -388,7 +375,6 @@ def test_revoke_api_key_admin_gate(reload_app, tmp_path, monkeypatch):
 
 def test_revoke_api_key_non_admin_redirected(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     monkeypatch.setenv("CERT_WATCH_ROLE_MAP", '{"viewer": {"groups": ["viewers"], "roles": []}}')
     app_mod = reload_app()
@@ -409,7 +395,6 @@ def test_revoke_api_key_non_admin_redirected(reload_app, tmp_path, monkeypatch):
 
 def test_revoke_api_key_audit_source_ip_populated(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_CSRF_DISABLED", "1")
     db = _seed_local_admin(tmp_path)
     app_mod = reload_app()
 
