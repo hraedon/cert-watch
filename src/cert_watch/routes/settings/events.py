@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.alert_adapters import WEBHOOK_KIND_OPTIONS
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.events import (
     ALL_EVENT_TYPES,
@@ -45,6 +46,7 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
             "config": replace(config, pagerduty_routing_key=""),
             "pagerduty_routing_key_set": bool(config.pagerduty_routing_key),
             "all_event_types": ALL_EVENT_TYPES,
+            "webhook_kind_options": WEBHOOK_KIND_OPTIONS,
             "active_page": "settings",
             **auth_ctx,
             **ctx,

@@ -6,13 +6,16 @@ import asyncio
 import csv
 import io
 import logging
-import sqlite3
+from pathlib import Path
+from typing import Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
+from cert_watch.alerts import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import (
     _extract_client_ip,
@@ -26,7 +29,6 @@ from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied, 
 from cert_watch.scan import (
     STARTTLS_MODES,
     ScanError,
-    ScannedEntry,
     resolve_and_validate_host,
     scan_host_async,
     store_scanned_async,
@@ -34,13 +36,93 @@ from cert_watch.scan import (
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.tags import parse_tags
 
-ScanResult = ScannedEntry | ScanError
-
 logger = logging.getLogger("cert_watch.routes.hosts")
 
 # Serialize concurrent store_scanned_async calls — SQLite WAL handles writers
 # but concurrent writes beyond busy_timeout raise OperationalError.
 _store_sem = asyncio.Semaphore(1)
+
+
+async def _scan_and_store(
+    hostname: str,
+    port: int,
+    db: str | Path,
+    settings: Settings,
+    *,
+    pinned_ip: str | None,
+    starttls_mode: str,
+    source: str,
+    webhook_config: WebhookConfig | None = None,
+    _store_error_types: tuple[type[BaseException], ...] = (Exception,),
+) -> tuple[Literal["success", "scan_error", "store_error"], str | None]:
+    result = await scan_host_async(
+        hostname,
+        port,
+        timeout=settings.scan_timeout,
+        retries=settings.scan_retries,
+        allow_private=settings.allow_private,
+        allowed_subnets=settings.allowed_subnets,
+        dns_servers=settings.dns_servers,
+        pinned_ip=pinned_ip,
+        max_output_bytes=settings.scan_max_output_bytes,
+        hsts_timeout=settings.hsts_timeout,
+        starttls_mode=starttls_mode,
+    )
+    if isinstance(result, ScanError):
+        record_scan_history(
+            db,
+            ScanHistory(
+                hostname=hostname,
+                port=port,
+                status="failure",
+                error_message=result.error_message,
+            ),
+        )
+        try:
+            from cert_watch.events import emit_scan_failed
+            emit_scan_failed(db, hostname, port, result.error_message, source=source)
+        except Exception:
+            logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
+        return "scan_error", result.error_message
+    async with _store_sem:
+        try:
+            leaf_id = await store_scanned_async(
+                result,
+                db,
+                check_revocation=settings.check_revocation,
+                allow_private=settings.allow_private,
+                allowed_subnets=settings.allowed_subnets,
+                webhook_config=webhook_config,
+            )
+        except _store_error_types:
+            logger.exception("store_scanned_async failed for %s:%d", hostname, port)
+            record_scan_history(
+                db,
+                ScanHistory(
+                    hostname=hostname,
+                    port=port,
+                    status="failure",
+                    error_message="store failed",
+                ),
+            )
+            return "store_error", "store failed"
+    if not leaf_id:
+        logger.warning(
+            "store_scanned returned empty (transaction rolled back) for %s:%d",
+            hostname, port,
+        )
+        record_scan_history(
+            db,
+            ScanHistory(
+                hostname=hostname,
+                port=port,
+                status="failure",
+                error_message="store failed",
+            ),
+        )
+        return "store_error", "store failed"
+    record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
+    return "success", None
 
 
 router = APIRouter()
@@ -120,55 +202,29 @@ async def add_host(
             source_ip=source_ip,
         )
 
-    async def _scan_and_store(p: int) -> bool:
-        result = await scan_host_async(
+    async def _scan_one(p: int) -> bool:
+        status, error = await _scan_and_store(
             hostname,
             p,
-            timeout=s.scan_timeout,
-            retries=s.scan_retries,
-            allow_private=s.allow_private,
-            allowed_subnets=s.allowed_subnets,
-            dns_servers=s.dns_servers,
+            db,
+            s,
             pinned_ip=pinned_ip,
-            max_output_bytes=s.scan_max_output_bytes,
-            hsts_timeout=s.hsts_timeout,
             starttls_mode=starttls_mode,
+            source="scan",
+            webhook_config=s.build_webhook_config(),
+            _store_error_types=(Exception,),
         )
-        if not isinstance(result, ScanError):
-            async with _store_sem:
-                try:
-                    await store_scanned_async(
-                        result, db,
-                        check_revocation=s.check_revocation,
-                        allow_private=s.allow_private,
-                        allowed_subnets=s.allowed_subnets,
-                        webhook_config=s.build_webhook_config(),
-                    )
-                except sqlite3.DatabaseError:
-                    logger.exception("store_scanned_async failed for %s:%d", hostname, p)
-                    return False
-            record_scan_history(db, ScanHistory(hostname=hostname, port=p, status="success"))
+        if status == "success":
             logger.info("added and scanned host %s:%d", hostname, p)
             return True
-        record_scan_history(
-            db,
-            ScanHistory(
-                hostname=hostname, port=p, status="failure",
-                error_message=result.error_message,
-            ),
-        )
-        try:
-            from cert_watch.events import emit_scan_failed
-            emit_scan_failed(db, hostname, p, result.error_message, source="scan")
-        except Exception:  # noqa: BLE001 — best-effort event emission
-            logger.debug("emit_scan_failed suppressed for %s:%d", hostname, p, exc_info=True)
-        logger.warning(
-            "added host %s:%d but scan failed: %s",
-            hostname, p, result.error_message,
-        )
+        if status == "scan_error":
+            logger.warning(
+                "added host %s:%d but scan failed: %s",
+                hostname, p, error,
+            )
         return False
 
-    results = await asyncio.gather(*[_scan_and_store(p) for p in ports])
+    results = await asyncio.gather(*[_scan_one(p) for p in ports])
     scanned = sum(1 for r in results if r)
     if common_ports:
         logger.info("common-ports scan for %s: %d/%d succeeded", hostname, scanned, len(ports))
@@ -259,9 +315,6 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         )
         scan_jobs.append((hostname, port, threshold, row_pinned_ip, row_starttls))
 
-    allow_priv = s.allow_private
-    allowed_nets = s.allowed_subnets
-    dns_srv = s.dns_servers
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
     record_audit(
@@ -276,63 +329,21 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
     async def _scan_one(
         job: tuple[str, int, int | None, str | None, str],
-    ) -> tuple[str, int, ScanResult]:
+    ) -> None:
         hostname, port, _, pinned, row_starttls = job
-        result = await scan_host_async(
+        await _scan_and_store(
             hostname,
             port,
-            timeout=s.scan_timeout,
-            retries=s.scan_retries,
-            allow_private=allow_priv,
-            allowed_subnets=allowed_nets,
-            dns_servers=dns_srv,
+            db,
+            s,
             pinned_ip=pinned,
-            max_output_bytes=s.scan_max_output_bytes,
-            hsts_timeout=s.hsts_timeout,
             starttls_mode=row_starttls,
+            source="scan",
+            webhook_config=s.build_webhook_config(),
         )
-        return hostname, port, result
 
-    imported = 0
-    for hostname, port, result in await asyncio.gather(*[_scan_one(j) for j in scan_jobs]):
-        if not isinstance(result, ScanError):
-            async with _store_sem:
-                try:
-                    await store_scanned_async(
-                        result, db,
-                        check_revocation=s.check_revocation,
-                        allow_private=s.allow_private,
-                        allowed_subnets=s.allowed_subnets,
-                        webhook_config=s.build_webhook_config(),
-                    )
-                except Exception:
-                    logger.exception("store_scanned_async failed for %s:%d", hostname, port)
-                    record_scan_history(
-                        db,
-                        ScanHistory(
-                            hostname=hostname, port=port,
-                            status="failure", error_message="store failed",
-                        ),
-                    )
-                    imported += 1
-                    continue
-            record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
-        else:
-            record_scan_history(
-                db,
-                ScanHistory(
-                    hostname=hostname,
-                    port=port,
-                    status="failure",
-                    error_message=result.error_message,
-                ),
-            )
-            try:
-                from cert_watch.events import emit_scan_failed
-                emit_scan_failed(db, hostname, port, result.error_message, source="scan")
-            except Exception:  # noqa: BLE001 — best-effort event emission
-                logger.debug("emit_scan_failed suppressed for %s:%d", hostname, port, exc_info=True)
-        imported += 1
+    statuses = await asyncio.gather(*[_scan_one(j) for j in scan_jobs])
+    imported = len(statuses)
     if errors and imported == 0:
         logger.warning("CSV import failed: %s", errors[:3])
         return RedirectResponse(
@@ -506,63 +517,23 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
 
     async def _limited_scan(h):
         async with sem:
-            return h, await scan_host_async(
+            return h, await _scan_and_store(
                 h.hostname,
                 h.port,
-                timeout=s.scan_timeout,
-                retries=s.scan_retries,
-                allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                dns_servers=s.dns_servers,
-                max_output_bytes=s.scan_max_output_bytes,
-                hsts_timeout=s.hsts_timeout,
+                db,
+                s,
+                pinned_ip=None,
                 starttls_mode=h.starttls_mode,
+                source="scan",
+                webhook_config=s.build_webhook_config(),
             )
 
-    for h, result in await asyncio.gather(*[_limited_scan(h) for h in hosts]):
+    for h, (status, _) in await asyncio.gather(*[_limited_scan(h) for h in hosts]):
         try:
-            if isinstance(result, ScanError):
-                record_scan_history(
-                    db,
-                    ScanHistory(
-                        hostname=h.hostname, port=h.port,
-                        status="failure", error_message=result.error_message,
-                    ),
-                )
-                try:
-                    from cert_watch.events import emit_scan_failed
-                    emit_scan_failed(db, h.hostname, h.port, result.error_message, source="scan")
-                except Exception:  # noqa: BLE001 — best-effort event emission
-                    logger.debug(
-                        "emit_scan_failed suppressed for %s:%d",
-                        h.hostname, h.port, exc_info=True,
-                    )
-                failures += 1
-            else:
-                async with _store_sem:
-                    try:
-                        await store_scanned_async(
-                            result, db,
-                            check_revocation=s.check_revocation,
-                            allow_private=s.allow_private,
-                            allowed_subnets=s.allowed_subnets,
-                            webhook_config=s.build_webhook_config(),
-                        )
-                    except Exception:
-                        logger.exception("store_scanned_async failed for %s:%d", h.hostname, h.port)
-                        record_scan_history(
-                            db,
-                            ScanHistory(
-                                hostname=h.hostname, port=h.port,
-                                status="failure", error_message="store failed",
-                            ),
-                        )
-                        failures += 1
-                        continue
-                record_scan_history(
-                    db, ScanHistory(hostname=h.hostname, port=h.port, status="success")
-                )
+            if status == "success":
                 scanned += 1
+            else:
+                failures += 1
         except Exception:
             logger.exception("scan_all: failed for %s:%d", h.hostname, h.port)
             failures += 1
@@ -593,67 +564,26 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
         source_ip=resolve_source_ip(request),
     )
     s = _get_settings(request)
-    result = await scan_host_async(
+    status, error = await _scan_and_store(
         host.hostname,
         host.port,
-        timeout=s.scan_timeout,
-        retries=s.scan_retries,
-        allow_private=s.allow_private,
-        allowed_subnets=s.allowed_subnets,
-        dns_servers=s.dns_servers,
-        max_output_bytes=s.scan_max_output_bytes,
-        hsts_timeout=s.hsts_timeout,
+        db,
+        s,
+        pinned_ip=None,
         starttls_mode=host.starttls_mode,
+        source="manual",
+        webhook_config=s.build_webhook_config(),
     )
-    if not isinstance(result, ScanError):
-        async with _store_sem:
-            try:
-                await store_scanned_async(
-                    result, db,
-                    check_revocation=s.check_revocation,
-                    allow_private=s.allow_private,
-                    allowed_subnets=s.allowed_subnets,
-                    webhook_config=s.build_webhook_config(),
-                )
-            except Exception:
-                logger.exception("store_scanned_async failed for %s:%d", host.hostname, host.port)
-                record_scan_history(
-                    db,
-                    ScanHistory(
-                        hostname=host.hostname, port=host.port,
-                        status="failure", error_message="store failed",
-                    ),
-                )
-                logger.error("manual scan store failed for %s:%d", host.hostname, host.port)
-                return RedirectResponse(
-                    url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
-                )
-        record_scan_history(
-            db, ScanHistory(hostname=host.hostname, port=host.port, status="success")
-        )
+    if status == "success":
         logger.info("manual scan succeeded for %s:%d", host.hostname, host.port)
         return RedirectResponse(url="/", status_code=303)
-    record_scan_history(
-        db,
-        ScanHistory(
-            hostname=host.hostname,
-            port=host.port,
-            status="failure",
-            error_message=result.error_message,
-        ),
-    )
-    try:
-        from cert_watch.events import emit_scan_failed
-        emit_scan_failed(db, host.hostname, host.port, result.error_message, source="manual")
-    except Exception:  # noqa: BLE001 — best-effort event emission
-        logger.debug(
-            "emit_scan_failed suppressed for %s:%d",
-            host.hostname, host.port, exc_info=True,
+    if status == "store_error":
+        logger.error("manual scan store failed for %s:%d", host.hostname, host.port)
+        return RedirectResponse(
+            url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
         )
-    logger.warning(
-        "manual scan failed for %s:%d: %s", host.hostname, host.port, result.error_message
-    )
-    msg = f"scan failed for {host.hostname}:{host.port}: {result.error_message}"
+    msg = f"scan failed for {host.hostname}:{host.port}: {error}"
+    logger.warning("manual scan failed for %s:%d: %s", host.hostname, host.port, error)
     return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
 
 

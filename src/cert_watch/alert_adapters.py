@@ -381,3 +381,17 @@ def get_adapter(kind: str) -> AlertAdapter:
     if adapter is None:
         raise ValueError(f"unknown alert adapter kind: {kind!r}")
     return adapter
+
+
+_WEBHOOK_KIND_LABELS: dict[str, str] = {
+    "generic": "Generic",
+    "discord": "Discord",
+    "teams": "Teams",
+    "slack": "Slack",
+    "pagerduty": "PagerDuty",
+    "alertmanager": "Alertmanager",
+}
+
+WEBHOOK_KIND_OPTIONS: list[tuple[str, str]] = [
+    (kind, _WEBHOOK_KIND_LABELS[kind]) for kind in _ADAPTERS
+]

@@ -422,24 +422,149 @@ def _stage_webhook_resolve(
         )
 
 
+@dataclass
+class _PostureEval:
+    """Result of posture evaluation (WI-113: computed pre-transaction)."""
+    grade: str = ""
+    findings: list[dict] = field(default_factory=list)
+    chain_status: str | None = None
+    protocol_version: str = ""
+    ocsp_stapling: bool | None = None
+    hsts: bool | None = None
+    must_staple: bool = False
+    caa_present: bool | None = None
+    caa_records: list[str] | None = None
+
+
+def _evaluate_posture(
+    db_path: str | Path,
+    entry: ScannedEntry,
+    *,
+    check_revocation: bool = False,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> _PostureEval:
+    """Evaluate TLS posture *without* storing (WI-113).
+
+    Does network I/O (CAA DNS lookup, OCSP/CRL revocation checks) so it
+    must run **before** ``BEGIN`` to avoid holding the write lock during
+    network calls.  The caller stores the result inside the transaction
+    via ``_stage_posture``.
+    """
+    from cert_watch.cert_chain import chain_status
+    from cert_watch.certificate_model import Certificate as _Cert
+    from cert_watch.database import SqliteTrustAnchorRepository
+    from cert_watch.posture import evaluate_posture
+
+    init_schema(db_path)
+    cert = entry.leaf
+    chain = entry.chain
+
+    anchors = [_Cert(
+        subject=a.subject, issuer=a.issuer,
+        not_before=a.not_before, not_after=a.not_after,
+        san_dns_names=a.san_dns_names,
+        fingerprint_sha256=a.fingerprint_sha256,
+        raw_der=a.raw_der,
+    ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
+
+    cs = chain_status(cert, chain, anchors) if chain else None
+
+    caa_present: bool | None = None
+    caa_records: list[str] | None = None
+    if entry.host:
+        from cert_watch.caa_check import check_caa
+        try:
+            caa_result = check_caa(entry.host)
+            caa_present = bool(caa_result.records) and not caa_result.error
+            caa_records = caa_result.records
+        except (OSError, ValueError):
+            caa_present = None
+
+    scan_interval_days: int | None = None
+    if entry.host:
+        from cert_watch.database.connection import _connect
+        with _connect(db_path) as c:
+            row = c.execute(
+                "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
+                (entry.host, entry.port),
+            ).fetchone()
+        if row and row["scan_interval_hours"] is not None:
+            scan_interval_days = max(row["scan_interval_hours"] // 24, 1)
+
+    issuer_der: bytes | None = None
+    if chain and cs == "private":
+        for chain_cert in chain:
+            if chain_cert.subject == cert.issuer:
+                issuer_der = chain_cert.raw_der
+                break
+
+    result = evaluate_posture(
+        cert=cert,
+        protocol_version=entry.protocol_version or None,
+        chain_status=cs,
+        chain_incomplete=entry.chain_incomplete,
+        hsts=entry.hsts,
+        check_revocation=check_revocation,
+        port=entry.port,
+        caa_present=caa_present,
+        caa_records=caa_records,
+        scan_interval_days=scan_interval_days,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+        issuer_der=issuer_der,
+    )
+
+    return _PostureEval(
+        grade=result.grade,
+        findings=typing.cast("list[dict]", result.findings),
+        chain_status=cs,
+        protocol_version=result.protocol_version,
+        ocsp_stapling=result.ocsp_stapling,
+        hsts=result.hsts,
+        must_staple=result.must_staple,
+        caa_present=caa_present,
+        caa_records=caa_records,
+    )
+
+
 def _stage_posture(
     repo_path: str | Path,
     leaf_id: str,
     entry: ScannedEntry,
     *,
     conn: sqlite3.Connection,
-    check_revocation: bool = False,
-    allow_private: bool = True,
-    allowed_subnets: tuple[str, ...] = (),
+    eval_result: _PostureEval,
 ) -> tuple[str, list[dict], str | None]:
-    """Evaluate TLS posture and store the result. Returns (grade, findings, chain_status)."""
-    return _evaluate_and_store_posture(
-        repo_path, leaf_id, entry,
+    """Store TLS posture results. Returns (grade, findings, chain_status).
+
+    WI-113: posture *evaluation* (CAA DNS, OCSP/CRL) now runs pre-transaction
+    via ``_evaluate_posture``; this stage only writes to the DB inside the
+    transaction.
+    """
+    from cert_watch.database.connection import _iso
+    from cert_watch.database.queries import store_scan_posture
+
+    store_scan_posture(
+        db_path=repo_path,
+        cert_id=leaf_id,
+        hostname=entry.host,
+        port=entry.port,
+        grade=eval_result.grade,
+        findings=eval_result.findings,
+        protocol_version=eval_result.protocol_version,
+        ocsp_stapling=eval_result.ocsp_stapling,
+        hsts=eval_result.hsts,
+        must_staple=eval_result.must_staple,
+        verify_requested=entry.verify_requested,
+        chain_incomplete=entry.chain_incomplete,
+        chain_status=eval_result.chain_status,
+        caa_present=eval_result.caa_present,
+        caa_records=eval_result.caa_records,
+        scanned_at=_iso(entry.scanned_at),
         conn=conn,
-        check_revocation=check_revocation,
-        allow_private=allow_private,
-        allowed_subnets=allowed_subnets,
     )
+    return eval_result.grade, eval_result.findings, eval_result.chain_status
 
 
 def _stage_previous_grade(
@@ -598,45 +723,52 @@ def _stage_events(
     *,
     conn: sqlite3.Connection,
     event_config: EventStreamConfig,
-) -> None:
-    """Emit cert_added/cert_renewed and posture_changed events."""
+) -> list[tuple]:
+    """Emit cert_added/cert_renewed and posture_changed events.
+
+    Webhook delivery is deferred (``_defer_webhook=True``) so the webhook
+    thread pool doesn't fire before the transaction commits — preventing
+    phantom events on COMMIT failure (WI-114). Returns a list of
+    ``(event, config, row_id)`` tuples for the caller to submit after COMMIT.
+    """
     from cert_watch.events import Event, emit_event
 
+    pending: list[tuple] = []
+
     evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
-    emit_event(
-        Event(
-            event_type=evt_type,
+    event = Event(
+        event_type=evt_type,
+        timestamp=datetime.now(UTC),
+        payload={
+            "cert_id": leaf_id,
+            "hostname": entry.host,
+            "port": entry.port,
+            "replaced_cert_id": replaced_cert_id,
+        },
+        source="scan",
+    )
+    row_id = emit_event(event, repo_path, config=event_config, conn=conn, _defer_webhook=True)
+    if event_config.webhook_url and row_id is not None:
+        pending.append((event, event_config, row_id))
+
+    if posture_grade and previous_grade is not None and previous_grade != posture_grade:
+        event = Event(
+            event_type="posture_changed",
             timestamp=datetime.now(UTC),
             payload={
                 "cert_id": leaf_id,
                 "hostname": entry.host,
                 "port": entry.port,
-                "replaced_cert_id": replaced_cert_id,
+                "old_grade": previous_grade,
+                "new_grade": posture_grade,
             },
             source="scan",
-        ),
-        repo_path,
-        config=event_config,
-        conn=conn,
-    )
-    if posture_grade and previous_grade is not None and previous_grade != posture_grade:
-        emit_event(
-            Event(
-                event_type="posture_changed",
-                timestamp=datetime.now(UTC),
-                payload={
-                    "cert_id": leaf_id,
-                    "hostname": entry.host,
-                    "port": entry.port,
-                    "old_grade": previous_grade,
-                    "new_grade": posture_grade,
-                },
-                source="scan",
-            ),
-            repo_path,
-            config=event_config,
-            conn=conn,
         )
+        row_id = emit_event(event, repo_path, config=event_config, conn=conn, _defer_webhook=True)
+        if event_config.webhook_url and row_id is not None:
+            pending.append((event, event_config, row_id))
+
+    return pending
 
 
 def store_scanned(
@@ -724,8 +856,17 @@ def store_scanned(
         posture_grade: str = ""
         original_findings: list[dict] = []
         stored_chain_status: str | None = None
+        pending_event_webhooks: list[tuple] = []
 
         try:
+            # WI-113: evaluate posture (network I/O — CAA DNS, OCSP/CRL)
+            # BEFORE BEGIN so the write lock isn't held during network calls.
+            posture_eval = _evaluate_posture(
+                repo_path, entry,
+                check_revocation=check_revocation,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
+            )
             conn.execute("BEGIN")
             leaf_id, replaced_cert_id = _stage(
                 "replace", _stage_replace, repo_path, entry, conn,
@@ -733,9 +874,7 @@ def store_scanned(
             posture_grade, original_findings, stored_chain_status = _stage(
                 "posture", _stage_posture, repo_path, leaf_id, entry,
                 conn=conn,
-                check_revocation=check_revocation,
-                allow_private=allow_private,
-                allowed_subnets=allowed_subnets,
+                eval_result=posture_eval,
             )
             posture_grade = _stage(
                 "policy", _stage_policy,
@@ -753,7 +892,7 @@ def store_scanned(
                 repo_path, entry, posture_grade,
                 conn=conn,
             )
-            _stage(
+            pending_event_webhooks = _stage(
                 "events", _stage_events,
                 repo_path, leaf_id, entry,
                 replaced_cert_id, posture_grade, previous_grade,
@@ -778,6 +917,14 @@ def store_scanned(
                 webhook_config, pending_for_resolve,
             )
 
+        # WI-114: fire deferred event webhooks only after COMMIT succeeded.
+        for evt, cfg, rid in (pending_event_webhooks or []):
+            try:
+                from cert_watch.events import _deliver_webhook, _get_pool
+                _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
+            except Exception:
+                logger.warning("deferred event webhook submit failed", exc_info=True)
+
         return leaf_id
 
     repo = repo_path_or_repo
@@ -797,109 +944,44 @@ def _evaluate_and_store_posture(
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
 ) -> tuple[str, list[dict], str | None]:
-    """Evaluate TLS posture and store the result. Returns (grade, findings)."""
-    from cert_watch.cert_chain import chain_status
-    from cert_watch.certificate_model import Certificate as _Cert
-    from cert_watch.database import SqliteTrustAnchorRepository
+    """Evaluate TLS posture and store the result. Returns (grade, findings, chain_status).
+
+    Backward-compat wrapper: ``_evaluate_posture`` (pre-transaction, network I/O)
+    + ``store_scan_posture`` (in-transaction DB write).  ``store_scanned`` calls
+    them separately so network I/O stays outside the transaction (WI-113).
+    """
     from cert_watch.database.connection import _iso
     from cert_watch.database.queries import store_scan_posture
-    from cert_watch.posture import evaluate_posture
-
-    cert = entry.leaf
-    chain = entry.chain
 
     if conn is None:
         init_schema(db_path)
-        anchors = [_Cert(
-            subject=a.subject, issuer=a.issuer,
-            not_before=a.not_before, not_after=a.not_after,
-            san_dns_names=a.san_dns_names,
-            fingerprint_sha256=a.fingerprint_sha256,
-            raw_der=a.raw_der,
-        ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
-    else:
-        anchors = [_Cert(
-            subject=a.subject, issuer=a.issuer,
-            not_before=a.not_before, not_after=a.not_after,
-            san_dns_names=a.san_dns_names,
-            fingerprint_sha256=a.fingerprint_sha256,
-            raw_der=a.raw_der,
-        ) for a in SqliteTrustAnchorRepository(db_path).list_entries(conn=conn)]
-
-    cs = chain_status(cert, chain, anchors) if chain else None
-
-    caa_present: bool | None = None
-    caa_records: list[str] | None = None
-    if entry.host:
-        from cert_watch.caa_check import check_caa
-        try:
-            caa_result = check_caa(entry.host)
-            caa_present = bool(caa_result.records) and not caa_result.error
-            caa_records = caa_result.records
-        except (OSError, ValueError):
-            caa_present = None
-
-    scan_interval_days: int | None = None
-    if entry.host:
-        if conn is None:
-            from cert_watch.database.connection import _connect
-            with _connect(db_path) as c:
-                row = c.execute(
-                    "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
-                    (entry.host, entry.port),
-                ).fetchone()
-        else:
-            row = conn.execute(
-                "SELECT scan_interval_hours FROM hosts WHERE hostname = ? AND port = ?",
-                (entry.host, entry.port),
-            ).fetchone()
-        if row and row["scan_interval_hours"] is not None:
-            scan_interval_days = max(row["scan_interval_hours"] // 24, 1)
-
-    # Find the issuer cert from the chain for CRL signature verification
-    issuer_der: bytes | None = None
-    if chain and cs == "private":
-        for chain_cert in chain:
-            if chain_cert.subject == cert.issuer:
-                issuer_der = chain_cert.raw_der
-                break
-
-    result = evaluate_posture(
-        cert=cert,
-        protocol_version=entry.protocol_version or None,
-        chain_status=cs,
-        chain_incomplete=entry.chain_incomplete,
-        hsts=entry.hsts,
+    eval_result = _evaluate_posture(
+        db_path,
+        entry,
         check_revocation=check_revocation,
-        port=entry.port,
-        caa_present=caa_present,
-        caa_records=caa_records,
-        scan_interval_days=scan_interval_days,
         allow_private=allow_private,
         allowed_subnets=allowed_subnets,
-        issuer_der=issuer_der,
     )
-
     store_scan_posture(
         db_path=db_path,
         cert_id=cert_id,
         hostname=entry.host,
         port=entry.port,
-        grade=result.grade,
-        findings=typing.cast("list[dict]", result.findings),
-        protocol_version=result.protocol_version,
-        ocsp_stapling=result.ocsp_stapling,
-        hsts=result.hsts,
-        must_staple=result.must_staple,
+        grade=eval_result.grade,
+        findings=eval_result.findings,
+        protocol_version=eval_result.protocol_version,
+        ocsp_stapling=eval_result.ocsp_stapling,
+        hsts=eval_result.hsts,
+        must_staple=eval_result.must_staple,
         verify_requested=entry.verify_requested,
         chain_incomplete=entry.chain_incomplete,
-        chain_status=cs,
-        caa_present=caa_present,
-        caa_records=caa_records,
+        chain_status=eval_result.chain_status,
+        caa_present=eval_result.caa_present,
+        caa_records=eval_result.caa_records,
         scanned_at=_iso(entry.scanned_at),
         conn=conn,
     )
-    return result.grade, typing.cast("list[dict]", result.findings), cs
+    return eval_result.grade, eval_result.findings, eval_result.chain_status
 
 
 async def scan_host_async(
