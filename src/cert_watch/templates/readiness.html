@@ -1,6 +1,8 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — SC-081 readiness report{% endblock %}
 
+{% import "macros/icons.html" as icons %}
+
 {% block head %}
 <style>
 @media print {
@@ -8,41 +10,11 @@
   .cw-page { padding: 0 !important; }
   body { background: #fff !important; color: #000 !important; }
   .cw-panel { border: 1px solid #ccc !important; break-inside: avoid; }
-  .rdy-risk-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .rdy-class-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .cw-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
-.rdy-header { margin-bottom: 24px; }
-.rdy-header .rdy-h2 { margin: 0 0 4px 0; font-size: 16px; font-weight: 600; }
-.rdy-header .rdy-sub { font-size: 13px; opacity: 0.7; }
-.rdy-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
-.rdy-stat-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
-.rdy-stat-box .val { font-size: 28px; font-weight: 700; font-family: monospace; }
-.rdy-stat-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-.rdy-section { margin-bottom: 24px; }
-.rdy-section h2 { font-size: 16px; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.rdy-timeline { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
-.rdy-milestone { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); min-width: 120px; }
-.rdy-milestone .ms-label { font-size: 18px; font-weight: 700; font-family: monospace; }
-.rdy-milestone .ms-date { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-.rdy-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.rdy-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); font-weight: 600; font-size: 11.5px; opacity: 0.7; }
-.rdy-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.rdy-table tr:last-child td { border-bottom: none; }
-.rdy-class-chip { padding: 3px 10px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
-.rdy-class-chip.auto { background: var(--ok); color: #fff; }
-.rdy-class-chip.manual { background: var(--warn); color: #fff; }
-.rdy-class-chip.unknown { background: var(--border); color: var(--text-2); }
-.rdy-risk-chip { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
-.rdy-risk-chip.late { background: var(--crit); color: #fff; }
-.rdy-risk-chip.ok { background: var(--ok); color: #fff; }
-.rdy-risk-chip.na { opacity: 0.4; }
-.rdy-forecast { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
-.rdy-forecast-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
-.rdy-forecast-box .val { font-size: 24px; font-weight: 700; font-family: monospace; }
-.rdy-forecast-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-.rdy-private-note { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background: rgba(128,128,128,0.05); margin-bottom: 16px; font-size: 13px; }
-.rdy-actions { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
-.rdy-empty { padding: 12px 0; font-size: 13px; opacity: 0.5; }
+.cw-section-hdr { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.cw-milestone-box { min-width: 120px; }
+.cw-private-note { padding: 10px 16px; background: rgba(128,128,128,0.05); margin-bottom: 16px; }
 </style>
 {% endblock %}
 
@@ -60,163 +32,165 @@
     </div>
   </div>
 
-  <div class="rdy-header">
-    <h2 class="rdy-h2">Milestone timeline</h2>
-    <div class="rdy-sub">Maximum public-trust certificate validity reducing over time. Generated {{ report.generated_at[:19]|replace('T', ' ') }} UTC</div>
+  <div class="cw-mb-18">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4">Milestone timeline</div>
+    <div class="cw-fz-13 cw-text-text-3">Maximum public-trust certificate validity reducing over time. Generated {{ report.generated_at[:19]|replace('T', ' ') }} UTC</div>
   </div>
 
-  <div class="rdy-timeline">
+  <div class="cw-flex cw-gap-12 cw-wrap cw-mb-18">
     {% for ms in report.milestones %}
-    <div class="rdy-milestone">
-      <div class="ms-label">{{ ms.label }}</div>
-      <div class="ms-date">Effective {{ ms.date }}</div>
+    <div class="cw-panel cw-p-14-16 cw-milestone-box">
+      <div class="mono cw-fz-18 cw-fw-700">{{ ms.label }}</div>
+      <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Effective {{ ms.date }}</div>
     </div>
     {% endfor %}
   </div>
 
   <div class="cw-panel cw-p-16-18">
-    <div class="rdy-stats">
-      <div class="rdy-stat-box">
-        <div class="val">{{ report.total_hosts }}</div>
-        <div class="label">Total hosts</div>
+    <div class="cw-stats cw-mb-0">
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('server', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total hosts</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.total_hosts }}</div>
       </div>
-      <div class="rdy-stat-box">
-        <div class="val">{{ report.public_trust_hosts }}</div>
-        <div class="label">Public-trust hosts</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-ok"></div>
+        <div class="cw-stat-top cw-stat-top-ok">{{ icons.svg_icon('shield', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Public-trust</span></div>
+        <div class="cw-stat-val cw-stat-val-ok">{{ report.public_trust_hosts }}</div>
       </div>
-      <div class="rdy-stat-box">
-        <div class="val">{{ report.private_ca_hosts }}</div>
-        <div class="label">Private-CA hosts</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('key', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Private-CA</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.private_ca_hosts }}</div>
       </div>
     </div>
   </div>
 
   {% if report.workload_forecast %}
-  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-    <div class="rdy-section">
-      <h2>Workload Forecast</h2>
-      <p style="font-size:13px;margin:0 0 12px 0;opacity:0.7">
-        Estimated renewal operations per month across your public-trust estate at each milestone.
-      </p>
-      <div class="rdy-forecast">
-        <div class="rdy-forecast-box">
-          <div class="val">{{ report.workload_forecast.current_renewals_per_month }}</div>
-          <div class="label">Current (per month)</div>
-        </div>
-        <div class="rdy-forecast-box">
-          <div class="val">{{ report.workload_forecast.at_100d_renewals_per_month }}</div>
-          <div class="label">At 100-day max</div>
-        </div>
-        <div class="rdy-forecast-box">
-          <div class="val">{{ report.workload_forecast.at_47d_renewals_per_month }}</div>
-          <div class="label">At 47-day max</div>
-        </div>
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4">Workload Forecast</div>
+    <p class="cw-fz-13 cw-text-text-3 cw-mt-0 cw-mb-12">
+      Estimated renewal operations per month across your public-trust estate at each milestone.
+    </p>
+    <div class="cw-stats cw-mb-0">
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('refresh', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Current</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.workload_forecast.current_renewals_per_month }}</div>
+        <div class="cw-stat-sub">per month</div>
       </div>
-      {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
-        {% if host_list %}
-        <div style="margin-top:8px;font-size:12.5px">
-          <strong>{{ ms_label }} risk:</strong> {{ host_list | join(', ') }}
-        </div>
-        {% endif %}
-      {% endfor %}
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-warn"></div>
+        <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">At 100-day max</span></div>
+        <div class="cw-stat-val cw-stat-val-warn">{{ report.workload_forecast.at_100d_renewals_per_month }}</div>
+        <div class="cw-stat-sub">per month</div>
+      </div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-crit"></div>
+        <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">At 47-day max</span></div>
+        <div class="cw-stat-val cw-stat-val-crit">{{ report.workload_forecast.at_47d_renewals_per_month }}</div>
+        <div class="cw-stat-sub">per month</div>
+      </div>
     </div>
+    {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
+      {% if host_list %}
+      <div class="cw-mt-8 cw-fz-12-5">
+        <strong>{{ ms_label }} risk:</strong> {{ host_list | join(', ') }}
+      </div>
+      {% endif %}
+    {% endfor %}
   </div>
   {% endif %}
 
-  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-    <div class="rdy-section">
-      <h2>Public-Trust Host Readiness</h2>
-      {% if report.hosts %}
-      <table class="rdy-table">
-        <thead>
-          <tr>
-            <th>Host</th>
-            <th>Classification</th>
-            <th>Lead Time</th>
-            <th>Lifetime</th>
-            {% for ms in report.milestones %}
-            <th>{{ ms.label }} margin</th>
-            {% endfor %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for h in report.hosts %}
-          <tr>
-            <td class="mono">{{ h.hostname }}</td>
-            <td>
-              {% if h.classification == 'likely-automated' %}
-              <span class="rdy-class-chip auto">Automated</span>
-              {% elif h.classification == 'manual' %}
-              <span class="rdy-class-chip manual">Manual</span>
-              {% else %}
-              <span class="rdy-class-chip unknown">Unknown</span>
-              {% endif %}
-            </td>
-            <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
-            <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
-            {% for m in h.margins %}
-            <td>
-              {% if m.margin_days is not none %}
-                {% if m.renew_late %}
-                <span class="rdy-risk-chip late">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
-                {% else %}
-                <span class="rdy-risk-chip ok">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
-                {% endif %}
-              {% elif m.renew_late %}
-                <span class="rdy-risk-chip late">At risk</span>
-              {% else %}
-                <span class="rdy-risk-chip na">&mdash;</span>
-              {% endif %}
-            </td>
-            {% endfor %}
-          </tr>
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Public-Trust Host Readiness</div>
+    {% if report.hosts %}
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Classification</th>
+          <th>Lead Time</th>
+          <th>Lifetime</th>
+          {% for ms in report.milestones %}
+          <th>{{ ms.label }} margin</th>
           {% endfor %}
-        </tbody>
-      </table>
-      {% else %}
-      <div class="rdy-empty">No public-trust hosts found.</div>
-      {% endif %}
-    </div>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in report.hosts %}
+        <tr>
+          <td class="mono">{{ h.hostname }}</td>
+          <td>
+            {% if h.classification == 'likely-automated' %}
+            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
+            {% elif h.classification == 'manual' %}
+            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
+            {% else %}
+            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
+            {% endif %}
+          </td>
+          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+          {% for m in h.margins %}
+          <td>
+            {% if m.margin_days is not none %}
+              {% if m.renew_late %}
+              <span class="cw-chip tone-crit">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
+              {% else %}
+              <span class="cw-chip tone-ok">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
+              {% endif %}
+            {% elif m.renew_late %}
+              <span class="cw-chip tone-crit">At risk</span>
+            {% else %}
+              <span class="cw-chip cw-chip-muted">&mdash;</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="cw-empty"><div class="cw-empty-sub">No public-trust hosts found.</div></div>
+    {% endif %}
   </div>
 
   {% if report.private_hosts %}
-  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-    <div class="rdy-section">
-      <h2>Private-CA Hosts</h2>
-      <div class="rdy-private-note">
-        These hosts use private certificate authorities. SC-081 does not bind them, but they are listed for awareness.
-      </div>
-      <table class="rdy-table">
-        <thead>
-          <tr>
-            <th>Host</th>
-            <th>Classification</th>
-            <th>Lead Time</th>
-            <th>Lifetime</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for h in report.private_hosts %}
-          <tr>
-            <td class="mono">{{ h.hostname }}</td>
-            <td>
-              {% if h.classification == 'likely-automated' %}
-              <span class="rdy-class-chip auto">Automated</span>
-              {% elif h.classification == 'manual' %}
-              <span class="rdy-class-chip manual">Manual</span>
-              {% else %}
-              <span class="rdy-class-chip unknown">Unknown</span>
-              {% endif %}
-            </td>
-            <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
-            <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Private-CA Hosts</div>
+    <div class="cw-private-note">
+      <span class="cw-fz-13">These hosts use private certificate authorities. SC-081 does not bind them, but they are listed for awareness.</span>
     </div>
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Classification</th>
+          <th>Lead Time</th>
+          <th>Lifetime</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in report.private_hosts %}
+        <tr>
+          <td class="mono">{{ h.hostname }}</td>
+          <td>
+            {% if h.classification == 'likely-automated' %}
+            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
+            {% elif h.classification == 'manual' %}
+            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
+            {% else %}
+            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
+            {% endif %}
+          </td>
+          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
   {% endif %}
 </div>
 {% endblock %}
-

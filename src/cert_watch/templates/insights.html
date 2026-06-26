@@ -10,17 +10,25 @@
       <h1 data-testid="insights-heading">Insights</h1>
       <div class="cw-page-head-sub">Fleet-wide expiry concentration and posture trends over time.</div>
     </div>
-    <div class="cw-seg">
-      <a href="/insights?tab=calendar" class="cw-btn cw-no-decoration cw-toolbtn {% if tab == 'calendar' %}on{% endif %}">{{ icons.svg_icon('calendar', 13) }}Expiry calendar</a>
-      <a href="/insights?tab=trends" class="cw-btn cw-no-decoration cw-toolbtn {% if tab == 'trends' %}on{% endif %}">{{ icons.svg_icon('trend', 13) }}Trends</a>
-      <a href="/reports/compliance" class="cw-btn cw-no-decoration cw-toolbtn">{{ icons.svg_icon('shield', 13) }}Compliance report</a>
-      <a href="/readiness" class="cw-btn cw-no-decoration cw-toolbtn">{{ icons.svg_icon('calendar', 13) }}Readiness report</a>
-      <a href="/crypto" class="cw-btn cw-no-decoration cw-toolbtn">{{ icons.svg_icon('key', 13) }}Crypto inventory</a>
+    <div class="cw-flex cw-items-center cw-gap-8">
+      <div class="cw-seg" role="tablist" aria-label="Insights view">
+        <a href="/insights?tab=calendar" class="cw-btn cw-no-decoration cw-toolbtn {% if tab == 'calendar' %}on{% endif %}" role="tab" aria-selected="{% if tab == 'calendar' %}true{% else %}false{% endif %}" aria-controls="insights-calendar-panel">{{ icons.svg_icon('calendar', 13) }}Expiry calendar</a>
+        <a href="/insights?tab=trends" class="cw-btn cw-no-decoration cw-toolbtn {% if tab == 'trends' %}on{% endif %}" role="tab" aria-selected="{% if tab == 'trends' %}true{% else %}false{% endif %}" aria-controls="insights-trends-panel">{{ icons.svg_icon('trend', 13) }}Trends</a>
+      </div>
+      <span class="cw-fz-11-5 cw-text-text-3" aria-hidden="true">·</span>
+      <nav aria-label="Reports">
+        <a href="/reports/compliance" class="cw-link cw-fz-12 cw-no-decoration">{{ icons.svg_icon('shield', 13) }}Compliance</a>
+        <span class="cw-muted cw-fz-11-5" aria-hidden="true">|</span>
+        <a href="/readiness" class="cw-link cw-fz-12 cw-no-decoration">{{ icons.svg_icon('calendar', 13) }}Readiness</a>
+        <span class="cw-muted cw-fz-11-5" aria-hidden="true">|</span>
+        <a href="/crypto" class="cw-link cw-fz-12 cw-no-decoration">{{ icons.svg_icon('key', 13) }}Crypto</a>
+      </nav>
     </div>
   </div>
 
   {% if tab == 'calendar' %}
     {# ---- Expiry calendar ---- #}
+    <div id="insights-calendar-panel" role="tabpanel" aria-labelledby="insights-calendar-tab">
     {% set ns = namespace(storms=0, within=0, later=0, leaf_total=0, soon=0) %}
     {% for b in calendar_data %}
       {% if b.count >= 3 %}{% set ns.storms = ns.storms + 1 %}{% endif %}
@@ -114,9 +122,11 @@
         {% endif %}
       </div>
     </div>
+    </div>
 
   {% elif tab == 'trends' %}
     {# ---- Trends: TLS versions + posture grades ---- #}
+    <div id="insights-trends-panel" role="tabpanel" aria-labelledby="insights-trends-tab">
     <div class="cw-layout-16-1" style="grid-template-columns:1fr 1fr">
       <div class="cw-panel cw-p-16-18">
         <div class="cw-flex cw-items-baseline cw-gap-9 cw-mb-2">
@@ -135,7 +145,7 @@
           </span>
         </div>
         {% if tls_trends %}
-        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px">
+        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px" role="img" aria-label="TLS version trends: {{ tls_trends | length }} months of data showing TLS 1.3, 1.2, and 1.0 distribution">
           {% for t in tls_trends %}
             {% set total = (t.tls_1_3 or 0) + (t.tls_1_2 or 0) + (t.tls_1_0 or 0) %}
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
@@ -175,7 +185,7 @@
           </span>
         </div>
         {% if grade_trends %}
-        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px">
+        <div class="cw-flex cw-items-end cw-gap-14" style="height:168px" role="img" aria-label="Posture grade distribution trends: {{ grade_trends | length }} months of data showing grades A through F">
           {% for g in grade_trends %}
             {% set total = (g.grade_a or 0) + (g.grade_b or 0) + (g.grade_c or 0) + (g.grade_f or 0) %}
             <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end">
@@ -195,6 +205,7 @@
           <div class="cw-empty"><div class="cw-empty-sub">Not enough history to show trends.</div></div>
         {% endif %}
       </div>
+    </div>
     </div>
   {% endif %}
 </div>

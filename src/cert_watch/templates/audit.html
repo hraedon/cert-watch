@@ -49,7 +49,7 @@
             <tr>
               <td class="mono cw-fz-12-5 cw-text-text">{{ r.ts[:19] | replace('T', ' ') if r.ts else '—' }}</td>
               <td class="cw-fz-12-5 cw-text-text-2">{{ r.actor or 'anonymous' }}</td>
-              <td><span class="cw-pill neutral"><span class="dot"></span>{{ r.action }}</span></td>
+              <td><span class="cw-pill neutral"><span class="dot" aria-hidden="true"></span>{{ r.action }}</span></td>
               <td class="cw-fz-12-5">{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-text-text-3 mono">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
               <td class="cw-fz-12 cw-text-text-3 cw-td-mw-300">{{ r.detail or '' }}</td>
               <td class="mono cw-fz-12 cw-text-text-3">{{ r.source_ip or '' }}</td>

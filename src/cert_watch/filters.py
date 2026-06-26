@@ -43,6 +43,25 @@ def _relative(days: int) -> str:
     return f"expired {amount} ago" if past else f"in {amount}"
 
 
+_URGENCY_LABELS = {
+    "expired": "Expired",
+    "critical": "Critical",
+    "warning": "Warning",
+    "healthy": "Healthy",
+    "gray": "Unknown",
+    "neutral": "—",
+}
+
+_URGENCY_TONES = {
+    "expired": "var(--expired)",
+    "critical": "var(--crit)",
+    "warning": "var(--warn)",
+    "healthy": "var(--ok)",
+    "gray": "var(--text-3)",
+    "neutral": "var(--text-2)",
+}
+
+
 def compute_urgency(days_remaining: int | None) -> str:
     """Compute urgency bucket from days until expiry.
 
@@ -59,6 +78,26 @@ def compute_urgency(days_remaining: int | None) -> str:
     if days_remaining < 30:
         return "warning"
     return "healthy"
+
+
+def urgency_label(urgency: str) -> str:
+    """Map an urgency bucket to its display label (WI-108).
+
+    Single source of truth for the text rendered inside ``cw-pill`` —
+    previously hand-duplicated as ``{% if urg == 'expired' %}Expired{% ... %}``
+    chains across 7+ template sites.
+    """
+    return _URGENCY_LABELS.get(urgency, "Unknown")
+
+
+def urgency_tone(urgency: str) -> str:
+    """Map an urgency bucket to its CSS colour-variable (WI-108).
+
+    Replaces the ``{% set _c = 'var(--expired)' if urg == 'expired' else ... %}``
+    if-chain duplicated across dashboard.html, certificate_detail.html, and
+    team_dashboard.html.
+    """
+    return _URGENCY_TONES.get(urgency, "var(--text-3)")
 
 
 def compute_urgency_with_chain(
@@ -173,6 +212,8 @@ def register_filters(templates) -> None:
     """Register all filters on a Jinja2Templates instance."""
     templates.env.filters["humanize_expiry"] = humanize_expiry
     templates.env.filters["urgency"] = compute_urgency
+    templates.env.filters["urgency_label"] = urgency_label
+    templates.env.filters["urgency_tone"] = urgency_tone
     templates.env.filters["relative_short"] = relative_short
     templates.env.filters["friendly_issuer"] = friendly_issuer
     templates.env.filters["issuer_cn"] = issuer_cn

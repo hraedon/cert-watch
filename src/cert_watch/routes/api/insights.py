@@ -69,9 +69,15 @@ def api_pivot_group_entries(
     from cert_watch.database import get_pivot_group_entries
 
     entries = get_pivot_group_entries(db, pivot, group_key)
-    # Strip internal _pivot_key field
+    # Strip internal _pivot_key field; add urgency + label so the JS
+    # consumer doesn't duplicate compute_urgency (WI-071).
+    from cert_watch.filters import compute_urgency, urgency_label
+
     for e in entries:
         e.pop("_pivot_key", None)
+        urg = compute_urgency(e.get("days_remaining"))
+        e["urgency"] = urg
+        e["urgency_label"] = urgency_label(urg)
     return JSONResponse(
         content={
             "pivot": pivot,

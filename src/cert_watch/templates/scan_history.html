@@ -61,7 +61,7 @@
                 <span class="mono cw-fz-12-5 cw-text-text">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</span>
                 <span class="cw-chip">{{ icons.svg_icon('refresh', 11, 1.6) }}{{ b.trigger }}</span>
                 <span class="cw-pill {% if b.result == 'failure' %}critical{% elif b.result == 'partial' %}warning{% else %}healthy{% endif %}">
-                  <span class="dot"></span>
+                  <span class="dot" aria-hidden="true"></span>
                   {{ b.result }}
                 </span>
               </div>
@@ -93,7 +93,7 @@
                       <td class="mono cw-fz-12-5 cw-text-text">{{ h.hostname }}:{{ h.port }}</td>
                       <td>
                         <span class="cw-pill {% if h.status == 'failure' %}critical{% elif h.status == 'success' %}healthy{% else %}warning{% endif %}">
-                          <span class="dot"></span>
+                          <span class="dot" aria-hidden="true"></span>
                           {{ h.status }}
                         </span>
                       </td>

@@ -18,9 +18,9 @@
       <div class="cw-flex cw-items-center cw-gap-12">
         <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="host-detail-heading">{{ host.hostname }}:{{ host.port }}</h1>
         {% if scan_status == 'failure' %}
-          <span class="cw-pill critical"><span class="dot"></span>Scan failed</span>
+          <span class="cw-pill critical"><span class="dot" aria-hidden="true"></span>Scan failed</span>
         {% else %}
-          <span class="cw-pill gray"><span class="dot"></span>Pending</span>
+          <span class="cw-pill gray"><span class="dot" aria-hidden="true"></span>Pending</span>
         {% endif %}
       </div>
       <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
