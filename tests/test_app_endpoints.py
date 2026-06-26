@@ -29,7 +29,6 @@ def test_delete_host_removes_host_and_certs(tmp_path, reload_app, leaf_pem_file)
 
     assert host_repo.get(hid) is None
     # Cert with that hostname/port should be gone.
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT COUNT(*) FROM certificates WHERE hostname = ? AND port = ?",
@@ -46,7 +45,6 @@ def test_delete_certificate_removes_leaf_and_chain(tmp_path, reload_app, chain_p
     entry = upload_certificate(chain_pem_file)
     leaf_id = store_uploaded(entry, db)
 
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         before = conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0]
     assert before >= 2
@@ -110,7 +108,6 @@ def test_scan_now_surfaces_failure_to_user(tmp_path, monkeypatch, reload_app):
     loc = r.headers["location"]
     assert "connection%20refused" in loc or "connection+refused" in loc
 
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
@@ -379,6 +376,7 @@ def test_import_hosts_store_scanned_async_failure_isolated(
         # Second call (fail.example.com) fails.
         if call_count["n"] == 2:
             raise sqlite3.DatabaseError("store boom")
+        return "leaf-id"
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)
@@ -394,7 +392,6 @@ def test_import_hosts_store_scanned_async_failure_isolated(
     # Both hosts were added despite one store failure
     assert host_repo.count_all() == 2
 
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT hostname, status, error_message FROM scan_history ORDER BY hostname"
@@ -439,7 +436,6 @@ def test_scan_now_store_scanned_async_failure_isolated(
     assert "warning=" in loc
     assert "store%20failed" in loc or "store+failed" in loc
 
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
@@ -477,6 +473,7 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
         call_count["n"] += 1
         if call_count["n"] == 2:
             raise sqlite3.DatabaseError("store boom")
+        return "leaf-id"
 
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
     monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", flaky_store)
@@ -485,7 +482,6 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
         r = client.post("/hosts/all/scan", follow_redirects=False)
     assert r.status_code == 303
 
-    import sqlite3
     with sqlite3.connect(str(db)) as conn:
         rows = conn.execute(
             "SELECT hostname, status, error_message FROM scan_history ORDER BY hostname"
@@ -497,6 +493,47 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
     assert rows[1][0] == "batch-b.example.com"
     assert rows[1][1] == "failure"
     assert rows[1][2] == "store failed"
+
+
+def test_scan_now_store_scanned_empty_return_treated_as_failure(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
+    """When store_scanned_async returns '' (transaction rolled back), the route
+    must treat it as a store failure, not success (WI-094 regression)."""
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+
+    from cert_watch.database import SqliteHostRepository, init_schema
+    from cert_watch.scan import ScannedEntry
+
+    init_schema(db)
+    hid = SqliteHostRepository(db).add("empty-return.example.com", 443)
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    async def empty_return_store(*args, **kwargs):
+        return ""
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+    monkeypatch.setattr("cert_watch.routes.hosts.store_scanned_async", empty_return_store)
+
+    with TestClient(app_mod.app) as client:
+        r = client.post(f"/hosts/{hid}/scan", follow_redirects=False)
+    assert r.status_code == 303
+    loc = r.headers["location"]
+    assert "warning=" in loc
+
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT status, error_message FROM scan_history WHERE hostname=? AND port=?",
+            ("empty-return.example.com", 443),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "failure"
+    assert rows[0][1] == "store failed"
 
 
 def test_flush_alert_queue(tmp_path, reload_app):

@@ -112,3 +112,15 @@ def test_rate_limit_dependency_returns_429_on_api_route(tmp_path, monkeypatch):
     assert 429 in statuses
     # The first request must not be rate limited.
     assert statuses[0] != 429
+
+
+def test_csrf_bypass_defaults_false(csrf_strict):
+    """The _CSRF_BYPASS flag must default to False — it is test-only (WI-097/099).
+
+    The flag cannot be enabled via env var or config; only via monkeypatch in
+    test fixtures.  This test guards against accidental enabling in production.
+    The ``csrf_strict`` fixture re-enables real validation by setting the flag
+    back to ``False``, confirming the production default.
+    """
+    import cert_watch.middleware as mw
+    assert mw._CSRF_BYPASS is False

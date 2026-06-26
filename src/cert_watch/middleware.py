@@ -12,6 +12,7 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote
 
 from fastapi import Request
@@ -700,104 +701,6 @@ async def security_headers_middleware(request: Request, call_next):
 # ---------- FastAPI dependencies (replaces manual auth checks) ----------
 
 
-async def require_auth(request: Request) -> str:
-    """FastAPI dependency. Returns username or raises 401.
-
-    Also builds an ``AuthContext`` on ``request.state.auth_context`` using
-    the configured role map (Plan 035).  When no role map is configured the
-    context grants full access (backward compat).
-    """
-    if not _is_auth_enabled(request):
-        request.state.auth_context = AuthContext.full_access("")
-        return ""
-    token = request.cookies.get(SESSION_COOKIE, "")
-    db_path = _request_db_path(request)
-    _settings = getattr(request.app.state, "settings", None)
-    _ttl = getattr(_settings, "session_ttl", None) if _settings else None
-    info = decode_session(token, _request_security(request))
-    username = (
-        validate_session(
-            token, _request_security(request),
-            db_path=db_path, session_ttl=_ttl,
-        )
-        if info is not None
-        else ""
-    )
-    if info is None or not username:
-        # No valid session cookie — fall back to an API-key bearer token
-        # (Plan 039). This is what lets cron jobs / CI authenticate.
-        api_ctx = authenticate_api_key(request, db_path)
-        if api_ctx is not None:
-            return api_ctx.username
-        raise HTTPException(status_code=401, detail="unauthenticated")
-    # Build AuthContext from role map, using the IdP groups/roles that were
-    # encoded into the session token at login time (BC-145).
-    settings = getattr(request.app.state, "settings", None)
-    role_map = getattr(settings, "role_map", {}) if settings else {}
-    role_repo = None
-    if settings:
-        try:
-            from cert_watch.database.users_roles import SqliteRoleRepository
-            role_repo = SqliteRoleRepository(settings.db_path)
-        except (OSError, sqlite3.Error):
-            pass
-    auth_ctx = build_auth_context(
-        username, info.groups, info.roles, role_map, role_repo=role_repo,
-    )
-    request.state.auth_context = auth_ctx
-    request.scope["auth_user"] = username
-    return username
-
-
-async def require_write(request: Request) -> str:
-    """Auth + CSRF + write_users check. Returns username or raises 401/403.
-
-    When a role map is active (Plan 035 RBAC), AuthContext permissions
-    are used; otherwise, the legacy write_users/admin_users lists apply.
-    """
-    username = await require_auth(request)
-    if not _is_auth_enabled(request):
-        return username
-
-    if _write_denied(request, username):
-        raise HTTPException(status_code=403, detail='read-only user')
-
-    # API-key (bearer) requests are not subject to CSRF — CSRF protects the
-    # ambient cookie-session path only (Plan 039).
-    if not getattr(request.state, "api_key_auth", False):
-        csrf_err = await check_csrf(request)
-        if csrf_err:
-            raise HTTPException(status_code=403, detail=csrf_err)
-    return username
-
-
-async def require_admin(request: Request) -> str:
-    """Auth + admin-permission check (no CSRF). Use for admin-scoped GETs.
-
-    Returns the username/key-name or raises 401/403. With no auth provider
-    configured, grants access (backward compat, mirrors require_auth).
-    """
-    username = await require_auth(request)
-    if not _is_auth_enabled(request):
-        return username
-    ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-    if ctx is None or not ctx.is_admin:
-        raise HTTPException(status_code=403, detail="admin required")
-    return username
-
-
-async def require_admin_write(request: Request) -> str:
-    """``require_admin`` + CSRF (skipped for API-key auth). Use for admin mutations."""
-    username = await require_admin(request)
-    if not _is_auth_enabled(request):
-        return username
-    if not getattr(request.state, "api_key_auth", False):
-        csrf_err = await check_csrf(request)
-        if csrf_err:
-            raise HTTPException(status_code=403, detail=csrf_err)
-    return username
-
-
 def _may_write(request: Request, username: str) -> bool:
     """Return True if *username* is allowed to perform mutations.
 
@@ -852,64 +755,178 @@ def _admin_redirect_target(request: Request) -> str:
     return "/"
 
 
-def _admin_denied_redirect(request: Request) -> RedirectResponse | None:
-    """Check admin access for form-POST routes. Returns a redirect on failure, None on success.
-
-    Shared by require_admin_form and require_admin_write_form so the two paths
-    cannot diverge. Must be called after the auth middleware has set
-    request.state.auth_context.
-    """
-    user = request.scope.get("auth_user")
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
+def _admin_allowed(request: Request, user: str, *, use_legacy: bool = False) -> bool:
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-    if role_map:
-        if ctx is not None and ctx.is_admin:
-            return None
-        return RedirectResponse(
-            url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
-            status_code=303,
-        )
+    if role_map or not use_legacy:
+        return ctx is not None and ctx.is_admin
     admin_ok = ctx is not None and ctx.is_admin
     if not admin_ok:
         admin_list = getattr(settings, "admin_users", None) if settings else None
         if not admin_list or user in admin_list:
             admin_ok = True
-    if not admin_ok:
-        return RedirectResponse(
-            url=f"{_admin_redirect_target(request)}?error={quote('admin required')}",
-            status_code=303,
+    return admin_ok
+
+
+class _AuthResult(NamedTuple):
+    user: str | None = None
+    error: str | None = None
+    api_key_auth: bool = False
+
+
+def _set_request_auth_context(request: Request, username: str, info) -> None:
+    settings = getattr(request.app.state, "settings", None)
+    role_map = getattr(settings, "role_map", {}) if settings else {}
+    role_repo = None
+    if settings:
+        try:
+            from cert_watch.database.users_roles import SqliteRoleRepository
+            role_repo = SqliteRoleRepository(settings.db_path)
+        except (OSError, sqlite3.Error):
+            pass
+    auth_ctx = build_auth_context(
+        username, info.groups, info.roles, role_map, role_repo=role_repo,
+    )
+    request.state.auth_context = auth_ctx
+    request.scope["auth_user"] = username
+
+
+def _resolve_session_user(request: Request) -> _AuthResult:
+    token = request.cookies.get(SESSION_COOKIE, "")
+    db_path = _request_db_path(request)
+    _settings = getattr(request.app.state, "settings", None)
+    _ttl = getattr(_settings, "session_ttl", None) if _settings else None
+    info = decode_session(token, _request_security(request))
+    username = (
+        validate_session(
+            token, _request_security(request),
+            db_path=db_path, session_ttl=_ttl,
         )
-    return None
+        if info is not None
+        else ""
+    )
+    if info is not None and username:
+        _set_request_auth_context(request, username, info)
+        return _AuthResult(user=username)
+    api_ctx = authenticate_api_key(request, db_path)
+    if api_ctx is not None:
+        return _AuthResult(user=api_ctx.username, api_key_auth=True)
+    return _AuthResult(error="unauthenticated")
+
+
+def _check_auth(
+    request: Request,
+    *,
+    resolve_session: bool = True,
+    require_write: bool = False,
+    require_admin: bool = False,
+    admin_legacy: bool = False,
+) -> _AuthResult:
+    if not _is_auth_enabled(request):
+        request.state.auth_context = AuthContext.full_access("")
+        return _AuthResult(user="")
+
+    if resolve_session:
+        result = _resolve_session_user(request)
+        user = result.user
+        api_key_auth = result.api_key_auth
+        error = result.error
+    else:
+        user = request.scope.get("auth_user")
+        api_key_auth = getattr(request.state, "api_key_auth", False)
+        error = None
+
+    if error:
+        return _AuthResult(error=error)
+    if not user:
+        return _AuthResult(error="unauthenticated")
+
+    if require_write and _write_denied(request, user):
+        return _AuthResult(user=user, error="read-only user")
+    if require_admin and not _admin_allowed(request, user, use_legacy=admin_legacy):
+        return _AuthResult(user=user, error="admin required")
+
+    return _AuthResult(user=user, api_key_auth=api_key_auth)
+
+
+async def _csrf_required_error(request: Request) -> str | None:
+    if getattr(request.state, "api_key_auth", False):
+        return None
+    return await check_csrf(request)
+
+
+async def require_auth(request: Request) -> str:
+    """FastAPI dependency. Returns username or raises 401."""
+    result = _check_auth(request)
+    if result.error:
+        raise HTTPException(status_code=401, detail="unauthenticated")
+    return result.user or ""
+
+
+async def require_write(request: Request) -> str:
+    """Auth + CSRF + write_users check. Returns username or raises 401/403."""
+    result = _check_auth(request, require_write=True)
+    if result.error:
+        if result.error == "unauthenticated":
+            raise HTTPException(status_code=401, detail="unauthenticated")
+        raise HTTPException(status_code=403, detail=result.error)
+    if _is_auth_enabled(request):
+        csrf_err = await _csrf_required_error(request)
+        if csrf_err:
+            raise HTTPException(status_code=403, detail=csrf_err)
+    return result.user or ""
+
+
+async def require_admin(request: Request) -> str:
+    """Auth + admin-permission check (no CSRF). Use for admin-scoped GETs."""
+    result = _check_auth(request, require_admin=True)
+    if result.error:
+        if result.error == "unauthenticated":
+            raise HTTPException(status_code=401, detail="unauthenticated")
+        raise HTTPException(status_code=403, detail=result.error)
+    return result.user or ""
+
+
+async def require_admin_write(request: Request) -> str:
+    """``require_admin`` + CSRF (skipped for API-key auth). Use for admin mutations."""
+    result = _check_auth(request, require_admin=True)
+    if result.error:
+        if result.error == "unauthenticated":
+            raise HTTPException(status_code=401, detail="unauthenticated")
+        raise HTTPException(status_code=403, detail=result.error)
+    if _is_auth_enabled(request):
+        csrf_err = await _csrf_required_error(request)
+        if csrf_err:
+            raise HTTPException(status_code=403, detail=csrf_err)
+    return result.user or ""
 
 
 def require_admin_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: admin-only check (no CSRF), redirect on failure."""
     if not _is_auth_enabled(request):
         return None
-    return _admin_denied_redirect(request)
+    result = _check_auth(
+        request, resolve_session=False, require_admin=True, admin_legacy=True,
+    )
+    if result.error:
+        if result.error == "unauthenticated":
+            return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(
+            url=f"{_admin_redirect_target(request)}?error={quote(result.error)}",
+            status_code=303,
+        )
+    return None
 
 
 async def require_write_form(request: Request) -> RedirectResponse | None:
-    """Form-POST helper: check write access + CSRF, return redirect on failure.
-
-    Use this for form-POST handlers that return RedirectResponse (add_host,
-    upload, delete, etc.) — they cannot use ``Depends(require_write)`` because
-    it raises HTTPException.
-    """
-    if not _is_auth_enabled(request):
-        csrf_err = await check_csrf(request)
-        if csrf_err:
-            return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-        return None
-    user = request.scope.get("auth_user")
-    if not user:
-        return RedirectResponse(url="/login", status_code=303)
-    if _write_denied(request, user):
-        return RedirectResponse(url="/?error=read-only%20user", status_code=303)
-    csrf_err = await check_csrf(request)
+    """Form-POST helper: check write access + CSRF, return redirect on failure."""
+    result = _check_auth(request, resolve_session=False, require_write=True)
+    if result.error:
+        if result.error == "unauthenticated":
+            return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(url=f"/?error={quote(result.error)}", status_code=303)
+    csrf_err = await _csrf_required_error(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
     return None
@@ -917,18 +934,17 @@ async def require_write_form(request: Request) -> RedirectResponse | None:
 
 async def require_admin_write_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: admin + write + CSRF check, redirect on failure."""
-    if not _is_auth_enabled(request):
-        csrf_err = await check_csrf(request)
-        if csrf_err:
-            return RedirectResponse(
-                url=f"{_admin_redirect_target(request)}?error={quote(csrf_err)}",
-                status_code=303,
-            )
-        return None
-    denied = _admin_denied_redirect(request)
-    if denied is not None:
-        return denied
-    csrf_err = await check_csrf(request)
+    result = _check_auth(
+        request, resolve_session=False, require_admin=True, admin_legacy=True,
+    )
+    if result.error:
+        if result.error == "unauthenticated":
+            return RedirectResponse(url="/login", status_code=303)
+        return RedirectResponse(
+            url=f"{_admin_redirect_target(request)}?error={quote(result.error)}",
+            status_code=303,
+        )
+    csrf_err = await _csrf_required_error(request)
     if csrf_err:
         return RedirectResponse(
             url=f"{_admin_redirect_target(request)}?error={quote(csrf_err)}",

@@ -335,6 +335,7 @@ def emit_event(
     config: EventStreamConfig | None = None,
     *,
     conn: sqlite3.Connection | None = None,
+    _defer_webhook: bool = False,
 ) -> int | None:
     try:
         if config is None:
@@ -350,7 +351,7 @@ def emit_event(
         if not config.webhook_url:
             delivery_status = "delivered"
         row_id = _write_event_log(db_path, event, delivery_status, conn=conn)
-        if config.webhook_url and row_id is not None:
+        if config.webhook_url and row_id is not None and not _defer_webhook:
             try:
                 _get_pool().submit(_deliver_webhook, event, config, str(db_path), row_id)
             except Exception:

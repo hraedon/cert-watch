@@ -303,11 +303,9 @@
           <label class="cw-label" for="webhook_preset">Webhook preset</label>
           <select class="cw-input" id="webhook_preset" name="webhook_preset"
                   data-action="apply-webhook-preset">
-            <option value="" {% if not alert.webhook_kind %}selected{% endif %}>Custom / generic</option>
-            <option value="slack" {% if alert.webhook_kind == 'slack' %}selected{% endif %}>Slack</option>
-            <option value="teams" {% if alert.webhook_kind == 'teams' %}selected{% endif %}>Microsoft Teams</option>
-            <option value="pagerduty" {% if alert.webhook_kind == 'pagerduty' %}selected{% endif %}>PagerDuty</option>
-            <option value="alertmanager" {% if alert.webhook_kind == 'alertmanager' %}selected{% endif %}>Alertmanager</option>
+            {% for value, label in webhook_kind_options %}
+            <option value="{{ value }}" {% if (alert.webhook_kind or 'generic') == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
           </select>
         </div>
 
@@ -1178,8 +1176,7 @@
       return;
     }
     if (!cfg) {
-      // Custom / generic: clear the preset-derived fields.
-      kindEl.value = 'generic';
+      kindEl.value = preset;
       urlEl.placeholder = 'https://...';
       ta.value = '';
       return;

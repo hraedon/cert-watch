@@ -224,6 +224,21 @@ class TestEmitEvent:
         events = get_events(db)
         assert events[0]["delivery_status"] == "pending"
 
+    def test_defer_webhook_does_not_submit(self, db):
+        c = EventStreamConfig(webhook_url="https://example.com/hook")
+        e = Event(
+            event_type="cert_added",
+            timestamp=datetime.now(UTC),
+            payload={"cert_id": "1"},
+            source="scan",
+        )
+        with patch("cert_watch.events._get_pool") as mock_pool:
+            row_id = emit_event(e, db, config=c, _defer_webhook=True)
+        assert row_id is not None
+        mock_pool.return_value.submit.assert_not_called()
+        events = get_events(db)
+        assert events[0]["delivery_status"] == "pending"
+
     def test_fail_open_on_error(self, db):
         e = Event(
             event_type="cert_added",

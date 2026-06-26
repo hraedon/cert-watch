@@ -49,12 +49,9 @@
       <label class="cw-label" for="webhook_kind">Adapter kind</label>
       <select class="cw-input cw-w-auto" id="webhook_kind" name="webhook_kind"
               data-testid="events-webhook-kind">
-        <option value="generic" {% if config.webhook_kind == 'generic' %}selected{% endif %}>Generic</option>
-        <option value="discord" {% if config.webhook_kind == 'discord' %}selected{% endif %}>Discord</option>
-        <option value="teams" {% if config.webhook_kind == 'teams' %}selected{% endif %}>Teams</option>
-        <option value="slack" {% if config.webhook_kind == 'slack' %}selected{% endif %}>Slack</option>
-        <option value="pagerduty" {% if config.webhook_kind == 'pagerduty' %}selected{% endif %}>PagerDuty</option>
-        <option value="alertmanager" {% if config.webhook_kind == 'alertmanager' %}selected{% endif %}>Alertmanager</option>
+        {% for value, label in webhook_kind_options %}
+        <option value="{{ value }}" {% if config.webhook_kind == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
       </select>
     </div>
     <div class="cw-field cw-mb-12" id="pagerduty-key-field">
