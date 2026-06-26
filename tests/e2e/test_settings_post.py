@@ -301,10 +301,10 @@ class TestReadinessPage:
         page.goto(f"{cert_watch_server}/readiness")
         expect(page.get_by_test_id("readiness-heading")).to_be_visible()
         # The milestone timeline and stats boxes should render
-        expect(page.locator(".rdy-timeline")).to_be_visible()
-        expect(page.locator(".rdy-stats")).to_be_visible()
+        expect(page.locator(".cw-milestone-box")).to_be_visible()
+        expect(page.locator(".cw-stats")).to_be_visible()
         # Host table or empty-state message must be present
-        assert page.locator(".rdy-table").count() + page.locator(".rdy-empty").count() >= 1
+        assert page.locator(".cw-table").count() + page.locator(".cw-empty").count() >= 1
 
     def test_readiness_json_api(self, page: Page, cert_watch_server: str) -> None:
         resp = page.request.get(f"{cert_watch_server}/api/readiness.json")
