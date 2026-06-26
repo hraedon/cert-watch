@@ -136,7 +136,6 @@ def test_login_path_emits_small_cookie_for_user_in_many_groups(reload_app):
         LDAP_SERVER="ldap://dc.example.com",
         LDAP_BASE_DN="DC=example,DC=com",
         CERT_WATCH_ROLE_MAP=json.dumps(role_map),
-        CERT_WATCH_CSRF_DISABLED="1",
     )
 
     class _FakeLdap:

@@ -3,7 +3,7 @@
 The JSON /api/alert-groups CRUD is covered elsewhere; this exercises the
 form-based Settings UI paths: create/list/update/delete, validation, and audit.
 CSRF and the admin gate are relaxed by the autouse ``_isolated_data_dir``
-fixture (CSRF_DISABLED + ALLOW_UNAUTH).
+fixture (_CSRF_BYPASS + ALLOW_UNAUTH).
 """
 from __future__ import annotations
 
@@ -204,10 +204,9 @@ def test_non_numeric_threshold_rejected(reload_app, tmp_path):
     assert _groups(tmp_path) == []
 
 
-def test_create_csrf_failure_does_not_mutate(reload_app, tmp_path, monkeypatch):
+def test_create_csrf_failure_does_not_mutate(reload_app, csrf_strict, tmp_path, monkeypatch):
     """With CSRF enabled and no token, create must redirect with an error and not
     write a group or an audit row (guards mutate-then-check-CSRF reordering)."""
-    monkeypatch.delenv("CERT_WATCH_CSRF_DISABLED", raising=False)
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:

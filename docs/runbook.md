@@ -279,7 +279,6 @@ docker logs cert-watch 2>&1 | grep scan
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CERT_WATCH_CSRF_SECRET` | random | HMAC key for CSRF tokens |
-| `CERT_WATCH_CSRF_DISABLED` | `0` | Disable CSRF (testing only) |
 
 ### Secret file convention
 
