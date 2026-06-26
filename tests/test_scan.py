@@ -33,8 +33,9 @@ from cert_watch.scan_conn import ScanOutputTooLargeError, _format_connect_host, 
 
 
 def _fake_ssl_socket(der_chain: list[bytes]) -> MagicMock:
-    sock = MagicMock(spec=["getpeercert", "get_unverified_chain", "close"])
+    sock = MagicMock(spec=["getpeercert", "get_unverified_chain", "version", "close"])
     sock.getpeercert.return_value = der_chain[0] if der_chain else None
+    sock.version.return_value = "TLSv1.3"
 
     class _FakeCert:
         def __init__(self, der: bytes) -> None:
@@ -802,7 +803,7 @@ def test_open_tls_connection_exception_closes_socket(monkeypatch):
 def test_get_chain_der_getter_exception(monkeypatch):
     sock = MagicMock(spec=["getpeercert", "get_unverified_chain", "close"])
     sock.getpeercert.return_value = b"\x00"
-    sock.get_unverified_chain.side_effect = Exception("chain api broke")
+    sock.get_unverified_chain.side_effect = ssl.SSLError("chain api broke")
     result = _get_chain_der(sock)
     assert result == [b"\x00"]
 
@@ -834,7 +835,8 @@ def test_scan_host_once_oserror_resolve(monkeypatch):
     assert "DNS" in result.error_message
 
 
-def test_scan_host_once_generic_exception(monkeypatch):
+def test_scan_host_once_unexpected_error_propagates(monkeypatch):
+    """RuntimeError (a code bug, not a TLS error) must not be swallowed."""
     monkeypatch.setattr(
         "cert_watch.scan._resolve_host",
         lambda *a, **kw: (2, ("93.184.216.34", 443)),
@@ -844,9 +846,24 @@ def test_scan_host_once_generic_exception(monkeypatch):
         "cert_watch.scan._open_tls_connection",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("weird")),
     )
+    with pytest.raises(RuntimeError, match="weird"):
+        _scan_host_once("example.com", 443)
+
+
+def test_scan_host_once_value_error_returns_scan_error(monkeypatch):
+    """Non-OSError input errors from the TLS stack are still surfaced as ScanError."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad hostname")),
+    )
     result = _scan_host_once("example.com", 443)
     assert isinstance(result, ScanError)
-    assert "weird" in result.error_message
+    assert "bad hostname" in result.error_message
 
 
 def test_scan_host_once_leaf_not_certificate(monkeypatch):
@@ -868,7 +885,8 @@ def test_scan_host_once_leaf_not_certificate(monkeypatch):
 # ---------- _scan_host_via_openssl fallback branches ----------
 
 
-def test_scan_host_via_openssl_fallback_generic_exception(monkeypatch):
+def test_scan_host_via_openssl_fallback_unexpected_error_propagates(monkeypatch):
+    """RuntimeError (a code bug, not a TLS error) must not be swallowed."""
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
@@ -882,12 +900,34 @@ def test_scan_host_via_openssl_fallback_generic_exception(monkeypatch):
         "cert_watch.scan._open_tls_connection",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("weird")),
     )
+    with pytest.raises(RuntimeError, match="weird"):
+        _scan_host_via_openssl(
+            "example.com", 443, timeout=5.0, allow_private=True,
+            allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
+        )
+
+
+def test_scan_host_via_openssl_fallback_value_error_returns_scan_error(monkeypatch):
+    """Non-OSError input errors in the openssl fallback path are surfaced as ScanError."""
+    monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
+    monkeypatch.setattr(
+        "cert_watch.scan._scan_via_openssl",
+        lambda *a, **kw: ([], ""),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (2, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._open_tls_connection",
+        lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad hostname")),
+    )
     result = _scan_host_via_openssl(
         "example.com", 443, timeout=5.0, allow_private=True,
         allowed_subnets=(), dns_servers=(), pinned_ip="93.184.216.34",
     )
     assert isinstance(result, ScanError)
-    assert "weird" in result.error_message
+    assert "bad hostname" in result.error_message
 
 
 def test_scan_host_via_openssl_fallback_no_leaf(monkeypatch):

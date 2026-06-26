@@ -225,6 +225,7 @@ def check_private_crl_freshness(
     from datetime import UTC, datetime
 
     from cryptography import x509
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives.asymmetric.x448 import X448PublicKey
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
@@ -341,7 +342,7 @@ def check_private_crl_freshness(
                         message=f"CRL from {url} signature does not match "
                                 f"issuer '{issuer_name}'",
                     ))
-            except (ValueError, TypeError):
+            except (ValueError, TypeError, UnsupportedAlgorithm):
                 logger.debug("Failed to parse issuer DER for CRL signature check from %s", url)
 
     if not checked_any:
@@ -387,6 +388,7 @@ def evaluate_posture(
     is checked (network calls).  Gated by ``CERT_WATCH_CHECK_REVOCATION``.
     """
     from cryptography import x509
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
 
@@ -433,7 +435,7 @@ def evaluate_posture(
                 check="key_type", status="pass",
                 message=type(key).__name__,
             ))
-    except (ValueError, TypeError):  # crypto key access
+    except (ValueError, TypeError, UnsupportedAlgorithm):  # crypto key access
         findings.append(Finding(
             check="key_type", status="warn",
             message="Cannot determine key type",

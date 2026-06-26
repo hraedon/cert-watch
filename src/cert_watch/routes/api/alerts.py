@@ -324,6 +324,19 @@ def api_cert_alert_routing(
     if cert is None:
         return JSONResponse(content={"error": "not found"}, status_code=404)
 
+    # Alert-group routing applies only to leaf certificates — the batch
+    # resolver (_resolve_group_config) filters on is_leaf=1. Return an empty
+    # preview for chain/intermediate certs so matched_groups and recipients
+    # stay consistent (WI-085).
+    if not cert.is_leaf:
+        return JSONResponse(content={
+            "cert_id": cert_id,
+            "effective_tags": cert_repo.effective_tags(cert_id),
+            "matched_groups": [],
+            "recipients": [],
+            "note": "alert routing applies only to leaf certificates",
+        })
+
     group_repo = SqliteAlertGroupRepository(db)
     effective = cert_repo.effective_tags(cert_id)
     manual_ids = set(group_repo.groups_for_cert_manual(cert_id))

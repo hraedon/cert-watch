@@ -12,15 +12,18 @@ from fastapi.testclient import TestClient
 from cert_watch.alerts import (
     evaluate_all_certs,
     evaluate_thresholds,
+    resolve_all_group_recipients,
     resolve_group_recipients,
     resolve_group_thresholds,
 )
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
+    Role,
     SqliteAlertGroupRepository,
     SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteHostRepository,
+    SqliteRoleRepository,
     init_schema,
 )
 
@@ -450,6 +453,32 @@ class TestAlertGroupAPI:
             r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/alert-routing")
             assert r.status_code == 404
 
+    def test_alert_routing_non_leaf_returns_empty(self, reload_app, tmp_path, chain_pem_file):
+        """Non-leaf (chain) certs get an empty, consistent preview (WI-085)."""
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        from cert_watch.upload import store_uploaded, upload_certificate
+
+        store_uploaded(upload_certificate(chain_pem_file), db)
+        with sqlite3.connect(str(db)) as conn:
+            # Pick a non-leaf cert (intermediate or root)
+            row = conn.execute(
+                "SELECT id FROM certificates WHERE is_leaf = 0 LIMIT 1"
+            ).fetchone()
+            assert row is not None
+            cert_id = row[0]
+
+        with TestClient(app_mod.app) as client:
+            client.post("/api/alert-groups", json={
+                "name": "g", "recipients": ["a@b.com"], "match_tags": [],
+            })
+            r = client.get(f"/api/certificates/{cert_id}/alert-routing")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["matched_groups"] == []
+            assert data["recipients"] == []
+            assert "note" in data
+
     def test_list_groups(self, reload_app):
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:
@@ -803,3 +832,87 @@ class TestAlertGroupConfigAPI:
             groups = r.json()["groups"]
             assert len(groups) == 1
             assert groups[0]["threshold_days"] == 10
+
+
+# ---------- Per-cert == batch resolution (WI-085) ----------
+
+
+class TestPerCertMatchesBatchResolution:
+    def test_per_cert_matches_batch_resolution(self, db_path: Path):
+        """Property test: resolve_group_recipients(cert) == resolve_all_group_recipients()[cert].
+
+        Enforces that the per-cert path (now a thin wrapper over the batch path)
+        cannot diverge from the batch resolver across all routing modes:
+        tag-match (host + cert-level), manual-assignment, role-link, and no-match.
+        """
+        host_repo = SqliteHostRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db_path)
+        role_repo = SqliteRoleRepository(db_path)
+
+        # --- alert groups with different match_tags ---
+        group_repo.create("tag-group", ["tag@co.com"], ["team-web"])
+        gid_manual = group_repo.create(
+            "manual-group", ["manual@co.com"], ["nonexistent-tag"]
+        )
+        gid_role = group_repo.create("role-group", ["role@co.com"], ["unrelated"])
+        group_repo.create("lonely", ["lonely@co.com"], ["never-matches"])
+
+        # --- cert 1: matches a group by inherited host tag (team-web) ---
+        host_repo.add("tag-host.example.com", 443, tags="team-web")
+        cert_repo_tag = SqliteCertificateRepository(
+            db_path, hostname="tag-host.example.com", port=443
+        )
+        cid_tag = _make_cert(cert_repo_tag, fingerprint="11" * 32)
+
+        # --- cert 2: matches a group by cert-level tag (prod) ---
+        host_repo.add("certtag-host.example.com", 443, tags="")
+        cert_repo_certtag = SqliteCertificateRepository(
+            db_path, hostname="certtag-host.example.com", port=443
+        )
+        cid_certtag = _make_cert(cert_repo_certtag, fingerprint="22" * 32)
+        cert_repo_certtag.set_tags(cid_certtag, "prod")
+        group_repo.create("prod-group", ["prod@co.com"], ["prod"])
+
+        # --- cert 3: manually assigned to a group (no tag match) ---
+        host_repo.add("manual-host.example.com", 443, tags="")
+        cert_repo_manual = SqliteCertificateRepository(
+            db_path, hostname="manual-host.example.com", port=443
+        )
+        cid_manual = _make_cert(cert_repo_manual, fingerprint="33" * 32)
+        group_repo.assign_cert(gid_manual, cid_manual)
+
+        # --- cert 4: matches a role-link (scope_tag=epic → role-group) ---
+        host_repo.add("role-host.example.com", 443, tags="epic")
+        cert_repo_role = SqliteCertificateRepository(
+            db_path, hostname="role-host.example.com", port=443
+        )
+        cid_role = _make_cert(cert_repo_role, fingerprint="44" * 32)
+        role_repo.add(Role(
+            name="epic-team",
+            permission_tier="viewer",
+            scope_tag="epic",
+            alert_group_id=gid_role,
+        ))
+
+        # --- cert 5: matches nothing (empty list) ---
+        host_repo.add("nomatch-host.example.com", 443, tags="orphan")
+        cert_repo_none = SqliteCertificateRepository(
+            db_path, hostname="nomatch-host.example.com", port=443
+        )
+        cid_none = _make_cert(cert_repo_none, fingerprint="55" * 32)
+
+        # --- the property: per-cert == batch for every leaf cert ---
+        batch = resolve_all_group_recipients(db_path)
+        for cert_id in (cid_tag, cid_certtag, cid_manual, cid_role, cid_none):
+            per_cert = resolve_group_recipients(db_path, cert_id)
+            assert per_cert == batch.get(cert_id, []), (
+                f"divergence for {cert_id}: "
+                f"per_cert={per_cert!r} batch={batch.get(cert_id, [])!r}"
+            )
+
+        # sanity: each routing mode actually exercised (guards against a vacuous pass)
+        assert "tag@co.com" in batch[cid_tag]
+        assert "prod@co.com" in batch[cid_certtag]
+        assert "manual@co.com" in batch[cid_manual]
+        assert "role@co.com" in batch[cid_role]
+        assert batch.get(cid_none, []) == []

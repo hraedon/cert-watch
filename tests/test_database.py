@@ -26,6 +26,55 @@ def test_init_schema_idempotent(tmp_path):
     assert db.exists()
 
 
+def test_init_schema_detects_replaced_backup(tmp_path):
+    """WI-091: init_schema must detect a restored backup (different file) and
+    re-run migrations, even though the path string is unchanged.
+
+    The module-level cache keys on (st_ino, st_size, st_mtime), not just the
+    path — mirroring the connection layer. A path-only cache would short-
+    circuit and skip migrations on the restored file.
+    """
+    import sqlite3
+
+    from cert_watch.database.connection import close_connections
+    from cert_watch.database.schema import ensure_base
+
+    db = tmp_path / "cw.sqlite3"
+
+    # 1. Full init — establishes the cache entry for this path.
+    init_schema(db)
+
+    # 2. Simulate a restore from a pre-migration backup: replace the file
+    #    with one that has only the base schema (no schema_version table,
+    #    no roles table, no permission_tier column).
+    close_connections()  # release file handles before replacing
+    for suffix in ("", "-wal", "-shm"):
+        (tmp_path / f"cw.sqlite3{suffix}").unlink(missing_ok=True)
+    # Clear pre-migration backups from the first init so the second init's
+    # VACUUM INTO doesn't collide on the same-second timestamp.
+    for f in tmp_path.glob("*-pre-migration-*"):
+        f.unlink(missing_ok=True)
+    ensure_base(db)  # fresh file: base tables only, no migrations applied
+
+    # Confirm the "backup" lacks migration-added artifacts.
+    with sqlite3.connect(str(db)) as conn:
+        tables = {
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "roles" not in tables  # added by migration 0019
+
+    # 3. Re-init — must detect the replaced file and re-run migrations.
+    init_schema(db)
+
+    # 4. Migration-added column must now exist.
+    with sqlite3.connect(str(db)) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(roles)").fetchall()}
+        assert "permission_tier" in cols  # added by migration 0024
+
+
 def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
     """Regression for k8s CrashLoopBackOff: indexes referencing migrated columns
     must be created AFTER the column migration, not inside the table DDL."""

@@ -156,7 +156,8 @@ def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
         if getter:
             try:
                 items = getter()
-            except Exception:  # noqa: BLE001 — Python 3.13+ chain APIs; error modes not fully known, fall through to next method
+            except (ssl.SSLError, OSError, ValueError, AttributeError):
+                # Fall through to the next chain API method.
                 continue
             chain = []
             for c in items:
