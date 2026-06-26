@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — compliance report{% endblock %}
 
+{% import "macros/icons.html" as icons %}
+{% import "macros/urgency.html" as urgency_macros %}
+
 {% block head %}
 <style>
 @media print {
@@ -8,39 +11,14 @@
   .cw-page { padding: 0 !important; }
   body { background: #fff !important; color: #000 !important; }
   .cw-panel { border: 1px solid #ccc !important; break-inside: avoid; }
-  .cmp-metric-bar-fill { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-  .cmp-grade-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .cw-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
 }
-.cmp-header { margin-bottom: 24px; }
-.cmp-header h1 { margin: 0 0 4px 0; font-size: 22px; }
-.cmp-header .cmp-sub { font-size: 13px; opacity: 0.7; }
-.cmp-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 24px; }
-.cmp-stat-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
-.cmp-stat-box .val { font-size: 28px; font-weight: 700; font-family: monospace; }
-.cmp-stat-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-.cmp-grades { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 24px; }
-.cmp-grade-chip { padding: 6px 14px; border-radius: 6px; font-weight: 600; font-size: 13px; font-family: monospace; }
-.cmp-grade-chip.grade-a-plus, .cmp-grade-chip.grade-a { background: var(--ok); color: #fff; }
-.cmp-grade-chip.grade-b { background: var(--accent); color: #fff; }
-.cmp-grade-chip.grade-c { background: var(--warn); color: #fff; }
-.cmp-grade-chip.grade-f { background: var(--crit); color: #fff; }
-.cmp-section { margin-bottom: 24px; }
-.cmp-section h2 { font-size: 16px; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.cmp-metric-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-.cmp-metric-row:last-child { border-bottom: none; }
-.cmp-metric-label { flex: 1; font-size: 13px; }
-.cmp-metric-bar { width: 120px; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
-.cmp-metric-bar-fill { height: 100%; border-radius: 4px; background: var(--ok); }
-.cmp-metric-bar-fill.warn { background: var(--warn); }
-.cmp-metric-bar-fill.crit { background: var(--crit); }
-.cmp-metric-value { width: 90px; text-align: right; font-size: 13px; font-family: monospace; }
-.cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.cmp-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); font-weight: 600; font-size: 11.5px; opacity: 0.7; }
-.cmp-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.cmp-table tr:last-child td { border-bottom: none; }
-.cmp-empty { padding: 12px 0; font-size: 13px; opacity: 0.5; }
-.cmp-footer { margin-top: 32px; padding: 16px 0; border-top: 1px solid var(--border); font-size: 11px; font-family: monospace; opacity: 0.6; }
-.cmp-actions { margin-bottom: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+.cw-section-hdr { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+.cw-metric-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; }
+.cw-metric-row:not(:last-child) { border-bottom: 1px solid var(--border); }
+.cw-metric-bar { width: 120px; height: 8px; border-radius: 4px; background: var(--border); overflow: hidden; }
+.cw-metric-value { width: 90px; text-align: right; font-family: monospace; font-size: 13px; }
+.cw-report-footer { margin-top: 32px; padding: 16px 0; border-top: 1px solid var(--border); font-size: 11px; font-family: monospace; opacity: 0.6; }
 </style>
 {% endblock %}
 
@@ -59,9 +37,9 @@
     </div>
   </div>
 
-  <div class="cmp-header">
-    <h1>TLS Certificate Compliance Report</h1>
-    <div class="cmp-sub">
+  <div class="cw-mb-18">
+    <h1 class="cw-fz-22 cw-fw-600 cw-mt-0 cw-mb-4">TLS Certificate Compliance Report</h1>
+    <div class="cw-fz-13 cw-text-text-3">
       {{ report.scope_description }}
       &middot; Generated {{ report.generated_at[:19]|replace('T', ' ') }} UTC
       {% if report.version %} &middot; cert-watch v{{ report.version }}{% endif %}
@@ -69,97 +47,94 @@
   </div>
 
   <div class="cw-panel cw-p-16-18">
-    <div class="cmp-stats">
-      <div class="cmp-stat-box">
-        <div class="val">{{ report.total_certs }}</div>
-        <div class="label">Certificates</div>
+    <div class="cw-stats cw-mb-0">
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('shield', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Certificates</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.total_certs }}</div>
       </div>
-      <div class="cmp-stat-box">
-        <div class="val">{{ report.total_hosts }}</div>
-        <div class="label">Hosts</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('server', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Hosts</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.total_hosts }}</div>
       </div>
-      <div class="cmp-stat-box">
-        <div class="val">{{ report.fleet_grade or 'N/A' }}</div>
-        <div class="label">Fleet grade</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('shield', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Fleet grade</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ report.fleet_grade or 'N/A' }}</div>
       </div>
     </div>
   </div>
 
   {% set gd = report.grade_distribution %}
-  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-    <div class="cmp-section">
-      <h2>Posture grade distribution</h2>
-      <div class="cmp-grades">
-        {% for g in ['A+', 'A', 'B', 'C', 'F'] %}
-          {% set count = gd.get(g, 0) %}
-          {% if count > 0 %}
-            <span class="cmp-grade-chip grade-{{ g | lower | replace('+', '-plus') }}">{{ g }}: {{ count }}</span>
-          {% endif %}
-        {% endfor %}
-        {% if report.total_certs > (gd.get('A+', 0) + gd.get('A', 0) + gd.get('B', 0) + gd.get('C', 0) + gd.get('F', 0)) %}
-          <span class="cmp-grade-chip" style="background:var(--border)">Ungraded: {{ report.total_certs - (gd.get('A+', 0) + gd.get('A', 0) + gd.get('B', 0) + gd.get('C', 0) + gd.get('F', 0)) }}</span>
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Posture grade distribution</div>
+    <div class="cw-flex cw-gap-8 cw-wrap">
+      {% for g in ['A+', 'A', 'B', 'C', 'F'] %}
+        {% set count = gd.get(g, 0) %}
+        {% if count > 0 %}
+          <span class="cw-chip {% if g in ('A+', 'A') %}tone-ok{% elif g == 'B' %}tone-accent{% elif g == 'C' %}tone-warn{% else %}tone-crit{% endif %}"><strong class="mono">{{ g }}: {{ count }}</strong></span>
         {% endif %}
-      </div>
+      {% endfor %}
+      {% if report.total_certs > (gd.get('A+', 0) + gd.get('A', 0) + gd.get('B', 0) + gd.get('C', 0) + gd.get('F', 0)) %}
+        <span class="cw-chip cw-chip-muted">Ungraded: {{ report.total_certs - (gd.get('A+', 0) + gd.get('A', 0) + gd.get('B', 0) + gd.get('C', 0) + gd.get('F', 0)) }}</span>
+      {% endif %}
     </div>
   </div>
 
-  <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-    <div class="cmp-section">
-      <h2>Compliance metrics</h2>
-      {% for m in report.compliance_metrics %}
-        <div class="cmp-metric-row">
-          <div class="cmp-metric-label">{{ m.label }}</div>
-          {% if m.total > 0 %}
-            {% set pct = (m.passing / m.total * 100) | float %}
-            <div class="cmp-metric-bar">
-              <div class="cmp-metric-bar-fill {% if pct < 50 %}crit{% elif pct < 80 %}warn{% endif %}" style="width:{{ pct | int }}%"></div>
-            </div>
-            <div class="cmp-metric-value">{{ m.display }}</div>
-          {% else %}
-            <div class="cmp-metric-value">{{ m.display }}</div>
-          {% endif %}
-        </div>
-      {% endfor %}
-    </div>
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Compliance metrics</div>
+    {% for m in report.compliance_metrics %}
+      <div class="cw-metric-row">
+        <div class="cw-flex-1 cw-fz-13">{{ m.label }}</div>
+        {% if m.total > 0 %}
+          {% set pct = (m.passing / m.total * 100) | float %}
+          <div class="cw-metric-bar">
+            <i class="cw-urgency-bar" style="--tone:var(--{% if pct < 50 %}crit{% elif pct < 80 %}warn{% else %}ok{% endif %});width:{{ pct | int }}%"></i>
+          </div>
+          <div class="cw-metric-value">{{ m.display }}</div>
+        {% else %}
+          <div class="cw-metric-value">{{ m.display }}</div>
+        {% endif %}
+      </div>
+    {% endfor %}
   </div>
 
   {% for bucket in report.remediation_buckets %}
-    <div class="cw-panel cw-p-16-18" style="margin-top:16px">
-      <div class="cmp-section">
-        <h2>{{ bucket.label }} ({{ bucket.entries | length }})</h2>
-        {% if bucket.entries %}
-          <table class="cmp-table">
-            <thead>
+    <div class="cw-panel cw-p-16-18 cw-mt-16">
+      <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">{{ bucket.label }} ({{ bucket.entries | length }})</div>
+      {% if bucket.entries %}
+        <table class="cw-table">
+          <thead>
+            <tr>
+              <th>Host</th>
+              <th>Subject</th>
+              <th>Days</th>
+              <th>Urgency</th>
+              <th>Owner</th>
+              <th>Findings</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for e in bucket.entries %}
               <tr>
-                <th>Host</th>
-                <th>Subject</th>
-                <th>Days</th>
-                <th>Urgency</th>
-                <th>Owner</th>
-                <th>Findings</th>
+                <td class="mono">{{ e.host }}{% if e.port != 443 %}:{{ e.port }}{% endif %}</td>
+                <td>{{ e.subject }}</td>
+                <td class="mono">{{ e.days_remaining }}</td>
+                <td>{{ urgency_macros.urgency_pill(e.urgency) }}</td>
+                <td>{{ e.owner }}</td>
+                <td class="cw-fz-11">{{ e.findings | join('; ') }}</td>
               </tr>
-            </thead>
-            <tbody>
-              {% for e in bucket.entries %}
-                <tr>
-                  <td class="mono">{{ e.host }}{% if e.port != 443 %}:{{ e.port }}{% endif %}</td>
-                  <td>{{ e.subject }}</td>
-                  <td class="mono">{{ e.days_remaining }}</td>
-                  <td>{{ e.urgency }}</td>
-                  <td>{{ e.owner }}</td>
-                  <td style="font-size:11px">{{ e.findings | join('; ') }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <div class="cmp-empty">No certificates in this category.</div>
-        {% endif %}
-      </div>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="cw-empty"><div class="cw-empty-sub">No certificates in this category.</div></div>
+      {% endif %}
     </div>
   {% endfor %}
 
-  <div class="cmp-footer">
+  <div class="cw-report-footer">
     Content SHA-256: {{ report.content_sha256 }}<br>
     HMAC-SHA256 signature: {{ report.signature }}<br>
     Generated at: {{ report.generated_at[:19]|replace('T', ' ') }}<br>
@@ -167,4 +142,3 @@
   </div>
 </div>
 {% endblock %}
-

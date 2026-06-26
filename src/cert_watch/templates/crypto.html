@@ -1,25 +1,15 @@
 {% extends "base.html" %}
 {% block title %}cert-watch — crypto inventory{% endblock %}
 
+{% import "macros/icons.html" as icons %}
+
 {% block head %}
 <style>
-.cry-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }
-.cry-stat-box { padding: 12px 16px; border-radius: 8px; border: 1px solid var(--border); }
-.cry-stat-box .val { font-size: 28px; font-weight: 700; font-family: monospace; }
-.cry-stat-box .val.warn { color: var(--warn); }
-.cry-stat-box .label { font-size: 12px; opacity: 0.7; margin-top: 2px; }
-.cry-section { margin-bottom: 24px; }
-.cry-section h2 { font-size: 15px; margin: 0 0 12px 0; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.cry-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; }
-.cry-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-.cry-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid var(--border); font-weight: 600; font-size: 11.5px; opacity: 0.7; }
-.cry-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
-.cry-table th.num, .cry-table td.num { text-align: right; }
-.cry-table td.num { font-family: monospace; }
-.cry-table tr:last-child td { border-bottom: none; }
-.cry-weak-reason { font-size: 11px; opacity: 0.8; }
-.cry-note { padding: 10px 16px; border-radius: 8px; border: 1px solid var(--border); background: rgba(128,128,128,0.05); margin-bottom: 16px; font-size: 13px; line-height: 1.5; }
-.cry-empty { padding: 12px 0; font-size: 13px; opacity: 0.5; }
+.cw-crypto-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; }
+.cw-crypto-note { padding: 10px 16px; border-radius: 8px; background: rgba(128,128,128,0.05); }
+.cw-section-hdr { border-bottom: 1px solid var(--border); padding-bottom: 8px; margin-bottom: 12px; }
+.cw-table th.cw-td-num, .cw-table td.cw-td-num { text-align: right; }
+.cw-table td.cw-td-num { font-family: monospace; }
 </style>
 {% endblock %}
 
@@ -36,66 +26,70 @@
   </div>
 
   <div class="cw-panel">
-    <div class="cry-stats">
-      <div class="cry-stat-box">
-        <div class="val" data-testid="crypto-total">{{ posture.total }}</div>
-        <div class="label">Leaf certificates</div>
+    <div class="cw-stats cw-mb-18">
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('shield', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Leaf certificates</span></div>
+        <div class="cw-stat-val cw-stat-val-default" data-testid="crypto-total">{{ posture.total }}</div>
       </div>
-      <div class="cry-stat-box">
-        <div class="val {% if posture.weak_count %}warn{% endif %}" data-testid="crypto-weak-count">{{ posture.weak_count }}</div>
-        <div class="label">Weak primitives (SHA-1 / RSA&lt;2048 / weak curve)</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail {% if posture.weak_count %}cw-stat-rail-warn{% else %}cw-stat-rail-ok{% endif %}"></div>
+        <div class="cw-stat-top {% if posture.weak_count %}cw-stat-top-warn{% else %}cw-stat-top-ok{% endif %}">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Weak primitives</span></div>
+        <div class="cw-stat-val {% if posture.weak_count %}cw-stat-val-warn{% else %}cw-stat-val-ok{% endif %}" data-testid="crypto-weak-count">{{ posture.weak_count }}{% if posture.weak_count %}<span class="cw-fz-12 cw-fw-500"> &#x26A0;</span>{% endif %}</div>
+        <div class="cw-stat-sub">SHA-1 / RSA&lt;2048 / weak curve</div>
       </div>
-      <div class="cry-stat-box">
-        <div class="val">{{ posture.families | length }}</div>
-        <div class="label">Key algorithm families</div>
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-accent"></div>
+        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('key', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Key families</span></div>
+        <div class="cw-stat-val cw-stat-val-default">{{ posture.families | length }}</div>
       </div>
     </div>
 
     {% if posture.total == 0 %}
-      <div class="cry-empty">No certificates scanned yet — the inventory populates after the first scan.</div>
+      <div class="cw-empty"><div class="cw-empty-sub">No certificates scanned yet — the inventory populates after the first scan.</div></div>
     {% else %}
-    <div class="cry-grid">
-      <div class="cry-section">
-        <h2>Key algorithms</h2>
-        <table class="cry-table">
-          <thead><tr><th>Algorithm</th><th class="num">Count</th></tr></thead>
+    <div class="cw-crypto-grid">
+      <div class="cw-mb-18">
+        <div class="cw-fz-15 cw-fw-600 cw-section-hdr">Key algorithms</div>
+        <table class="cw-table">
+          <thead><tr><th>Algorithm</th><th class="cw-td-num">Count</th></tr></thead>
           <tbody>
           {% for row in posture.key_algorithms %}
-            <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+            <tr><td class="mono">{{ row.label }}</td><td class="cw-td-num">{{ row.count }}</td></tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
 
-      <div class="cry-section">
-        <h2>Signature hashes</h2>
-        <table class="cry-table">
-          <thead><tr><th>Hash</th><th class="num">Count</th></tr></thead>
+      <div class="cw-mb-18">
+        <div class="cw-fz-15 cw-fw-600 cw-section-hdr">Signature hashes</div>
+        <table class="cw-table">
+          <thead><tr><th>Hash</th><th class="cw-td-num">Count</th></tr></thead>
           <tbody>
           {% for row in posture.sig_hashes %}
-            <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+            <tr><td class="mono">{{ row.label }}</td><td class="cw-td-num">{{ row.count }}</td></tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
 
-      <div class="cry-section">
-        <h2>Families</h2>
-        <table class="cry-table">
-          <thead><tr><th>Family</th><th class="num">Count</th></tr></thead>
+      <div class="cw-mb-18">
+        <div class="cw-fz-15 cw-fw-600 cw-section-hdr">Families</div>
+        <table class="cw-table">
+          <thead><tr><th>Family</th><th class="cw-td-num">Count</th></tr></thead>
           <tbody>
           {% for row in posture.families %}
-            <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+            <tr><td class="mono">{{ row.label }}</td><td class="cw-td-num">{{ row.count }}</td></tr>
           {% endfor %}
           </tbody>
         </table>
       </div>
     </div>
 
-    <div class="cry-section">
-      <h2>Weak primitives ({{ posture.weak_count }})</h2>
+    <div class="cw-mb-18">
+      <div class="cw-fz-15 cw-fw-600 cw-section-hdr">Weak primitives ({{ posture.weak_count }})</div>
       {% if posture.weak_certs %}
-      <table class="cry-table" data-testid="crypto-weak-table">
+      <table class="cw-table" data-testid="crypto-weak-table">
         <thead><tr><th>Host</th><th>Subject</th><th>Key</th><th>Reason</th></tr></thead>
         <tbody>
         {% for c in posture.weak_certs %}
@@ -103,17 +97,17 @@
             <td class="mono">{{ c.hostname }}{% if c.port and c.port != 443 %}:{{ c.port }}{% endif %}</td>
             <td>{{ c.subject }}</td>
             <td class="mono">{{ c.key_label }}</td>
-            <td class="cry-weak-reason">{{ c.reason }}</td>
+            <td class="cw-fz-11 cw-text-text-3">{{ c.reason }}</td>
           </tr>
         {% endfor %}
         </tbody>
       </table>
       {% else %}
-        <div class="cry-empty">No weak primitives detected across the fleet.</div>
+        <div class="cw-empty"><div class="cw-empty-sub">No weak primitives detected across the fleet.</div></div>
       {% endif %}
     </div>
 
-    <div class="cry-note">
+    <div class="cw-crypto-note">
       <strong>Post-quantum readiness.</strong> {{ posture.pqc_note }}
     </div>
     {% endif %}

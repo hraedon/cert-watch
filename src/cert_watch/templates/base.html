@@ -257,6 +257,15 @@
         }
       }
     });
+    /* WI-068: Keyboard activation for data-action elements (Enter/Space).
+       Only fires for elements with tabindex (keyboard-reachable). */
+    document.addEventListener('keydown', function(e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      var el = e.target.closest('[data-action]');
+      if (!el || !el.hasAttribute('tabindex')) return;
+      e.preventDefault();
+      el.click();
+    });
   </script>
 </body>
 </html>

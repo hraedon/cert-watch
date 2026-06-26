@@ -1,0 +1,6 @@
+{% macro urgency_pill(urgency) %}
+<span class="cw-pill {{ urgency }}">
+  <span class="dot" aria-hidden="true"></span>
+  {{ urgency | urgency_label }}
+</span>
+{% endmacro %}

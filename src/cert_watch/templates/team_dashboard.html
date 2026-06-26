@@ -2,6 +2,7 @@
 {% block title %}cert-watch — team dashboard{% endblock %}
 
 {% import "macros/icons.html" as icons %}
+{% import "macros/urgency.html" as urgency_macros %}
 
 {% macro stat_card(tone, icon, label, value, sub, href=None, active=False) %}
   {% if href %}
@@ -86,7 +87,7 @@
       <tbody>
         {% for e in entries %}
         {% set urg = e.urgency %}
-        <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}">
+        <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}" tabindex="0" role="link">
           <td class="cw-td-mw-360">
             <div class="cw-cert-chips">
               <span class="cw-host">{{ e.name or '—' }}</span>
@@ -102,15 +103,12 @@
           <td class="cw-td-minw-150">
             <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
             {% if e.days_remaining is not none %}
-              {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
+              {% set _c = urg | urgency_tone %}
               <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
             {% endif %}
           </td>
           <td>
-            <span class="cw-pill {{ urg }}">
-              <span class="dot"></span>
-              {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-            </span>
+            {{ urgency_macros.urgency_pill(urg) }}
           </td>
           <td data-action="stop-propagation">
             <div class="cw-rowact">

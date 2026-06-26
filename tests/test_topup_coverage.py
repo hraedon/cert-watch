@@ -124,6 +124,29 @@ def test_compute_urgency():
     assert compute_urgency(90) == "healthy"
 
 
+def test_urgency_label():
+    from cert_watch.filters import urgency_label
+
+    assert urgency_label("expired") == "Expired"
+    assert urgency_label("critical") == "Critical"
+    assert urgency_label("warning") == "Warning"
+    assert urgency_label("healthy") == "Healthy"
+    assert urgency_label("gray") == "Unknown"
+    assert urgency_label("neutral") == "—"
+    assert urgency_label("bogus") == "Unknown"
+
+
+def test_urgency_tone():
+    from cert_watch.filters import urgency_tone
+
+    assert urgency_tone("expired") == "var(--expired)"
+    assert urgency_tone("critical") == "var(--crit)"
+    assert urgency_tone("warning") == "var(--warn)"
+    assert urgency_tone("healthy") == "var(--ok)"
+    assert urgency_tone("gray") == "var(--text-3)"
+    assert urgency_tone("bogus") == "var(--text-3)"
+
+
 def test_friendly_issuer():
     from cert_watch.filters import friendly_issuer
 

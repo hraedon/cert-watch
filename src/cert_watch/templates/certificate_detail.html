@@ -2,6 +2,7 @@
 {% block title %}cert-watch — {{ subject_cn }}{% endblock %}
 
 {% import "macros/icons.html" as icons %}
+{% import "macros/urgency.html" as urgency_macros %}
 
 {% block content %}
 <div class="cw-page-wrap">
@@ -17,10 +18,7 @@
     <div>
       <div class="cw-flex cw-items-center cw-gap-12">
         <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="cert-detail-heading">{{ subject_cn }}</h1>
-        <span class="cw-pill {{ urgency }}">
-          <span class="dot"></span>
-          {% if urgency == 'expired' %}Expired{% elif urgency == 'critical' %}Critical{% elif urgency == 'warning' %}Warning{% elif urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-        </span>
+        {{ urgency_macros.urgency_pill(urgency) }}
         {% if posture %}
         <span class="cw-grade" style="color:{% if posture.grade in ('A+', 'A') %}var(--ok){% elif posture.grade == 'B' %}var(--accent){% elif posture.grade == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ posture.grade }}">{{ posture.grade }}</span>
         {% endif %}
@@ -256,7 +254,7 @@
           <div>
             <div class="mono cw-fz-11 cw-text-text-3 cw-fw-500 cw-mb-4 cw-ls-04em">TIME REMAINING</div>
             <div class="cw-flex cw-items-baseline cw-gap-8">
-              {% set _tone = 'var(--expired)' if urgency == 'expired' else 'var(--crit)' if urgency == 'critical' else 'var(--warn)' if urgency == 'warning' else 'var(--ok)' %}
+              {% set _tone = urgency | urgency_tone %}
               <span class="cw-fz-30 cw-fw-600 cw-ls-04em cw-tone-text" style="--tone:{{ _tone }}">
                 {% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}
               </span>
@@ -503,7 +501,7 @@
               <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
               <span class="mono cw-text-text-3">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
               <div class="cw-spacer"></div>
-              {% set c_tone = 'var(--expired)' if c_urg == 'expired' else 'var(--crit)' if c_urg == 'critical' else 'var(--warn)' if c_urg == 'warning' else 'var(--ok)' %}
+              {% set c_tone = c_urg | urgency_tone %}
               <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ c_tone }}">
                 <span class="cw-status-dot__mark"></span>
                 <span class="cw-fw-500">{% if c_days < 0 %}Expired{% else %}{{ c_days }}d{% endif %}</span>

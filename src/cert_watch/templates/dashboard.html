@@ -2,6 +2,7 @@
 {% block title %}cert-watch — dashboard{% endblock %}
 
 {% import "macros/icons.html" as icons %}
+{% import "macros/urgency.html" as urgency_macros %}
 
 {% macro stat_card(tone, icon, label, value, sub, href=None, active=False, disabled=False) %}
   {% if href and not disabled %}
@@ -101,7 +102,6 @@
       <button type="submit" name="view" value="renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}">By method</button>
     </div>
     <div class="cw-spacer"></div>
-    <button type="submit" name="source" value="" class="cw-btn">{{ icons.svg_icon('filter', 14) }}Source: {{ filter_source if filter_source else 'All' }}</button>
   </form>
 
   {# ---- Table ---- #}
@@ -118,14 +118,11 @@
       </thead>
       <tbody>
         {% for g in pivot_groups %}
-        <tr class="cw-row-link" data-action="toggle-pivot-group" data-group="{{ loop.index }}">
+        <tr class="cw-row-link" data-action="toggle-pivot-group" data-group="{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-{{ loop.index }}">
           <td class="cw-fw-600">{{ g.key }}</td>
           <td>{{ g.count }}</td>
           <td>
-            <span class="cw-pill {{ g.worst_urgency }}">
-              <span class="dot"></span>
-              {% if g.worst_urgency == 'expired' %}Expired{% elif g.worst_urgency == 'critical' %}Critical{% elif g.worst_urgency == 'warning' %}Warning{% elif g.worst_urgency == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-            </span>
+            {{ urgency_macros.urgency_pill(g.worst_urgency) }}
           </td>
           <td>
             {% if g.earliest_expiry is not none %}
@@ -162,7 +159,7 @@
           {% if e.kind == 'grouped' %}
           {# ---- Grouped entry (multiple hosts, same fingerprint) ---- #}
           {% set urg = e.urgency %}
-          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" data-action="toggle-group">
+          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" data-action="toggle-group" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
@@ -212,7 +209,7 @@
             <td class="cw-td-minw-150">
               <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
               {% if e.days_remaining is not none %}
-                {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
+                {% set _c = urg | urgency_tone %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
                 <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
@@ -227,10 +224,7 @@
             </td>
             <td>
               <div class="cw-flex cw-items-center cw-gap-6">
-                <span class="cw-pill {{ urg }}">
-                  <span class="dot"></span>
-                  {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-                </span>
+                {{ urgency_macros.urgency_pill(urg) }}
                 {% set pg = posture_grades.get(e.id) if posture_grades else None %}
                 {% if pg %}
                 <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
@@ -253,7 +247,7 @@
                 <div class="cw-host-row-info">
                   <a href="/certificates/{{ h.id }}" class="cw-host cw-no-decoration">{{ h.host }}</a>
                   {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
-                  <span class="cw-pill {{ h_urg }}"><span class="dot"></span>{% if h_urg == 'expired' %}Expired{% elif h_urg == 'critical' %}Critical{% elif h_urg == 'warning' %}Warning{% elif h_urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}</span>
+                  {{ urgency_macros.urgency_pill(h_urg) }}
                   {% if h.scan_status == 'failure' %}
                     <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
                   {% elif h.last_scanned_at %}
@@ -286,7 +280,7 @@
           {% else %}
           {# ---- Normal (non-grouped) entry ---- #}
           {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row">
+          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
             <td class="cw-td-mw-360">
               <div class="cw-cert-chips">
                 <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
@@ -359,7 +353,7 @@
             <td class="cw-td-minw-150">
               <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
               {% if e.days_remaining is not none %}
-                {% set _c = 'var(--expired)' if urg == 'expired' else 'var(--crit)' if urg == 'critical' else 'var(--warn)' if urg == 'warning' else 'var(--ok)' %}
+                {% set _c = urg | urgency_tone %}
                 {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
                 <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
               {% endif %}
@@ -374,10 +368,7 @@
             </td>
             <td>
               <div class="cw-flex cw-items-center cw-gap-6">
-                <span class="cw-pill {{ urg }}">
-                  <span class="dot"></span>
-                  {% if urg == 'expired' %}Expired{% elif urg == 'critical' %}Critical{% elif urg == 'warning' %}Warning{% elif urg == 'healthy' %}Healthy{% else %}Unknown{% endif %}
-                </span>
+                {{ urgency_macros.urgency_pill(urg) }}
                 {% set pg = posture_grades.get(e.id) if posture_grades else None %}
                 {% if pg %}
                 <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
@@ -462,27 +453,27 @@
   {% endif %}
 </div>
 
-{# ---- Add-host slide-over ---- #}
-<div class="cw-slide-bg" id="slide-bg" data-action="close-slide"></div>
-<div class="cw-slide" id="slide-panel">
+{# ---- Add-host slide-over (WI-068: dialog role, aria-modal, focus management) ---- #}
+<div class="cw-slide-bg" id="slide-bg" data-action="close-slide" role="presentation"></div>
+<div class="cw-slide" id="slide-panel" role="dialog" aria-modal="true" aria-labelledby="slide-heading">
   <div class="cw-slide-head">
     <div>
-      <div class="cw-fz-15 cw-fw-600">Add certificates</div>
+      <div class="cw-fz-15 cw-fw-600" id="slide-heading">Add certificates</div>
       <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Scan a host, upload a file, or import in bulk.</div>
     </div>
-    <button class="cw-iconbtn" data-action="close-slide">{{ icons.svg_icon('x', 16) }}</button>
+    <button class="cw-iconbtn" data-action="close-slide" aria-label="Close add host panel">{{ icons.svg_icon('x', 16) }}</button>
   </div>
   <div class="cw-p-slide-top">
-    <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs">
-      <button type="button" class="on" data-tab="scan" data-action="switch-tab" data-testid="tab-scan-btn">{{ icons.svg_icon('server', 13) }}Scan host</button>
-      <button type="button" data-tab="upload" data-action="switch-tab" data-testid="tab-upload-btn">{{ icons.svg_icon('file', 13) }}Upload file</button>
-      <button type="button" data-tab="bulk" data-action="switch-tab" data-testid="tab-bulk-btn">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
+    <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs" role="tablist" aria-label="Add certificates method">
+      <button type="button" class="on" data-tab="scan" data-action="switch-tab" data-testid="tab-scan-btn" role="tab" aria-selected="true">{{ icons.svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab="upload" data-action="switch-tab" data-testid="tab-upload-btn" role="tab" aria-selected="false">{{ icons.svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab="bulk" data-action="switch-tab" data-testid="tab-bulk-btn" role="tab" aria-selected="false">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
   <div class="cw-p-slide-body">
     {% if may_write %}
     {# Scan host tab #}
-    <div id="tab-scan" class="tab-body">
+    <div id="tab-scan" class="tab-body" role="tabpanel" aria-labelledby="tab-scan-btn">
       <form method="post" action="/hosts" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-field">
@@ -522,7 +513,7 @@
       </form>
     </div>
     {# Upload file tab #}
-    <div id="tab-upload" class="tab-body cw-hidden">
+    <div id="tab-upload" class="tab-body cw-hidden" role="tabpanel" aria-labelledby="tab-upload-btn">
       <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" data-action="click-target" data-target="file-input">
@@ -543,7 +534,7 @@
       </form>
     </div>
     {# Bulk import tab #}
-    <div id="tab-bulk" class="tab-body cw-hidden">
+    <div id="tab-bulk" class="tab-body cw-hidden" role="tabpanel" aria-labelledby="tab-bulk-btn">
       <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form-stack">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-drop" data-action="click-target" data-target="csv-input">
@@ -574,7 +565,7 @@
 
 {% block topbar_actions %}
   {% if may_write %}
-  <button class="cw-btn primary" data-action="open-slide" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+  <button class="cw-btn primary" id="add-host-trigger" data-action="open-slide" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
   {% endif %}
 {% endblock %}
 
@@ -582,78 +573,99 @@
 <script nonce="{{ request.state.csp_nonce }}">
 function openSlide() {
   document.getElementById('slide-bg').classList.add('on');
-  document.getElementById('slide-panel').classList.add('on');
+  var panel = document.getElementById('slide-panel');
+  panel.classList.add('on');
+  var firstInput = panel.querySelector('input:not([type="hidden"]), button:not([data-action="close-slide"])');
+  if (firstInput) firstInput.focus();
 }
 function closeSlide() {
   document.getElementById('slide-bg').classList.remove('on');
   document.getElementById('slide-panel').classList.remove('on');
+  var trigger = document.getElementById('add-host-trigger');
+  if (trigger) trigger.focus();
 }
 function switchTab(tab) {
   document.querySelectorAll('.tab-body').forEach(function(b) { b.style.display = 'none'; });
   document.getElementById('tab-' + tab).style.display = 'flex';
-  document.querySelectorAll('#add-tabs button').forEach(function(b) { b.classList.remove('on'); });
-  document.querySelector('#add-tabs button[data-tab="' + tab + '"]').classList.add('on');
+  document.querySelectorAll('#add-tabs button').forEach(function(b) {
+    b.classList.remove('on');
+    b.setAttribute('aria-selected', 'false');
+  });
+  var activeBtn = document.querySelector('#add-tabs button[data-tab="' + tab + '"]');
+  activeBtn.classList.add('on');
+  activeBtn.setAttribute('aria-selected', 'true');
+  activeBtn.focus();
 }
 function toggleGroup(groupId) {
   var row = document.getElementById('group-hosts-' + groupId);
   var chevron = document.getElementById('chevron-' + groupId);
+  var trigger = document.querySelector('[data-group="' + groupId + '"][data-action="toggle-group"]');
   if (row) {
-    row.classList.toggle('cw-open');
-    if (chevron) chevron.classList.toggle('cw-group-chevron-open');
+    var open = row.classList.toggle('cw-open');
+    if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (chevron) chevron.classList.toggle('cw-group-chevron-open', open);
   }
 }
-function cwUrgency(daysRemaining) {
-  if (daysRemaining == null) return { urgency: 'gray', label: 'Pending' };
-  if (daysRemaining < 0) return { urgency: 'expired', label: 'Expired' };
-  if (daysRemaining < 7) return { urgency: 'critical', label: 'Critical' };
-  if (daysRemaining < 30) return { urgency: 'warning', label: 'Warning' };
-  return { urgency: 'healthy', label: 'Healthy' };
-}
-
 var _VALID_URGENCIES = { expired:1, critical:1, warning:1, healthy:1, gray:1 };
 
-/* Reports dropdown menu */
+/* Reports dropdown menu (WI-068: ARIA menu roles, Escape to close) */
 (function() {
   var wrap = document.getElementById('reports-menu-wrap');
   var btn = document.getElementById('reports-btn');
   if (!wrap || !btn) return;
   var menu = document.createElement('div');
   menu.className = 'cw-menu';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Download reports');
   menu.style.display = 'none';
   menu.style.right = '0';
   menu.style.left = 'auto';
   menu.style.width = '286px';
   menu.innerHTML = '<div class="cw-menu-label">Download a report</div>'
-    + '<div style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
-    + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>'
+    + '<div role="menuitem" style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
+    + '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>'
     + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Certificate inventory</div><div style="font-size:11px;color:var(--text-3)">all tracked certs + status</div></div>'
     + '<div style="display:flex;gap:5px"><a href="/api/reports/inventory.csv" class="cw-btn sm" style="padding:3px 8px">CSV</a><a href="/api/export/certificates.json" class="cw-btn sm" style="padding:3px 8px">JSON</a></div></div>'
-    + '<div style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
-    + '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>'
+    + '<div role="menuitem" style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
+    + '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>'
     + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Hosts</div><div style="font-size:11px;color:var(--text-3)">owners · renewal · tags</div></div>'
     + '<div style="display:flex;gap:5px"><a href="/api/export/hosts.csv" class="cw-btn sm" style="padding:3px 8px">CSV</a></div></div>'
     + '<div class="cw-divider" style="margin:4px 0"></div>'
     + '<div style="padding:6px 10px 8px;font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:6px">'
-    + '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>'
+    + '<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>'
     + 'Point-in-time snapshot · UTC</div>';
   wrap.appendChild(menu);
+  btn.setAttribute('aria-haspopup', 'true');
+  btn.setAttribute('aria-expanded', 'false');
+  function toggleMenu(open) {
+    menu.style.display = open ? 'block' : 'none';
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
   btn.addEventListener('click', function(e) {
     e.stopPropagation();
-    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    toggleMenu(menu.style.display === 'none');
   });
   document.addEventListener('mousedown', function(e) {
-    if (!wrap.contains(e.target)) menu.style.display = 'none';
+    if (!wrap.contains(e.target)) toggleMenu(false);
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && menu.style.display !== 'none') {
+      toggleMenu(false);
+      btn.focus();
+    }
   });
 })();
 
 function togglePivotGroup(idx) {
   var row = document.getElementById('pivot-detail-' + idx);
   if (!row) return;
+  var trigger = document.querySelector('[data-group="' + idx + '"][data-action="toggle-pivot-group"]');
 
   var loadingEl = document.getElementById('pivot-loading-' + idx);
   if (loadingEl && !row.classList.contains('cw-loaded')) {
     // First expand: fetch entries via AJAX (BC-048 lazy loading)
     row.classList.add('cw-open');
+    if (trigger) trigger.setAttribute('aria-expanded', 'true');
     var pivot = row.getAttribute('data-pivot');
     var groupKey = row.getAttribute('data-group-key');
     var detailCell = loadingEl.parentElement;
@@ -664,8 +676,8 @@ function togglePivotGroup(idx) {
       .then(function(data) {
         var html = '';
         (data.entries || []).forEach(function(e) {
-          var u = cwUrgency(e.days_remaining);
-          var urgencyClass = _VALID_URGENCIES[u.urgency] ? u.urgency : 'gray';
+          var urgencyClass = _VALID_URGENCIES[e.urgency] ? e.urgency : 'gray';
+          var urgencyLabel = e.urgency_label || 'Unknown';
           var daysHtml = e.days_remaining != null
             ? '<span class="cw-text-text-3 cw-fz-11-5">' + escHtml(e.days_remaining) + ' days</span>'
             : '';
@@ -674,7 +686,7 @@ function togglePivotGroup(idx) {
           html += '<div class="cw-host-row">'
             + '<div class="cw-host-row-info">'
             + link
-            + ' <span class="cw-pill ' + urgencyClass + '"><span class="dot"></span>' + escHtml(u.label) + '</span>'
+            + ' <span class="cw-pill ' + urgencyClass + '"><span class="dot" aria-hidden="true"></span>' + escHtml(urgencyLabel) + '</span>'
             + daysHtml
             + '</div></div>';
         });
@@ -688,7 +700,8 @@ function togglePivotGroup(idx) {
   }
 
   // Subsequent toggles: just show/hide
-  if (row) row.classList.toggle('cw-open');
+  var open = row.classList.toggle('cw-open');
+  if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
 }
 function capChips(containerSelector, maxChips) {
   document.querySelectorAll(containerSelector).forEach(function(el) {
@@ -775,6 +788,30 @@ document.addEventListener('click', function(e) {
       alert('Error saving note: ' + err.message);
     });
   });
+ });
+
+/* WI-068: Escape key to close slide-over; focus trap within dialog */
+document.addEventListener('keydown', function(e) {
+  var panel = document.getElementById('slide-panel');
+  if (!panel || !panel.classList.contains('on')) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    closeSlide();
+    return;
+  }
+  if (e.key === 'Tab') {
+    var focusable = panel.querySelectorAll('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])');
+    if (focusable.length === 0) return;
+    var first = focusable[0];
+    var last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  }
 });
  </script>
  {% endblock %}
