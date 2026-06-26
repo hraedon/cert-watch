@@ -311,6 +311,43 @@ def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app,
     assert ("multi.example.com", 8443) in hostnames
 
 
+def test_hosts_store_path_survives_across_event_loops(
+    tmp_path, monkeypatch, reload_app, self_signed_leaf
+):
+    """Regression (pre-existing _store_sem cross-loop bug): the /hosts store path
+    must not rely on a module-level asyncio primitive that binds to the first
+    event loop and raises RuntimeError on the next TestClient. WI-092's
+    get_write_lock (inside store_scanned_async) serializes writes, so the
+    module-level semaphore is gone.
+    """
+    from cert_watch.scan import ScannedEntry
+
+    async def fake_scan_host(hostname, port=443, **kw):
+        from cert_watch.certificate_model import parse_certificate
+        cert = parse_certificate(self_signed_leaf.der)
+        return ScannedEntry(host=hostname, port=port, leaf=cert, chain=[])
+
+    monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", fake_scan_host)
+
+    app1 = reload_app()
+    with TestClient(app1.app) as client:
+        r1 = client.post(
+            "/hosts",
+            data={"hostname": "loop-a.example.com", "common_ports": "true"},
+            follow_redirects=False,
+        )
+    assert r1.status_code == 303
+
+    app2 = reload_app()
+    with TestClient(app2.app) as client:
+        r2 = client.post(
+            "/hosts",
+            data={"hostname": "loop-b.example.com", "common_ports": "true"},
+            follow_redirects=False,
+        )
+    assert r2.status_code == 303
+
+
 # ---------- Semaphore failure-isolation branches (BC-134) ----------
 
 

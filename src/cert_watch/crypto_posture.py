@@ -88,6 +88,7 @@ def classify_cert_crypto(raw_der: bytes) -> CertCrypto | None:
         return None
     try:
         from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
         from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 
         cert = x509.load_der_x509_certificate(raw_der)
@@ -99,7 +100,7 @@ def classify_cert_crypto(raw_der: bytes) -> CertCrypto | None:
 
     try:
         key = cert.public_key()
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, UnsupportedAlgorithm):
         return CertCrypto(
             key_family="other", key_label="unknown", sig_hash="unknown",
             is_weak=False,

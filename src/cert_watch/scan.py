@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from cert_watch.policy import PolicySet
 
 from cert_watch.certificate_model import Certificate, parse_certificate
-from cert_watch.database import init_schema, replace_scanned
+from cert_watch.database import get_write_lock, init_schema, replace_scanned
 from cert_watch.retry import backoff_range
 from cert_watch.scan_conn import (  # noqa: F401
     _PROTOCOL_RE,
@@ -1032,14 +1032,24 @@ async def store_scanned_async(
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
 ) -> str:
-    """Async wrapper around store_scanned — runs the blocking DB writes in a thread."""
-    return await asyncio.to_thread(
-        store_scanned,
-        entry,
-        repo_path_or_repo,
-        drift_alerts=drift_alerts,
-        check_revocation=check_revocation,
-        allow_private=allow_private,
-        allowed_subnets=allowed_subnets,
-        webhook_config=webhook_config,
-    )
+    """Async wrapper around store_scanned — runs the blocking DB writes in a thread.
+
+    Acquires the cross-thread write lock inside the worker thread so
+    request-handler stores mutually exclude with the scheduler's scan cycle
+    (which holds the same lock around its direct ``store_scanned`` calls).
+    The lock lives here, not inside ``store_scanned`` itself, so the
+    scheduler's already-locked path does not re-enter a non-reentrant
+    ``threading.Lock``.
+    """
+    def _run() -> str:
+        with get_write_lock():
+            return store_scanned(
+                entry,
+                repo_path_or_repo,
+                drift_alerts=drift_alerts,
+                check_revocation=check_revocation,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
+                webhook_config=webhook_config,
+            )
+    return await asyncio.to_thread(_run)

@@ -306,6 +306,29 @@ def test_run_pending_nothing_pending(db_path: Path) -> None:
 
 # ---------- AC-3: Pre-migration backup ----------
 
+def test_ct_issuer_first_seen_dropped(db_path: Path) -> None:
+    """Migration 0028 drops the unused ct_issuer_first_seen table (WI-082)."""
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        assert conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='ct_issuer_first_seen'"
+        ).fetchone() is None
+
+
+def test_drop_ct_issuer_first_seen_idempotent(db_path: Path) -> None:
+    """Migration 0028 is idempotent."""
+    from cert_watch.migrations.m0028_drop_ct_issuer_first_seen import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        upgrade(conn)
+        upgrade(conn)
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+    assert "ct_issuer_first_seen" not in tables
+
+
 def test_backup_created_before_migration(tmp_path: Path) -> None:
     db = tmp_path / "test.sqlite3"
     init_schema(db)

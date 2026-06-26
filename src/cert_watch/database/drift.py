@@ -55,6 +55,7 @@ def _extract_key_algo(raw_der: bytes) -> str:
     """Extract key algorithm string from DER-encoded certificate."""
     try:
         from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
         from cryptography.hazmat.primitives.asymmetric import ec, rsa
 
         cert = x509.load_der_x509_certificate(raw_der)
@@ -64,7 +65,7 @@ def _extract_key_algo(raw_der: bytes) -> str:
         if isinstance(key, ec.EllipticCurvePublicKey):
             return f"EC-{key.curve.name}"
         return type(key).__name__
-    except (ValueError, TypeError, ImportError):
+    except (ValueError, TypeError, ImportError, UnsupportedAlgorithm):
         return ""
 
 

@@ -131,7 +131,30 @@ def test_classify_bad_der_returns_none():
     assert classify_cert_crypto(b"") is None
 
 
+def test_classify_unsupported_algorithm_returns_other(monkeypatch):
+    """WI-118: UnsupportedAlgorithm from public_key() must return safe default."""
+    from unittest.mock import MagicMock
+
+    from cryptography import x509
+    from cryptography.exceptions import UnsupportedAlgorithm
+
+    from cert_watch.crypto_posture import CertCrypto
+
+    fake_cert = MagicMock()
+    fake_cert.public_key.side_effect = UnsupportedAlgorithm(
+        "unsupported public key",
+    )
+    fake_cert.signature_algorithm_oid._name = "sha256WithRSAEncryption"
+    monkeypatch.setattr(
+        x509, "load_der_x509_certificate", lambda _data: fake_cert,
+    )
+    result = classify_cert_crypto(b"any-der")
+    assert isinstance(result, CertCrypto)
+    assert result.key_family == "other"
+
+
 # ---------- analyze_fleet_crypto ----------
+
 
 
 @pytest.fixture

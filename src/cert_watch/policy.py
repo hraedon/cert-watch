@@ -128,6 +128,7 @@ def _evaluate_rule(
     ocsp_stapling: bool | None,
 ) -> list[PolicyViolation]:
     from cryptography import x509 as _x509_mod
+    from cryptography.exceptions import UnsupportedAlgorithm
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec, rsa
     from cryptography.x509.oid import ExtensionOID, SignatureAlgorithmOID
@@ -147,7 +148,7 @@ def _evaluate_rule(
                         f"RSA key size {key.key_size} < {min_rsa} bits",
                         f"Replace certificate with RSA key of at least {min_rsa} bits",
                     )]
-        except (ValueError, TypeError):  # crypto key access
+        except (ValueError, TypeError, UnsupportedAlgorithm):  # crypto key access
             pass
         return []
 
@@ -162,7 +163,7 @@ def _evaluate_rule(
                         f"ECDSA curve {key.curve.name} not in allowed list",
                         f"Replace certificate with an allowed curve: {', '.join(allowed)}",
                     )]
-        except (ValueError, TypeError):  # crypto key access
+        except (ValueError, TypeError, UnsupportedAlgorithm):  # crypto key access
             pass
         return []
 

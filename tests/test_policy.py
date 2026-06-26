@@ -300,6 +300,25 @@ class TestKeySizeRsaRule:
         vs = evaluate_policy(cert, None, False, None, None, None, self._ruleset())
         assert len(vs) == 0
 
+    def test_unsupported_algorithm_no_violation(self, monkeypatch):
+        """WI-118: UnsupportedAlgorithm from public_key() must not crash."""
+        from unittest.mock import MagicMock
+
+        from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
+
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        fake_cert = MagicMock()
+        fake_cert.public_key.side_effect = UnsupportedAlgorithm(
+            "unsupported public key",
+        )
+        monkeypatch.setattr(
+            x509, "load_der_x509_certificate", lambda _data: fake_cert,
+        )
+        vs = evaluate_policy(cert, None, False, None, None, None, self._ruleset())
+        assert vs == []
+
 
 class TestKeySizeEcRule:
     def _ruleset(self) -> PolicySet:
@@ -322,6 +341,25 @@ class TestKeySizeEcRule:
         cert = _cert_from_der(der)
         vs = evaluate_policy(cert, None, False, None, None, None, self._ruleset())
         assert len(vs) == 0
+
+    def test_unsupported_algorithm_no_violation(self, monkeypatch):
+        """WI-118: UnsupportedAlgorithm from public_key() must not crash."""
+        from unittest.mock import MagicMock
+
+        from cryptography import x509
+        from cryptography.exceptions import UnsupportedAlgorithm
+
+        der = _ecdsa_cert_der("secp256r1")
+        cert = _cert_from_der(der)
+        fake_cert = MagicMock()
+        fake_cert.public_key.side_effect = UnsupportedAlgorithm(
+            "unsupported public key",
+        )
+        monkeypatch.setattr(
+            x509, "load_der_x509_certificate", lambda _data: fake_cert,
+        )
+        vs = evaluate_policy(cert, None, False, None, None, None, self._ruleset())
+        assert vs == []
 
 
 class TestHashAlgorithmRule:
