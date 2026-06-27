@@ -186,17 +186,29 @@ def _compute_host_from_entries(hostname: str, entries: list[dict]) -> HostRenewa
     )
 
 
-def compute_host_analytics(db_path: str | Path, hostname: str) -> HostRenewalAnalytics:
+def compute_host_analytics(
+    db_path: str | Path, hostname: str, *, port: int | None = None
+) -> HostRenewalAnalytics:
     init_schema(db_path)
 
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
-               FROM cert_history
-               WHERE hostname = ?
-               ORDER BY scanned_at ASC""",
-            (hostname,),
-        ).fetchall()
+    if port is not None:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
+                   FROM cert_history
+                   WHERE hostname = ? AND port = ?
+                   ORDER BY scanned_at ASC""",
+                (hostname, port),
+            ).fetchall()
+    else:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
+                   FROM cert_history
+                   WHERE hostname = ?
+                   ORDER BY scanned_at ASC""",
+                (hostname,),
+            ).fetchall()
 
     entries = [dict(r) for r in rows]
     return _compute_host_from_entries(hostname, entries)
@@ -207,28 +219,30 @@ def compute_fleet_analytics(db_path: str | Path) -> list[HostRenewalAnalytics]:
 
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT hostname, fingerprint_sha256, issuer, not_after, not_before, scanned_at
+            """SELECT hostname, port, fingerprint_sha256, issuer, not_after, not_before, scanned_at
                FROM cert_history
                WHERE hostname IS NOT NULL
-               ORDER BY hostname, scanned_at ASC"""
+               ORDER BY hostname, port, scanned_at ASC"""
         ).fetchall()
 
     from collections import defaultdict
-    by_host: dict[str, list[dict]] = defaultdict(list)
+    by_host: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for r in rows:
         d = dict(r)
-        by_host[d["hostname"]].append(d)
+        by_host[(d["hostname"], d.get("port", 0))].append(d)
 
     results: list[HostRenewalAnalytics] = []
-    for hostname in sorted(by_host):
-        results.append(_compute_host_from_entries(hostname, by_host[hostname]))
+    for (hostname, _port), entries in sorted(by_host.items()):
+        results.append(_compute_host_from_entries(hostname, entries))
     return results
 
 
-def detect_renewal_overdue(db_path: str | Path, hostname: str) -> RenewalOverdueSignal | None:
+def detect_renewal_overdue(
+    db_path: str | Path, hostname: str, *, port: int | None = None
+) -> RenewalOverdueSignal | None:
     from datetime import UTC, datetime, timedelta
 
-    analytics = compute_host_analytics(db_path, hostname)
+    analytics = compute_host_analytics(db_path, hostname, port=port)
     if analytics.cert_count < 2 or analytics.median_lead_time is None:
         return None
     if analytics.median_lead_time <= 0:
@@ -236,14 +250,24 @@ def detect_renewal_overdue(db_path: str | Path, hostname: str) -> RenewalOverdue
 
     init_schema(db_path)
     with _connect(db_path) as conn:
-        row = conn.execute(
-            """SELECT fingerprint_sha256, not_after
-               FROM cert_history
-               WHERE hostname = ?
-               ORDER BY scanned_at DESC
-               LIMIT 1""",
-            (hostname,),
-        ).fetchone()
+        if port is not None:
+            row = conn.execute(
+                """SELECT fingerprint_sha256, not_after
+                   FROM cert_history
+                   WHERE hostname = ? AND port = ?
+                   ORDER BY scanned_at DESC
+                   LIMIT 1""",
+                (hostname, port),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT fingerprint_sha256, not_after
+                   FROM cert_history
+                   WHERE hostname = ?
+                   ORDER BY scanned_at DESC
+                   LIMIT 1""",
+                (hostname,),
+            ).fetchone()
     if row is None:
         return None
 

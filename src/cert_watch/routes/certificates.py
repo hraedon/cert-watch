@@ -21,6 +21,7 @@ from cert_watch.database import (
     _row_to_cert,
     delete_certificate_cascade,
     get_renewal_history,
+    get_write_lock,
 )
 from cert_watch.filters import (
     compute_urgency,
@@ -37,7 +38,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
-from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
+from cert_watch.routes._scoped import scope_read_denied, scope_write_denied, tags_with_scope
 from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
@@ -53,6 +54,9 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
@@ -397,6 +401,9 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
 def certificate_posture_api(request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)):
     """Return the latest posture evaluation for a certificate as JSON."""
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return {"error": "not found", "cert_id": cert_id}
     from cert_watch.database import get_posture_for_cert
 
     posture = get_posture_for_cert(db, cert_id)
@@ -423,7 +430,8 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    delete_certificate_cascade(db, cert_id)
+    with get_write_lock():
+        delete_certificate_cascade(db, cert_id)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -645,7 +653,8 @@ async def upload(
         if isinstance(entry, ParseError):
             return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
         entry.file_name = file.filename or entry.file_name
-        store_uploaded(entry, db, tags=tags_with_scope(request, ""))
+        with get_write_lock():
+            store_uploaded(entry, db, tags=tags_with_scope(request, ""))
         record_audit(
             db,
             actor=resolve_actor(request),

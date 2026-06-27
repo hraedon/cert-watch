@@ -11,10 +11,11 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.compliance import build_compliance_report, report_to_csv_rows, report_to_dict
-from cert_watch.database import list_dashboard_rows
+from cert_watch.database import list_dashboard_page
 from cert_watch.middleware import require_auth
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _csv_safe, _db_path
+from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
 from cert_watch.routes.api._shared import compliance_signing_key
 
 logger = logging.getLogger("cert_watch.routes.api.reports")
@@ -28,7 +29,8 @@ def api_export_certificates_csv(
 ) -> PlainTextResponse:
     """Export all certificates as CSV for compliance reporting."""
     db = _db_path(request)
-    rows = list_dashboard_rows(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -82,7 +84,8 @@ def api_export_certificates_json(
 ) -> JSONResponse:
     """Export all certificates as JSON for compliance reporting."""
     db = _db_path(request)
-    rows = list_dashboard_rows(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
     return JSONResponse(
         content={"certificates": rows},
         headers={"Content-Disposition": "attachment; filename=certificates.json"},
@@ -95,7 +98,8 @@ def api_report_inventory_csv(
 ) -> PlainTextResponse:
     """Full certificate inventory as CSV for audit/compliance reporting."""
     db = _db_path(request)
-    rows = list_dashboard_rows(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -147,7 +151,8 @@ def api_report_expiring_csv(
     """Certificates expiring within *days* days as CSV."""
     days = max(1, min(days, 365))
     db = _db_path(request)
-    rows = list_dashboard_rows(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, _ = list_dashboard_page(db, per_page=100000, scope_tags=scope_tags)
     expiring = [
         r
         for r in rows
@@ -196,6 +201,9 @@ def api_compliance_report_json(
     tag: str = "",
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = enforce_scope_tag(request, tag)
+    if denied:
+        return JSONResponse(content={"error": denied}, status_code=403)
     signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,
@@ -217,6 +225,9 @@ def api_compliance_report_csv(
     tag: str = "",
 ) -> PlainTextResponse:
     db = _db_path(request)
+    denied = enforce_scope_tag(request, tag)
+    if denied:
+        return PlainTextResponse(denied, status_code=403)
     signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,

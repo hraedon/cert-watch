@@ -89,3 +89,58 @@ def scope_write_denied(
     if any(t in target_tags for t in scope_tags):
         return None
     return "operation not permitted outside your team scope"
+
+
+def scope_read_denied(
+    request: Request,
+    db_path: str | Path,
+    *,
+    cert_id: str | None = None,
+    host_id: str | None = None,
+) -> str | None:
+    """Return an error message if a scoped user can't read the target.
+
+    Analogous to :func:`scope_write_denied` but for read access.  Admins and
+    unscoped users pass.  Targets whose effective tags do not include any of
+    the user's scope tags are denied.
+    """
+    auth_ctx = getattr(request.state, "auth_context", None)
+    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
+        return None
+    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
+    if not scope_tag:
+        return None
+    from cert_watch.tags import parse_tags
+
+    scope_tags = parse_tags(scope_tag)
+    target_tags = _effective_tags(db_path, cert_id=cert_id, host_id=host_id)
+    if any(t in target_tags for t in scope_tags):
+        return None
+    return "resource not in your team scope"
+
+
+def enforce_scope_tag(
+    request: Request,
+    user_tag: str,
+) -> str | None:
+    """Validate that *user_tag* is within the caller's scope_tags.
+
+    For scoped users, the tag parameter must match one of their scope tags.
+    Admins and unscoped users can pass any tag.  Returns an error message
+    if the tag is not allowed, or None if it is.
+    """
+    auth_ctx = getattr(request.state, "auth_context", None)
+    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
+        return None
+    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
+    if not scope_tag:
+        return None
+    from cert_watch.tags import parse_tags
+
+    scope_tags = parse_tags(scope_tag)
+    if not user_tag:
+        return "a tag parameter is required for scoped users"
+    user_tags = parse_tags(user_tag)
+    if not any(t in scope_tags for t in user_tags):
+        return "requested tag is outside your team scope"
+    return None
