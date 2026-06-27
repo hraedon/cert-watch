@@ -171,6 +171,10 @@ async def create_user(request: Request) -> RedirectResponse:
         return RedirectResponse(
             url="/settings?tab=users&error=username+and+password+required", status_code=303
         )
+    if ":" in username:
+        return RedirectResponse(
+            url="/settings?tab=users&error=username+must+not+contain+colons", status_code=303
+        )
     if len(password) < 8:
         return RedirectResponse(
             url="/settings?tab=users&error=password+must+be+at+least+8+characters", status_code=303
@@ -209,6 +213,10 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
     if not username:
         return RedirectResponse(
             url="/settings?tab=users&error=username+required", status_code=303
+        )
+    if ":" in username:
+        return RedirectResponse(
+            url="/settings?tab=users&error=username+must+not+contain+colons", status_code=303
         )
     user.username = username
     user.email = email

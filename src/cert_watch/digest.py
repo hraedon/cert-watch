@@ -288,6 +288,45 @@ def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
             conn.quit()
 
 
+def _send_digest_email_msg(
+    msg,
+    config,
+) -> bool:
+    """Send a pre-built EmailMessage via SMTP with retry.
+
+    Unlike ``_send_digest_smtp`` (which constructs its own message from cert
+    data), this sends an already-built message — needed for the renewal digest
+    where the body is a textual summary, not a per-cert expiry listing.
+    """
+    import contextlib
+
+    from cert_watch.alerts import (
+        ALERT_MAX_RETRIES,
+        ALERT_RETRY_DELAY,
+        _open_smtp_connection,
+        _sanitize_smtp_error,
+        backoff_range,
+    )
+
+    for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+        try:
+            conn = _open_smtp_connection(config)
+            if conn is None:
+                continue
+            try:
+                conn.send_message(msg)
+                return True
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.quit()
+        except Exception as exc:
+            logger.warning(
+                "renewal digest email failed: %s",
+                _sanitize_smtp_error(str(exc), config),
+            )
+    return False
+
+
 def send_renewal_digest(
     db_path: str | Path,
     alert_config,
@@ -305,10 +344,8 @@ def send_renewal_digest(
     from cert_watch.alerts import (
         AlertConfig,
         WebhookConfig,
-        _build_digest_email,
         _open_smtp_connection,
         _sanitize_smtp_error,
-        _send_digest_smtp,
     )
     from cert_watch.database import Alert
 
@@ -348,15 +385,30 @@ def send_renewal_digest(
         smtp_conn = _open_smtp_connection(alert_config)
         if smtp_conn is not None:
             try:
-                msg = _build_digest_email(
-                    [{"subject": f"Renewal digest ({days}d)",
-                      "hostname": "", "port": 0, "not_after": "",
-                      "days_remaining": 0}],
-                    global_recipients_original,
-                    alert_config.from_addr,
+                # Global digest: aggregate all owner digests into one fleet summary.
+                global_digest = RenewalDigest(
+                    days=days,
+                    renewed_count=sum(d.renewed_count for d in digests),
+                    renewed_hosts=sorted({h for d in digests for h in d.renewed_hosts}),
+                    overdue_count=sum(d.overdue_count for d in digests),
+                    overdue_hosts=sorted({h for d in digests for h in d.overdue_hosts}),
+                    shortened_count=sum(d.shortened_count for d in digests),
+                    shortened_hosts=sorted({h for d in digests for h in d.shortened_hosts}),
                 )
+                global_body = _build_digest_message(global_digest)
+                global_subject = (
+                    f"[cert-watch] Renewal Digest: "
+                    f"{global_digest.renewed_count} renewed, "
+                    f"{global_digest.overdue_count} overdue"
+                )
+                from email.message import EmailMessage
+                global_msg = EmailMessage()
+                global_msg["Subject"] = global_subject
+                global_msg["From"] = alert_config.from_addr
+                global_msg["To"] = ", ".join(global_recipients_original)
+                global_msg.set_content(global_body)
                 try:
-                    smtp_conn.send_message(msg)
+                    smtp_conn.send_message(global_msg)
                     any_smtp_success = True
                 except Exception as exc:
                     logger.warning(
@@ -370,7 +422,6 @@ def send_renewal_digest(
                         f"[cert-watch] Renewal Digest: "
                         f"{od.renewed_count} renewed, {od.overdue_count} overdue"
                     )
-                    from email.message import EmailMessage
                     m = EmailMessage()
                     m["Subject"] = subject
                     m["From"] = alert_config.from_addr
@@ -403,9 +454,7 @@ def send_renewal_digest(
                 m["From"] = alert_config.from_addr
                 m["To"] = cf_email
                 m.set_content(body)
-                if _send_digest_smtp([{"subject": "x", "hostname": "", "port": 0,
-                                       "not_after": "", "days_remaining": 0}],
-                                     [cf_email], alert_config, _conn=None):
+                if _send_digest_email_msg(m, alert_config):
                     any_smtp_success = True
                 else:
                     any_smtp_failure = True

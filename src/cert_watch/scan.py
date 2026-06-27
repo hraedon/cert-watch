@@ -785,6 +785,7 @@ def store_scanned(
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
+    _deferred: dict | None = None,
 ) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
@@ -834,11 +835,17 @@ def store_scanned(
                 repo_path, entry, webhook_config,
             )
 
-        with contextlib.suppress(Exception):
-            if old_leaf_id:
+        if old_leaf_id:
+            try:
                 previous_grade = _stage(
                     "previous_grade", _stage_previous_grade,
                     repo_path, old_leaf_id,
+                )
+            except Exception:
+                logger.warning(
+                    "previous_grade read failed for %s:%s — posture_changed "
+                    "event will be skipped (no baseline to compare)",
+                    entry.host, entry.port, exc_info=True,
                 )
 
         # Pre-load configurations that read kv_store so they do not issue inner
@@ -914,21 +921,31 @@ def store_scanned(
             return ""
 
         # Post-transaction HTTP: failures must not invalidate the scan.
-        with contextlib.suppress(Exception):
-            _stage(
-                "webhook_resolve",
-                _stage_webhook_resolve,
-                repo_path, entry, replaced_cert_id,
-                webhook_config, pending_for_resolve,
-            )
+        # When _deferred is provided, stash the work for the caller to execute
+        # after releasing the write lock (avoids holding the lock during HTTP).
+        if _deferred is not None:
+            _deferred["repo_path"] = repo_path
+            _deferred["entry"] = entry
+            _deferred["replaced_cert_id"] = replaced_cert_id
+            _deferred["webhook_config"] = webhook_config
+            _deferred["pending_for_resolve"] = pending_for_resolve
+            _deferred["pending_event_webhooks"] = pending_event_webhooks
+        else:
+            with contextlib.suppress(Exception):
+                _stage(
+                    "webhook_resolve",
+                    _stage_webhook_resolve,
+                    repo_path, entry, replaced_cert_id,
+                    webhook_config, pending_for_resolve,
+                )
 
-        # WI-114: fire deferred event webhooks only after COMMIT succeeded.
-        for evt, cfg, rid in (pending_event_webhooks or []):
-            try:
-                from cert_watch.events import _deliver_webhook, _get_pool
-                _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
-            except Exception:
-                logger.warning("deferred event webhook submit failed", exc_info=True)
+            # WI-114: fire deferred event webhooks only after COMMIT succeeded.
+            for evt, cfg, rid in (pending_event_webhooks or []):
+                try:
+                    from cert_watch.events import _deliver_webhook, _get_pool
+                    _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
+                except Exception:
+                    logger.warning("deferred event webhook submit failed", exc_info=True)
 
         return leaf_id
 
@@ -1040,10 +1057,15 @@ async def store_scanned_async(
     The lock lives here, not inside ``store_scanned`` itself, so the
     scheduler's already-locked path does not re-enter a non-reentrant
     ``threading.Lock``.
+
+    Post-transaction HTTP calls (webhook resolve, event webhooks) are executed
+    **after** the lock is released so a slow PagerDuty API call doesn't block
+    all other writes.
     """
     def _run() -> str:
+        deferred: dict = {}
         with get_write_lock():
-            return store_scanned(
+            leaf_id = store_scanned(
                 entry,
                 repo_path_or_repo,
                 drift_alerts=drift_alerts,
@@ -1051,5 +1073,24 @@ async def store_scanned_async(
                 allow_private=allow_private,
                 allowed_subnets=allowed_subnets,
                 webhook_config=webhook_config,
+                _deferred=deferred,
             )
+        # Execute post-transaction HTTP outside the write lock.
+        if leaf_id and deferred:
+            repo_path: str | Path = deferred.get("repo_path")  # type: ignore[assignment]
+            replaced_cert_id = deferred.get("replaced_cert_id")
+            pending_for_resolve = deferred.get("pending_for_resolve")
+            pending_event_webhooks = deferred.get("pending_event_webhooks")
+            with contextlib.suppress(Exception):
+                _stage_webhook_resolve(
+                    repo_path, entry, replaced_cert_id,
+                    webhook_config, pending_for_resolve,
+                )
+            for evt, cfg, rid in (pending_event_webhooks or []):
+                try:
+                    from cert_watch.events import _deliver_webhook, _get_pool
+                    _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
+                except Exception:
+                    logger.warning("deferred event webhook submit failed", exc_info=True)
+        return leaf_id
     return await asyncio.to_thread(_run)

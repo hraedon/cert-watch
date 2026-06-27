@@ -630,7 +630,7 @@ def evaluate_posture(
     if (
         grade == "A"
         and protocol_version
-        and "1.3" in protocol_version
+        and protocol_version.strip().lower() == "tlsv1.3"
         and (hsts is True or port != 443)
     ):
         grade = "A+"

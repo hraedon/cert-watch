@@ -16,6 +16,7 @@ from cert_watch.database import (
 )
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
+from cert_watch.routes._scoped import scope_read_denied
 from cert_watch.routes.api._shared import (
     _alert_group_json,
     _normalize_pagination,
@@ -319,6 +320,9 @@ def api_cert_alert_routing(
 ) -> JSONResponse:
     """Preview which alert groups match a cert and the resolved recipients."""
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     cert_repo = SqliteCertificateRepository(db)
     cert = cert_repo.get_by_id(cert_id)
     if cert is None:

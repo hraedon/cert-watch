@@ -11,7 +11,7 @@ from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
@@ -261,6 +261,9 @@ def api_get_host_issuers(
 ) -> JSONResponse:
     """Return the expected-issuer CN allowlist for a host (WI-007)."""
     db = _db_path(request)
+    denied = scope_read_denied(request, db, host_id=host_id)
+    if denied:
+        return JSONResponse(content={"error": "host not found"}, status_code=404)
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
     if host is None:

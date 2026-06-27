@@ -16,7 +16,7 @@ from cert_watch.database import (
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings
-from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import (
     _normalize_pagination,
     _pagination_links,
@@ -61,7 +61,9 @@ def api_get_certificate(
     request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     db = _db_path(request)
-
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
     if cert is None:
@@ -89,6 +91,9 @@ def api_download_pem(
     request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
 ) -> PlainTextResponse:
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return PlainTextResponse("not found", status_code=404)
 
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
@@ -149,6 +154,9 @@ def api_cert_history(
     request: Request, cert_id: IdParam, _auth: str = Depends(require_auth), limit: int = 365
 ) -> JSONResponse:
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     from cert_watch.database.connection import _connect
 
     with _connect(db) as conn:
@@ -167,6 +175,9 @@ def api_check_revocation(
 ) -> JSONResponse:
     """Check OCSP/CRL endpoint reachability for a certificate on demand."""
     db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     s = _get_settings(request)
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)

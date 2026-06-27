@@ -37,7 +37,7 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
-from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth, scope_write_denied
 
 logger = logging.getLogger("cert_watch.routes.views")
 
@@ -124,8 +124,6 @@ def readyz(request: Request):
         logger.warning("readyz cert count query failed", exc_info=True)
     return {
         "status": "ok" if ok else "degraded",
-        "version": __version__,
-        "commit": __commit__,
         "checks": checks,
     }
 
@@ -966,6 +964,9 @@ def compliance_report_view(
     from cert_watch.routes.api._shared import compliance_signing_key
 
     db = _db_path(request)
+    denied = enforce_scope_tag(request, tag)
+    if denied:
+        return HTMLResponse(content=denied, status_code=403)
     signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,

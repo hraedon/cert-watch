@@ -78,6 +78,10 @@ async def setup_submit(
             return RedirectResponse(
                 url="/setup?step=1&error=username+and+password+are+required", status_code=303
             )
+        if ":" in username:
+            return RedirectResponse(
+                url="/setup?step=1&error=username+must+not+contain+colons", status_code=303
+            )
         if len(username) < 3:
             return RedirectResponse(
                 url="/setup?step=1&error=username+must+be+at+least+3+characters", status_code=303

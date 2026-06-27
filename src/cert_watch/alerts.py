@@ -253,7 +253,7 @@ def evaluate_all_certs(
         if hostname and port:
             host_td = host_thresholds.get((hostname, port))
             if host_td is not None:
-                custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1))
+                custom = (host_td, max(host_td // 2, 1), max(host_td // 4, 1), 1)
             owner_info = host_owners.get((hostname, port))
 
         # Per-group threshold override: if any matching group has threshold_days
@@ -261,7 +261,7 @@ def evaluate_all_certs(
         cert_id = leaf_row["id"]
         group_td = group_threshold_map.get(cert_id)
         if group_td is not None:
-            custom = (group_td, max(group_td // 2, 1), max(group_td // 4, 1))
+            custom = (group_td, max(group_td // 2, 1), max(group_td // 4, 1), 1)
 
         # Resolve alert-group recipients for this cert (batch result), then merge
         # with owner + role members through the shared resolver (single source of
@@ -425,6 +425,8 @@ def evaluate_renewal_window(
         ):
             continue  # already flagged this window
         owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
+        if owner.get("renewal_status") in ("renewed", "in_progress"):
+            continue  # operator has flagged renewal as handled
         alert = Alert(
             cert_id=cid,
             alert_type="renewal_stalled",
@@ -975,14 +977,40 @@ def _open_smtp_connection(
         if alert is not None:
             alert.error_message = "smtp host blocked by SSRF policy"
         return None
+    # Pin the resolved IP to close the DNS-rebinding TOCTOU window between
+    # validate_smtp_host (SSRF check) and smtplib's own getaddrinfo.  We connect
+    # to the pinned IP but override _host to the original hostname so TLS
+    # certificate verification (STARTTLS) uses the correct SNI.
+    import socket as _socket
+
+    pinned_ip: str | None = None
+    try:
+        infos = _socket.getaddrinfo(config.smtp_host, config.smtp_port, proto=_socket.IPPROTO_TCP)
+        for _fam, _type, _proto, _canon, sockaddr in infos:
+            pinned_ip = str(sockaddr[0])
+            break
+    except _socket.gaierror:
+        pass  # let smtplib fail naturally
     s: smtplib.SMTP_SSL | smtplib.SMTP | None = None
     try:
-        if config.smtp_port == 465:
-            s = smtplib.SMTP_SSL(
-                config.smtp_host, config.smtp_port, timeout=15,
-            )
+        if pinned_ip:
+            if config.smtp_port == 465:
+                # SMTP_SSL wraps TLS during connect(); we can't override _host
+                # after connect. Fall back to hostname-based connect for TLS
+                # correctness — the TOCTOU window is milliseconds for an
+                # admin-configured host.
+                s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+            else:
+                # Connect to the pinned IP, then set _host to the original
+                # hostname so starttls() uses the correct server_hostname.
+                s = smtplib.SMTP(timeout=15)
+                s.connect(pinned_ip, config.smtp_port)
+                s._host = config.smtp_host  # type: ignore[attr-defined]
         else:
-            s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
+            if config.smtp_port == 465:
+                s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
+            else:
+                s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
             logger.warning(
                 "SMTP send aborted: STARTTLS not supported by %s:%s",

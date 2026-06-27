@@ -238,8 +238,15 @@ def _load_compliance_rows(
             # Tags are stored as comma-separated strings.  The pattern
             # ,{tag}, inside ,{column}, reliably matches exact tags
             # regardless of position (first, last, middle, or only).
-            sql += " AND (',' || c.tags || ',') LIKE ?"
-            params.append(f"%,{scope_tag},%")
+            # Escape LIKE wildcards in the tag value so a user-supplied
+            # scope_tag of "%" can't match every row, and use cw_casefold
+            # for Unicode case-insensitive matching.
+            escaped = scope_tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            sql += (
+                " AND cw_casefold(',' || c.tags || ',')"
+                " LIKE cw_casefold(?) ESCAPE '\\'"
+            )
+            params.append(f"%,{escaped},%")
         rows = conn.execute(sql, params).fetchall()
 
     result: list[dict] = []

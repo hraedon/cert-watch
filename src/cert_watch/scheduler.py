@@ -365,12 +365,12 @@ def _check_renewal_overdue(
             except (KeyError, _json.JSONDecodeError):
                 pass
 
-        seen: set[str] = set()
+        seen: set[tuple[str, int]] = set()
         for hostname, port in hosts:
-            if hostname in seen:
+            if (hostname, port) in seen:
                 continue
-            seen.add(hostname)
-            signal = detect_renewal_overdue(db_path, hostname)
+            seen.add((hostname, port))
+            signal = detect_renewal_overdue(db_path, hostname, port=port)
             if signal is not None:
                 if (signal.hostname, signal.cert_fingerprint) in already_emitted:
                     continue

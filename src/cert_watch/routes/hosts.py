@@ -16,7 +16,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from cert_watch.alerts import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
-from cert_watch.database import SqliteHostRepository
+from cert_watch.database import SqliteHostRepository, get_write_lock
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
@@ -177,25 +177,26 @@ async def add_host(
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
-    for p in ports:
-        host_id = host_repo.add(
-            hostname,
-            p,
-            threshold_days=threshold_days,
-            tags=tags_with_scope(request, tags),
-            scan_interval_hours=scan_interval_hours,
-            notes=notes,
-            starttls_mode=starttls_mode,
-        )
-        record_audit(
-            db,
-            actor=actor,
-            action="host.add",
-            target_type="host",
-            target_id=host_id,
-            detail={"hostname": hostname, "port": p},
-            source_ip=source_ip,
-        )
+    with get_write_lock():
+        for p in ports:
+            host_id = host_repo.add(
+                hostname,
+                p,
+                threshold_days=threshold_days,
+                tags=tags_with_scope(request, tags),
+                scan_interval_hours=scan_interval_hours,
+                notes=notes,
+                starttls_mode=starttls_mode,
+            )
+            record_audit(
+                db,
+                actor=actor,
+                action="host.add",
+                target_type="host",
+                target_id=host_id,
+                detail={"hostname": hostname, "port": p},
+                source_ip=source_ip,
+            )
 
     async def _scan_one(p: int) -> bool:
         status, error = await _scan_and_store(
@@ -426,7 +427,6 @@ async def update_host_expected_issuers(
     if write_err:
         return write_err
     db = _db_path(request)
-    from cert_watch.database import SqliteHostRepository
 
     repo = SqliteHostRepository(db)
     host = repo.get(host_id)
@@ -463,7 +463,8 @@ async def delete_host(request: Request, host_id: IdParam) -> RedirectResponse:
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    SqliteHostRepository(db).delete(host_id)
+    with get_write_lock():
+        SqliteHostRepository(db).delete(host_id)
     record_audit(
         db,
         actor=resolve_actor(request),

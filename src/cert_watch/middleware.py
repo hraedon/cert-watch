@@ -308,9 +308,14 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
             # rate limiting to per-process counters without anyone noticing.
             # This is fail-open (degraded rather than denied) — crashing the
             # whole app over a rate-limit DB error is worse than temporarily
-            # losing cross-worker limit enforcement.
-            logger.warning(
-                "rate limit DB error, falling back to per-process in-memory limiting",
+            # losing cross-worker limit enforcement. Monitor for this log
+            # line: sustained fallback means rate limiting is ineffective in
+            # multi-worker deployments.
+            logger.error(
+                "RATE_LIMIT_DEGRADED: rate limit DB error, falling back to "
+                "per-process in-memory limiting. Cross-worker rate limiting "
+                "is INEFFECTIVE until the DB recovers. Monitor and alert on "
+                "this message pattern.",
                 exc_info=True,
             )
             # Fallback to in-memory on DB errors
