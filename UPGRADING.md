@@ -46,6 +46,20 @@ are on a pre-0.9.0 release, take the two-step path below.
 Downgrade is **not** supported — migrations are forward-only. To roll back,
 restore the pre-migration backup.
 
+### Windows / IIS specifics
+
+Validated on a real Windows host by migrating a 0.9.0 database to current:
+
+- A **running** instance holds the SQLite database open, so its `.sqlite3`,
+  `-wal`, and `-shm` files cannot be copied/replaced/restored while the app pool
+  is running (you get `WinError 32`, a sharing violation). **Stop the app pool
+  first** for any manual file operation (backup restore, DB swap).
+- A **clean app-pool stop checkpoints the WAL and releases the handle** — the
+  `-wal`/`-shm` files disappear and the database becomes a clean standalone file.
+  So the normal stop → deploy 1.0 → start sequence is safe: the old process
+  releases the DB on stop, the new process migrates it on start (writing the
+  `*-pre-migration-*.sqlite3` backup), then serves. No `-wal` is left orphaned.
+
 ## Upgrading from a pre-0.9.0 release
 
 There is no full-fidelity data export/import tool. Two options:
