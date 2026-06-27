@@ -258,6 +258,47 @@ All webhook delivery — including the Teams/Discord/PagerDuty channels — is r
 through an **SSRF-guarded HTTP opener** that resolves and re-checks every redirect
 hop against the scan blocklist (see [Scanning & SSRF policy](#scanning--ssrf-policy)).
 
+### Renewal webhook (automation)
+
+Distinct from the alert webhook above (which is human-facing): the **renewal
+webhook** fires a machine-readable POST when cert-watch detects a
+**renewal-overdue** certificate — a cert inside its renewal window with no
+successor yet. It carries enough context (hostname, port, SANs, issuer, expiry,
+and an `automation_hint`) for an external tool — certbot, acme.sh, Certify the
+Web, an Ansible play, a custom script — to act without calling cert-watch back.
+This is the integration seam for closing the loop on a stalled renewal job;
+cert-watch itself does not renew certificates.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CERT_WATCH_RENEWAL_WEBHOOK_URL` | — | Destination URL; setting it enables the renewal webhook |
+| `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (e.g. an auth token) |
+| `CERT_WATCH_BASE_URL` | — | If set, adds a `cert_watch_url` deep-link to the cert detail page in the payload |
+
+Delivery is fired from the daily scan cycle, routed through the same
+SSRF-guarded opener as the alert webhook, and **retried** (3 attempts with
+exponential backoff) on transient failure. A persistently failing endpoint is
+logged and dropped — it never blocks the scan cycle. The POST body looks like:
+
+```json
+{
+  "event": "renewal_needed",
+  "hostname": "www.example.com",
+  "port": 443,
+  "cert_fingerprint": "…",
+  "subject_cn": "www.example.com",
+  "san_names": ["www.example.com", "example.com"],
+  "issuer": "R3",
+  "expiry": "2026-07-10T12:00:00+00:00",
+  "days_remaining": 7.0,
+  "expected_renewal_at_days": 30.0,
+  "days_overdue": 23.0,
+  "confidence": "low",
+  "automation_hint": "acme",
+  "cert_watch_url": "https://cert-watch.example.com/certificates/42"
+}
+```
+
 ### SIEM / log export
 
 Ship the structured audit log (`ts, actor, action, target_type, target_id,

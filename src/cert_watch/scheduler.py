@@ -409,6 +409,7 @@ def _send_renewal_webhook_if_configured(
         load_renewal_webhook_config,
         send_renewal_webhook,
     )
+    from cert_watch.retry import backoff_range
 
     config = load_renewal_webhook_config(
         env_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
@@ -424,7 +425,15 @@ def _send_renewal_webhook_if_configured(
         return
     base_url = os.environ.get("CERT_WATCH_BASE_URL", "")
     payload = build_renewal_payload(signal, db_path, port=port, base_url=base_url)
-    send_renewal_webhook(payload, config)
+    # Retry on transient delivery failure, matching the alert/event webhook paths
+    # (single-attempt primitive, backoff at the orchestration layer). Three
+    # attempts total: 0, +1s, +2s.
+    for _ in backoff_range(2, 1.0, strategy="exponential"):
+        if send_renewal_webhook(payload, config):
+            return
+    logger.warning(
+        "renewal webhook for %s failed after retries", signal.hostname
+    )
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:
