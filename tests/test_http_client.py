@@ -8,8 +8,11 @@ and hostname cases monkeypatch ``socket.getaddrinfo``.
 from __future__ import annotations
 
 import socket
+import urllib.error
 
-from cert_watch.http_client import validate_smtp_host
+import pytest
+
+from cert_watch.http_client import ssrf_safe_urlopen, validate_smtp_host
 
 # ---------------------------------------------------------------------------
 # Literal IPs (no DNS resolution needed)
@@ -21,6 +24,49 @@ def test_validate_smtp_host_loopback_blocked():
     err = validate_smtp_host("127.0.0.1", allow_private=True)
     assert err is not None
     assert "127.0.0.1" in err
+
+
+def test_https_pinned_connect_uses_2tuple_for_ipv6(monkeypatch):
+    """Regression: SSRF-safe HTTPS delivery to an IPv6 host must pass a 2-tuple
+    to socket.create_connection.
+
+    The pinned-HTTPS connect() previously built a 4-tuple sockaddr for IPv6
+    targets, which create_connection() rejects with "too many values to unpack",
+    breaking ALL HTTPS webhook/HEC/scan delivery to IPv6 hosts. IPv4-only unit
+    tests missed it; a live IPv6 lab delivery surfaced it.
+    """
+    ula = "fd21:1:2:3::5"  # ULA → private, allowed with allow_private=True
+    real_gai = socket.getaddrinfo
+
+    def fake_gai(host, *a, **k):
+        if host == "hook.internal":
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", (ula, 0, 0, 0))]
+        return real_gai(host, *a, **k)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_gai)
+
+    captured: dict[str, object] = {}
+
+    # OSError so urllib's do_open wraps it into URLError (deterministic to assert).
+    class _Stop(OSError):
+        pass
+
+    def fake_create_connection(address, *a, **k):
+        captured["address"] = address
+        raise _Stop()  # stop before real network I/O
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+
+    # The guard must ALLOW the private IPv6 host and reach the connect path.
+    with pytest.raises(urllib.error.URLError):
+        ssrf_safe_urlopen(
+            "https://hook.internal/hook", data=b"{}", timeout=5, allow_private=True
+        )
+
+    assert "address" in captured, "create_connection never reached (guard blocked the host?)"
+    addr = captured["address"]
+    assert isinstance(addr, tuple) and len(addr) == 2, f"expected 2-tuple, got {addr!r}"
+    assert addr[0] == ula
 
 
 def test_validate_smtp_host_ipv6_loopback_blocked():

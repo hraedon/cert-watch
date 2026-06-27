@@ -147,13 +147,16 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
                 conn_self.server_hostname = _hostname
 
             def connect(conn_self):
-                ip = ipaddress.ip_address(conn_self._pinned_ip)
-                if isinstance(ip, ipaddress.IPv6Address):
-                    addr = (conn_self._pinned_ip, conn_self.port, 0, 0)
-                else:
-                    addr = (conn_self._pinned_ip, conn_self.port)
+                # socket.create_connection() takes a 2-tuple (host, port) and
+                # resolves IP literals itself. Passing the 4-tuple sockaddr form
+                # used by socket.connect() raises "too many values to unpack",
+                # which previously broke ALL HTTPS delivery to IPv6 targets
+                # (webhooks, HEC, scans). An IPv6 literal connects fine via the
+                # 2-tuple; only scope-bearing link-local addresses would need the
+                # scope_id, and those are always SSRF-blocked upstream.
                 conn_self.sock = socket.create_connection(
-                    addr, conn_self.timeout, conn_self.source_address,
+                    (conn_self._pinned_ip, conn_self.port),
+                    conn_self.timeout, conn_self.source_address,
                 )
                 if conn_self._tunnel_host:
                     conn_self._tunnel_host = None
