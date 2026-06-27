@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from cert_watch.alerts import AlertConfig, WebhookConfig
     from cert_watch.auth import AuthProvider
+    from cert_watch.security import SecurityContext
 
 from cert_watch.config.helpers import (
     _default_data_dir,
@@ -52,6 +53,8 @@ class Settings:
     drift_alerts: bool = True
     event_retention_days: int = 30
     renewal_window_days: int = 30
+    renewal_webhook_url: str = ""
+    renewal_webhook_headers: str = ""
     check_revocation: bool = False
     scan_timeout: float = 10.0
     scan_retries: int = 2
@@ -184,6 +187,8 @@ class Settings:
             event_retention_days=event_retention_days,
             drift_alerts=os.environ.get("CERT_WATCH_DRIFT_ALERTS", "1") == "1",
             renewal_window_days=renewal_window_days,
+            renewal_webhook_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
+            renewal_webhook_headers=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", ""),
             check_revocation=os.environ.get("CERT_WATCH_CHECK_REVOCATION", "0") == "1",
             tls_verify=os.environ.get("CERT_WATCH_TLS_VERIFY", "0") == "1",
             allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
@@ -330,7 +335,7 @@ class Settings:
             allowed_subnets=self.allowed_subnets,
         )
 
-    def build_auth_provider(self) -> AuthProvider:
+    def build_auth_provider(self, *, security: SecurityContext | None = None) -> AuthProvider:
         """Return an AuthProvider based on auth config.
 
         Falls back to kv_store for local_admin_user/local_admin_password_hash when
@@ -378,6 +383,7 @@ class Settings:
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,
             local_admin_password_hash=local_admin_password_hash,
+            security=security,
         )
 
     @classmethod

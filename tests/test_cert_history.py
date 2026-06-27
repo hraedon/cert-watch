@@ -6,15 +6,16 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import SqliteCertificateRepository, init_schema
-from cert_watch.database.connection import _connect
-from cert_watch.database.queries import (
+from cert_watch.database import (
+    SqliteCertificateRepository,
+    init_schema,
     list_cert_history,
     list_grade_trends,
     list_tls_version_trends,
     purge_old_history,
     record_cert_history,
 )
+from cert_watch.database.connection import _connect
 
 
 def _make_leaf(

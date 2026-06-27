@@ -10,6 +10,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cert_watch.renewal_analytics import RenewalOverdueSignal
 
 logger = logging.getLogger("cert_watch.scheduler")
 
@@ -362,7 +366,7 @@ def _check_renewal_overdue(
                 pass
 
         seen: set[str] = set()
-        for hostname, _port in hosts:
+        for hostname, port in hosts:
             if hostname in seen:
                 continue
             seen.add(hostname)
@@ -387,8 +391,40 @@ def _check_renewal_overdue(
                     db_path,
                 )
                 already_emitted.add((signal.hostname, signal.cert_fingerprint))
+                _send_renewal_webhook_if_configured(signal, hostname, port, db_path)
     except Exception:  # noqa: BLE001 — best-effort overdue check; must not crash scan cycle
         logger.exception("renewal overdue check failed")
+
+
+def _send_renewal_webhook_if_configured(
+    signal: RenewalOverdueSignal,
+    hostname: str,
+    port: int,
+    db_path: str | Path,
+) -> None:
+    import os
+
+    from cert_watch.renewal_webhook import (
+        build_renewal_payload,
+        load_renewal_webhook_config,
+        send_renewal_webhook,
+    )
+
+    config = load_renewal_webhook_config(
+        env_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
+        env_headers=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", ""),
+        allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
+        allowed_subnets=tuple(
+            s.strip()
+            for s in os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "").split(",")
+            if s.strip()
+        ),
+    )
+    if config is None:
+        return
+    base_url = os.environ.get("CERT_WATCH_BASE_URL", "")
+    payload = build_renewal_payload(signal, db_path, port=port, base_url=base_url)
+    send_renewal_webhook(payload, config)
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:

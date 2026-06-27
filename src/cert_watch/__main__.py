@@ -99,8 +99,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "re-encrypt":
         from cert_watch.config import Settings, resolve_or_persist_secret
-        from cert_watch.database import init_schema
-        from cert_watch.database.queries import derive_encryption_key, re_encrypt_kv_store
+        from cert_watch.database import derive_encryption_key, init_schema, re_encrypt_kv_store
 
         s = Settings.from_env()
         init_schema(s.db_path)

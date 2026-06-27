@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from cert_watch.security import SecurityContext
+
 from .ldap_provider import LDAPAuthProvider
 from .local_admin import LocalAdminProvider, _CompositeProvider
 from .oauth_provider import OAuthConfig, OAuthProvider
@@ -73,6 +75,7 @@ def build_auth_provider(
     local_admin_user: str = "",
     local_admin_password_hash: str = "",
     db_path: str | None = None,
+    security: SecurityContext | None = None,
 ) -> AuthProvider:
     """Build an auth provider from config values. Returns NoAuthProvider if provider is empty."""
     provider = provider.lower().strip()
@@ -135,7 +138,8 @@ def build_auth_provider(
                 allowed_subnets=allowed_subnets,
                 jwks_cache_ttl=jwks_cache_ttl,
                 provider_label=_label_map.get(provider, "OAuth"),
-            )
+            ),
+            security=security,
         )
         if local_admin:
             return _CompositeProvider(local_admin, primary)

@@ -215,3 +215,68 @@ def test_insights_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -
     trends_tab.focus()
     page.keyboard.press("ArrowLeft")
     page.wait_for_url("**/insights?tab=calendar", timeout=5000)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard tablist: Home / End switching
+# ---------------------------------------------------------------------------
+
+def test_add_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None:
+    """Home/End jumps to the first/last tab in the Add-certificates tablist."""
+    page.goto(cert_watch_server)
+    page.get_by_test_id("add-host-btn").click()
+    page.locator(".cw-slide.on").wait_for()
+    scan_tab = page.get_by_test_id("tab-scan-btn")
+    bulk_tab = page.get_by_test_id("tab-bulk-btn")
+    scan_tab.focus()
+    expect(scan_tab).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("ArrowRight")
+    page.keyboard.press("ArrowRight")
+    expect(bulk_tab).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("Home")
+    expect(scan_tab).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("End")
+    expect(bulk_tab).to_have_attribute("aria-selected", "true")
+
+
+# ---------------------------------------------------------------------------
+# Reports dropdown: Home / End navigation
+# ---------------------------------------------------------------------------
+
+def test_reports_menu_home_end_nav(page: Page, cert_watch_server: str) -> None:
+    """Home/End jumps focus to the first/last menuitem in the reports menu."""
+    page.goto(cert_watch_server)
+    page.get_by_test_id("dashboard-heading").wait_for()
+    page.locator("#reports-btn").click()
+    items = page.locator('#reports-menu-wrap [role="menuitem"]')
+    expect(items).to_have_count(3)
+    expect(items.first).to_be_focused()
+    page.keyboard.press("ArrowDown")
+    expect(items.nth(1)).to_be_focused()
+    page.keyboard.press("Home")
+    expect(items.first).to_be_focused()
+    page.keyboard.press("End")
+    expect(items.last).to_be_focused()
+
+
+# ---------------------------------------------------------------------------
+# Insights page tablist: Home / End switching
+# ---------------------------------------------------------------------------
+
+def test_insights_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None:
+    """Home/End switches between Insights tabs via URL navigation."""
+    page.goto(f"{cert_watch_server}/insights?tab=trends")
+    page.get_by_test_id("insights-heading").wait_for()
+    tabs = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]')
+    expect(tabs).to_have_count(2)
+    trends_tab = tabs.nth(1)
+    trends_tab.focus()
+    expect(trends_tab).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("Home")
+    page.wait_for_url("**/insights?tab=calendar", timeout=5000)
+    calendar_tab = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]').first
+    calendar_tab.focus()
+    expect(calendar_tab).to_have_attribute("aria-selected", "true")
+    page.keyboard.press("End")
+    page.wait_for_url("**/insights?tab=trends", timeout=5000)
+    expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")

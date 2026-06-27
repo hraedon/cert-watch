@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from cert_watch.database import Alert, SqliteAlertRepository, init_schema
-from cert_watch.database.queries import purge_old_alerts
+from cert_watch.database import Alert, SqliteAlertRepository, init_schema, purge_old_alerts
 
 
 def _make_alert(

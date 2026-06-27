@@ -19,7 +19,7 @@ from cert_watch.auth import (
     create_session,
 )
 from cert_watch.auth.rbac import claims_for_session
-from cert_watch.database.queries import bump_session_version, get_session_version
+from cert_watch.database import bump_session_version, get_session_version
 from cert_watch.middleware import (
     _COOKIE_SECURE,
     _extract_client_ip,
@@ -232,7 +232,7 @@ def oauth_callback(
         )
         return response
     from cert_watch.auth import _verify_state as _verify_oauth_state
-    verify_result = _verify_oauth_state(signed_state)
+    verify_result = _verify_oauth_state(signed_state, security=_request_security(request))
     if verify_result is None:
         response = RedirectResponse(
             url="/login?error=OAuth+state+mismatch", status_code=303

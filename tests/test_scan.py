@@ -993,11 +993,11 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1033,11 +1033,11 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1101,11 +1101,11 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1171,11 +1171,11 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1209,11 +1209,11 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
         lambda *a, **kw: (_ for _ in ()).throw(Exception("posture boom")),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1238,20 +1238,20 @@ def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_l
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events
+        "cert_watch.database.detect_drift", lambda *a, **kw: drift_events
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries._extract_key_algo", lambda x: "RSA"
+        "cert_watch.database._extract_key_algo", lambda x: "RSA"
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries._extract_sig_algo", lambda x: "SHA256"
+        "cert_watch.database._extract_sig_algo", lambda x: "SHA256"
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.create_drift_alert",
+        "cert_watch.database.create_drift_alert",
         lambda *a, **kw: "alert-id",
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1275,15 +1275,15 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
     )
-    monkeypatch.setattr("cert_watch.database.queries.detect_drift", lambda *a, **kw: drift_events)
-    monkeypatch.setattr("cert_watch.database.queries._extract_key_algo", lambda x: "RSA")
-    monkeypatch.setattr("cert_watch.database.queries._extract_sig_algo", lambda x: "SHA256")
+    monkeypatch.setattr("cert_watch.database.detect_drift", lambda *a, **kw: drift_events)
+    monkeypatch.setattr("cert_watch.database._extract_key_algo", lambda x: "RSA")
+    monkeypatch.setattr("cert_watch.database._extract_sig_algo", lambda x: "SHA256")
     monkeypatch.setattr(
-        "cert_watch.database.queries.create_drift_alert",
+        "cert_watch.database.create_drift_alert",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("db locked")),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1305,11 +1305,11 @@ def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_sig
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries._extract_key_algo",
+        "cert_watch.database._extract_key_algo",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("drift import fail")),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1331,11 +1331,11 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("history write fail")),
     )
 
@@ -1357,11 +1357,11 @@ def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_sign
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
 
@@ -1387,7 +1387,7 @@ def test_evaluate_and_store_posture_caa_exception(monkeypatch, tmp_path, self_si
                                ocsp_stapling=False, hsts=False, must_staple=False),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.store_scan_posture",
+        "cert_watch.database.store_scan_posture",
         MagicMock(),
     )
     monkeypatch.setattr(
@@ -1414,7 +1414,7 @@ def test_evaluate_and_store_posture_caa_value_error(monkeypatch, tmp_path, self_
                                ocsp_stapling=False, hsts=False, must_staple=False),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.store_scan_posture",
+        "cert_watch.database.store_scan_posture",
         MagicMock(),
     )
     monkeypatch.setattr(
@@ -1858,7 +1858,7 @@ def test_store_scanned_rolls_back_replace_and_posture_when_drift_fails(
     initial_fp = repo.list_all()[0].fingerprint_sha256
 
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("drift boom")),
     )
 
@@ -1888,7 +1888,7 @@ def test_store_scanned_rolls_back_prior_writes_when_history_fails(
         raise Exception("history boom")
 
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         failing_record,
     )
 
@@ -1957,7 +1957,7 @@ def test_store_scanned_returns_empty_string_on_transaction_failure(
     assert first_id
 
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("history boom")),
     )
 
@@ -1987,11 +1987,11 @@ def test_store_scanned_event_webhooks_deferred_until_commit(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: "hist-id",
     )
     monkeypatch.setattr(
@@ -2029,11 +2029,11 @@ def test_store_scanned_event_webhooks_not_fired_on_rollback(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.detect_drift",
+        "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
     monkeypatch.setattr(
-        "cert_watch.database.queries.record_cert_history",
+        "cert_watch.database.record_cert_history",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("history boom")),
     )
     monkeypatch.setattr(
@@ -2047,3 +2047,137 @@ def test_store_scanned_event_webhooks_not_fired_on_rollback(
     result = store_scanned(entry, db)
     assert result == ""
     mock_pool.submit.assert_not_called()
+
+
+# ---------- _stage_policy / _stage_events branch coverage ----------
+
+
+def test_stage_policy_grade_changed(tmp_path, self_signed_leaf):
+    from unittest.mock import patch
+
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.policy import PolicySet, PolicyViolation
+    from cert_watch.scan import _stage_policy
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id
+
+    conn = _connect(db)
+    ruleset = PolicySet()
+    violations = [PolicyViolation(
+        rule_id="test_critical", severity="critical",
+        message="critical test violation", remediation="fix it",
+    )]
+    with patch("cert_watch.policy.evaluate_policy", return_value=violations):
+        result = _stage_policy(
+            db, leaf_id, entry, "A", [], None,
+            conn=conn, ruleset=ruleset,
+        )
+    conn.commit()
+
+    assert result == "F"
+    row = conn.execute(
+        "SELECT grade FROM scan_posture WHERE cert_id = ? AND grade = 'F'",
+        (leaf_id,),
+    ).fetchone()
+    assert row is not None
+
+
+def test_stage_policy_grade_unchanged_alerts_still_created(tmp_path, self_signed_leaf):
+    from unittest.mock import patch
+
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.policy import PolicySet, PolicyViolation
+    from cert_watch.scan import _stage_policy
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id
+
+    conn = _connect(db)
+    ruleset = PolicySet()
+    violations = [PolicyViolation(
+        rule_id="test_warning", severity="warning",
+        message="warning test violation", remediation="fix it",
+        grade_affecting=False,
+    )]
+    with patch("cert_watch.policy.evaluate_policy", return_value=violations):
+        result = _stage_policy(
+            db, leaf_id, entry, "A", [], None,
+            conn=conn, ruleset=ruleset,
+        )
+    conn.commit()
+
+    assert result == "A"
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM alerts WHERE cert_id = ? AND alert_type = 'policy_violation'",
+        (leaf_id,),
+    ).fetchone()
+    assert row["n"] >= 1
+
+
+def test_stage_events_posture_changed(tmp_path, self_signed_leaf):
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.events import EventStreamConfig
+    from cert_watch.scan import _stage_events
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    conn = _connect(db)
+    config = EventStreamConfig(webhook_url="https://example.com/hook")
+    pending = _stage_events(
+        db, "test-cert-id", entry, None, "B", "A",
+        conn=conn, event_config=config,
+    )
+    conn.commit()
+
+    assert len(pending) == 2
+    event_types = [evt.event_type for evt, _, _ in pending]
+    assert "cert_added" in event_types
+    assert "posture_changed" in event_types
+
+    rows = conn.execute(
+        "SELECT event_type FROM event_log WHERE event_type = 'posture_changed'"
+    ).fetchall()
+    assert len(rows) == 1
+
+
+def test_stage_events_posture_unchanged(tmp_path, self_signed_leaf):
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.events import EventStreamConfig
+    from cert_watch.scan import _stage_events
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+
+    conn = _connect(db)
+    config = EventStreamConfig(webhook_url="https://example.com/hook")
+    pending = _stage_events(
+        db, "test-cert-id", entry, None, "A", "A",
+        conn=conn, event_config=config,
+    )
+    conn.commit()
+
+    assert len(pending) == 1
+    assert pending[0][0].event_type == "cert_added"
+
+    rows = conn.execute(
+        "SELECT event_type FROM event_log WHERE event_type = 'posture_changed'"
+    ).fetchall()
+    assert len(rows) == 0

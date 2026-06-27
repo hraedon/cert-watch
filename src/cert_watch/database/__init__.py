@@ -4,8 +4,7 @@ Previously a single 1200-line module (`database.py`).  Split into:
 - `schema`     – DDL strings, `init_schema()`, migration logic
 - `connection` – `_connect`, `_iso`, `_parse_iso`, `_row_to_cert`
 - `repo`       – Repository classes (`CertificateRepository`, `AlertRepository`,
-                 `SqliteHostRepository`, `SqliteTrustAnchorRepository`)
-- `queries`    – Re-export layer (BC-094 decomposition into submodules)
+                  `SqliteHostRepository`, `SqliteTrustAnchorRepository`)
 
 All public names are re-exported so external imports
 (`from cert_watch.database import X`) continue to work.

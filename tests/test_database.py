@@ -6,15 +6,13 @@ from cert_watch.database import (
     SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteHostRepository,
-    init_schema,
-    list_unified_entries,
-)
-from cert_watch.database.queries import (
     check_encrypted_values,
     derive_encryption_key,
+    init_schema,
     kv_get,
     kv_set,
     kv_set_secret,
+    list_unified_entries,
     re_encrypt_kv_store,
 )
 

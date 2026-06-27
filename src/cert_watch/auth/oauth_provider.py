@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from urllib.parse import urlencode
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
+from cert_watch.security import SecurityContext
 
 from .protocol import AuthProvider, AuthResult
 from .session import _sign_state, _verify_state
@@ -96,8 +97,9 @@ class OAuthProvider(AuthProvider):
     WARNING level. OIDC-compliant IdPs SHOULD return an ``id_token``.
     """
 
-    def __init__(self, config: OAuthConfig) -> None:
+    def __init__(self, config: OAuthConfig, *, security: SecurityContext | None = None) -> None:
         self.config = config
+        self._security = security
         self._discovered: dict[str, str] = {}
         self._jwks: dict | None = None
         self._jwks_fetched_at: float = 0.0
@@ -347,14 +349,14 @@ class OAuthProvider(AuthProvider):
         )
         return AuthResult(
             success=True, redirect_url=uri,
-            oauth_state=_sign_state(state, nonce=nonce),
+            oauth_state=_sign_state(state, security=self._security, nonce=nonce),
         )
 
     def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
         # BC-009: verify state parameter before exchanging code
         if not state:
             return AuthResult(success=False, error="missing OAuth state parameter")
-        verify_result = _verify_state(state)
+        verify_result = _verify_state(state, security=self._security)
         if verify_result is None:
             return AuthResult(success=False, error="invalid OAuth state")
         expected_state, nonce = verify_result

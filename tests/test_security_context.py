@@ -1,5 +1,5 @@
-"""Plan 018 B1: SecurityContext is threaded through signing and injected via
-create_app, instead of relying on mutated module-level globals."""
+"""Plan 018 B1 / WI-083: SecurityContext is threaded through signing and
+injected via create_app, instead of relying on mutated module-level globals."""
 
 from types import SimpleNamespace
 
@@ -69,3 +69,48 @@ def test_two_apps_with_different_keys_reject_each_others_sessions(tmp_path, monk
     assert validate_session(token, sec_b) is None
     # SimpleNamespace stands in for app.state in the helper signature.
     assert isinstance(SimpleNamespace(security=sec_a).security, SecurityContext)
+
+
+def test_oauth_provider_uses_injected_security_for_state_signing():
+    """WI-083: OAuthProvider signs and verifies state with the injected
+    SecurityContext, not the module-level fallback."""
+    from cert_watch.auth import OAuthConfig, OAuthProvider, _verify_state
+
+    sec_a = SecurityContext(signing_key="oauth-key-a", csrf_secret="c")
+    sec_b = SecurityContext(signing_key="oauth-key-b", csrf_secret="c")
+    config = OAuthConfig(
+        client_id="c",
+        client_secret="s",
+        issuer_url="https://example.com",
+        authorization_endpoint="https://example.com/authorize",
+        token_endpoint="https://example.com/token",
+    )
+    provider_a = OAuthProvider(config, security=sec_a)
+    provider_b = OAuthProvider(config, security=sec_b)
+
+    import sys
+    from unittest.mock import MagicMock
+
+    mock_session = MagicMock()
+    mock_session.create_authorization_url.return_value = (
+        "https://example.com/authorize?...",
+        "state123",
+    )
+    mock_authlib = MagicMock()
+    mock_authlib.integrations.requests_client.OAuth2Session.return_value = mock_session
+    sys.modules["authlib"] = mock_authlib
+    sys.modules["authlib.integrations"] = mock_authlib.integrations
+    sys.modules["authlib.integrations.requests_client"] = mock_authlib.integrations.requests_client
+    try:
+        result = provider_a.start_oauth_flow("https://app.example/callback")
+        assert result.success is True
+        signed = result.oauth_state
+        assert _verify_state(signed, security=sec_a) is not None
+        assert _verify_state(signed, security=sec_b) is None
+        result_b = provider_b.complete_oauth_flow(
+            "code", "https://app.example/callback", state=signed,
+        )
+        assert result_b.success is False
+    finally:
+        for mod in ("authlib", "authlib.integrations", "authlib.integrations.requests_client"):
+            sys.modules.pop(mod, None)

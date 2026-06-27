@@ -302,6 +302,7 @@ def test_oauth_no_form_login():
     config.userinfo_endpoint = ""
 
     provider = OAuthProvider.__new__(OAuthProvider)
+    provider._security = None
     provider.config = config
     provider._discovered = {}
 
@@ -321,6 +322,7 @@ def test_oauth_start_flow():
     config.userinfo_endpoint = ""
 
     provider = OAuthProvider.__new__(OAuthProvider)
+    provider._security = None
     provider.config = config
     provider._discovered = {
         "authorization_endpoint": "https://login.microsoftonline.com/authorize",
@@ -494,6 +496,7 @@ def test_login_page_oidc_label(tmp_path):
     from cert_watch.auth import OAuthConfig
 
     provider = OAuthProvider.__new__(OAuthProvider)
+    provider._security = None
     provider.config = OAuthConfig(
         client_id="c",
         client_secret="s",
@@ -1445,6 +1448,7 @@ def _make_oauth_provider(
         jwks_uri=f"{issuer}/.well-known/jwks.json",
     )
     provider = OAuthProvider.__new__(OAuthProvider)
+    provider._security = None
     provider.config = config
     provider._discovered = {
         "authorization_endpoint": f"{issuer}/authorize",
@@ -2503,6 +2507,7 @@ class TestJWKSCacheTTL:
             issuer_url="https://example.com",
         )
         provider = OAuthProvider.__new__(OAuthProvider)
+        provider._security = None
         provider.config = config
         provider._discovered = {}
         provider._jwks = None
