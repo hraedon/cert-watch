@@ -5,6 +5,21 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Renewal webhook (automation seam).** When the daily scan cycle detects a
+  **renewal-overdue** certificate (inside its renewal window with no successor
+  yet), cert-watch can POST a structured, machine-readable payload to an
+  external renewal tool — certbot, acme.sh, Certify the Web, an Ansible play, a
+  custom script — carrying hostname, port, SANs, issuer, expiry, and an
+  `automation_hint` so the receiver can act without calling back. Distinct from
+  the human-facing alert webhook. Enabled with `CERT_WATCH_RENEWAL_WEBHOOK_URL`
+  (optional `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS`, `CERT_WATCH_BASE_URL` for a
+  deep-link); routed through the same SSRF-guarded opener as the alert webhook,
+  **retried** with exponential backoff (3 attempts) on transient failure, and
+  best-effort (a failing endpoint is logged, never blocks the scan cycle).
+  cert-watch does not renew certificates itself — this is the integration seam
+  for closing the loop on a stalled job. Documented in the README; the wiring
+  (detect → emit → deliver, plus 24h dedup and retry) is covered by
+  `tests/test_scheduler_renewal_webhook.py`.
 - **Windows uninstaller (`scripts/uninstall-windows.ps1`).** Tears down a
   Windows/IIS deployment created by `install-windows.ps1`: stops/removes the
   app pool and site, removes the physical site directory, and deletes **only
