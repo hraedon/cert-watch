@@ -36,8 +36,10 @@ are on a pre-0.9.0 release, take the two-step path below.
      the DB and migrations run when the new pod starts.
    - **Docker Compose / systemd:** pull the new image/release and restart; point
      it at the same DB path.
-   - **Windows / IIS:** run the 1.0 `install-windows.ps1` against the existing
-     site; the app pool restart triggers the migration on first request.
+   - **Windows / IIS:** **re-run `install-windows.ps1`** with the same arguments
+     as your original install (this is the supported upgrade method — see the
+     Windows / IIS section below). It stops the app pool, updates the code/venv,
+     and restarts the pool; the app then migrates the existing DB on startup.
 3. **Verify.** Watch the startup logs for `applying migration ...` /
    `migration ... applied`, confirm the dashboard loads, and confirm
    `schema_version` is at head. A `*-pre-migration-*.sqlite3` file next to the DB
@@ -48,17 +50,32 @@ restore the pre-migration backup.
 
 ### Windows / IIS specifics
 
-Validated on a real Windows host by migrating a 0.9.0 database to current:
+**Upgrade by re-running `install-windows.ps1`** with the same arguments as your
+original install. The script is idempotent and is the supported upgrade path —
+you do not stop/start anything by hand:
+
+- It **stops the app pool before touching files** (releasing the database
+  handle), rebuilds the venv/code, then **restarts the pool**, at which point the
+  app migrates the existing database on startup (writing the
+  `*-pre-migration-*.sqlite3` backup). The stop is a clean exit, so the WAL is
+  checkpointed and no `-wal` is left orphaned.
+- It **never touches the `.sqlite3` file itself** — your data, signing keys, and
+  operator-set `web.config` settings are preserved (web.config is no-clobber).
+- Bonus: routing every deploy through the installer keeps it continuously
+  exercised on Windows, which CI does not cover — so installer regressions
+  surface at deploy time rather than lurking.
+
+Behaviour validated on a real Windows host by migrating a 0.9.0 database to
+current (migration applied, data preserved, backup written, no `-wal` leak after
+the app-pool stop).
+
+Manual file operations (restoring a backup, swapping the DB) are the exception:
 
 - A **running** instance holds the SQLite database open, so its `.sqlite3`,
   `-wal`, and `-shm` files cannot be copied/replaced/restored while the app pool
   is running (you get `WinError 32`, a sharing violation). **Stop the app pool
-  first** for any manual file operation (backup restore, DB swap).
-- A **clean app-pool stop checkpoints the WAL and releases the handle** — the
-  `-wal`/`-shm` files disappear and the database becomes a clean standalone file.
-  So the normal stop → deploy 1.0 → start sequence is safe: the old process
-  releases the DB on stop, the new process migrates it on start (writing the
-  `*-pre-migration-*.sqlite3` backup), then serves. No `-wal` is left orphaned.
+  first** for any manual file operation (backup restore, DB swap). Once it stops
+  cleanly the WAL is checkpointed and the file is a safe standalone copy.
 
 ## Upgrading from a pre-0.9.0 release
 
