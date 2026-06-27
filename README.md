@@ -21,9 +21,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
 - **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
-- **Certificate Transparency** — removed in maintenance mode (was crt.sh-based lookup; see CHANGELOG)
 - **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
-- **Discover** — CT-based coverage reconciliation: surfaces hostnames seen in CT but not tracked, plus a private-CA inventory
 - **Bulk import** — CSV upload for adding many hosts at once
 - **Prometheus metrics** — `/metrics` endpoint for monitoring integration (optionally bearer-token gated)
 - **Renewal tracking** — links renewed certificates to their predecessors
@@ -165,6 +163,12 @@ SIEM agents collect them), install the extra and enable the sink:
 uv pip install -e ".[windows]"   # pywin32
 $env:CERT_WATCH_EVENTLOG = "1"
 ```
+
+## Upgrading
+
+Schema migrations run automatically on startup (with a pre-migration backup).
+The supported upgrade source is **0.9.0 or later** — see [UPGRADING.md](UPGRADING.md)
+for the per-platform steps, the pre-0.9.0 path, and the rollback note.
 
 ## Configuration
 
@@ -656,9 +660,6 @@ These boundaries are deliberate and documented so they don't look like bugs.
 - **CAA not stored per scan** — the compliance report shows CAA as
   "Not collected" because CAA lookup is an on-demand endpoint, not a scan
   field. Per-scan CAA storage is planned for 1.1 (BC-121).
-- **CT mis-issuance / first-seen** — the Discover page reconciles CT coverage
-  but does not yet detect mis-issued certificates or show per-issuer first-seen
-  dates. Planned for 1.1 (BC-151).
 - **HTTP client SSRF guard** — `http_client.ssrf_safe_urlopen` validates the
   initial URL and every redirect hop, but `urllib` may re-resolve the hostname
   on connect. This is a large improvement over unvalidated `urlopen`, not a
