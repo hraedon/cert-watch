@@ -42,7 +42,7 @@ class SessionInfo:
 
 def _key(security: SecurityContext | None) -> str:
     """Resolve the signing key: the injected SecurityContext, else the
-    module-level import-time fallback (Plan 018 B1)."""
+    module-level import-time fallback (WI-083 — test-only path)."""
     val = security.signing_key if security is not None else _signing_key
     if val is None:
         raise ValueError(
@@ -95,12 +95,10 @@ SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
 _MAX_SAFE_SESSION_BYTES = 3500
 _signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or None
 if not _signing_key:
-    # Import-time fallback only. The lifespan replaces this via set_signing_key()
-    # with a key from config.resolve_or_persist_secret(), which persists to
-    # data_dir/.auth_secret (0600) so sessions survive restarts even without the
-    # env var. The authoritative warning (if persistence actually fails) is
-    # emitted there; keep this at debug to avoid a misleading "sessions die on
-    # restart" message that the persistence path contradicts.
+    # Import-time fallback for unit tests that call session/CSRF helpers
+    # directly without going through the app. In production, the lifespan
+    # resolves a SecurityContext and the OAuth provider receives it at
+    # construction — this module global is never mutated by the app.
     _signing_key = secrets.token_hex(32)
     logger.debug(
         "CERT_WATCH_AUTH_SECRET not set at import; using a temporary key until "
@@ -109,7 +107,7 @@ if not _signing_key:
 
 
 def set_signing_key(value: str) -> None:
-    """Replace the module-level signing key (used during lifespan startup)."""
+    """Replace the module-level signing key (test-only; production uses SecurityContext)."""
     global _signing_key
     _signing_key = value
 
@@ -338,7 +336,7 @@ def validate_session(
 
     # BC-081: check session version against the database
     if db_path is not None:
-        from cert_watch.database.queries import get_session_version
+        from cert_watch.database import get_session_version
         stored_version = get_session_version(db_path, info.username)
         if stored_version > info.version:
             return None

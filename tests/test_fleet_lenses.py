@@ -6,9 +6,9 @@ from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     SqliteHostRepository,
     init_schema,
+    list_fleet_pivot,
     replace_scanned,
 )
-from cert_watch.database.queries import list_fleet_pivot
 
 
 def _insert_host_with_cert(

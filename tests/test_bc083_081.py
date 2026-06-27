@@ -24,9 +24,14 @@ from cert_watch.config import (
     SETUP_COMPLETE,
     Settings,
 )
-from cert_watch.database import init_schema, kv_get, kv_set
+from cert_watch.database import (
+    bump_session_version,
+    get_session_version,
+    init_schema,
+    kv_get,
+    kv_set,
+)
 from cert_watch.database.kv_store import kv_all, kv_set_multi
-from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.middleware import set_csrf_secret
 
 # ---------- BC-083: Secure-by-default auth posture ----------

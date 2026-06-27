@@ -26,7 +26,7 @@ async def save_auth_config(request: Request) -> RedirectResponse:
     if resp.status_code == 303 and ("saved=1" in str(resp.headers.get("location", ""))):
         try:
             s = _get_settings(request)
-            auth = s.build_auth_provider()
+            auth = s.build_auth_provider(security=getattr(request.app.state, "security", None))
             request.app.state.auth_provider = auth
             request.app.state.needs_setup = False
             logger.info("settings: auth provider updated to '%s'", s.auth_provider)

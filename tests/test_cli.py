@@ -7,8 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from cert_watch.__main__ import main
-from cert_watch.database import init_schema
-from cert_watch.database.queries import derive_encryption_key, fernet_encrypt, kv_set
+from cert_watch.database import derive_encryption_key, fernet_encrypt, init_schema, kv_set
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -104,7 +103,7 @@ class TestReEncryptSubcommand:
         kv_set(db, "smtp_password", encrypted)
         monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", new_key_raw)
         main(["re-encrypt", old_key_raw])
-        from cert_watch.database.queries import fernet_decrypt
+        from cert_watch.database import fernet_decrypt
         new_key = derive_encryption_key(new_key_raw)
         with sqlite3.connect(str(db)) as conn:
             row = conn.execute(

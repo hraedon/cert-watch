@@ -26,9 +26,8 @@ from cert_watch.auth import (
 )
 from cert_watch.auth.local_admin import _scrypt_hash
 from cert_watch.auth.protocol import AuthResult
-from cert_watch.database import init_schema, kv_set
+from cert_watch.database import bump_session_version, get_session_version, init_schema, kv_set
 from cert_watch.database.dashboard import _build_host_filter
-from cert_watch.database.queries import bump_session_version, get_session_version
 from cert_watch.http_client import SSRFBlockedError, _validate_url, validate_webhook_url
 from cert_watch.middleware import _request_security
 from cert_watch.posture import _check_endpoint_reachable

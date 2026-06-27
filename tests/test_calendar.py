@@ -5,8 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import SqliteCertificateRepository, init_schema
-from cert_watch.database.queries import list_calendar
+from cert_watch.database import SqliteCertificateRepository, init_schema, list_calendar
 
 
 def _make_leaf(

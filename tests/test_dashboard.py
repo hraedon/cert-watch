@@ -393,7 +393,7 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
 
 def test_group_entries_by_fingerprint():
     """BC-033: scanned entries sharing a fingerprint are grouped."""
-    from cert_watch.database.queries import group_entries_by_fingerprint
+    from cert_watch.database import group_entries_by_fingerprint
 
     entries = [
         {
@@ -521,7 +521,7 @@ def test_group_entries_by_fingerprint():
 
 def test_group_entries_mixed_urgency():
     """BC-033: group urgency reflects worst host."""
-    from cert_watch.database.queries import group_entries_by_fingerprint
+    from cert_watch.database import group_entries_by_fingerprint
 
     base = {
         "kind": "scanned",

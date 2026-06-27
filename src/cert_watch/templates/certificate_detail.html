@@ -106,11 +106,11 @@
                 {% if chain_status == 'public' or chain_status == 'private' %}
                   <span class="cw-chip cw-chip-public">Verified to trusted root</span>
                 {% elif chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete">⚠ Incomplete — server missing intermediate(s)</span>
+                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">⚠</span> Incomplete — server missing intermediate(s)</span>
                 {% elif chain_status == 'self-signed' %}
                   <span class="cw-chip">Self-signed</span>
                 {% elif chain_status == 'invalid' %}
-                  <span class="cw-chip cw-chip-incomplete">✗ Chain validation failed</span>
+                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">✗</span> Chain validation failed</span>
                 {% else %}
                   <span class="cw-chip cw-chip-muted">Unknown</span>
                 {% endif %}

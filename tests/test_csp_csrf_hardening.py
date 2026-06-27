@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 
@@ -123,4 +125,63 @@ def test_csrf_bypass_defaults_false(csrf_strict):
     back to ``False``, confirming the production default.
     """
     import cert_watch.middleware as mw
+
     assert mw._CSRF_BYPASS is False
+
+
+class _FakeApp:
+    def __init__(self):
+        self.state = type("State", (), {})()
+
+
+def _make_request(method="GET", headers=None, cookies=None):
+    hdrs = [(k.lower().encode(), v.encode()) for k, v in (headers or {}).items()]
+    if cookies:
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies.items())
+        hdrs.append((b"cookie", cookie_str.encode()))
+    scope = {
+        "type": "http",
+        "method": method,
+        "path": "/",
+        "headers": hdrs,
+        "app": _FakeApp(),
+        "client": ("127.0.0.1", 12345),
+        "query_string": b"",
+    }
+    return Request(scope)
+
+
+@pytest.mark.anyio
+async def test_csrf_bypass_exercises_validation_path(monkeypatch):
+    """In bypass mode check_csrf mints a token and validates it (WI-099)."""
+    from cert_watch import middleware as _mw
+    from cert_watch.middleware import check_csrf, validate_csrf_token
+
+    original = validate_csrf_token
+    calls = []
+
+    def _spy(token, session_id, security=None):
+        calls.append((token, session_id, security))
+        return original(token, session_id, security)
+
+    monkeypatch.setattr(_mw, "validate_csrf_token", _spy)
+    monkeypatch.setattr(_mw, "_CSRF_BYPASS", True)
+
+    request = _make_request()
+    assert await check_csrf(request) is None
+    assert len(calls) == 1
+    assert calls[0][0]
+    assert calls[0][1]
+
+
+@pytest.mark.anyio
+async def test_csrf_bypass_false_rejects_missing_token(monkeypatch):
+    """With bypass disabled and no token, check_csrf reports a missing token."""
+    from cert_watch import middleware as _mw
+    from cert_watch.middleware import check_csrf
+
+    monkeypatch.setattr(_mw, "_CSRF_BYPASS", False)
+
+    request = _make_request()
+    result = await check_csrf(request)
+    assert result == "missing CSRF token"

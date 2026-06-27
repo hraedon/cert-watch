@@ -15,8 +15,7 @@ from cert_watch.config import (
     LOCAL_ADMIN_PASSWORD_HASH,
     LOCAL_ADMIN_USER,
 )
-from cert_watch.database import kv_get, kv_set
-from cert_watch.database.queries import bump_session_version
+from cert_watch.database import bump_session_version, kv_get, kv_set
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.core import _rebuild_settings
@@ -92,7 +91,8 @@ async def change_local_admin_password(request: Request) -> RedirectResponse:
 
     # Rebuild auth provider with new hash
     _rebuild_settings(request, db)
-    auth = _get_settings(request).build_auth_provider()
+    _security = getattr(request.app.state, "security", None)
+    auth = _get_settings(request).build_auth_provider(security=_security)
     request.app.state.auth_provider = auth
 
     logger.info("Local admin password rotated via UI")

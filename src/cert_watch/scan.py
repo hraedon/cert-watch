@@ -547,8 +547,8 @@ def _stage_posture(
     via ``_evaluate_posture``; this stage only writes to the DB inside the
     transaction.
     """
+    from cert_watch.database import store_scan_posture
     from cert_watch.database.connection import _iso
-    from cert_watch.database.queries import store_scan_posture
 
     store_scan_posture(
         db_path=repo_path,
@@ -628,7 +628,7 @@ def _stage_policy(
         overridden = apply_policy_overrides(posture_grade, violations)
         if overridden != posture_grade:
             posture_grade = overridden
-            from cert_watch.database.queries import store_scan_posture
+            from cert_watch.database import store_scan_posture
             store_scan_posture(
                 db_path=repo_path,
                 cert_id=leaf_id,
@@ -668,7 +668,7 @@ def _stage_drift(
     conn: sqlite3.Connection,
 ) -> None:
     """Detect drift from previous cert and optionally create alerts."""
-    from cert_watch.database.queries import (
+    from cert_watch.database import (
         _extract_key_algo,
         _extract_sig_algo,
         create_drift_alert,
@@ -706,7 +706,7 @@ def _stage_history(
     conn: sqlite3.Connection,
 ) -> None:
     """Record cert history entry."""
-    from cert_watch.database.queries import record_cert_history
+    from cert_watch.database import record_cert_history
     record_cert_history(
         repo_path,
         hostname=entry.host,
@@ -955,8 +955,8 @@ def _evaluate_and_store_posture(
     + ``store_scan_posture`` (in-transaction DB write).  ``store_scanned`` calls
     them separately so network I/O stays outside the transaction (WI-113).
     """
+    from cert_watch.database import store_scan_posture
     from cert_watch.database.connection import _iso
-    from cert_watch.database.queries import store_scan_posture
 
     if conn is None:
         init_schema(db_path)

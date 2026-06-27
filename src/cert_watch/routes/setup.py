@@ -11,8 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
 from cert_watch.config import LOCAL_ADMIN_PASSWORD_HASH, LOCAL_ADMIN_USER, SETUP_COMPLETE
-from cert_watch.database import kv_set
-from cert_watch.database.queries import bump_session_version
+from cert_watch.database import bump_session_version, kv_set
 from cert_watch.middleware import check_csrf, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 
@@ -117,7 +116,7 @@ async def setup_submit(
         kv_set(db, SETUP_COMPLETE, "1")
 
         # Rebuild auth provider with the new local admin
-        auth = s.build_auth_provider()
+        auth = s.build_auth_provider(security=getattr(request.app.state, "security", None))
         request.app.state.auth_provider = auth
         request.app.state.needs_setup = False
 

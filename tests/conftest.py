@@ -207,15 +207,21 @@ def malformed_blob(tmp_path: Path) -> Path:
 def _isolated_data_dir(tmp_path, monkeypatch):
     """Point CERT_WATCH_DATA_DIR at a per-test tmp dir so tests don't collide.
 
-    No module reloading (Plan 018 B1): config reads env live, and apps are built
+    No module reloading (WI-083): config reads env live, and apps are built
     via ``create_app`` whose lifespan resolves a SecurityContext from these env
-    vars. The module-level signing/CSRF globals are still seeded with
-    deterministic test values for direct-call unit tests (e.g. session/CSRF
-    round-trip helpers and OAuth state signing) that don't go through a request.
+    vars. The env vars for AUTH_SECRET and CSRF_SECRET ensure the SecurityContext
+    matches the module-level globals set below, so direct-call unit tests (e.g.
+    session/CSRF round-trip helpers and OAuth state signing) that use the
+    module-level fallback produce tokens that validate through the app.
+
+    CSRF validation is bypassed for route-level tests but the bypass branch still
+    mints a valid token and calls ``validate_csrf_token`` so the HMAC path is
+    exercised (WI-099).
     """
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
+    monkeypatch.setenv("CERT_WATCH_CSRF_SECRET", "test-csrf-secret-for-tests")
 
     from cert_watch import middleware as _mw
     from cert_watch.auth import set_signing_key
@@ -244,6 +250,9 @@ def csrf_strict(monkeypatch):
     the bulk of the suite (267+ form-POST call sites) can exercise route logic
     without minting tokens.  Tests that specifically verify CSRF enforcement
     depend on this fixture to flip the flag back to ``False``.
+
+    In bypass mode ``check_csrf`` auto-mints and validates a token; this fixture
+    disables that auto-minting to test the real rejection path (WI-099).
     """
     from cert_watch import middleware as _mw
 

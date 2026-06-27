@@ -5,16 +5,16 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import init_schema
-from cert_watch.database.connection import _connect
-from cert_watch.database.queries import (
+from cert_watch.database import (
     DriftEvent,
     _compute_drift_events,
     _drift_summary,
     create_drift_alert,
     detect_drift,
+    init_schema,
     record_cert_history,
 )
+from cert_watch.database.connection import _connect
 
 
 def _make_leaf(
