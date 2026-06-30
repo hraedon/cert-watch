@@ -221,7 +221,7 @@ class SqliteUserRepository:
                 username=r["username"],
                 email=r["email"],
                 password_hash=r["password_hash"],
-                role_id=r["role_id"],
+                role_id=r["role_id"] or "",
                 created_at=datetime.fromisoformat(r["created_at"]),
                 updated_at=datetime.fromisoformat(r["updated_at"]),
             )

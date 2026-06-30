@@ -87,6 +87,11 @@ async def api_update_host_owner(
     host_id: IdParam, request: Request, _auth: str = Depends(require_write)
 ) -> JSONResponse:
     """Update owner/contact and renewal status for a host."""
+    db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": denied})
+
     try:
         body = await request.json()
     except ValueError:
@@ -130,10 +135,6 @@ async def api_update_host_owner(
         if err:
             return JSONResponse(content={"error": err}, status_code=400)
 
-    db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
     with get_write_lock():
         host = repo.get(host_id)

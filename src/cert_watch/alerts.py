@@ -33,11 +33,17 @@ def _validate_email(addr: str) -> bool:
 
     Parses the address and rejects:
     - empty/only-display-name results,
-    - any comma in the input (prevents header-injection of multiple To:
-      recipients via a stored owner_email),
+    - any comma or semicolon (prevents header-injection of multiple
+      To:/Cc: recipients via a stored owner_email),
+    - newlines, carriage returns, tabs, or other control characters
+      (prevents SMTP header injection),
     - malformed addresses without an '@'.
     """
-    if not addr or "," in addr:
+    if not addr:
+        return False
+    if any(c in addr for c in (",", ";", "\r", "\n", "\t")):
+        return False
+    if any(ord(c) < 32 for c in addr):
         return False
     from email.utils import parseaddr
 

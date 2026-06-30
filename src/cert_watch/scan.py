@@ -490,7 +490,7 @@ def _stage_webhook_resolve(
 class _PostureEval:
     """Result of posture evaluation (WI-113: computed pre-transaction)."""
     grade: str = ""
-    findings: list[dict[str, Any]] = field(default_factory=list)
+    findings: list[Any] = field(default_factory=list)
     chain_status: str | None = None
     protocol_version: str = ""
     ocsp_stapling: bool | None = None
@@ -581,7 +581,7 @@ def _evaluate_posture(
 
     return _PostureEval(
         grade=result.grade,
-        findings=typing.cast("list[dict[str, Any]]", result.findings),
+        findings=result.findings,
         chain_status=cs,
         protocol_version=result.protocol_version,
         ocsp_stapling=result.ocsp_stapling,
@@ -650,7 +650,7 @@ def _stage_policy(
     leaf_id: str,
     entry: ScannedEntry,
     posture_grade: str,
-    original_findings: list[dict[str, Any]],
+    original_findings: list[Any],
     stored_chain_status: str | None,
     *,
     conn: sqlite3.Connection,
@@ -665,13 +665,15 @@ def _stage_policy(
     posture_finding_objs: list[_Finding] | None = None
     if original_findings:
         posture_finding_objs = [
-            _Finding(
-                check=f["check"],
-                status=f["status"],
-                message=f.get("message", ""),
+            f if isinstance(f, _Finding)
+            else _Finding(
+                check=f.get("check", "") if isinstance(f, dict) else getattr(f, "check", ""),
+                status=f.get("status", "") if isinstance(f, dict) else getattr(f, "status", ""),
+                message=f.get("message", "") if isinstance(f, dict) else getattr(f, "message", ""),
             )
             for f in original_findings
-            if isinstance(f, dict) and "check" in f and "status" in f
+            if (isinstance(f, dict) and "check" in f and "status" in f)
+            or isinstance(f, _Finding)
         ]
     violations = evaluate_policy(
         cert=entry.leaf,
