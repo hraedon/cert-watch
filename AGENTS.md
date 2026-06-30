@@ -144,17 +144,14 @@ The default pytest config (`pyproject.toml` `addopts`) runs `-m 'not e2e and not
 
 ## Known issues & plan status
 
-Breadcrumbs are tracked in **agent-notes** (postgres-backed) and mirrored as markdown under `breadcrumbs/active/` and `breadcrumbs/resolved/`. The `.md` files use YAML frontmatter (`identifier`/`title`/`kind`/`status`/`severity`), so `agent-notes breadcrumb sync` ingests them. Don't keep a changelog here — query the source of truth:
+Breadcrumbs are tracked in **regista** (the signed, hash-chained source of truth); the local agent-notes store is a read projection. **Do not create or hand-edit physical breadcrumb files** (`breadcrumbs/active/`, `breadcrumbs/resolved/`) — those are retired. Don't keep a changelog here — query the source of truth:
 
 ```bash
 agent-notes breadcrumb find --path /projects/cert-watch --status open --json
 agent-notes search all "<topic>" --path /projects/cert-watch --json
-# re-import after editing files (active/ is non-standard, so sync it explicitly):
-agent-notes breadcrumb sync --from-files breadcrumbs/active --path /projects/cert-watch --create-missing-vocab
-agent-notes breadcrumb sync --path /projects/cert-watch --create-missing-vocab   # default dir covers resolved/
 ```
 
-**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the agent-notes DB into `OPEN_WORK_ITEMS.txt` (gitignored, local-only; regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). **Treat the export as stale until you regenerate it** — the generated timestamp is in its header. For the live view query the DB directly (commands above). Resolved breadcrumbs live in the DB and under `breadcrumbs/resolved/` as history.
+**Do not hand-maintain a backlog list here — it drifts.** The open backlog is generated from the DB into `OPEN_WORK_ITEMS.txt` (gitignored, local-only; regenerate with `agent-notes breadcrumb export-index --path /projects/cert-watch`). **Treat the export as stale until you regenerate it** — the generated timestamp is in its header. For the live view query the DB directly (commands above).
 
 SSRF/scan policy is `CERT_WATCH_ALLOWED_SUBNETS` (BC-080): a CIDR allowlist scoping which **private** ranges are scannable (public always allowed; loopback/link-local/metadata always blocked). The global `allow_private` default was deliberately **not** flipped (breaks internal-monitoring on upgrade for low payoff — the scan reads cert metadata, not bodies/creds).
 
@@ -191,7 +188,7 @@ Plan status:
 
 ## Breadcrumbs / memory
 
-Project is registered with agent-notes (postgres-backed), resolving via path `/projects/cert-watch`. Use the `agent-notes` CLI (or the `/find-breadcrumb`, `/file-breadcrumb`, `/update-breadcrumb` skills). Local mirror directories: `breadcrumbs/active/`, `breadcrumbs/resolved/`, `plans/`, `reflections/`. **Search before filing** (dedup is the store's main failure mode).
+Project is registered with agent-notes and routes to its regista schema via path `/projects/cert-watch`. Use the `agent-notes` CLI (or the `/find-breadcrumb`, `/file-breadcrumb`, `/update-breadcrumb` skills); **do not create physical breadcrumb files** — regista is the source of truth. **Search before filing** (dedup is the store's main failure mode). Session reflections live under `reflections/`; plans under `plans/`.
 
 ## CI workflows
 

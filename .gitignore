@@ -22,6 +22,10 @@ snapshot_tests_failures/
 # line) only once a hook regenerates it on every commit.
 OPEN_WORK_ITEMS.txt
 
+# Physical breadcrumb files are retired — regista is the source of truth.
+# Tracked in the agent-notes DB; do not hand-create files here.
+breadcrumbs/
+
 # Never commit plaintext secrets. Real secrets belong in Vault / the CI secret
 # store; these patterns are a backstop against an accidental `git add`.
 credentials.txt
