@@ -347,6 +347,27 @@ class TestPostureEvaluation:
             )
             assert result.grade != "A+", f"{fake} should not get A+"
 
+    def test_self_signed_chain_status_caps_at_b(self):
+        """Regression (WI-075): self-signed (untrusted) certs must not get A+."""
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(
+            cert=cert, protocol_version="TLSv1.3",
+            hsts=True, chain_status="self-signed",
+        )
+        assert result.grade == "B"
+        assert result.grade != "A+"
+
+    def test_self_signed_chain_status_warn_finding(self):
+        """Regression (WI-075): self-signed chain_status produces a warn finding."""
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(
+            cert=cert, chain_status="self-signed",
+        )
+        chain_findings = [f for f in result.findings if f.check == "chain_completeness"]
+        assert any(f.status == "warn" for f in chain_findings)
+
     def test_a_grade_without_hsts(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)

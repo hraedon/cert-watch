@@ -535,6 +535,12 @@ def evaluate_posture(
             message="Chain validation failed",
         ))
         grade_severity = max(grade_severity, 2)
+    elif chain_status == "self-signed":
+        findings.append(Finding(
+            check="chain_completeness", status="warn",
+            message="Self-signed certificate not anchored in system trust store",
+        ))
+        grade_severity = max(grade_severity, 1)
     else:
         findings.append(Finding(
             check="chain_completeness", status="pass",

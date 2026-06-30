@@ -384,6 +384,8 @@ def chain_status(
     - "incomplete"    : chain links verify but no trusted root is present.
     """
     if _subject_bytes(leaf) == _issuer_bytes(leaf):
+        if _is_anchored_by_system_root([leaf]):
+            return "public"
         return "self-signed"
     if not chain:
         return "unknown"
