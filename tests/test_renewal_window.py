@@ -73,3 +73,29 @@ def test_window_zero_disables(tmp_path):
     _seed(db)
     repo = SqliteAlertRepository(db)
     assert evaluate_renewal_window(db, repo, 0) == []
+
+
+def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
+    """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
+    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+
+    db = str(tmp_path / "t.sqlite3")
+    _insert_cert(db, cid="stalled-ip", days_valid=20, hostname="ip.example.com")
+    SqliteHostRepository(db).add(hostname="ip.example.com", port=443, renewal_status="in_progress")
+    alert_repo = SqliteAlertRepository(db)
+    created = evaluate_renewal_window(db, alert_repo, 30)
+    assert created == [], "in_progress renewal_status should suppress alert"
+
+
+def test_renewal_stalled_suppressed_when_renewed(tmp_path):
+    """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
+    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
+
+    db = str(tmp_path / "t.sqlite3")
+    _insert_cert(db, cid="stalled-rn", days_valid=20, hostname="rn.example.com")
+    SqliteHostRepository(db).add(hostname="rn.example.com", port=443, renewal_status="renewed")
+    alert_repo = SqliteAlertRepository(db)
+    created = evaluate_renewal_window(db, alert_repo, 30)
+    assert created == [], "renewed renewal_status should suppress alert"

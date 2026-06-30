@@ -156,7 +156,8 @@ class SqliteUserRepository:
                 "INSERT INTO users "
                 "(id, username, email, password_hash, role_id, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, user.username, user.email, user.password_hash, user.role_id, now, now),
+                (user_id, user.username, user.email,
+                 user.password_hash, user.role_id or None, now, now),
             )
             conn.commit()
         return user_id
@@ -233,7 +234,7 @@ class SqliteUserRepository:
             conn.execute(
                 "UPDATE users SET username = ?, email = ?, password_hash = ?, "
                 "role_id = ?, updated_at = ? WHERE id = ?",
-                (user.username, user.email, user.password_hash, user.role_id, now, user.id),
+                (user.username, user.email, user.password_hash, user.role_id or None, now, user.id),
             )
             conn.commit()
 

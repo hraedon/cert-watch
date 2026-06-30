@@ -83,6 +83,33 @@ def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
     mw._rate_db_initialized = False
 
 
+def test_rate_limit_db_error_logs_error_with_marker(monkeypatch, tmp_path):
+    """Regression (WI-124 #6): DB-error fallback logs ERROR with RATE_LIMIT_DEGRADED."""
+    import sqlite3
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+    import cert_watch.middleware as mw
+
+    db_path = tmp_path / "rate.sqlite3"
+    mw._init_rate_db(db_path)
+    mw._rate_db_initialized = False
+    mw._clear_rate_caches()
+
+    def _boom(*a: object, **kw: object):
+        raise sqlite3.Error("simulated DB failure")
+
+    monkeypatch.setattr("cert_watch.database.connection._connect", _boom)
+    captured: list[str] = []
+    monkeypatch.setattr(mw.logger, "error", lambda msg, *a, **kw: captured.append(msg))
+    mw.check_rate_limit("test:marker", 2, 60)
+    mw._clear_rate_caches()
+    mw._rate_db_path = None
+    mw._rate_db_initialized = False
+    assert any("RATE_LIMIT_DEGRADED" in msg for msg in captured), \
+        "Expected RATE_LIMIT_DEGRADED marker in ERROR log"
+
+
 def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     """Test that cache is used within TTL."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))

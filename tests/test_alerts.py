@@ -1197,3 +1197,26 @@ def test_routine_threshold_fires_when_not_digest(alert_repo):
     alerts = evaluate_thresholds(cert, alert_repo, urgent_only=False)
     assert len(alerts) == 1
     assert alerts[0].threshold_days == 14
+
+
+def test_custom_threshold_includes_1day_urgent(alert_repo):
+    """Regression (WI-124 #8): custom threshold tuples must include a 1-day urgent.
+
+    When a host has a custom threshold (e.g. 20 days), the resulting tuple is
+    (20, 10, 5, 1).  The 1-day urgent alert must fire even in digest mode.
+    """
+    cert = _leaf_expiring_in(0, "fp-custom-1d")
+    alerts = evaluate_thresholds(
+        cert, alert_repo, custom_thresholds=(20, 10, 5, 1), urgent_only=True,
+    )
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == 1
+
+
+def test_custom_threshold_routine_skipped_in_digest(alert_repo):
+    """Regression (WI-124 #8): custom routine thresholds are skipped in digest mode."""
+    cert = _leaf_expiring_in(15, "fp-custom-routine")
+    alerts = evaluate_thresholds(
+        cert, alert_repo, custom_thresholds=(20, 10, 5, 1), urgent_only=True,
+    )
+    assert alerts == []
