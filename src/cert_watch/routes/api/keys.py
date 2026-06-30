@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository
+from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.middleware import require_admin, require_admin_write
 from cert_watch.routes._deps import IdParam, _db_path
@@ -62,16 +62,17 @@ async def api_create_key(
         )
 
     repo = SqliteApiKeyRepository(_db_path(request))
-    entry, raw_token = repo.create_key(name, scope)
-    record_audit(
-        _db_path(request),
-        actor=resolve_actor(request),
-        action="api_key.create",
-        target_type="api_key",
-        target_id=entry.id,
-        detail={"name": name, "scope": scope},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        entry, raw_token = repo.create_key(name, scope)
+        record_audit(
+            _db_path(request),
+            actor=resolve_actor(request),
+            action="api_key.create",
+            target_type="api_key",
+            target_id=entry.id,
+            detail={"name": name, "scope": scope},
+            source_ip=resolve_source_ip(request),
+        )
     # The raw token is returned exactly once here and never stored.
     return JSONResponse(
         content={**_entry_json(entry), "token": raw_token},
@@ -84,15 +85,16 @@ async def api_revoke_key(
     key_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     repo = SqliteApiKeyRepository(_db_path(request))
-    revoked = repo.revoke_key(key_id)
-    if not revoked:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    record_audit(
-        _db_path(request),
-        actor=resolve_actor(request),
-        action="api_key.revoke",
-        target_type="api_key",
-        target_id=key_id,
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        revoked = repo.revoke_key(key_id)
+        if not revoked:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        record_audit(
+            _db_path(request),
+            actor=resolve_actor(request),
+            action="api_key.revoke",
+            target_type="api_key",
+            target_id=key_id,
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"status": "revoked", "id": key_id})

@@ -13,6 +13,7 @@ from cert_watch.database import (
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
     _total_alerts,
+    get_write_lock,
     list_alerts_with_subject,
 )
 from cert_watch.middleware import require_auth, require_write
@@ -115,25 +116,26 @@ async def api_create_alert_group(
             return JSONResponse(content={"error": f"invalid email: {r}"}, status_code=400)
 
     repo = SqliteAlertGroupRepository(db)
-    if repo.get_by_name(name):
-        return JSONResponse(
-            content={"error": f"alert group '{name}' already exists"}, status_code=409
-        )
+    with get_write_lock():
+        if repo.get_by_name(name):
+            return JSONResponse(
+                content={"error": f"alert group '{name}' already exists"}, status_code=409
+            )
 
-    group_id = repo.create(
-        name, recipients_raw, match_tags_raw, webhook_url,
-        threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
-    )
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.create",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
-                "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
-        source_ip=resolve_source_ip(request),
-    )
+        group_id = repo.create(
+            name, recipients_raw, match_tags_raw, webhook_url,
+            threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
+        )
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert_group.create",
+            target_type="alert_group",
+            target_id=group_id,
+            detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
+                    "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
+            source_ip=resolve_source_ip(request),
+        )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g), status_code=201)
 
@@ -156,9 +158,6 @@ async def api_update_alert_group(
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
-    if repo.get(group_id) is None:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-
     try:
         body = await request.json()
     except ValueError:
@@ -215,32 +214,36 @@ async def api_update_alert_group(
             status_code=400,
         )
 
-    # Check unique name on rename
-    if name is not None:
-        existing = repo.get_by_name(name)
-        if existing and existing.id != group_id:
-            return JSONResponse(
-                content={"error": f"alert group '{name}' already exists"}, status_code=409
-            )
+    with get_write_lock():
+        if repo.get(group_id) is None:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
 
-    repo.update(
-        group_id,
-        name=name,
-        recipients=recipients_raw,
-        match_tags=match_tags_raw,
-        webhook_url=webhook_url,
-        threshold_days=threshold_days,
-        digest_cadence_days=digest_cadence_days,
-    )
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.update",
-        target_type="alert_group",
-        target_id=group_id,
-        detail=dict(body),
-        source_ip=resolve_source_ip(request),
-    )
+        # Check unique name on rename
+        if name is not None:
+            existing = repo.get_by_name(name)
+            if existing and existing.id != group_id:
+                return JSONResponse(
+                    content={"error": f"alert group '{name}' already exists"}, status_code=409
+                )
+
+        repo.update(
+            group_id,
+            name=name,
+            recipients=recipients_raw,
+            match_tags=match_tags_raw,
+            webhook_url=webhook_url,
+            threshold_days=threshold_days,
+            digest_cadence_days=digest_cadence_days,
+        )
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert_group.update",
+            target_type="alert_group",
+            target_id=group_id,
+            detail=dict(body),
+            source_ip=resolve_source_ip(request),
+        )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g))
 
@@ -251,20 +254,21 @@ async def api_delete_alert_group(
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
-    g = repo.get(group_id)
-    if g is None:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
+    with get_write_lock():
+        g = repo.get(group_id)
+        if g is None:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
 
-    repo.delete(group_id)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.delete",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"name": g.name},
-        source_ip=resolve_source_ip(request),
-    )
+        repo.delete(group_id)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert_group.delete",
+            target_type="alert_group",
+            target_id=group_id,
+            detail={"name": g.name},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"status": "deleted"})
 
 
@@ -274,22 +278,23 @@ async def api_assign_cert_to_group(
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
-    if group_repo.get(group_id) is None:
-        return JSONResponse(content={"error": "group not found"}, status_code=404)
     cert_repo = SqliteCertificateRepository(db)
-    if cert_repo.get_by_id(cert_id) is None:
-        return JSONResponse(content={"error": "certificate not found"}, status_code=404)
+    with get_write_lock():
+        if group_repo.get(group_id) is None:
+            return JSONResponse(content={"error": "group not found"}, status_code=404)
+        if cert_repo.get_by_id(cert_id) is None:
+            return JSONResponse(content={"error": "certificate not found"}, status_code=404)
 
-    group_repo.assign_cert(group_id, cert_id)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.assign_cert",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"cert_id": cert_id},
-        source_ip=resolve_source_ip(request),
-    )
+        group_repo.assign_cert(group_id, cert_id)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert_group.assign_cert",
+            target_type="alert_group",
+            target_id=group_id,
+            detail={"cert_id": cert_id},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"status": "assigned", "group_id": group_id, "cert_id": cert_id})
 
 
@@ -299,19 +304,20 @@ async def api_unassign_cert_from_group(
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
-    if group_repo.get(group_id) is None:
-        return JSONResponse(content={"error": "group not found"}, status_code=404)
+    with get_write_lock():
+        if group_repo.get(group_id) is None:
+            return JSONResponse(content={"error": "group not found"}, status_code=404)
 
-    group_repo.unassign_cert(group_id, cert_id)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.unassign_cert",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"cert_id": cert_id},
-        source_ip=resolve_source_ip(request),
-    )
+        group_repo.unassign_cert(group_id, cert_id)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert_group.unassign_cert",
+            target_type="alert_group",
+            target_id=group_id,
+            detail={"cert_id": cert_id},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"status": "unassigned", "group_id": group_id, "cert_id": cert_id})
 
 
