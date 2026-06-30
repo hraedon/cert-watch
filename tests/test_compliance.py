@@ -153,6 +153,19 @@ class TestComplianceAggregation:
         assert report.scope_description == "Tag: prod"
         assert report.total_certs == 3
 
+    def test_scope_tag_like_wildcard_escape(self, tmp_path):
+        """Regression (WI-124 #1): LIKE wildcards in scope_tag must be escaped.
+
+        A scope_tag of '%' or '_' must not match every row — it should match
+        only certs literally tagged with that exact string.
+        """
+        db = tmp_path / "test.sqlite3"
+        _seed_fleet(str(db))
+        report_pct = build_compliance_report(str(db), scope_tag="%", signing_key="k")
+        report_und = build_compliance_report(str(db), scope_tag="_", signing_key="k")
+        assert report_pct.total_certs == 0
+        assert report_und.total_certs == 0
+
     def test_version_commit_included(self, tmp_path):
         db = tmp_path / "test.sqlite3"
         _seed_empty(db)

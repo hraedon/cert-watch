@@ -67,6 +67,22 @@ def test_readyz_db_error(monkeypatch, reload_app):
     monkeypatch.setattr(views_mod, "_connect", orig)
 
 
+def test_readyz_strips_version_and_commit(reload_app):
+    """Regression (WI-124 #5): /readyz must NOT expose version or commit.
+
+    The public readiness endpoint is unauthenticated; leaking build metadata
+    there gives an attacker free reconnaissance (framework version, commit
+    hash for targeted exploits).
+    """
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/readyz")
+    assert r.status_code == 200
+    data = r.json()
+    assert "version" not in data
+    assert "commit" not in data
+
+
 # ---------- api/health ----------
 
 

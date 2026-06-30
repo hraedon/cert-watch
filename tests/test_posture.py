@@ -333,6 +333,20 @@ class TestPostureEvaluation:
         )
         assert result.grade == "A+"
 
+    def test_a_plus_grade_rejects_tls13_substring(self):
+        """Regression (WI-124 #14): exact string match for TLS 1.3 A+ grade.
+
+        Inputs like 'TLSv1.3x' or 'xTLSv1.3' must NOT be graded A+.
+        """
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        for fake in ("TLSv1.3x", "xTLSv1.3", "TLSv1.30"):
+            result = evaluate_posture(
+                cert=cert, protocol_version=fake,
+                hsts=True, chain_status="public",
+            )
+            assert result.grade != "A+", f"{fake} should not get A+"
+
     def test_a_grade_without_hsts(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)

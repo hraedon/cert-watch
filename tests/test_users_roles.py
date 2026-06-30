@@ -128,6 +128,20 @@ class TestUserRepository:
         user_repo.delete(user_id)
         assert user_repo.get(user_id) is None
 
+    def test_add_with_empty_role_id_succeeds(self, db):
+        """Regression: empty-string role_id must be stored as NULL (FK constraint).
+
+        PRAGMA foreign_keys=ON rejects role_id='' because no role with id=''
+        exists. The repository must coerce '' → None.
+        """
+        user_repo = SqliteUserRepository(db)
+        user_id = user_repo.add(User(
+            username="norole", email="n@example.com", password_hash="h", role_id="",
+        ))
+        fetched = user_repo.get(user_id)
+        assert fetched is not None
+        assert fetched.role_id == ""
+
 
 # ---------- Local admin provider with DB users ----------
 

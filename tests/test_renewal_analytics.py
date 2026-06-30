@@ -308,6 +308,32 @@ class TestComputeHostAnalyticsMixed:
         assert result.classification_evidence["max_lifetime_days"] > 90
 
 
+class TestComputeHostAnalyticsPortFiltering:
+    """Regression (WI-124 #9): analytics must filter by (hostname, port)."""
+
+    def test_same_host_different_port_not_mixed(self, db_path: Path):
+        import sqlite3
+
+        now = datetime.now(UTC)
+        with sqlite3.connect(str(db_path)) as conn:
+            _insert_history_row(
+                conn, "dual.example.com", "fp-443", "Let's Encrypt R3",
+                _iso(now + timedelta(days=89)), _iso(now - timedelta(days=1)),
+                not_before=_iso(now - timedelta(days=1)), port=443,
+            )
+            _insert_history_row(
+                conn, "dual.example.com", "fp-636", "DC=corp,DC=ad",
+                _iso(now + timedelta(days=365)), _iso(now - timedelta(days=30)),
+                not_before=_iso(now - timedelta(days=30)), port=636,
+            )
+
+        result_443 = compute_host_analytics(db_path, "dual.example.com", port=443)
+        result_636 = compute_host_analytics(db_path, "dual.example.com", port=636)
+        assert result_443.cert_count == 1
+        assert result_636.cert_count == 1
+        assert result_443.observed_lifetimes != result_636.observed_lifetimes
+
+
 class TestComputeHostAnalyticsManyRenewals:
     def test_many_renewals(self, db_path: Path):
         import sqlite3
