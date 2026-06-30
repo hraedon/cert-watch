@@ -111,6 +111,24 @@ def test_chain_status_self_signed(self_signed_leaf):
     assert chain_status(leaf, [], []) == "self-signed"
 
 
+def test_chain_status_self_signed_in_system_store(self_signed_leaf, monkeypatch):
+    """Regression (WI-075): self-signed leaf in system trust store is 'public'."""
+    leaf = parse_certificate(self_signed_leaf.der)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: True
+    )
+    assert chain_status(leaf, [], []) == "public"
+
+
+def test_chain_status_self_signed_not_in_system_store(self_signed_leaf, monkeypatch):
+    """Regression (WI-075): self-signed leaf NOT in system store stays 'self-signed'."""
+    leaf = parse_certificate(self_signed_leaf.der)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: False
+    )
+    assert chain_status(leaf, [], []) == "self-signed"
+
+
 def test_chain_status_unknown_no_chain(chain_triplet):
     leaf = parse_certificate(chain_triplet["leaf"].der)
     assert chain_status(leaf, [], []) == "unknown"
