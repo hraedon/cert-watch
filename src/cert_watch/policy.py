@@ -7,7 +7,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.kv_store import kv_get, kv_set
@@ -46,7 +46,7 @@ class PolicyRule:
     category: str
     severity: str
     enabled: bool
-    parameters: dict = field(default_factory=dict)
+    parameters: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -97,7 +97,7 @@ def _extract_cn_from_name(x509_name: Any) -> str:
     try:
         cns = x509_name.get_attributes_for_oid(NameOID.COMMON_NAME)
         if cns:
-            return cns[0].value
+            return cast(str, cns[0].value)
     except (ValueError, TypeError, AttributeError):
         pass
     return str(x509_name)

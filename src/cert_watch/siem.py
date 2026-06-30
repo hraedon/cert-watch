@@ -28,6 +28,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import SysLogHandler
+from typing import Any
 
 logger = logging.getLogger("cert_watch.siem")
 
@@ -59,7 +60,7 @@ class SiemExporter:
 
         self._syslog: logging.Logger | None = None
         self._pool: ThreadPoolExecutor | None = None
-        self._eventlog: tuple | None = None
+        self._eventlog: tuple[Any, Any] | None = None
         if self.syslog_host:
             self._setup_syslog()
         if self.eventlog_requested:
@@ -126,7 +127,7 @@ class SiemExporter:
             )
             self._eventlog = None
 
-    def export(self, event: dict) -> None:
+    def export(self, event: dict[str, Any]) -> None:
         if self._syslog is not None:
             self._to_syslog(event)
         if self._eventlog is not None:
@@ -134,7 +135,7 @@ class SiemExporter:
         if self.hec_url and self.hec_token and self._pool is not None:
             self._pool.submit(self._to_hec, event)
 
-    def _to_eventlog(self, event: dict) -> None:
+    def _to_eventlog(self, event: dict[str, Any]) -> None:
         try:
             _evlog = self._eventlog
             if _evlog is None:
@@ -149,7 +150,7 @@ class SiemExporter:
         except Exception:
             logger.warning("Windows Event Log export failed", exc_info=True)
 
-    def _to_syslog(self, event: dict) -> None:
+    def _to_syslog(self, event: dict[str, Any]) -> None:
         try:
             _syslog = self._syslog
             if _syslog is None:
@@ -158,13 +159,13 @@ class SiemExporter:
         except Exception:
             logger.warning("syslog export failed", exc_info=True)
 
-    def _to_hec(self, event: dict) -> None:
+    def _to_hec(self, event: dict[str, Any]) -> None:
         from urllib.error import HTTPError
 
         from cert_watch.http_client import ssrf_safe_urlopen
 
         try:
-            envelope: dict = {
+            envelope: dict[str, Any] = {
                 "event": event,
                 "sourcetype": self.hec_sourcetype,
                 "time": time.time(),
@@ -218,7 +219,7 @@ def siem_enabled() -> bool:
     return _get_exporter().enabled
 
 
-def export_audit_event(event: dict) -> None:
+def export_audit_event(event: dict[str, Any]) -> None:
     """Fan an audit event out to the configured SIEM sinks (fail-open)."""
     exp = _get_exporter()
     if exp.enabled:

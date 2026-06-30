@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Generator
-from typing import Literal
+from typing import Literal, assert_never
 
 logger = logging.getLogger("cert_watch.retry")
 
@@ -33,7 +33,9 @@ def backoff_range(
         if attempt < max_retries:
             if strategy == "exponential":
                 delay = base_delay * (2 ** attempt)
-            else:
+            elif strategy == "linear":
                 delay = base_delay * (attempt + 1)
+            else:
+                assert_never(strategy)
             logger.debug("retry %d/%d, sleeping %.1fs", attempt + 1, max_retries, delay)
             time.sleep(delay)

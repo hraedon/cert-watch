@@ -94,42 +94,15 @@ def _fleet_grade(grades: list[str]) -> str:
 
 
 def _canonical_json(report: ComplianceReport) -> bytes:
-    d = {
-        "generated_at": report.generated_at,
-        "version": report.version,
-        "commit": report.commit,
-        "scope_tag": report.scope_tag,
-        "scope_description": report.scope_description,
-        "total_certs": report.total_certs,
-        "total_hosts": report.total_hosts,
-        "grade_distribution": dict(sorted(report.grade_distribution.items())),
-        "fleet_grade": report.fleet_grade,
-        "compliance_metrics": [
-            {"label": m.label, "passing": m.passing, "total": m.total}
-            for m in sorted(report.compliance_metrics, key=lambda m: m.label)
-        ],
-        "remediation_buckets": [
-            {
-                "label": b.label,
-                "entries": [
-                    {
-                        "host": e.host,
-                        "port": e.port,
-                        "subject": e.subject,
-                        "issuer": e.issuer,
-                        "not_after": e.not_after,
-                        "days_remaining": e.days_remaining,
-                        "urgency": e.urgency,
-                        "findings": sorted(e.findings),
-                        "owner": e.owner,
-                        "tags": e.tags,
-                    }
-                    for e in sorted(b.entries, key=lambda e: e.days_remaining)
-                ],
-            }
-            for b in sorted(report.remediation_buckets, key=lambda b: b.label)
-        ],
-    }
+    """Canonical JSON for HMAC signing.
+
+    M5: covers the FULL ``report_to_dict()`` output (minus signature fields)
+    so an attacker can't alter presentation values (pct, display, count) or
+    add arbitrary keys without invalidating the signature.
+    """
+    d = report_to_dict(report)
+    d.pop("content_sha256", None)
+    d.pop("signature", None)
     return json.dumps(d, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -161,7 +134,8 @@ def verify_report_signature(
         fleet_grade=report_json.get("fleet_grade", ""),
         compliance_metrics=[
             ComplianceMetric(
-                label=m["label"], passing=m["passing"], total=m["total"]
+                label=m["label"], passing=m["passing"], total=m["total"],
+                collected=m.get("collected", True),
             )
             for m in report_json.get("compliance_metrics", [])
         ],
@@ -204,7 +178,7 @@ def _load_compliance_rows(
     db_path: str | Path,
     *,
     scope_tag: str = "",
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fetch minimal leaf-certificate rows for compliance reporting.
 
     Replaces ``list_dashboard_rows`` for the compliance path so the report
@@ -233,7 +207,7 @@ def _load_compliance_rows(
             LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
             WHERE c.is_leaf = 1
         """
-        params: list = []
+        params: list[Any] = []
         if scope_tag:
             # Tags are stored as comma-separated strings.  The pattern
             # ,{tag}, inside ,{column}, reliably matches exact tags
@@ -249,7 +223,7 @@ def _load_compliance_rows(
             params.append(f"%,{escaped},%")
         rows = conn.execute(sql, params).fetchall()
 
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
     now = datetime.now(UTC)
     for r in rows:
         d = dict(r)
@@ -499,6 +473,7 @@ def report_to_dict(report: ComplianceReport) -> dict[str, Any]:
                 "label": m.label,
                 "passing": m.passing,
                 "total": m.total,
+                "collected": m.collected,
                 "pct": round(m.pct, 1),
                 "display": m.display,
             }

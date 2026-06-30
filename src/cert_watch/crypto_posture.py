@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger("cert_watch.crypto_posture")
 
@@ -75,7 +76,7 @@ class CryptoPosture:
     sig_hashes: dict[str, int] = field(default_factory=dict)
     families: dict[str, int] = field(default_factory=dict)        # RSA/EC/EdDSA -> count
     weak_count: int = 0
-    weak_certs: list[dict] = field(default_factory=list)          # addressable offenders
+    weak_certs: list[dict[str, Any]] = field(default_factory=list)          # addressable offenders
     pqc_note: str = ""
 
 
@@ -189,9 +190,9 @@ def analyze_fleet_crypto(db_path: str | Path) -> CryptoPosture:
     return posture
 
 
-def crypto_posture_to_dict(posture: CryptoPosture) -> dict:
+def crypto_posture_to_dict(posture: CryptoPosture) -> dict[str, Any]:
     """Serialize for templates / JSON, with distributions ordered by count desc."""
-    def _ranked(d: dict[str, int]) -> list[dict]:
+    def _ranked(d: dict[str, int]) -> list[dict[str, Any]]:
         return [
             {"label": k, "count": v}
             for k, v in sorted(d.items(), key=lambda kv: (-kv[1], kv[0]))

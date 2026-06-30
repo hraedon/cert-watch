@@ -12,12 +12,15 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import NamedTuple
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from urllib.parse import quote, urlparse
 
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import JSONResponse, RedirectResponse
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, decode_session, validate_session
 from cert_watch.auth.rbac import (
@@ -28,6 +31,9 @@ from cert_watch.auth.rbac import (
     build_auth_context,
 )
 from cert_watch.security import SecurityContext  # noqa: F401  (re-exported)
+
+if TYPE_CHECKING:
+    from cert_watch.auth.session import SessionInfo
 
 logger = logging.getLogger("cert_watch.middleware")
 
@@ -110,7 +116,7 @@ def get_session_id(request: Request) -> str:
         return sid
     scope_sid = request.scope.get("session_id")
     if scope_sid:
-        return scope_sid
+        return cast(str, scope_sid)
     return secrets.token_hex(16)
 
 
@@ -164,6 +170,10 @@ def _extract_client_ip(request: Request) -> str:
     XFF entry (the hop the trusted proxy appended) rather than the leftmost
     (client-controlled) entry, which is spoofable. This is the correct behavior
     for a single trusted proxy; multi-proxy chains should use ``TRUSTED_PROXIES``.
+
+    L10 hardening: when ``TRUSTED_PROXIES`` is empty AND there is only one XFF
+    entry, that entry is entirely client-controlled (no proxy rewrote it), so
+    we fall back to ``request.client.host`` (the TCP peer) instead.
     """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
@@ -174,9 +184,11 @@ def _extract_client_ip(request: Request) -> str:
             for part in reversed(parts):
                 if part not in _TRUSTED_PROXIES:
                     return part
-        else:
-            # Rightmost entry = the proxy that directly contacted us (BC-029)
-            return parts[-1] if parts else (request.client.host if request.client else "unknown")
+        elif len(parts) > 1:
+            # Multi-entry XFF: rightmost = the proxy that directly contacted us (BC-029)
+            return parts[-1]
+        # Single-entry XFF with no TRUSTED_PROXIES: entirely client-controlled.
+        # Fall through to X-Real-IP / TCP peer below.
     real_ip = request.headers.get("x-real-ip", "")
     if real_ip:
         logger.warning(
@@ -379,7 +391,7 @@ async def check_csrf(request: Request) -> str | None:
     return None
 
 
-def get_auth_context(request: Request) -> dict:
+def get_auth_context(request: Request) -> dict[str, Any]:
     """Return template context dict with auth_user, may_write, etc.
 
     When an AuthContext is present (Plan 035 RBAC), may_write is
@@ -437,7 +449,7 @@ def get_auth_context(request: Request) -> dict:
     }
 
 
-def get_csrf_context(request: Request) -> dict:
+def get_csrf_context(request: Request) -> dict[str, Any]:
     """Return template context dict with CSRF token for the current session."""
     session_token = get_session_token(request)
     token = make_csrf_token(session_token, _request_security(request))
@@ -459,11 +471,10 @@ def is_public_path(path: str) -> bool:
     # inventory, CSV export, posture) requires auth when AUTH_PROVIDER is set;
     # unauthenticated API requests get a 401 (see auth_middleware). Only
     # liveness/scrape and the login flow stay open.
-    if path in _PUBLIC_PATHS:
+    normalized = path.rstrip("/")
+    if normalized in _PUBLIC_PATHS or normalized == "/metrics":
         return True
-    if path.startswith("/static/"):
-        return True
-    return path == "/metrics" or path.startswith("/metrics/")
+    return bool(path.startswith("/static/"))
 
 
 def check_metrics_token(request: Request) -> bool:
@@ -480,7 +491,9 @@ def check_metrics_token(request: Request) -> bool:
     return False
 
 
-async def rate_limit_headers_middleware(request: Request, call_next):
+async def rate_limit_headers_middleware(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     """Enforce rate limits on API routes and add X-RateLimit headers."""
     if not request.url.path.startswith("/api/"):
         return await call_next(request)
@@ -491,7 +504,7 @@ async def rate_limit_headers_middleware(request: Request, call_next):
     key = f"api:{client}"
     if not check_rate_limit(key, 60, 60):
         remaining, retry_after = get_rate_remaining(key, 60, 60)
-        response = JSONResponse(
+        response: Response = JSONResponse(
             content={"error": "rate limited"},
             status_code=429,
         )
@@ -506,7 +519,9 @@ async def rate_limit_headers_middleware(request: Request, call_next):
     return response
 
 
-async def csrf_session_middleware(request: Request, call_next):
+async def csrf_session_middleware(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     """Ensure every visitor has a session cookie for CSRF protection."""
     if not request.cookies.get("cw_sid"):
         sid = secrets.token_hex(16)
@@ -523,7 +538,9 @@ async def csrf_session_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-async def setup_redirect_middleware(request: Request, call_next):
+async def setup_redirect_middleware(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     """Redirect all HTML page requests to /setup when the app needs first-run configuration.
 
     Detected via app.state.needs_setup flag set during lifespan.
@@ -579,7 +596,9 @@ def authenticate_api_key(
     return ctx
 
 
-async def auth_middleware(request: Request, call_next):
+async def auth_middleware(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
     """Enforce authentication when AUTH_PROVIDER is configured.
 
     Public paths (/healthz, /metrics, /static, /login, /auth/*) are exempt.
@@ -659,7 +678,13 @@ def _build_csp(nonce: str) -> str:
     )
     report_uri = os.environ.get("CERT_WATCH_CSP_REPORT_URI", "")
     if report_uri:
-        policy += f"; report-uri {report_uri}"
+        parsed = urlparse(report_uri)
+        if parsed.scheme in ("http", "https") and parsed.netloc:
+            policy += f"; report-uri {report_uri}"
+        else:
+            logger.warning(
+                "CERT_WATCH_CSP_REPORT_URI is not a valid http(s) URL, ignoring"
+            )
     return policy
 
 
@@ -675,26 +700,17 @@ class CSPNonceMiddleware:
     the eventual header flip) read the same value. See BC-075.
     """
 
-    def __init__(self, app):
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send):
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
             scope.setdefault("state", {})["csp_nonce"] = secrets.token_urlsafe(16)
         await self.app(scope, receive, send)
 
 
-async def security_headers_middleware(request: Request, call_next):
-    """Add security response headers (CSP, X-Content-Type-Options, etc.).
-
-    The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
-    (``request.state.csp_nonce``) and consumed here by ``_build_csp(nonce)``: the
-    emitted ``script-src`` is ``'self' 'nonce-{nonce}'`` with no ``'unsafe-inline'``
-    (BC-075 flip done). ``style-src`` intentionally retains ``'unsafe-inline'`` for
-    dynamic inline ``style=`` custom properties.
-    """
-    nonce = getattr(request.state, "csp_nonce", "")
-    response = await call_next(request)
+def _apply_security_headers(response: Response, nonce: str) -> None:
+    """Apply security headers to a response (shared by normal + error paths)."""
     response.headers["Content-Security-Policy"] = _build_csp(nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -707,6 +723,33 @@ async def security_headers_middleware(request: Request, call_next):
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
+
+
+async def security_headers_middleware(
+    request: Request, call_next: RequestResponseEndpoint
+) -> Response:
+    """Add security response headers (CSP, X-Content-Type-Options, etc.).
+
+    The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
+    (``request.state.csp_nonce``) and consumed here by ``_build_csp(nonce)``: the
+    emitted ``script-src`` is ``'self' 'nonce-{nonce}'`` with no ``'unsafe-inline'``
+    (BC-075 flip done). ``style-src`` intentionally retains ``'unsafe-inline'`` for
+    dynamic inline ``style=`` custom properties.
+
+    M7: wraps ``call_next`` in try/except so security headers are applied even
+    when the handler raises (Starlette's ``ServerErrorMiddleware`` returns a 500
+    that bypasses this middleware without the try/except).
+    """
+    nonce = getattr(request.state, "csp_nonce", "")
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled exception in request handler")
+        response = JSONResponse(
+            content={"detail": "Internal Server Error"},
+            status_code=500,
+        )
+    _apply_security_headers(response, nonce)
     return response
 
 
@@ -794,7 +837,7 @@ class _AuthResult(NamedTuple):
     api_key_auth: bool = False
 
 
-def _set_request_auth_context(request: Request, username: str, info) -> None:
+def _set_request_auth_context(request: Request, username: str, info: SessionInfo) -> None:
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     role_repo = None
@@ -972,7 +1015,7 @@ async def require_admin_write_form(request: Request) -> RedirectResponse | None:
     return None
 
 
-def rate_limit(key_prefix: str, max_requests: int, window_seconds: int):
+def rate_limit(key_prefix: str, max_requests: int, window_seconds: int) -> Any:
     """FastAPI dependency factory for per-client-IP rate limiting (Plan 020 S2).
 
     Usage: ``deps=[Depends(rate_limit("ct", 10, 60))]`` (or a parameter

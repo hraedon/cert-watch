@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import cast
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
@@ -71,7 +72,7 @@ def _extract_ocsp_url(cert_der: bytes) -> str | None:
         )
         for access_desc in aia.value:  # type: ignore[attr-defined]
             if access_desc.access_method == AuthorityInformationAccessOID.OCSP:
-                return access_desc.access_location.value
+                return cast(str, access_desc.access_location.value)
     except (x509.ExtensionNotFound, ValueError, TypeError):
         pass
     return None

@@ -31,16 +31,29 @@ def test_api_posture_returns_stored_grade(tmp_path, reload_app):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
+    from cert_watch.database.connection import _connect
 
     init_schema(str(db))
+    cert_id = "00000000-0000-0000-0000-000000000001"
+    with _connect(str(db)) as conn:
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cert_id, "CN=test", "CN=CA", "2026-01-01T00:00:00+00:00",
+             "2027-01-01T00:00:00+00:00", "[]", "fp-test", b"", "scanned",
+             "example.com", 443, 1, "2026-01-01T00:00:00+00:00",
+             "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
     store_scan_posture(
-        str(db), "00000000-0000-0000-0000-000000000001", "example.com", 443, "B",
+        str(db), cert_id, "example.com", 443, "B",
         [{"check": "tls_version", "status": "warn", "message": "TLS 1.0 offered"}],
         protocol_version="TLSv1.0",
     )
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates/00000000-0000-0000-0000-000000000001/posture")
+        r = client.get(f"/api/certificates/{cert_id}/posture")
     assert r.status_code == 200
     data = r.json()
     assert data["cert_id"] == "00000000-0000-0000-0000-000000000001"

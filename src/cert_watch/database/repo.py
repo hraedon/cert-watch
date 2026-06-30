@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso
@@ -179,9 +180,9 @@ class SqliteCertificateRepository(CertificateRepository):
             conn.commit()
 
     def delete(self, cert_id: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute("DELETE FROM certificates WHERE id = ?", (cert_id,))
-            conn.commit()
+        from cert_watch.database.cert_ops import delete_certificate_cascade
+
+        delete_certificate_cascade(self.db_path, cert_id)
 
     def update_notes(self, cert_id: str, notes: str) -> None:
         now = _iso(datetime.now(UTC))
@@ -250,6 +251,9 @@ class AlertRepository(ABC):
 
     @abstractmethod
     def mark_failed(self, alert_id: str, error_message: str) -> None: ...
+
+    @abstractmethod
+    def reset_to_pending(self, alert_id: str) -> None: ...
 
 
 class SqliteAlertRepository(AlertRepository):
@@ -339,7 +343,7 @@ class SqliteAlertRepository(AlertRepository):
         offset: int = 0,
     ) -> list[Alert]:
         conditions: list[str] = ["status = 'pending'"]
-        params: list = []
+        params: list[Any] = []
         if alert_type:
             conditions.append("alert_type = ?")
             params.append(alert_type)
@@ -428,8 +432,16 @@ class SqliteAlertRepository(AlertRepository):
             )
             conn.commit()
 
+    def reset_to_pending(self, alert_id: str) -> None:
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "UPDATE alerts SET status = 'pending', error_message = NULL WHERE id = ?",
+                (alert_id,),
+            )
+            conn.commit()
+
     @staticmethod
-    def _row_to_alert(row) -> Alert:
+    def _row_to_alert(row: sqlite3.Row) -> Alert:
         row_dict = dict(row)
         extra = row_dict.get("extra_recipients", "[]")
         try:
@@ -490,6 +502,9 @@ class ScopedAlertRepository(AlertRepository):
 
     def mark_failed(self, alert_id: str, error_message: str) -> None:
         self._repo.mark_failed(alert_id, error_message)
+
+    def reset_to_pending(self, alert_id: str) -> None:
+        self._repo.reset_to_pending(alert_id)
 
 
 # ---------- Trust Anchors ----------
@@ -639,7 +654,7 @@ class SqliteHostRepository:
         return [self._row_to_host(r) for r in rows]
 
     @staticmethod
-    def _row_to_host(r) -> HostEntry:
+    def _row_to_host(r: sqlite3.Row) -> HostEntry:
         return HostEntry(
             id=r["id"],
             hostname=r["hostname"],
@@ -763,7 +778,7 @@ class SqliteHostRepository:
             if not r:
                 return False
             sets: list[str] = []
-            params: list = []
+            params: list[Any] = []
             if owner_name is not None:
                 sets.append("owner_name = ?")
                 params.append(owner_name)
@@ -814,7 +829,7 @@ class SqliteHostRepository:
             if not r:
                 return False
             sets: list[str] = []
-            params: list = []
+            params: list[Any] = []
             if renewal_method is not None:
                 sets.append("renewal_method = ?")
                 params.append(renewal_method)
@@ -993,7 +1008,7 @@ class SqliteAlertGroupRepository:
             if not r:
                 return False
             sets: list[str] = []
-            params: list = []
+            params: list[Any] = []
             if name is not None:
                 sets.append("name = ?")
                 params.append(name)

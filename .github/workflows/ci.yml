@@ -31,8 +31,7 @@ jobs:
       - name: ruff
         run: .venv/bin/ruff check .
       - name: mypy
-        # Gated now that the tree is at zero errors (BC-093 / BC-146). Config
-        # lives in [tool.mypy] in pyproject.toml.
+        # strict = true in [tool.mypy] (WI-125). Zero errors across 127 source files.
         run: .venv/bin/mypy src/cert_watch
       - name: djlint
         # Template linting (BC-143).  Ignore style conventions that are

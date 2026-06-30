@@ -6,6 +6,7 @@ import contextlib
 import ipaddress
 import socket
 import ssl
+from typing import Any
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
@@ -21,7 +22,7 @@ def _capture_ldaps_chain(
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> list[dict] | None:
+) -> list[dict[str, Any]] | None:
     """Capture the certificate chain presented by an LDAPS server using a non-validating probe."""
     lowered = url.lower()
     if not lowered.startswith("ldaps://"):
@@ -44,7 +45,7 @@ def _capture_starttls_chain(
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> list[dict] | None:
+) -> list[dict[str, Any]] | None:
     """Capture the certificate chain presented by an LDAP server via StartTLS."""
     lowered = url.lower()
     if not lowered.startswith("ldap://"):
@@ -107,7 +108,7 @@ def _probe_tls_chain(
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> list[dict] | None:
+) -> list[dict[str, Any]] | None:
     """Non-validating TLS probe to capture the certificate chain from *host:port*."""
     # SSRF guard — resolve hostnames to catch DNS-based bypasses
     try:
@@ -153,7 +154,7 @@ def _probe_tls_chain(
     return _der_chain_to_ca_dicts(der_chain)
 
 
-def _der_chain_to_ca_dicts(der_chain: list[bytes]) -> list[dict] | None:
+def _der_chain_to_ca_dicts(der_chain: list[bytes]) -> list[dict[str, Any]] | None:
     """Convert a list of DER-encoded certificates to CA dicts (leaf excluded)."""
     if not der_chain:
         return None
@@ -172,7 +173,7 @@ def _der_chain_to_ca_dicts(der_chain: list[bytes]) -> list[dict] | None:
     if not ca_certs:
         return None
 
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
     for cert in ca_certs:
         pem = (
             x509.load_der_x509_certificate(cert.raw_der)

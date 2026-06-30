@@ -14,8 +14,11 @@ import http.client
 import ipaddress
 import logging
 import socket
+import ssl
+import typing
 import urllib.request
-from http.client import HTTPResponse
+from http.client import HTTPMessage, HTTPResponse
+from typing import IO
 from urllib.parse import urlparse, urlunparse
 
 from cert_watch.scan import _is_blocked_ip
@@ -121,7 +124,10 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
     back to the default connection behaviour.
     """
 
-    def https_open(self, req):
+    # stdlib HTTPSHandler stores the SSLContext here but typeshed doesn't expose it.
+    _context: ssl.SSLContext
+
+    def https_open(self, req: urllib.request.Request) -> typing.Any:
         pinned_ip = getattr(req, "_pinned_ip", None)
         original_hostname = getattr(req, "_pinned_hostname", None)
 
@@ -141,12 +147,19 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
         class _Conn(http.client.HTTPSConnection):
             """HTTPSConnection that TCP-connects to the pinned IP."""
 
-            def __init__(conn_self, host, **kwargs):
+            # Declared so mypy accepts the attribute access below.  These are
+            # inherited from HTTPConnection / HTTPSConnection but typeshed
+            # doesn't expose all of them as instance attributes.
+            _pinned_ip: str
+            _tunnel_host: str | None
+            source_address: tuple[str, int] | None
+
+            def __init__(conn_self, host: str, **kwargs: typing.Any) -> None:
                 super().__init__(_hostname, port=_port, context=ctx, **kwargs)
                 conn_self._pinned_ip = _pinned_ip
                 conn_self.server_hostname = _hostname
 
-            def connect(conn_self):
+            def connect(conn_self) -> None:
                 # socket.create_connection() takes a 2-tuple (host, port) and
                 # resolves IP literals itself. Passing the 4-tuple sockaddr form
                 # used by socket.connect() raises "too many values to unpack",
@@ -160,7 +173,7 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
                 )
                 if conn_self._tunnel_host:
                     conn_self._tunnel_host = None
-                conn_self.sock = conn_self._context.wrap_socket(
+                conn_self.sock = ctx.wrap_socket(
                     conn_self.sock, server_hostname=conn_self.server_hostname,
                 )
 
@@ -175,7 +188,10 @@ def _ssrf_safe_redirect_handler(
     """Build a redirect handler that validates and pins each redirect target."""
 
     class _Handler(urllib.request.HTTPRedirectHandler):
-        def redirect_request(self, req, fp, code, msg, headers, newurl):
+        def redirect_request(
+            self, req: urllib.request.Request, fp: IO[bytes], code: int,
+            msg: str, headers: HTTPMessage, newurl: str,
+        ) -> urllib.request.Request | None:
             pinned_ip = _validate_url(
                 newurl,
                 allow_private=allow_private,
@@ -189,9 +205,13 @@ def _ssrf_safe_redirect_handler(
             pinned_url, original_hostname, host_header = _pin_url(newurl, pinned_ip)
             new_req.full_url = pinned_url
             new_req.add_unredirected_header("Host", host_header)
-            new_req._pinned_ip = pinned_ip
-            new_req._pinned_hostname = original_hostname
-            return new_req
+            # urllib's redirect handler creates plain Request objects; we
+            # attach the pinning attributes so _PinnedHTTPSHandler can read
+            # them back on the next hop.
+            pinned_req = typing.cast("_PinnedRequest", new_req)
+            pinned_req._pinned_ip = pinned_ip
+            pinned_req._pinned_hostname = original_hostname
+            return pinned_req
 
     return _Handler()
 
@@ -234,7 +254,7 @@ def ssrf_safe_urlopen(
     if headers:
         for k, v in headers.items():
             req.add_header(k, v)
-    return opener.open(req, timeout=timeout)
+    return typing.cast("HTTPResponse", opener.open(req, timeout=timeout))
 
 
 def validate_webhook_url(

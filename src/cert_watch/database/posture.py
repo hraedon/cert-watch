@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect, _iso
 from cert_watch.database.schema import init_schema
@@ -17,7 +18,7 @@ def store_scan_posture(
     hostname: str | None,
     port: int | None,
     grade: str,
-    findings: list[dict],
+    findings: list[dict[str, Any]],
     protocol_version: str = "",
     ocsp_stapling: bool | None = None,
     hsts: bool | None = None,
@@ -94,7 +95,7 @@ def store_scan_posture(
     return posture_id
 
 
-def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict | None:
+def get_posture_for_cert(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:
     """Get the most recent posture evaluation for a certificate.
 
     Returns a dict with grade, findings, protocol_version, etc. or None.
@@ -164,7 +165,7 @@ def get_posture_grades_for_certs(
 
 def get_posture_for_certs(
     db_path: str | Path, cert_ids: list[str]
-) -> dict[str, dict]:
+) -> dict[str, dict[str, Any]]:
     """Get the latest full posture row for each cert_id in a single query.
 
     Same per-cert shape as :func:`get_posture_for_cert`, but batched so a
@@ -187,7 +188,7 @@ def get_posture_for_certs(
               )""",
             cert_ids,
         ).fetchall()
-    result: dict[str, dict] = {}
+    result: dict[str, dict[str, Any]] = {}
     for row in rows:
         d = dict(row)
         try:

@@ -208,7 +208,8 @@ def test_certificate_detail_posture_value_error_still_renders(
 def test_certificate_detail_posture_runtime_error_propagates(
     reload_app, tmp_path, leaf_pem_file, monkeypatch,
 ):
-    """RuntimeError (a code bug) in posture eval must not be silently swallowed."""
+    """RuntimeError (a code bug) in posture eval must produce a 500 response,
+    not be silently swallowed (M7: security_headers_middleware catches and returns 500)."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema
@@ -219,8 +220,9 @@ def test_certificate_detail_posture_runtime_error_propagates(
         "cert_watch.posture.evaluate_posture",
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")),
     )
-    with TestClient(app_mod.app) as client, pytest.raises(RuntimeError, match="boom"):
-        client.get(f"/certificates/{cert_id}")
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{cert_id}")
+    assert r.status_code == 500
 
 
 def test_certificate_detail_posture_unsupported_algorithm_still_renders(

@@ -6,6 +6,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso
@@ -82,7 +83,7 @@ def _extract_sig_algo(raw_der: bytes) -> str:
 
 
 def _compute_drift_events(
-    old: dict,
+    old: dict[str, Any],
     new_leaf: Certificate,
     new_posture_grade: str = "",
     new_protocol_version: str = "",
@@ -389,7 +390,7 @@ def list_cert_history(
     hostname: str,
     port: int,
     limit: int = 365,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return scan history for a specific host:port, newest first."""
     init_schema(db_path)
     with _connect(db_path) as conn:
@@ -409,7 +410,7 @@ def list_cert_history(
 def list_tls_version_trends(
     db_path: str | Path,
     days: int = 30,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fleet TLS version distribution over time.
 
     Returns [{date, protocol_version, count}] for the last *days* days.
@@ -431,7 +432,7 @@ def list_tls_version_trends(
 def list_grade_trends(
     db_path: str | Path,
     days: int = 30,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Fleet posture grade distribution over time.
 
     Returns [{date, posture_grade, count}] for the last *days* days.

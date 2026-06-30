@@ -5,12 +5,14 @@ from __future__ import annotations
 import logging
 import tempfile
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.database import (
@@ -320,7 +322,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     from cert_watch.posture import evaluate_posture
 
     _posture = get_posture_for_cert(db, cert_id)
-    posture_data: dict | None = None
+    posture_data: dict[str, Any] | None = None
     if _posture:
         posture_data = _posture
     else:
@@ -398,7 +400,9 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
 
 
 @router.get("/api/certificates/{cert_id}/posture", response_model=None)
-def certificate_posture_api(request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)):
+def certificate_posture_api(
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth),
+) -> dict[str, Any]:
     """Return the latest posture evaluation for a certificate as JSON."""
     db = _db_path(request)
     denied = scope_read_denied(request, db, cert_id=cert_id)
@@ -527,6 +531,10 @@ async def update_certificate_owner(
     write_err = await require_write_form(request)
     if write_err:
         return write_err
+    if not check_rate_limit(f"cert_owner:{_extract_client_ip(request)}", 30, 60):
+        return RedirectResponse(
+            url=f"/?error={quote('rate limited: too many requests')}", status_code=303
+        )
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
@@ -578,7 +586,7 @@ async def update_certificate_owner(
         return RedirectResponse(
             url=f"/certificates/{cert_id}?error={quote('invalid renewal method')}", status_code=303,
         )
-    if owner_email and "@" not in owner_email:
+    if owner_email and not _validate_email(owner_email):
         return RedirectResponse(
             url=f"/certificates/{cert_id}?error={quote('invalid email')}", status_code=303,
         )

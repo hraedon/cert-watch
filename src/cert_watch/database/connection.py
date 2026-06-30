@@ -149,6 +149,7 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     conn.create_function("cw_casefold", 1, _cw_casefold)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=15000")
+    conn.execute("PRAGMA foreign_keys=ON")
     cache[path_str] = conn
     if current_stat:
         meta[path_str] = (current_stat.st_ino, current_stat.st_size, current_stat.st_mtime)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
@@ -36,7 +37,7 @@ async def save_policy_settings(request: Request) -> RedirectResponse:
         category = str(form.get(f"category_{rid}", "custom"))
         severity = str(form.get(f"severity_{rid}", default_severity))
         enabled = form.get(f"enabled_{rid}") == "1"
-        parameters: dict = {}
+        parameters: dict[str, Any] = {}
         min_rsa_raw = form.get(f"min_rsa_{rid}")
         if min_rsa_raw is not None:
             with contextlib.suppress(ValueError):

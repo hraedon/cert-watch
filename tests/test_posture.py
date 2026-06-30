@@ -130,6 +130,22 @@ def _ca_signed_cert_der() -> bytes:
     return cert.public_bytes(serialization.Encoding.DER)
 
 
+def _insert_certificate(db_path: str, cert_id: str) -> None:
+    """Insert a minimal certificates row so child tables (scan_posture) satisfy FK."""
+    from cert_watch.database.connection import _connect
+
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cert_id, "CN=test", "CN=CA", "2026-01-01T00:00:00+00:00",
+             "2027-01-01T00:00:00+00:00", "[]", f"fp-{cert_id}", b"", "scanned",
+             "test", 443, 1, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+
 def _cert_from_der(der: bytes, fingerprint: str = "") -> Certificate:
     from cryptography import x509
     x509_cert = x509.load_der_x509_certificate(der)
@@ -382,6 +398,7 @@ class TestPostureStorage:
     def test_store_and_retrieve_posture(self, tmp_path):
         db = str(tmp_path / "test.db")
         init_schema(db)
+        _insert_certificate(db, "cert-001")
         findings = [
             {"check": "rsa_key_size", "status": "pass", "message": "RSA 2048 bits"},
             {"check": "sha1_signature", "status": "pass", "message": "No SHA-1"},
@@ -419,6 +436,7 @@ class TestPostureStorage:
     def test_posture_with_finding_objects(self, tmp_path):
         db = str(tmp_path / "test.db")
         init_schema(db)
+        _insert_certificate(db, "cert-002")
         findings = [
             Finding(check="chain_completeness", status="warn", message="Incomplete chain"),
         ]
@@ -441,6 +459,8 @@ class TestPostureStorage:
         from cert_watch.database import get_posture_grades_for_certs
         db = str(tmp_path / "test.db")
         init_schema(db)
+        _insert_certificate(db, "c1")
+        _insert_certificate(db, "c2")
         store_scan_posture(
             db, "c1", "h1", 443, "A",
             [{"check": "x", "status": "pass", "message": "ok"}],
@@ -529,6 +549,7 @@ class TestPostureLatestSelection:
 
         db = str(tmp_path / "test.db")
         init_schema(db)
+        _insert_certificate(db, "cert-tie")
         same_ts = "2026-05-30T12:00:00+00:00"
         store_scan_posture(
             db, "cert-tie", "h", 443, "A",

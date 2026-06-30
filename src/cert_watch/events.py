@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.retry import backoff_range
@@ -35,10 +36,10 @@ ALL_SOURCES = ("scan", "upload", "ct", "manual", "scheduler")
 class Event:
     event_type: str
     timestamp: datetime
-    payload: dict
+    payload: dict[str, Any]
     source: str
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "event_type": self.event_type,
             "timestamp": self.timestamp.isoformat(),
@@ -372,9 +373,9 @@ def get_events(
     since: str | None = None,
     limit: int = 100,
     offset: int = 0,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     conditions: list[str] = []
-    params: list = []
+    params: list[Any] = []
     if event_type:
         conditions.append("event_type = ?")
         params.append(event_type)
@@ -393,7 +394,7 @@ def get_events(
     return [dict(r) for r in rows]
 
 
-def get_failed_deliveries(db_path: str | Path, *, limit: int = 50) -> list[dict]:
+def get_failed_deliveries(db_path: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
     with _connect(db_path) as conn:
         rows = conn.execute(
             "SELECT * FROM event_log WHERE delivery_status = 'failed' ORDER BY id DESC LIMIT ?",
@@ -426,9 +427,9 @@ def purge_old_events(db_path: str | Path, retention_days: int) -> int:
         return 0
     cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
     with _connect(db_path) as conn:
-        count = conn.execute(
+        row = conn.execute(
             "SELECT COUNT(*) FROM event_log WHERE created_at < ?", (cutoff,)
-        ).fetchone()[0]
+        ).fetchone()
         conn.execute("DELETE FROM event_log WHERE created_at < ?", (cutoff,))
         conn.commit()
-    return count
+    return int(row[0]) if row is not None else 0

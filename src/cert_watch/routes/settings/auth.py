@@ -6,6 +6,7 @@ import contextlib
 import ipaddress
 import json
 import ssl
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -98,7 +99,7 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
 # ---------- Test LDAP connection ----------
 
 
-def _parse_ldap_form(form) -> tuple[str, str, str, str, str, bool, int] | JSONResponse:
+def _parse_ldap_form(form: Any) -> tuple[str, str, str, str, str, bool, int] | JSONResponse:
     _server = form.get("ldap_server", "")
     _base = form.get("ldap_base_dn", "")
     _bind = form.get("ldap_bind_dn", "")
@@ -129,10 +130,17 @@ def _check_ldap_ssrf(
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> JSONResponse | None:
+) -> tuple[JSONResponse | None, dict[str, str]]:
+    """Validate LDAP server URLs against the SSRF policy.
+
+    Returns ``(error_response_or_None, resolved_ips)`` where *resolved_ips*
+    maps each hostname to its pinned IP so the subsequent LDAP connection can
+    use the IP directly (prevents DNS rebinding — M8).
+    """
     from cert_watch.scan import _is_blocked_ip
     from cert_watch.scan_resolver import resolve_and_validate_host
 
+    resolved_ips: dict[str, str] = {}
     for s in [s.strip() for s in server.split(",") if s.strip()]:
         host_part = s.split("://", 1)[-1].split(":")[0].split("/")[0]
         try:
@@ -140,22 +148,33 @@ def _check_ldap_ssrf(
             if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
                 return JSONResponse(
                     {"ok": False, "error": f"LDAP server IP blocked: {ip}"},
-                )
+                ), resolved_ips
+            resolved_ips[host_part] = str(ip)
         except ValueError:
-            err, _ = resolve_and_validate_host(
+            err, pinned_ip = resolve_and_validate_host(
                 host_part, allow_private=allow_private, allowed_subnets=allowed_subnets
             )
             if err:
-                return JSONResponse({"ok": False, "error": f"LDAP server blocked: {err}"})
-    return None
+                return (
+                    JSONResponse({"ok": False, "error": f"LDAP server blocked: {err}"}),
+                    resolved_ips,
+                )
+            if pinned_ip:
+                resolved_ips[host_part] = pinned_ip
+    return None, resolved_ips
 
 
-def _build_ldap_tls(use_tls: bool, tmp_path: str | None, ldap3):
+def _build_ldap_tls(
+    use_tls: bool, tmp_path: str | None, ldap3: Any,
+    valid_names: list[str] | None = None,
+) -> Any:
     if not use_tls:
         return None
-    kwargs: dict = {"validate": ssl.CERT_REQUIRED}
+    kwargs: dict[str, Any] = {"validate": ssl.CERT_REQUIRED}
     if tmp_path:
         kwargs["ca_certs_file"] = tmp_path
+    if valid_names:
+        kwargs["valid_names"] = valid_names
     return ldap3.Tls(**kwargs)
 
 
@@ -167,14 +186,33 @@ async def _probe_single_ldap_url(
     ca_cert_tmp: str | None,
     connect_timeout: int,
     request: Request,
+    *,
+    resolved_ips: dict[str, str] | None = None,
 ) -> tuple[JSONResponse | None, bool]:
     import ldap3
 
     srv_is_ldaps = url.lower().startswith("ldaps://")
     use_tls = srv_is_ldaps or start_tls
-    tls = _build_ldap_tls(use_tls, ca_cert_tmp, ldap3)
+
+    # M8: pin the resolved IP to prevent DNS rebinding. Extract the hostname
+    # from the URL, look up the pinned IP, and construct a new URL with the
+    # IP. For TLS, pass valid_names=[hostname] so cert verification still
+    # checks against the original hostname.
+    host_part = url.split("://", 1)[-1].split(":")[0].split("/")[0]
+    pinned_url = url
+    valid_names = None
+    if resolved_ips and host_part in resolved_ips:
+        pinned_ip = resolved_ips[host_part]
+        scheme = url.split("://", 1)[0]
+        rest = url.split("://", 1)[1]
+        port_suffix = rest[len(host_part):]  # e.g. ":389" or ":636"
+        pinned_url = f"{scheme}://{pinned_ip}{port_suffix}"
+        if use_tls:
+            valid_names = [host_part]
+
+    tls = _build_ldap_tls(use_tls, ca_cert_tmp, ldap3, valid_names=valid_names)
     try:
-        srv = ldap3.Server(url, tls=tls, connect_timeout=connect_timeout)
+        srv = ldap3.Server(pinned_url, tls=tls, connect_timeout=connect_timeout)
         conn = ldap3.Connection(
             srv,
             user=bind_dn or None,
@@ -246,6 +284,8 @@ async def _run_ldap_probe(
     start_tls: bool,
     connect_timeout: int,
     request: Request,
+    *,
+    resolved_ips: dict[str, str] | None = None,
 ) -> JSONResponse:
     import os
     import tempfile
@@ -263,7 +303,8 @@ async def _run_ldap_probe(
     try:
         for url in server_urls:
             failure, tls_active = await _probe_single_ldap_url(
-                url, bind_dn, bind_password, start_tls, tmp_path, connect_timeout, request
+                url, bind_dn, bind_password, start_tls, tmp_path, connect_timeout, request,
+                resolved_ips=resolved_ips,
             )
             if failure is not None:
                 return failure
@@ -299,7 +340,7 @@ async def test_ldap_connection(
 
     server = parsed[0]
     settings = _get_settings(request)
-    ssrf_err = _check_ldap_ssrf(
+    ssrf_err, resolved_ips = _check_ldap_ssrf(
         server,
         allow_private=settings.allow_private,
         allowed_subnets=settings.allowed_subnets,
@@ -308,7 +349,7 @@ async def test_ldap_connection(
         return ssrf_err
 
     try:
-        return await _run_ldap_probe(*parsed, request)
+        return await _run_ldap_probe(*parsed, request, resolved_ips=resolved_ips)
     except ImportError:
         return JSONResponse({
             "ok": False,

@@ -9,6 +9,7 @@ import secrets
 import time
 import typing
 from dataclasses import dataclass
+from typing import Any
 from urllib.parse import urlencode
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
@@ -101,7 +102,7 @@ class OAuthProvider(AuthProvider):
         self.config = config
         self._security = security
         self._discovered: dict[str, str] = {}
-        self._jwks: dict | None = None
+        self._jwks: dict[str, Any] | None = None
         self._jwks_fetched_at: float = 0.0
         self._jwks_ttl: int = config.jwks_cache_ttl
         self._allow_private = config.allow_private
@@ -160,15 +161,19 @@ class OAuthProvider(AuthProvider):
 
     def _fetch_token(
         self, token_endpoint: str, code: str, redirect_uri: str,
-    ) -> dict:
+        *, code_verifier: str | None = None,
+    ) -> dict[str, Any]:
         """Exchange an authorization code for tokens via the SSRF-safe opener."""
         client_id = self.config.client_id
         client_secret = self.config.client_secret
-        payload = urlencode({
+        params: dict[str, str] = {
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": redirect_uri,
-        })
+        }
+        if code_verifier:  # L12: PKCE
+            params["code_verifier"] = code_verifier
+        payload = urlencode(params)
         credentials = base64.b64encode(
             f"{client_id}:{client_secret}".encode(),
         ).decode("ascii")
@@ -192,9 +197,9 @@ class OAuthProvider(AuthProvider):
                 raise ValueError(
                     f"token endpoint returned {resp.status}: {error_body}"
                 )
-            return json.loads(resp.read(_TOKEN_MAX_BYTES))
+            return dict[str, Any](json.loads(resp.read(_TOKEN_MAX_BYTES)))
 
-    def _fetch_jwks(self, *, force: bool = False) -> dict | None:
+    def _fetch_jwks(self, *, force: bool = False) -> dict[str, Any] | None:
         """Fetch and cache JWKS from the IdP's jwks_uri."""
         if (
             self._jwks is not None
@@ -227,16 +232,16 @@ class OAuthProvider(AuthProvider):
         id_token: str,
         access_token: str | None = None,
         nonce: str | None = None,
-    ) -> dict | None:
+    ) -> dict[str, Any] | None:
         """Verify an OIDC ID token using JWKS. Returns validated claims or None."""
         _jwt: typing.Any = None
         KeySet: typing.Any = None
         try:
-            import joserfc.jwt as _jwt  # type: ignore[no-redef]
-            from joserfc.jwk import KeySet  # type: ignore[no-redef]
+            import joserfc.jwt as _jwt
+            from joserfc.jwk import KeySet
         except ImportError:
             try:
-                import authlib.jose.jwt as _jwt  # type: ignore[no-redef,import-untyped]
+                import authlib.jose.jwt as _jwt  # type: ignore[no-redef]
                 KeySet = None
             except ImportError:
                 logger.warning("Neither joserfc nor authlib.jose available for JWT verification")
@@ -272,7 +277,7 @@ class OAuthProvider(AuthProvider):
                 "iss": {"essential": True, "value": issuer},
                 "aud": {"essential": True, "value": self.config.client_id},
             }
-            claims_params: dict = {"client_id": self.config.client_id}
+            claims_params: dict[str, Any] = {"client_id": self.config.client_id}
             if nonce:
                 claims_params["nonce"] = nonce
 
@@ -343,13 +348,16 @@ class OAuthProvider(AuthProvider):
         if not authorization_endpoint:
             return AuthResult(success=False, error="authorization_endpoint not configured")
         nonce = secrets.token_urlsafe(16)
+        code_verifier = secrets.token_urlsafe(43)  # L12: PKCE (S256)
         uri, state = client.create_authorization_url(
             authorization_endpoint, redirect_uri=redirect_uri,
-            nonce=nonce,
+            nonce=nonce, code_verifier=code_verifier,
         )
         return AuthResult(
             success=True, redirect_url=uri,
-            oauth_state=_sign_state(state, security=self._security, nonce=nonce),
+            oauth_state=_sign_state(
+                state, security=self._security, nonce=nonce, code_verifier=code_verifier,
+            ),
         )
 
     def complete_oauth_flow(self, code: str, redirect_uri: str, state: str = "") -> AuthResult:
@@ -359,18 +367,20 @@ class OAuthProvider(AuthProvider):
         verify_result = _verify_state(state, security=self._security)
         if verify_result is None:
             return AuthResult(success=False, error="invalid OAuth state")
-        expected_state, nonce = verify_result
+        expected_state, nonce, code_verifier = verify_result
         endpoints = self._discover()
         token_endpoint = endpoints.get("token_endpoint", "")
         if not token_endpoint:
             return AuthResult(success=False, error="token_endpoint not configured")
         try:
-            token = self._fetch_token(token_endpoint, code, redirect_uri)
+            token = self._fetch_token(
+                token_endpoint, code, redirect_uri, code_verifier=code_verifier,
+            )
             username = ""
             roles: list[str] = []
             groups: list[str] = []
-            claims: dict | None = None
-            info: dict = {}
+            claims: dict[str, Any] | None = None
+            info: dict[str, Any] = {}
             id_token_str = token.get("id_token")
             if id_token_str:
                 try:
@@ -496,7 +506,7 @@ class OAuthProvider(AuthProvider):
 
 
 def _validate_claims_manual(
-    claims: dict, expected_issuer: str, expected_audience: str, nonce: str | None,
+    claims: dict[str, Any], expected_issuer: str, expected_audience: str, nonce: str | None,
 ) -> None:
     """Manual OIDC claim validation for environments without authlib.oidc.core."""
     iss = claims.get("iss", "").rstrip("/")

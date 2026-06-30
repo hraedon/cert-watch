@@ -137,7 +137,7 @@ class SqliteRoleRepository:
     def delete(self, role_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE users SET role_id = '' WHERE role_id = ?",
+                "UPDATE users SET role_id = NULL WHERE role_id = ?",
                 (role_id,),
             )
             conn.execute("DELETE FROM roles WHERE id = ?", (role_id,))
@@ -175,7 +175,7 @@ class SqliteUserRepository:
             username=row["username"],
             email=row["email"],
             password_hash=row["password_hash"],
-            role_id=row["role_id"],
+            role_id=row["role_id"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -194,10 +194,19 @@ class SqliteUserRepository:
             username=row["username"],
             email=row["email"],
             password_hash=row["password_hash"],
-            role_id=row["role_id"],
+            role_id=row["role_id"] or "",
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
+
+    def list_usernames_by_role_id(self, role_id: str) -> list[str]:
+        """Return the usernames of all users assigned to *role_id*."""
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT username FROM users WHERE role_id = ?",
+                (role_id,),
+            ).fetchall()
+        return [r["username"] for r in rows]
 
     def list_all(self) -> list[User]:
         with _connect(self.db_path) as conn:

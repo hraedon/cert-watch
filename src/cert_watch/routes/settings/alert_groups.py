@@ -9,6 +9,8 @@ programmatic use; this exposes it in the Settings UI (vanilla forms, no JS).
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
@@ -51,7 +53,7 @@ def _parse_optional_positive_int(raw: str, field: str) -> tuple[int | None, str 
     return val, None
 
 
-def _parse_form(form) -> tuple[dict | None, str | None]:
+def _parse_form(form: Any) -> tuple[dict[str, Any] | None, str | None]:
     """Validate the shared create/edit fields. Returns (values, error)."""
     name = str(form.get("name") or "").strip()
     if not name:
@@ -136,8 +138,8 @@ def alert_groups_preview(request: Request) -> HTMLResponse | RedirectResponse:
 
 
 def _match_preview(
-    db_path, match_tags: list[str], *, sample_limit: int = 5
-) -> tuple[int, list[dict]]:
+    db_path: str | Path, match_tags: list[str], *, sample_limit: int = 5
+) -> tuple[int, list[dict[str, Any]]]:
     """Count leaf certs whose effective (cert ∪ host) tags intersect *match_tags*.
 
     Returns ``(count, sample)`` where sample is up to *sample_limit*
@@ -170,7 +172,7 @@ def _match_preview(
     if not normalized:
         return 0, []
     conditions: list[str] = []
-    params: list = []
+    params: list[str] = []
     for tag in normalized:
         like = f"%,{_escape_like(tag)},%"
         conditions.append(
@@ -188,7 +190,7 @@ def _match_preview(
         count = conn.execute(
             f"SELECT COUNT(*) {join} AND ({where})", params
         ).fetchone()[0]
-        sample: list[dict] = []
+        sample: list[dict[str, Any]] = []
         if sample_limit > 0:
             rows = conn.execute(
                 f"SELECT DISTINCT c.hostname, c.subject {join} AND ({where}) "

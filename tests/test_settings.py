@@ -501,6 +501,13 @@ def test_test_ldap_multi_server_reports_bad_source(reload_app, monkeypatch):
             pass
 
     monkeypatch.setattr(ldap3, "Connection", FakeConn)
+    # M8: _check_ldap_ssrf now resolves and pins IPs, which would change
+    # server.host from the hostname to an IP — causing FakeConn's "dc2" check
+    # to miss. Bypass the SSRF check so the test exercises the probe path.
+    monkeypatch.setattr(
+        "cert_watch.routes.settings.auth._check_ldap_ssrf",
+        lambda *a, **kw: (None, {}),
+    )
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.post(
@@ -1337,10 +1344,11 @@ def test_users_page_loads(reload_app, tmp_path, monkeypatch):
 
 
 def test_create_user_success(reload_app, tmp_path, monkeypatch):
-    from cert_watch.database import SqliteUserRepository
+    from cert_watch.database import Role, SqliteRoleRepository, SqliteUserRepository
 
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    _seed_local_admin(tmp_path)
+    db = _seed_local_admin(tmp_path)
+    role_id = SqliteRoleRepository(db).add(Role(name="analysts", email="analysts@example.com"))
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         _login_admin(client, monkeypatch)
@@ -1350,7 +1358,7 @@ def test_create_user_success(reload_app, tmp_path, monkeypatch):
                 "username": "analyst",
                 "email": "analyst@example.com",
                 "password": "securepass1",
-                "role_id": "",
+                "role_id": role_id,
             },
             follow_redirects=False,
         )
@@ -1399,7 +1407,7 @@ def test_delete_user(reload_app, tmp_path, monkeypatch):
     _seed_local_admin(tmp_path)
     db = tmp_path / "cert-watch.sqlite3"
     user_id = SqliteUserRepository(db).add(
-        User(username="to-delete", password_hash=_scrypt_hash("password1"))
+        User(username="to-delete", password_hash=_scrypt_hash("password1"), role_id=None)
     )
 
     app_mod = reload_app()
@@ -1650,9 +1658,11 @@ def test_check_ldap_ssrf_allows_private_when_allowed(monkeypatch):
         "cert_watch.scan_resolver.resolve_and_validate_host", fake_resolve
     )
 
-    assert _check_ldap_ssrf("ldap.internal.example", allow_private=True) is None
+    # M8: _check_ldap_ssrf now returns (error_or_None, resolved_ips)
+    err, ips = _check_ldap_ssrf("ldap.internal.example", allow_private=True)
+    assert err is None
 
-    blocked = _check_ldap_ssrf("ldap.internal.example", allow_private=False)
+    blocked, _ = _check_ldap_ssrf("ldap.internal.example", allow_private=False)
     assert blocked is not None
     assert b"blocked" in blocked.body.lower()
 

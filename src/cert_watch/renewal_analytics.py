@@ -4,6 +4,7 @@ from __future__ import annotations
 import statistics
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.database.schema import init_schema
@@ -30,7 +31,7 @@ class HostRenewalAnalytics:
     median_lead_time: float | None
     median_cadence_days: float | None
     automation_classification: str
-    classification_evidence: dict
+    classification_evidence: dict[str, Any]
     cert_count: int
 
 
@@ -56,12 +57,12 @@ def _compute_trend(values: list[int]) -> str:
 
 
 def _classify_automation(
-    fingerprint_periods: list[dict],
+    fingerprint_periods: list[dict[str, Any]],
     observed_lifetimes: list[int],
     cadence_intervals: list[float],
     renewal_lead_times: list[float],
-) -> tuple[str, dict]:
-    evidence: dict = {}
+) -> tuple[str, dict[str, Any]]:
+    evidence: dict[str, Any] = {}
 
     if len(fingerprint_periods) < 2:
         evidence["reason"] = "fewer than 2 observed renewals"
@@ -97,7 +98,9 @@ def _classify_automation(
     return "manual", evidence
 
 
-def _compute_host_from_entries(hostname: str, entries: list[dict]) -> HostRenewalAnalytics:
+def _compute_host_from_entries(
+    hostname: str, entries: list[dict[str, Any]]
+) -> HostRenewalAnalytics:
     if not entries:
         return HostRenewalAnalytics(
             hostname=hostname,
@@ -111,7 +114,7 @@ def _compute_host_from_entries(hostname: str, entries: list[dict]) -> HostRenewa
             cert_count=0,
         )
 
-    fingerprint_periods: list[dict] = []
+    fingerprint_periods: list[dict[str, Any]] = []
     seen_fingerprints: dict[str, int] = {}
 
     for entry in entries:
@@ -226,7 +229,7 @@ def compute_fleet_analytics(db_path: str | Path) -> list[HostRenewalAnalytics]:
         ).fetchall()
 
     from collections import defaultdict
-    by_host: dict[tuple[str, int], list[dict]] = defaultdict(list)
+    by_host: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         d = dict(r)
         by_host[(d["hostname"], d.get("port", 0))].append(d)

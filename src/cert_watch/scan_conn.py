@@ -12,6 +12,7 @@ import ssl
 import subprocess
 import threading
 import time
+import typing
 
 from cert_watch.scan_resolver import _is_blocked_ip, _resolve_host
 
@@ -100,7 +101,7 @@ def _open_tls_connection(
     allow_private: bool = True, allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
     pinned_ip: str | None = None,
-):
+) -> ssl.SSLSocket:
     """Open a TLS connection and return the SSLSocket. Separated so tests can monkeypatch."""
     ctx = ssl.create_default_context()
     if verify:
@@ -132,7 +133,7 @@ def _open_tls_connection(
         raise
 
 
-def _get_chain_der(ssl_sock, hostname: str = "") -> list[bytes]:
+def _get_chain_der(ssl_sock: ssl.SSLSocket, hostname: str = "") -> list[bytes]:
     """
     Return DER bytes for every certificate the peer presented.
     Uses SSLSocket.getpeercert(True) for the leaf and (when available)
@@ -395,7 +396,7 @@ def _has_native_chain_api() -> bool:
     )
 
 
-def _der_enc():
+def _der_enc() -> typing.Any:
     from cryptography.hazmat.primitives.serialization import Encoding
 
     return Encoding.DER

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import HTMLResponse
@@ -40,7 +41,7 @@ def _settings_context(
     password_changed: str | None = None,
     new_token: str | None = None,
     new_name: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Build the full context dict for ``settings.html``.
 
     Used by ``settings_page()`` and ``_render_api_keys()`` so both render the
@@ -77,9 +78,9 @@ def _settings_context(
     except (json.JSONDecodeError, TypeError):
         ldap_role_map = {}
 
-    roles_data: list = []
-    users_data: list = []
-    alert_groups_data: list = []
+    roles_data: list[Any] = []
+    users_data: list[Any] = []
+    alert_groups_data: list[Any] = []
     if tab in ("roles", "users"):
         from cert_watch.database import SqliteRoleRepository, SqliteUserRepository
         roles_data = SqliteRoleRepository(db).list_all()

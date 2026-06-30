@@ -110,7 +110,16 @@ async def setup_submit(
         # Store in kv_store
         password_hash = _scrypt_hash(password)
         kv_set(db, LOCAL_ADMIN_USER, username)
-        kv_set(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash)
+        # H3: encrypt the password hash at rest so a DB backup/dump does not
+        # expose the scrypt hash for offline cracking.
+        from cert_watch.routes.settings.config import _get_encryption_key
+
+        enc_key = _get_encryption_key(request)
+        if enc_key:
+            from cert_watch.database import kv_set_secret
+            kv_set_secret(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash, enc_key)
+        else:
+            kv_set(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash)
         if subnet_list:
             kv_set(db, "allowed_subnets", ",".join(subnet_list))
             # Apply immediately to the running app (Settings is frozen).

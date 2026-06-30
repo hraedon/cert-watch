@@ -85,7 +85,7 @@ def test_team_route_no_user_role(tmp_path):
     init_schema(db)
 
     user_repo = SqliteUserRepository(db)
-    user_repo.add(User(username="bob", email="bob@example.com", role_id=""))
+    user_repo.add(User(username="bob", email="bob@example.com", role_id=None))
 
     s = Settings(db_path=db, data_dir=tmp_path)
 

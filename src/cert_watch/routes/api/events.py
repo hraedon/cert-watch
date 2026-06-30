@@ -7,6 +7,8 @@ import contextlib
 import json
 import logging
 import sqlite3
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -53,7 +55,7 @@ async def api_event_stream(
 ) -> EventSourceResponse:
     db = str(_db_path(request))
 
-    async def _generate():
+    async def _generate() -> AsyncIterator[dict[str, Any]]:
         max_id = 0
         while True:
             if await request.is_disconnected():

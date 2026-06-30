@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect, _parse_iso, _row_to_cert
 from cert_watch.database.posture import get_posture_for_cert
@@ -33,11 +34,11 @@ _SQL_DIRS = frozenset({"ASC", "DESC"})
 
 def _add_effective_tag_filter(
     sql: str,
-    params: list,
+    params: list[Any],
     scope_tags: list[str] | tuple[str, ...],
     col_cert: str | None = "c.tags",
     col_host: str = "h.tags",
-) -> tuple[str, list]:
+) -> tuple[str, list[Any]]:
     """Append effective-tag (cert ∪ host) filter clauses to *sql*.
 
     For each scope tag, adds LIKE conditions on the cert and/or host tag
@@ -48,7 +49,7 @@ def _add_effective_tag_filter(
     if not scope_tags:
         return sql, params
     conditions: list[str] = []
-    new_params: list = []
+    new_params: list[Any] = []
     seen: set[str] = set()
     for tag in scope_tags:
         tag = tag.strip()
@@ -74,9 +75,9 @@ def _add_effective_tag_filter(
 
 def _add_grouped_effective_tag_filter(
     sql: str,
-    params: list,
+    params: list[Any],
     scope_tags: list[str] | tuple[str, ...],
-) -> tuple[str, list]:
+) -> tuple[str, list[Any]]:
     """Append effective-tag filter for grouped fingerprint rows (WI-051).
 
     A fingerprint group is kept when at least one of its scanned leaf certs
@@ -86,7 +87,7 @@ def _add_grouped_effective_tag_filter(
     if not scope_tags:
         return sql, params
     conditions: list[str] = []
-    new_params: list = []
+    new_params: list[Any] = []
     seen: set[str] = set()
     for tag in scope_tags:
         tag = tag.strip()
@@ -126,9 +127,9 @@ def _escape_like(s: str) -> str:
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 def _build_dashboard_rows(
-    cert_rows,
-    anchor_rows,
-) -> list[dict]:
+    cert_rows: list[Any],
+    anchor_rows: list[Any],
+) -> list[dict[str, Any]]:
     """Build rich dashboard rows from raw certificate and anchor rows."""
     from cert_watch.cert_chain import chain_status
 
@@ -136,8 +137,8 @@ def _build_dashboard_rows(
     # columns (is_leaf, source, notes) that _row_to_cert reads — default them.
     anchors = [_row_to_cert({**dict(r), "is_leaf": 0}) for r in anchor_rows]
 
-    leaf_rows: list[dict] = []
-    children_by_leaf: dict[str, list[dict]] = {}
+    leaf_rows: list[dict[str, Any]] = []
+    children_by_leaf: dict[str, list[dict[str, Any]]] = {}
     for r in cert_rows:
         d = dict(r)
         if d["is_leaf"]:
@@ -157,7 +158,7 @@ def _build_dashboard_rows(
             return "warning"
         return "healthy"
 
-    dash: list[dict] = []
+    dash: list[dict[str, Any]] = []
     for leaf in leaf_rows:
         chain = children_by_leaf.get(leaf["id"], [])
         leaf_days = _days(leaf["not_after"])
@@ -222,7 +223,7 @@ def list_dashboard_rows(
     sort_order: str = "asc",
     page: int = 1,
     per_page: int = 0,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Return rich rows for the dashboard. Per the scope extension, each scanned host
     or uploaded bundle surfaces leaf + intermediate + root, and the row's urgency
@@ -287,7 +288,7 @@ def count_dashboard_leaves(db_path: str | Path) -> int:
     return row[0] if row else 0
 
 
-def list_unified_entries(db_path: str | Path) -> list[dict]:
+def list_unified_entries(db_path: str | Path) -> list[dict[str, Any]]:
     """Return a merged list of hosts (pending or scanned) and uploaded certificates.
 
     Each entry has a ``kind`` of ``scanned``, ``uploaded``, or ``pending``.
@@ -299,7 +300,7 @@ def list_unified_entries(db_path: str | Path) -> list[dict]:
     return _load_unified_filtered(db_path, include_uploaded=True)
 
 
-def _matches_q(e: dict, ql: str) -> bool:
+def _matches_q(e: dict[str, Any], ql: str) -> bool:
     """Python text match used by the dashboard filter (case-insensitive)."""
     fields = [e.get("name"), e.get("subject"), e.get("issuer"), e.get("host"),
               e.get("tags")]
@@ -310,12 +311,12 @@ def _matches_q(e: dict, ql: str) -> bool:
 
 
 def _filter_unified(
-    entries: list[dict],
+    entries: list[dict[str, Any]],
     *,
     q: str | None = None,
     urgency: str | None = None,
     source: str | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Apply the dashboard q/urgency/source filters to built unified entries.
 
     This mirrors the filter semantics used by the dashboard route exactly so
@@ -349,8 +350,8 @@ _UNIFIED_SORT_KEYS = {
 
 
 def _sort_unified(
-    entries: list[dict], *, sort_by: str = "days", sort_order: str = "asc"
-) -> list[dict]:
+    entries: list[dict[str, Any]], *, sort_by: str = "days", sort_order: str = "asc"
+) -> list[dict[str, Any]]:
     """Sort built unified entries with the dashboard's sort semantics."""
     key_fn = _UNIFIED_SORT_KEYS.get(sort_by, _UNIFIED_SORT_KEYS["days"])
     entries.sort(key=key_fn, reverse=(sort_order == "desc"))
@@ -367,7 +368,7 @@ def list_unified_entries_page(
     source: str | None = None,
     sort_by: str = "days",
     sort_order: str = "asc",
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Return a paginated slice of unified entries plus the total count.
 
     Thin compatibility wrapper kept for callers and tests that predate the
@@ -390,13 +391,13 @@ def list_unified_entries_page(
 
 
 def _build_unified_for_leaf_ids(
-    conn,
+    conn: Any,
     leaf_ids: list[str],
     *,
-    host_rows,
-    scan_rows,
-    anchor_rows,
-) -> list[dict]:
+    host_rows: list[Any],
+    scan_rows: list[Any],
+    anchor_rows: list[Any],
+) -> list[dict[str, Any]]:
     """Build scanned/uploaded unified entries for a specific set of leaf ids.
 
     Fetches the leaf rows + their chain children, builds dashboard rows, and
@@ -462,7 +463,7 @@ def pivot_urgency_stats(
         JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
         WHERE c.is_leaf = 1
         """
-    params: list = []
+    params: list[Any] = []
     sql, params = _add_effective_tag_filter(
         sql, params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
     )
@@ -518,7 +519,7 @@ def dashboard_urgency_stats(
     """
 
     selects: list[str] = []
-    params: list = []
+    params: list[Any] = []
 
     if include_scanned:
         scanned_sql = f"""
@@ -527,7 +528,7 @@ def dashboard_urgency_stats(
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
             WHERE c.is_leaf = 1 AND c.source = 'scanned'
         """
-        scanned_params: list = []
+        scanned_params: list[Any] = []
         if like:
             scanned_sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -549,7 +550,7 @@ def dashboard_urgency_stats(
             FROM certificates c
             WHERE c.is_leaf = 1 AND c.source != 'scanned'
         """
-        uploaded_params: list = []
+        uploaded_params: list[Any] = []
         if like:
             uploaded_sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -588,7 +589,7 @@ def list_dashboard_page(
     page: int = 1,
     per_page: int = 50,
     scope_tags: list[str] | tuple[str, ...] | None = None,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
 
     Ungrouped dashboard path (BC-073).  Filtering on ``source``/``q`` and the
@@ -652,7 +653,7 @@ def list_dashboard_page(
         # entity kind + key plus the four sort keys so ORDER BY matches the
         # Python sort semantics (NULL cert fields fall back to sentinels).
         select_parts: list[str] = []
-        params: list = []
+        params: list[Any] = []
 
         if include_scanned:
             # Scanned leaf certs.
@@ -669,7 +670,7 @@ def list_dashboard_page(
                 JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
                 WHERE c.is_leaf = 1 AND c.source = 'scanned'
             """
-            scanned_params: list = []
+            scanned_params: list[Any] = []
             if like:
                 scanned_sql += (
                     " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -702,7 +703,7 @@ def list_dashboard_page(
                       AND c.is_leaf = 1
                 )
             """
-            pending_params: list = []
+            pending_params: list[Any] = []
             if like:
                 pending_sql += (
                     " AND (LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
@@ -725,7 +726,7 @@ def list_dashboard_page(
                 FROM certificates c
                 WHERE c.is_leaf = 1 AND c.source != 'scanned'
             """
-            uploaded_params: list = []
+            uploaded_params: list[Any] = []
             if like:
                 uploaded_sql += (
                     " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -798,10 +799,12 @@ def list_dashboard_page(
     return built, total
 
 
-def _reorder_by_candidates(entries: list[dict], ordered) -> list[dict]:
+def _reorder_by_candidates(
+    entries: list[dict[str, Any]], ordered: list[Any],
+) -> list[dict[str, Any]]:
     """Reorder built entries to match the SQL candidate ordering by id."""
-    by_id: dict[str, dict] = {e["id"]: e for e in entries}
-    result: list[dict] = []
+    by_id: dict[str, dict[str, Any]] = {e["id"]: e for e in entries}
+    result: list[dict[str, Any]] = []
     for r in ordered:
         e = by_id.get(r["ekey"])
         if e is not None:
@@ -809,14 +812,14 @@ def _reorder_by_candidates(entries: list[dict], ordered) -> list[dict]:
     return result
 
 
-def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
+def _build_pending_entries(host_rows: list[Any], scan_rows: list[Any]) -> list[dict[str, Any]]:
     """Build pending unified entries (hosts with no leaf cert) for given hosts."""
     if not host_rows:
         return []
-    latest_scan: dict[tuple[str, int], dict] = {
+    latest_scan: dict[tuple[str, int], dict[str, Any]] = {
         (r["hostname"], r["port"]): dict(r) for r in scan_rows
     }
-    entries: list[dict] = []
+    entries: list[dict[str, Any]] = []
     for h in host_rows:
         host_key = f"{h['hostname']}:{h['port']}"
         scan = latest_scan.get((h["hostname"], h["port"]))
@@ -861,7 +864,7 @@ def _build_pending_entries(host_rows, scan_rows) -> list[dict]:
 
 
 def _entry_matches_scope_tag(
-    entry: dict,
+    entry: dict[str, Any],
     scope_tags: list[str] | tuple[str, ...],
 ) -> bool:
     """Return True when *entry*'s tags intersect *scope_tags*.
@@ -888,7 +891,7 @@ def list_dashboard_grouped_page(
     page: int = 1,
     per_page: int = 50,
     scope_tags: list[str] | tuple[str, ...] | None = None,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-grouped, filtered, sorted, paginated page of dashboard rows.
 
     Grouped dashboard path (BC-073).  Scanned entries sharing a leaf
@@ -948,7 +951,7 @@ def list_dashboard_grouped_page(
               AND c.fingerprint_sha256 IS NOT NULL
               AND c.fingerprint_sha256 != ''
         """
-        params: list = []
+        params: list[Any] = []
 
         if like:
             grouped_sql += (
@@ -977,8 +980,8 @@ def list_dashboard_grouped_page(
         fingerprints = [r["fingerprint_sha256"] for r in rows]
 
         # Step 2: Load full details for grouped scanned entries.
-        cert_rows: list = []
-        chain_rows: list = []
+        cert_rows: list[Any] = []
+        chain_rows: list[Any] = []
         if fingerprints:
             ph = ",".join("?" * len(fingerprints))
             cert_rows = conn.execute(
@@ -1014,13 +1017,13 @@ def list_dashboard_grouped_page(
     dash = _build_dashboard_rows(all_rows, anchor_rows)
     entries = _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
 
-    entries_by_fp: dict[str, list[dict]] = {}
+    entries_by_fp: dict[str, list[dict[str, Any]]] = {}
     for e in entries:
         fp = e.get("fingerprint_sha256")
         if fp:
             entries_by_fp.setdefault(fp, []).append(e)
 
-    grouped_entries: list[dict] = []
+    grouped_entries: list[dict[str, Any]] = []
     group_idx = 0
     for row in rows:
         fp = row["fingerprint_sha256"]
@@ -1132,7 +1135,7 @@ def list_dashboard_grouped_page(
     return all_entries, total
 
 
-def get_cert_detail(db_path: str | Path, cert_id: str) -> dict | None:
+def get_cert_detail(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:
     """Return a single leaf certificate's dashboard row with chain + posture.
 
     Targeted JOIN replacement for scanning the full unified list to find one
@@ -1187,19 +1190,19 @@ def get_cert_detail(db_path: str | Path, cert_id: str) -> dict | None:
 
 
 def _build_unified_from_dash(
-    dash: list[dict],
-    host_rows: list,
-    scan_rows: list,
+    dash: list[dict[str, Any]],
+    host_rows: list[Any],
+    scan_rows: list[Any],
     *,
     include_uploaded: bool = True,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Build unified entries from dashboard rows, host rows, and scan rows."""
-    latest_scan: dict[tuple[str, int], dict] = {
+    latest_scan: dict[tuple[str, int], dict[str, Any]] = {
         (r["hostname"], r["port"]): dict(r) for r in scan_rows
     }
 
-    scanned_map: dict[str, dict] = {}
-    uploaded: list[dict] = []
+    scanned_map: dict[str, dict[str, Any]] = {}
+    uploaded: list[dict[str, Any]] = []
     for c in dash:
         if c["source"] == "scanned":
             scanned_map[c["host"]] = c
@@ -1213,7 +1216,7 @@ def _build_unified_from_dash(
         (h["hostname"], h["port"]): (h["tags"] or "") for h in host_rows
     }
 
-    entries: list[dict] = []
+    entries: list[dict[str, Any]] = []
     for h in host_rows:
         host_key = f"{h['hostname']}:{h['port']}"
         scan = latest_scan.get((h["hostname"], h["port"]))
@@ -1289,7 +1292,7 @@ def _build_host_filter(
     values: list[str] | tuple[str, ...],
     *,
     include_null: bool = False,
-) -> tuple[str, tuple]:
+) -> tuple[str, tuple[Any, ...]]:
     """Build a parameterised SQL WHERE clause for host filtering.
 
     *col* must be a bare column name (e.g. ``"owner_name"``) validated
@@ -1326,7 +1329,7 @@ def _load_unified_filtered(
     filter_values: list[str] | tuple[str, ...] | None = None,
     filter_include_null: bool = False,
     include_uploaded: bool = False,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Load unified entries for scanned/pending hosts, optionally filtered.
 
     Uses SQL-level filtering via an EXISTS subquery on the *hosts* table so

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -348,7 +349,7 @@ def api_cert_alert_routing(
     from cert_watch.alerts import resolve_group_recipients
     from cert_watch.tags import tags_match
 
-    matched_groups: list[dict] = []
+    matched_groups: list[dict[str, Any]] = []
     for g in group_repo.list_all():
         if g.id in manual_ids:
             matched_groups.append({"id": g.id, "name": g.name, "reason": "manual"})

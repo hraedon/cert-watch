@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard import _load_unified_filtered
@@ -13,7 +14,7 @@ def list_fleet_pivot(
     db_path: str | Path,
     pivot: str,
     scope_tags: list[str] | tuple[str, ...] | None = None,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return fleet pivot groups using SQL-level aggregation.
 
     Each group has ``key``, ``count``, ``worst_urgency``, ``earliest_expiry``.
@@ -65,7 +66,7 @@ def list_fleet_pivot(
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
             WHERE c.is_leaf = 1
         """
-        scanned_params: list = []
+        scanned_params: list[Any] = []
         scanned_sql, scanned_params = _add_effective_tag_filter(
             scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
         )
@@ -84,14 +85,14 @@ def list_fleet_pivot(
                 WHERE c.hostname = h.hostname AND c.port = h.port AND c.is_leaf = 1
             )
         """
-        pending_params: list = []
+        pending_params: list[Any] = []
         pending_sql, pending_params = _add_effective_tag_filter(
             pending_sql, pending_params, scope_tags or (), col_cert=None, col_host="h.tags"
         )
         pending_sql += " GROUP BY grp"
         pending_rows = conn.execute(pending_sql, pending_params).fetchall()
 
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
 
     for r in rows:
         d = dict(r)
@@ -150,7 +151,7 @@ def get_pivot_group_entries(
     db_path: str | Path,
     pivot: str,
     group_key: str,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return unified entries for a single pivot group.
 
     Used to lazily load entries when a pivot group is expanded (BC-048).
@@ -215,14 +216,14 @@ def get_pivot_group_entries(
     return [e for e in entries if e.get("_pivot_key") == group_key]
 
 
-def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:
+def group_entries_by_fingerprint(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Group scanned entries sharing the same leaf fingerprint into single rows.
 
     Entries with ``kind != "scanned"`` or no fingerprint pass through unchanged.
     Groups of size 1 also pass through.  Only scanned entries with a matching
     fingerprint and 2+ hosts are collapsed into a ``kind == "grouped"`` entry.
     """
-    fp_groups: dict[str, list[dict]] = {}
+    fp_groups: dict[str, list[dict[str, Any]]] = {}
     first_seen: dict[str, int] = {}
 
     for idx, e in enumerate(entries):
@@ -231,7 +232,7 @@ def group_entries_by_fingerprint(entries: list[dict]) -> list[dict]:
             fp_groups.setdefault(fp, []).append(e)
             first_seen.setdefault(fp, idx)
 
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
     emitted_fps: set[str] = set()
     group_idx = 0
 

@@ -12,15 +12,39 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import Alert, AlertRepository
+from cert_watch.database import Alert as Alert
+from cert_watch.database import AlertRepository
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen, validate_smtp_host
-from cert_watch.retry import backoff_range
+from cert_watch.retry import backoff_range as backoff_range
+
+if TYPE_CHECKING:
+    from cert_watch.policy import PolicyViolation
 
 logger = logging.getLogger("cert_watch.alerts")
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
+
+
+def _validate_email(addr: str) -> bool:
+    """Reject email addresses that could inject extra SMTP recipients.
+
+    Parses the address and rejects:
+    - empty/only-display-name results,
+    - any comma in the input (prevents header-injection of multiple To:
+      recipients via a stored owner_email),
+    - malformed addresses without an '@'.
+    """
+    if not addr or "," in addr:
+        return False
+    from email.utils import parseaddr
+
+    _real_name, email = parseaddr(addr)
+    return bool(email and "@" in email)
+
+
 CHAIN_THRESHOLDS = (30, 14, 7)
 # In digest mode, per-certificate alerts at or below this many days to expiry
 # still fire individually (the final-countdown "3/2/1" alerts); the routine
@@ -83,7 +107,7 @@ def evaluate_thresholds(
     *,
     cert_id: str | None = None,
     custom_thresholds: tuple[int, ...] | None = None,
-    owner_info: dict | None = None,
+    owner_info: dict[str, Any] | None = None,
     extra_recipients: list[str] | None = None,
     hostname: str = "",
     urgent_only: bool = False,
@@ -120,8 +144,9 @@ def evaluate_thresholds(
 
     # Collect existing alerts scoped to the current alert_type so that
     # renewal_stalled / policy_violation rows don't interfere with expiry
-    # thresholds. Exclude failed alerts so SMTP delivery failures get retried
-    # on the next daily cycle instead of permanently blocking the threshold.
+    # thresholds. M4: Include failed alerts in the dedup set so a delivery
+    # failure doesn't produce a duplicate row on the next cycle; instead the
+    # failed alert is reset to pending for retry (see below).
     current_type = "expired" if days < 0 else "expiry_warning"
     cert_alerts = alert_repo.list_for_cert(cid)
     existing_for_type: set[int] = {
@@ -129,7 +154,13 @@ def evaluate_thresholds(
         for a in cert_alerts
         if a.threshold_days is not None
         and a.alert_type == current_type
-        and a.status != "failed"
+    }
+    failed_for_type: dict[int, Alert] = {
+        a.threshold_days: a
+        for a in cert_alerts
+        if a.threshold_days is not None
+        and a.alert_type == current_type
+        and a.status == "failed"
     }
 
     # Find the most urgent (smallest) threshold the cert has now crossed.
@@ -143,6 +174,13 @@ def evaluate_thresholds(
 
     # Each (alert_type, threshold) fires exactly once.
     if most_urgent in existing_for_type:
+        # M4: If the existing alert failed delivery, reset it to pending so
+        # process_pending retries it instead of creating a duplicate row.
+        failed_alert = failed_for_type.get(most_urgent)
+        if failed_alert:
+            alert_repo.reset_to_pending(failed_alert.id)
+            failed_alert.status = "pending"
+            return [failed_alert]
         return []
 
     # Don't go backwards: if a more urgent threshold was already alerted
@@ -175,7 +213,7 @@ def evaluate_thresholds(
 
 def _load_host_owner_maps(
     db_path: str | Path,
-) -> tuple[dict[tuple[str, int], int | None], dict[tuple[str, int], dict]]:
+) -> tuple[dict[tuple[str, int], int | None], dict[tuple[str, int], dict[str, Any]]]:
     """Load per-host threshold and owner/contact maps in a single query.
 
     Shared by ``evaluate_all_certs`` and ``evaluate_renewal_window`` so the
@@ -184,7 +222,7 @@ def _load_host_owner_maps(
     from cert_watch.database import _connect
 
     host_thresholds: dict[tuple[str, int], int | None] = {}
-    host_owners: dict[tuple[str, int], dict] = {}
+    host_owners: dict[tuple[str, int], dict[str, Any]] = {}
     with _connect(db_path) as conn:
         for row in conn.execute("SELECT * FROM hosts").fetchall():
             key = (row["hostname"], row["port"])
@@ -249,7 +287,7 @@ def evaluate_all_certs(
         custom = None
         hostname = leaf_row["hostname"]
         port = leaf_row["port"]
-        owner_info: dict | None = None
+        owner_info: dict[str, Any] | None = None
         if hostname and port:
             host_td = host_thresholds.get((hostname, port))
             if host_td is not None:
@@ -309,7 +347,7 @@ def _load_role_user_emails(db_path: str | Path) -> dict[str, list[str]]:
 
 def resolve_cert_recipients(
     group_recipients: list[str],
-    owner_info: dict | None,
+    owner_info: dict[str, Any] | None,
     role_user_emails: dict[str, list[str]],
 ) -> list[str]:
     """Merge a cert's alert-group recipients, host owner, and role members into a
@@ -332,7 +370,7 @@ def resolve_cert_recipients(
     return merged
 
 
-def find_orphan_certs(db_path: str | Path) -> list[dict]:
+def find_orphan_certs(db_path: str | Path) -> list[dict[str, Any]]:
     """Return leaf certs that resolve to **zero** specific recipients.
 
     An orphan matches no alert group and has no host ``owner_email`` (so no role
@@ -357,7 +395,7 @@ def find_orphan_certs(db_path: str | Path) -> list[dict]:
             "SELECT id, subject, hostname, port FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
-    orphans: list[dict] = []
+    orphans: list[dict[str, Any]] = []
     for row in leaves:
         owner_info = host_owners.get((row["hostname"], row["port"]))
         recipients = resolve_cert_recipients(
@@ -444,7 +482,9 @@ def evaluate_renewal_window(
     return created
 
 
-def _format_renewal_message(leaf, days: int, window_days: int, owner: dict) -> str:
+def _format_renewal_message(
+    leaf: sqlite3.Row, days: int, window_days: int, owner: dict[str, Any]
+) -> str:
     name = leaf["subject"] or leaf["hostname"] or leaf["id"]
     target = leaf["hostname"] or "this certificate"
     msg = (
@@ -459,7 +499,7 @@ def _format_renewal_message(leaf, days: int, window_days: int, owner: dict) -> s
 
 
 def _format_message(
-    cert: Certificate, days: int, threshold: int, *, owner_info: dict | None = None
+    cert: Certificate, days: int, threshold: int, *, owner_info: dict[str, Any] | None = None
 ) -> str:
     """See AC-05."""
     action = (
@@ -563,9 +603,15 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
     msg["From"] = config.from_addr
-    all_recipients = list(config.recipients) + [
-        r for r in alert.extra_recipients if r not in config.recipients
-    ]
+    all_recipients = list(config.recipients)
+    for r in alert.extra_recipients:
+        if r not in all_recipients and _validate_email(r):
+            all_recipients.append(r)
+        elif r not in config.recipients and not _validate_email(r):
+            logger.warning("skipping invalid email recipient: %r", r)
+    if not all_recipients:
+        logger.warning("no valid recipients for alert %s", alert.id)
+        return False
     msg["To"] = ", ".join(all_recipients)
     msg.set_content(alert.message)
     conn = _open_smtp_connection(config, alert=alert)
@@ -696,7 +742,7 @@ def resolve_webhook_for_renewed_cert(
     old_cert_id: str,
     webhook_config: WebhookConfig | None = None,
     *,
-    pending_alerts: list | None = None,
+    pending_alerts: list[Alert] | None = None,
 ) -> int:
     """Resolve all open incidents/alerts for a cert that has been renewed.
 
@@ -745,7 +791,7 @@ ALERT_RETRY_DELAY = 2  # seconds between retries
 def evaluate_policy_alerts(
     cert_id: str,
     hostname: str,
-    violations: list,
+    violations: list[PolicyViolation],
     db_path: str | Path,
     *,
     subject: str = "",
@@ -855,7 +901,7 @@ def _resolve_group_config(
     # Role→alert-group links (WI-061): load roles that have both a
     # scope_tag and a linked alert_group_id, so their linked group's
     # recipients are included for matching certs.
-    role_links: list[dict] = []
+    role_links: list[dict[str, Any]] = []
     try:
         from cert_watch.database.users_roles import SqliteRoleRepository
 
@@ -951,7 +997,9 @@ def resolve_group_recipients(
     return resolve_all_group_recipients(db_path).get(cert_id, [])
 
 
-def _build_digest_message(certs: list[dict], *, owner_name: str | None = None) -> tuple[str, str]:
+def _build_digest_message(
+    certs: list[dict[str, Any]], *, owner_name: str | None = None
+) -> tuple[str, str]:
     lines = [
         f"[cert-watch] Expiry Digest — {len(certs)} certificate(s) expiring within 30 days",
         "",
@@ -1039,7 +1087,7 @@ def _open_smtp_connection(
 
 
 def _build_digest_email(
-    certs: list[dict],
+    certs: list[dict[str, Any]],
     recipients: list[str],
     from_addr: str,
     *,
@@ -1055,7 +1103,7 @@ def _build_digest_email(
 
 
 def _send_digest_smtp(
-    certs: list[dict],
+    certs: list[dict[str, Any]],
     recipients: list[str],
     config: AlertConfig,
     *,
@@ -1087,7 +1135,7 @@ def _send_digest_smtp(
 
 
 def _send_digest_webhook(
-    certs: list[dict],
+    certs: list[dict[str, Any]],
     webhook_config: WebhookConfig,
 ) -> bool:
     """Dispatch expiry digest through the adapter registry.
@@ -1137,7 +1185,7 @@ def send_expiry_digest(
         ).fetchall()
 
     now = datetime.now(UTC)
-    expiring: list[dict] = []
+    expiring: list[dict[str, Any]] = []
     for r in rows:
         na = _parse_iso(r["not_after"])
         days = (na - now).days
@@ -1177,7 +1225,7 @@ def send_expiry_digest(
             if on and cf not in owner_names:
                 owner_names[cf] = on
 
-    owner_certs: dict[str, list[dict]] = {}
+    owner_certs: dict[str, list[dict[str, Any]]] = {}
     for cert in expiring:
         oe = cert["owner_email"]
         cf = oe.casefold() if oe else ""

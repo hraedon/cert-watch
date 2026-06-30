@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
@@ -12,7 +13,7 @@ def list_calendar(
     from_date: str | None = None,
     to_date: str | None = None,
     bucket: str = "month",
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return certificate expiry buckets for the calendar view.
 
     Buckets: ``day``, ``week``, ``month``.  Each result has

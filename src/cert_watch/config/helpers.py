@@ -9,6 +9,7 @@ import json
 import logging
 import os
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 logger = logging.getLogger("cert_watch.config")
 
@@ -23,6 +24,7 @@ SENSITIVE_SETTING_KEYS = frozenset({
     "oauth_client_secret",
     "smtp_password",
     "pagerduty_routing_key",
+    "local_admin_password_hash",
     # A Bearer token or shared secret commonly lives in a custom webhook header
     # (the UI placeholder suggests ``Authorization: Bearer ...``); treat the
     # whole JSON blob as sensitive so it is encrypted at rest and masked in the
@@ -66,7 +68,7 @@ def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> s
     return generated
 
 
-def _parse_role_map(raw: str) -> dict:
+def _parse_role_map(raw: str) -> dict[str, dict[str, Any]]:
     """Parse CERT_WATCH_ROLE_MAP JSON.  Returns {} on empty / invalid input."""
     if not raw:
         return {}

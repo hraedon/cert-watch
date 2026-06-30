@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -25,7 +26,7 @@ logger = logging.getLogger("cert_watch.routes.api.policy")
 router = APIRouter()
 
 
-def _rule_json(r: PolicyRule) -> dict:
+def _rule_json(r: PolicyRule) -> dict[str, Any]:
     return {
         "rule_id": r.rule_id,
         "category": r.category,

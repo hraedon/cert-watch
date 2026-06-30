@@ -241,7 +241,7 @@ def oauth_callback(
             "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
         )
         return response
-    cookie_raw, _nonce = verify_result
+    cookie_raw, _nonce, _verifier = verify_result
     if not hmac.compare_digest(cookie_raw, state):
         response = RedirectResponse(
             url="/login?error=OAuth+state+mismatch", status_code=303

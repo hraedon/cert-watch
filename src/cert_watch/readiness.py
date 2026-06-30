@@ -6,7 +6,7 @@ import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
@@ -32,7 +32,7 @@ class HostReadiness:
     classification: str
     current_lead_time: float | None
     current_lifetime: int | None
-    margins: list[dict] = field(default_factory=list)
+    margins: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -40,7 +40,7 @@ class WorkloadForecast:
     current_renewals_per_month: float
     at_100d_renewals_per_month: float
     at_47d_renewals_per_month: float
-    hosts_by_milestone_risk: dict = field(default_factory=dict)
+    hosts_by_milestone_risk: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -49,7 +49,7 @@ class ReadinessReport:
     total_hosts: int
     public_trust_hosts: int
     private_ca_hosts: int
-    milestones: list[dict] = field(default_factory=list)
+    milestones: list[dict[str, Any]] = field(default_factory=list)
     hosts: list[HostReadiness] = field(default_factory=list)
     private_hosts: list[HostReadiness] = field(default_factory=list)
     workload_forecast: WorkloadForecast | None = None
@@ -84,8 +84,8 @@ def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str
 def _compute_margins(
     lead_time: float | None,
     lifetime: int | None,
-) -> list[dict]:
-    margins: list[dict] = []
+) -> list[dict[str, Any]]:
+    margins: list[dict[str, Any]] = []
     for ms in SC081_MILESTONES:
         max_days = ms["max_days"]
         if lead_time is not None:
@@ -202,8 +202,8 @@ def build_readiness_report(db_path: str | Path) -> ReadinessReport:
     )
 
 
-def readiness_report_to_dict(report: ReadinessReport) -> dict:
-    def _host_dict(h: HostReadiness) -> dict:
+def readiness_report_to_dict(report: ReadinessReport) -> dict[str, Any]:
+    def _host_dict(h: HostReadiness) -> dict[str, Any]:
         return {
             "hostname": h.hostname,
             "classification": h.classification,
@@ -212,7 +212,7 @@ def readiness_report_to_dict(report: ReadinessReport) -> dict:
             "margins": h.margins,
         }
 
-    d: dict = {
+    d: dict[str, Any] = {
         "generated_at": report.generated_at,
         "total_hosts": report.total_hosts,
         "public_trust_hosts": report.public_trust_hosts,

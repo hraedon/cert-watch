@@ -14,7 +14,7 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cert_watch.database.users_roles import SqliteRoleRepository
@@ -76,7 +76,7 @@ def permissions_for_roles(role_names: list[str]) -> frozenset[Permission]:
 def resolve_roles(
     user_groups: list[str],
     user_roles: list[str],
-    role_map: dict[str, dict],
+    role_map: dict[str, dict[str, Any]],
     username: str = "",
 ) -> list[str]:
     """Map IdP groups/roles to cert-watch role names.
@@ -112,7 +112,7 @@ def resolve_roles(
 def claims_for_session(
     user_groups: list[str] | None,
     user_roles: list[str] | None,
-    role_map: dict,
+    role_map: dict[str, dict[str, Any]],
 ) -> tuple[list[str], list[str]]:
     """Reduce IdP claims to only those the role map references, for the cookie.
 
@@ -213,7 +213,7 @@ class AuthContext:
 
 
 def _role_tiers_from_map(
-    role_map: dict,
+    role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None,
 ) -> dict[str, tuple[str, str]]:
     """Return {role_name: (permission_tier, scope_tag)} for mapped role names.
@@ -272,7 +272,7 @@ def build_auth_context(
     username: str,
     user_groups: list[str],
     user_roles: list[str],
-    role_map: dict,
+    role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None = None,
 ) -> AuthContext:
     """Build an AuthContext by resolving IdP groups/roles to cert-watch roles.
