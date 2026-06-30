@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
     SqliteCertificateRepository,
+    get_write_lock,
     list_cert_history,
     list_dashboard_page,
 )
@@ -124,9 +125,6 @@ async def api_update_notes(
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteCertificateRepository(db)
-    cert = repo.get_by_id(cert_id)
-    if cert is None:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         body = await request.json()
     except ValueError:
@@ -136,16 +134,20 @@ async def api_update_notes(
         return JSONResponse(content={"error": "notes must be a string"}, status_code=400)
     if len(notes) > 10000:
         return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
-    repo.update_notes(cert_id, notes)
-    record_audit(
-        _db_path(request),
-        actor=resolve_actor(request),
-        action="cert.update_notes",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"notes_length": len(notes)},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        cert = repo.get_by_id(cert_id)
+        if cert is None:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        repo.update_notes(cert_id, notes)
+        record_audit(
+            _db_path(request),
+            actor=resolve_actor(request),
+            action="cert.update_notes",
+            target_type="certificate",
+            target_id=cert_id,
+            detail={"notes_length": len(notes)},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"id": cert_id, "notes": notes})
 
 
@@ -220,8 +222,6 @@ async def api_set_cert_tags(
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteCertificateRepository(db)
-    if repo.get_by_id(cert_id) is None:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         body = await request.json()
     except ValueError:
@@ -231,16 +231,19 @@ async def api_set_cert_tags(
         return JSONResponse(
             content={"error": "tags must be a string or list of strings"}, status_code=400
         )
-    repo.set_tags(cert_id, tags)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="cert.set_tags",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"tags": tags},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        if repo.get_by_id(cert_id) is None:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        repo.set_tags(cert_id, tags)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="cert.set_tags",
+            target_type="certificate",
+            target_id=cert_id,
+            detail={"tags": tags},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(
         content={
             "id": cert_id,

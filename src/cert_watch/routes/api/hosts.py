@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 
 from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.database import SqliteHostRepository
+from cert_watch.database import SqliteHostRepository, get_write_lock
 from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
@@ -135,39 +135,40 @@ async def api_update_host_owner(
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
-    host = repo.get(host_id)
-    if host is None:
-        return JSONResponse(content={"error": "host not found"}, status_code=404)
+    with get_write_lock():
+        host = repo.get(host_id)
+        if host is None:
+            return JSONResponse(content={"error": "host not found"}, status_code=404)
 
-    repo.update_owner(
-        host_id,
-        owner_name=body.get("owner_name"),
-        owner_email=body.get("owner_email"),
-        owner_slack=body.get("owner_slack"),
-        renewal_status=renewal_status,
-    )
-    if renewal_method is not None or runbook_url is not None:
-        repo.update_renewal(
+        repo.update_owner(
             host_id,
-            renewal_method=renewal_method,
-            runbook_url=runbook_url,
+            owner_name=body.get("owner_name"),
+            owner_email=body.get("owner_email"),
+            owner_slack=body.get("owner_slack"),
+            renewal_status=renewal_status,
         )
-    record_audit(
-        _db_path(request),
-        actor=resolve_actor(request),
-        action="owner.update",
-        target_type="host",
-        target_id=host_id,
-        detail={
-            "owner_name": body.get("owner_name"),
-            "owner_email": body.get("owner_email"),
-            "owner_slack": body.get("owner_slack"),
-            "renewal_status": renewal_status,
-            "renewal_method": renewal_method,
-        },
-        source_ip=resolve_source_ip(request),
-    )
-    updated = repo.get(host_id)
+        if renewal_method is not None or runbook_url is not None:
+            repo.update_renewal(
+                host_id,
+                renewal_method=renewal_method,
+                runbook_url=runbook_url,
+            )
+        record_audit(
+            _db_path(request),
+            actor=resolve_actor(request),
+            action="owner.update",
+            target_type="host",
+            target_id=host_id,
+            detail={
+                "owner_name": body.get("owner_name"),
+                "owner_email": body.get("owner_email"),
+                "owner_slack": body.get("owner_slack"),
+                "renewal_status": renewal_status,
+                "renewal_method": renewal_method,
+            },
+            source_ip=resolve_source_ip(request),
+        )
+        updated = repo.get(host_id)
     if updated is None:
         from fastapi import HTTPException
 
@@ -195,9 +196,6 @@ async def api_update_host_notes(
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
     repo = SqliteHostRepository(db)
-    host = repo.get(host_id)
-    if host is None:
-        return JSONResponse(content={"error": "not found"}, status_code=404)
     try:
         body = await request.json()
     except ValueError:
@@ -207,16 +205,20 @@ async def api_update_host_notes(
         return JSONResponse(content={"error": "notes must be a string"}, status_code=400)
     if len(notes) > 10000:
         return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
-    repo.update_notes(host_id, notes)
-    record_audit(
-        _db_path(request),
-        actor=resolve_actor(request),
-        action="host.update_notes",
-        target_type="host",
-        target_id=host_id,
-        detail={"notes_length": len(notes)},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        host = repo.get(host_id)
+        if host is None:
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        repo.update_notes(host_id, notes)
+        record_audit(
+            _db_path(request),
+            actor=resolve_actor(request),
+            action="host.update_notes",
+            target_type="host",
+            target_id=host_id,
+            detail={"notes_length": len(notes)},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"id": host_id, "notes": notes})
 
 
@@ -240,17 +242,18 @@ async def api_set_host_tags(
         return JSONResponse(
             content={"error": "tags must be a string or list of strings"}, status_code=400
         )
-    if not repo.set_tags(host_id, tags):
-        return JSONResponse(content={"error": "not found"}, status_code=404)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.set_tags",
-        target_type="host",
-        target_id=host_id,
-        detail={"tags": tags},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        if not repo.set_tags(host_id, tags):
+            return JSONResponse(content={"error": "not found"}, status_code=404)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="host.set_tags",
+            target_type="host",
+            target_id=host_id,
+            detail={"tags": tags},
+            source_ip=resolve_source_ip(request),
+        )
     from cert_watch.tags import parse_tags
 
     return JSONResponse(content={"id": host_id, "tags": parse_tags(tags)})
@@ -284,9 +287,6 @@ async def api_set_host_issuers(
     """
     db = _db_path(request)
     repo = SqliteHostRepository(db)
-    host = repo.get(host_id)
-    if host is None:
-        return JSONResponse(content={"error": "host not found"}, status_code=404)
     try:
         body = await request.json()
     except ValueError:
@@ -315,14 +315,18 @@ async def api_set_host_issuers(
         return JSONResponse(
             content={"error": "too many issuers (max 50)"}, status_code=400
         )
-    repo.set_expected_issuers(host_id, issuers_csv)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.set_expected_issuers",
-        target_type="host",
-        target_id=host_id,
-        detail={"expected_issuers": issuers_list},
-        source_ip=resolve_source_ip(request),
-    )
+    with get_write_lock():
+        host = repo.get(host_id)
+        if host is None:
+            return JSONResponse(content={"error": "host not found"}, status_code=404)
+        repo.set_expected_issuers(host_id, issuers_csv)
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="host.set_expected_issuers",
+            target_type="host",
+            target_id=host_id,
+            detail={"expected_issuers": issuers_list},
+            source_ip=resolve_source_ip(request),
+        )
     return JSONResponse(content={"id": host_id, "expected_issuers": issuers_list})
