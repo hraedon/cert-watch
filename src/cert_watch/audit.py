@@ -9,6 +9,7 @@ import typing
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from fastapi import Request
 
@@ -24,7 +25,7 @@ def record_audit(
     action: str,
     target_type: str,
     target_id: str,
-    detail: dict | None = None,
+    detail: dict[str, Any] | None = None,
     source_ip: str | None = None,
 ) -> None:
     """Insert one audit row. Best-effort; logs WARNING on failure but never raises."""
@@ -110,10 +111,10 @@ def list_audit(
     actor: str | None = None,
     page: int = 1,
     limit: int = 50,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Query audit log with optional filters. Returns newest-first."""
     conditions: list[str] = []
-    params: list = []
+    params: list[Any] = []
     if target_type:
         conditions.append("target_type = ?")
         params.append(target_type)
@@ -142,7 +143,7 @@ def count_audit(
 ) -> int:
     """Count audit rows with optional filters."""
     conditions: list[str] = []
-    params: list = []
+    params: list[Any] = []
     if target_type:
         conditions.append("target_type = ?")
         params.append(target_type)

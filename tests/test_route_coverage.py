@@ -14,6 +14,22 @@ def _reload(reload_app):
     return reload_app()
 
 
+def _insert_certificate(db, cert_id: str) -> None:
+    """Insert a minimal certificates row so child tables satisfy FK."""
+    from cert_watch.database.connection import _connect
+
+    with _connect(str(db)) as conn:
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cert_id, "CN=test", "CN=CA", "2026-01-01T00:00:00+00:00",
+             "2027-01-01T00:00:00+00:00", "[]", f"fp-{cert_id}", b"", "scanned",
+             "test", 443, 1, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+
 # ---------- readyz ----------
 
 
@@ -206,6 +222,8 @@ def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
     from cert_watch.database import init_schema, store_scan_posture
 
     init_schema(db)
+    _insert_certificate(db, "cert-a")
+    _insert_certificate(db, "cert-b")
     store_scan_posture(str(db), "cert-a", "h.example.com", 443, "A", [], protocol_version="TLSv1.3")
     store_scan_posture(
         str(db), "cert-b", "h2.example.com", 443, "B", [], protocol_version="TLSv1.2"

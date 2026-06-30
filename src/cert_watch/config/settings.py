@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cert_watch.alerts import AlertConfig, WebhookConfig
@@ -82,7 +82,7 @@ class Settings:
     admin_users: tuple[str, ...] = ()
     session_ttl: int = 28800
     write_users: tuple[str, ...] = ()
-    role_map: dict = field(default_factory=dict)
+    role_map: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_admin_user: str = ""
     local_admin_password_hash: str = ""
     base_url: str = ""
@@ -342,15 +342,20 @@ class Settings:
             LOCAL_ADMIN_PASSWORD_HASH,
             LOCAL_ADMIN_USER,
         )
-        from cert_watch.database import kv_get
+        from cert_watch.database import derive_encryption_key, kv_get
 
         local_admin_user = self.local_admin_user
         local_admin_password_hash = self.local_admin_password_hash
         if not local_admin_user:
             local_admin_user = kv_get(self.db_path, LOCAL_ADMIN_USER) or ""
         if not local_admin_password_hash:
+            enc_key = (
+                derive_encryption_key(security.signing_key)
+                if security
+                else None
+            )
             local_admin_password_hash = kv_get(
-                self.db_path, LOCAL_ADMIN_PASSWORD_HASH
+                self.db_path, LOCAL_ADMIN_PASSWORD_HASH, encryption_key=enc_key
             ) or ""
 
         return build_auth_provider(

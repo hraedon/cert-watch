@@ -993,6 +993,10 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
         "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
@@ -1031,6 +1035,10 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.detect_drift",
@@ -1099,6 +1107,10 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.detect_drift",
@@ -1171,6 +1183,10 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
         "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
@@ -1236,6 +1252,10 @@ def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_l
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.detect_drift", lambda *a, **kw: drift_events
@@ -1331,6 +1351,10 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
         "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
@@ -1355,6 +1379,10 @@ def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_sign
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.detect_drift",
@@ -1987,6 +2015,10 @@ def test_store_scanned_event_webhooks_deferred_until_commit(
         lambda *a, **kw: _PostureEval("A", [], None),
     )
     monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
         "cert_watch.database.detect_drift",
         lambda *a, **kw: [],
     )
@@ -2027,6 +2059,10 @@ def test_store_scanned_event_webhooks_not_fired_on_rollback(
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
         lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
     )
     monkeypatch.setattr(
         "cert_watch.database.detect_drift",

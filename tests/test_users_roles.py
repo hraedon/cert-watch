@@ -91,20 +91,30 @@ class TestUserRepository:
 
     def test_get_by_username(self, db):
         user_repo = SqliteUserRepository(db)
-        user_repo.add(User(username="alice", email="a@example.com", password_hash="h"))
+        user_repo.add(User(
+            username="alice", email="a@example.com", password_hash="h", role_id=None,
+        ))
         fetched = user_repo.get_by_username("alice")
         assert fetched is not None
         assert fetched.username == "alice"
 
     def test_list_all(self, db):
         user_repo = SqliteUserRepository(db)
-        user_repo.add(User(username="u1", email="u1@example.com", password_hash="h"))
-        user_repo.add(User(username="u2", email="u2@example.com", password_hash="h"))
+        user_repo.add(User(
+            username="u1", email="u1@example.com", password_hash="h", role_id=None,
+        ))
+        user_repo.add(User(
+            username="u2", email="u2@example.com", password_hash="h", role_id=None,
+        ))
         assert len(user_repo.list_all()) == 2
 
     def test_update(self, db):
+        role_repo = SqliteRoleRepository(db)
+        role_id = role_repo.add(Role(name="ops", email="ops@example.com"))
         user_repo = SqliteUserRepository(db)
-        user_id = user_repo.add(User(username="old", email="old@example.com", password_hash="h"))
+        user_id = user_repo.add(User(
+            username="old", email="old@example.com", password_hash="h", role_id=role_id,
+        ))
         user = user_repo.get(user_id)
         user.username = "new"
         user_repo.update(user)
@@ -112,7 +122,9 @@ class TestUserRepository:
 
     def test_delete(self, db):
         user_repo = SqliteUserRepository(db)
-        user_id = user_repo.add(User(username="tmp", email="tmp@example.com", password_hash="h"))
+        user_id = user_repo.add(User(
+            username="tmp", email="tmp@example.com", password_hash="h", role_id=None,
+        ))
         user_repo.delete(user_id)
         assert user_repo.get(user_id) is None
 
@@ -151,6 +163,7 @@ class TestLocalAdminProviderDB:
                 username="jsmith",
                 email="jsmith@example.com",
                 password_hash=pw_hash,
+                role_id=None,
             )
         )
 
@@ -257,6 +270,14 @@ class TestSettingsRoutes:
         monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:
+            # Create a role so user creation/update satisfies the role_id FK.
+            client.post("/settings/roles", data={"name": "ops", "email": "ops@x.com"},
+                        follow_redirects=False)
+            role_id = re.search(
+                r'<option value="([^"]+)">ops</option>',
+                client.get("/settings/users").text,
+            ).group(1)
+
             # Unknown (well-formed) user id -> not found.
             r = client.post("/settings/users/00000000-0000-0000-0000-000000000000",
                             data={"username": "x"}, follow_redirects=False)
@@ -265,6 +286,7 @@ class TestSettingsRoutes:
 
             client.post("/settings/users", data={
                 "username": "jsmith", "password": "password123", "email": "j@x.com",
+                "role_id": role_id,
             }, follow_redirects=False)
             uid = re.search(
                 r'/settings/users/([0-9a-f-]{36})"', client.get("/settings/users").text
@@ -283,7 +305,8 @@ class TestSettingsRoutes:
 
             # Valid new password -> hash changes.
             r = client.post(f"/settings/users/{uid}",
-                            data={"username": "jsmith", "password": "newpassword123"},
+                            data={"username": "jsmith", "password": "newpassword123",
+                                  "role_id": role_id},
                             follow_redirects=False)
             assert "saved=1" in r.headers["location"]
 

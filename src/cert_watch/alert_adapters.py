@@ -107,7 +107,9 @@ class GenericAdapter:
                 payload_dict["extra_recipients"] = alert.extra_recipients
             payload = json.dumps(payload_dict)
             content_type = "application/json"
-        headers = {"Content-Type": content_type, **config.headers}
+        # Adapter Content-Type is security-critical: custom headers must not be
+        # allowed to override it (L11), so the adapter's value is applied last.
+        headers = {**config.headers, "Content-Type": content_type}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
 
@@ -135,7 +137,7 @@ class DiscordAdapter:
             "fields": fields,
         }
         payload = json.dumps({"username": "cert-watch", "embeds": [embed]})
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
 
@@ -187,7 +189,7 @@ class TeamsAdapter:
             ],
         }
         payload = json.dumps(card)
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
 
@@ -220,7 +222,7 @@ class PagerDutyAdapter:
             },
         }
         payload = json.dumps(payload_dict)
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(
             url=_PAGERDUTY_EVENTS_URL,
             body=payload.encode("utf-8"),
@@ -257,7 +259,7 @@ class PagerDutyAdapter:
             },
         }
         payload = json.dumps(payload_dict)
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(
             url=_PAGERDUTY_EVENTS_URL,
             body=payload.encode("utf-8"),
@@ -293,7 +295,7 @@ class SlackAdapter:
             "footer": "cert-watch",
         }
         payload = json.dumps({"attachments": [attachment]})
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
 
@@ -318,7 +320,7 @@ class AlertmanagerAdapter:
             "generatorURL": config.url,
         }
         payload = json.dumps({"alerts": [alert_entry]})
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
     def build_resolve(
@@ -358,7 +360,7 @@ class AlertmanagerAdapter:
             "generatorURL": config.url,
         }
         payload = json.dumps({"alerts": [alert_entry]})
-        headers = {"Content-Type": "application/json", **config.headers}
+        headers = {**config.headers, "Content-Type": "application/json"}
         return AlertRequest(url=config.url, body=payload.encode("utf-8"), headers=headers)
 
 

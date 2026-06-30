@@ -6,6 +6,7 @@ import ipaddress
 import logging
 import socket
 from functools import lru_cache
+from typing import Any
 
 logger = logging.getLogger("cert_watch.scan")
 
@@ -31,7 +32,9 @@ _TEREDO_NETWORK = ipaddress.ip_network("2001::/32")
 
 
 @lru_cache(maxsize=64)
-def _parse_allowed_subnets(allowed_subnets: tuple[str, ...]) -> tuple:
+def _parse_allowed_subnets(
+    allowed_subnets: tuple[str, ...],
+) -> tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]:
     """Parse a tuple of CIDR strings into ip_network objects (invalid entries skipped)."""
     nets = []
     for cidr in allowed_subnets:
@@ -97,7 +100,7 @@ def _is_blocked_ip(
 
 def _resolve_with_dns(
     hostname: str, port: int, dns_servers: tuple[str, ...], timeout: float = 5.0
-) -> list[tuple[int, tuple]]:
+) -> list[tuple[int, tuple[Any, ...]]]:
     """Resolve A/AAAA for *hostname* against the configured nameservers.
 
     Uses dnspython rather than a hand-rolled packet parser. dnspython validates
@@ -120,7 +123,7 @@ def _resolve_with_dns(
     resolver.nameservers = list(dns_servers)
     resolver.timeout = timeout
     resolver.lifetime = timeout
-    results: list[tuple[int, tuple]] = []
+    results: list[tuple[int, tuple[Any, ...]]] = []
     for qtype, family in (("A", socket.AF_INET), ("AAAA", socket.AF_INET6)):
         try:
             answer = resolver.resolve(hostname, qtype)
@@ -137,7 +140,7 @@ def _resolve_with_dns(
 
 def resolve_hostname(
     hostname: str, port: int, *, dns_servers: tuple[str, ...] = ()
-) -> list[tuple[int, tuple]]:
+) -> list[tuple[int, tuple[Any, ...]]]:
     """Resolve hostname to sockaddr list. Uses custom DNS servers when configured.
 
     Returns list of (family, sockaddr) tuples from socket.getaddrinfo.
@@ -215,7 +218,7 @@ def _resolve_host(
     hostname: str, port: int, *, allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     dns_servers: tuple[str, ...] = (),
-) -> tuple[int, tuple]:
+) -> tuple[int, tuple[Any, ...]]:
     """Resolve hostname and check all IPs against the SSRF blocklist.
 
     Returns a (family, sockaddr) tuple for the first allowed address.

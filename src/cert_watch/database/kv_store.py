@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from cert_watch.database.connection import _connect, _iso
 from cert_watch.database.encryption import _ENCRYPTED_PREFIX, fernet_decrypt, fernet_encrypt
@@ -23,7 +24,7 @@ def kv_get(db_path: str | Path, key: str, encryption_key: str | None = None) -> 
     val = row["value"]
     if encryption_key and val.startswith(_ENCRYPTED_PREFIX):
         val = fernet_decrypt(val, encryption_key)
-    return val
+    return cast("str | None", val)
 
 
 def kv_set(db_path: str | Path, key: str, value: str) -> None:

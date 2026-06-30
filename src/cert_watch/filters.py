@@ -5,16 +5,22 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime
 
+from fastapi.templating import Jinja2Templates
 
-def humanize_expiry(dt) -> str:
+
+def humanize_expiry(dt: datetime | str | None) -> str:
     """Render a datetime (or ISO string) as 'YYYY-MM-DD (in 3 days)'."""
     if dt is None:
         return ""
     if isinstance(dt, str):
+        parsed: datetime | None
         try:
-            dt = datetime.fromisoformat(dt)
+            parsed = datetime.fromisoformat(dt)
         except ValueError:
+            parsed = None
+        if parsed is None:
             return dt
+        dt = parsed
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     now = datetime.now(UTC)
@@ -208,7 +214,7 @@ def humanize_label(value: str) -> str:
     return " ".join(_ACRONYMS.get(w.lower(), w.capitalize()) for w in words)
 
 
-def register_filters(templates) -> None:
+def register_filters(templates: Jinja2Templates) -> None:
     """Register all filters on a Jinja2Templates instance."""
     templates.env.filters["humanize_expiry"] = humanize_expiry
     templates.env.filters["urgency"] = compute_urgency

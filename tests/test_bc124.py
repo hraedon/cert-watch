@@ -252,7 +252,7 @@ def test_fail_closed_when_provisioning_cannot_persist(tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
 
     # Simulate provisioning that returns None (no admin created)
-    monkeypatch.setattr(app_mod, "_provision_initial_admin", lambda s: None)
+    monkeypatch.setattr(app_mod, "_provision_initial_admin", lambda s, **kw: None)
 
     app = create_app()
 

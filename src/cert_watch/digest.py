@@ -7,10 +7,16 @@ import sqlite3
 import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from email.message import EmailMessage
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
+from cert_watch.alerts import _validate_email
 from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
+
+if TYPE_CHECKING:
+    from cert_watch.alerts import AlertConfig, WebhookConfig
 
 logger = logging.getLogger("cert_watch.digest")
 
@@ -27,14 +33,14 @@ class RenewalDigest:
     owner_email: str = ""
 
 
-def _parse_event_payload(payload_raw: str) -> dict:
+def _parse_event_payload(payload_raw: str) -> dict[str, Any]:
     try:
-        return json.loads(payload_raw)
+        return cast(dict[str, Any], json.loads(payload_raw))
     except (json.JSONDecodeError, TypeError):
         return {}
 
 
-def _lifetime_trend_decreasing(entries: list[dict]) -> bool:
+def _lifetime_trend_decreasing(entries: list[dict[str, Any]]) -> bool:
     if len(entries) < 2:
         return False
     lifetimes: list[int] = []
@@ -107,7 +113,7 @@ def build_renewal_digest(
         return []
 
     host_owners: dict[str, str] = {}
-    host_entries: dict[str, list[dict]] = {}
+    host_entries: dict[str, list[dict[str, Any]]] = {}
     with _connect(db_path) as conn:
         for row in conn.execute("SELECT hostname, owner_email FROM hosts").fetchall():
             host_owners[row["hostname"]] = row["owner_email"] or ""
@@ -217,7 +223,7 @@ def _admin_emails(db_path: str | Path) -> list[str]:
         return []
 
 
-def _build_orphan_message(orphans: list[dict]) -> str:
+def _build_orphan_message(orphans: list[dict[str, Any]]) -> str:
     lines = [
         f"[cert-watch] Orphaned certificates — no alert routing ({len(orphans)})",
         "",
@@ -235,7 +241,7 @@ def _build_orphan_message(orphans: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
+def send_orphan_notice(db_path: str | Path, alert_config: AlertConfig | None) -> bool | None:
     """Email admin-tier users a flagged list of orphaned certs (no alert routing).
 
     Part of the weekly digest run (Plan 050, decision pinned 2026-06-20): admins
@@ -251,6 +257,7 @@ def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
         AlertConfig,
         _open_smtp_connection,
         _sanitize_smtp_error,
+        _validate_email,
         find_orphan_certs,
     )
 
@@ -259,7 +266,7 @@ def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
     orphans = find_orphan_certs(db_path)
     if not orphans:
         return None
-    admins = _admin_emails(db_path)
+    admins = [a for a in _admin_emails(db_path) if _validate_email(a)]
     if not admins:
         return None
 
@@ -289,8 +296,8 @@ def send_orphan_notice(db_path: str | Path, alert_config) -> bool | None:
 
 
 def _send_digest_email_msg(
-    msg,
-    config,
+    msg: EmailMessage,
+    config: AlertConfig,
 ) -> bool:
     """Send a pre-built EmailMessage via SMTP with retry.
 
@@ -329,8 +336,8 @@ def _send_digest_email_msg(
 
 def send_renewal_digest(
     db_path: str | Path,
-    alert_config,
-    webhook_config=None,
+    alert_config: AlertConfig | None,
+    webhook_config: WebhookConfig | None = None,
     *,
     days: int = 7,
     cadence_days: int | None = None,
@@ -366,6 +373,9 @@ def send_renewal_digest(
     if isinstance(alert_config, AlertConfig):
         seen: set[str] = set()
         for r in alert_config.recipients:
+            if not _validate_email(r):
+                logger.warning("skipping invalid digest recipient: %r", r)
+                continue
             cf = r.casefold()
             if cf not in seen:
                 seen.add(cf)
@@ -374,7 +384,10 @@ def send_renewal_digest(
 
     owner_digests: dict[str, RenewalDigest] = {}
     for d in digests:
-        cf = d.owner_email.casefold() if d.owner_email else ""
+        if not _validate_email(d.owner_email):
+            logger.warning("skipping invalid owner_email digest: %r", d.owner_email)
+            continue
+        cf = d.owner_email.casefold()
         if cf and cf not in global_recipients_cf:
             owner_digests.setdefault(cf, d)
 

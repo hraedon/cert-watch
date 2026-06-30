@@ -284,7 +284,10 @@ class TestSetupWizard:
         # Verify kv_store has the admin
         assert kv_get(fresh_db, "local_admin_user") == "testadmin"
         assert kv_get(fresh_db, "setup_complete") == "1"
-        pw_hash = kv_get(fresh_db, "local_admin_password_hash")
+        # H3: password hash is now encrypted at rest — decrypt for verification
+        from cert_watch.database import derive_encryption_key
+        enc_key = derive_encryption_key("test-secret-for-setup")
+        pw_hash = kv_get(fresh_db, "local_admin_password_hash", encryption_key=enc_key)
         assert pw_hash is not None
         assert verify_scrypt_hash("SecurePass123", pw_hash)
 

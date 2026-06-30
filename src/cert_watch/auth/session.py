@@ -113,21 +113,25 @@ def set_signing_key(value: str) -> None:
 
 
 def _sign_state(
-    state: str, security: SecurityContext | None = None, nonce: str | None = None
+    state: str, security: SecurityContext | None = None,
+    nonce: str | None = None, code_verifier: str | None = None,
 ) -> str:
     payload = f"{state}:{nonce}" if nonce else state
+    if code_verifier:
+        payload = f"{payload}|{code_verifier}"
     sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
     return f"{payload}:{sig}"
 
 
 def _verify_state(
     token: str, security: SecurityContext | None = None
-) -> tuple[str, str | None] | None:
+) -> tuple[str, str | None, str | None] | None:
     """Verify a signed OAuth state token.
 
-    Returns ``(state, nonce)`` on success, ``None`` on failure.
-    Only the ``state:nonce:sig`` format (3+ colon-separated parts) is
-    accepted; the legacy ``state:sig`` format is rejected (WI-088).
+    Returns ``(state, nonce, code_verifier)`` on success, ``None`` on failure.
+    ``code_verifier`` is ``None`` when PKCE was not used. Only the
+    ``state:nonce:sig`` / ``state:nonce|verifier:sig`` format (3+ colon-separated
+    parts) is accepted; the legacy ``state:sig`` format is rejected (WI-088).
     """
     if not token or ":" not in token:
         return None
@@ -135,14 +139,23 @@ def _verify_state(
     if len(parts) < 3:
         return None
     sig = parts[-1]
-    nonce = parts[-2]
-    state = ":".join(parts[:-2])
+    payload = ":".join(parts[:-1])
+    # Verify HMAC over the FULL payload (including code_verifier if present).
     expected = hmac.new(
-        _key(security).encode(), f"{state}:{nonce}".encode(), hashlib.sha256
+        _key(security).encode(), payload.encode(), hashlib.sha256
     ).hexdigest()[:64]
-    if hmac.compare_digest(sig, expected):
-        return state, nonce
-    return None
+    if not hmac.compare_digest(sig, expected):
+        return None
+    # Extract optional PKCE code_verifier (pipe-separated; L12).
+    code_verifier: str | None = None
+    if "|" in payload:
+        payload, code_verifier = payload.rsplit("|", 1)
+    # Extract nonce and state from the remaining ``state:nonce`` payload.
+    if ":" in payload:
+        state, nonce = payload.rsplit(":", 1)
+    else:
+        state, nonce = payload, None
+    return state, nonce, code_verifier
 
 
 def _sign_session(data: str, security: SecurityContext | None = None) -> str:

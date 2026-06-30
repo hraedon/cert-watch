@@ -8,10 +8,11 @@ import logging
 import sqlite3
 import ssl
 import typing
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cert_watch.database import CertificateRepository
@@ -44,6 +45,38 @@ from cert_watch.scan_resolver import (  # noqa: F401
     resolve_and_validate_host,
     resolve_hostname,
 )
+
+# Re-exported for backwards compatibility (these were originally defined in
+# scan.py before extraction to scan_conn / scan_resolver).  Listed in __all__
+# so mypy --strict (no_implicit_reexport) treats them as public surface.
+__all__ = [
+    "DEFAULT_SCAN_MAX_OUTPUT_BYTES",
+    "DEFAULT_TIMEOUT",
+    "HSTS_TIMEOUT",
+    "STARTTLS_MODES",
+    "ScanError",
+    "ScanOutputTooLargeError",
+    "ScannedEntry",
+    "_ALWAYS_BLOCKED_NETWORKS",
+    "_PRIVATE_NETWORKS",
+    "_PROTOCOL_RE",
+    "_der_enc",
+    "_get_chain_der",
+    "_has_native_chain_api",
+    "_is_blocked_ip",
+    "_open_tls_connection",
+    "_parse_allowed_subnets",
+    "_probe_hsts",
+    "_resolve_host",
+    "_resolve_with_dns",
+    "_scan_via_openssl",
+    "resolve_and_validate_host",
+    "resolve_hostname",
+    "scan_host",
+    "scan_host_async",
+    "store_scanned",
+    "store_scanned_async",
+]
 
 logger = logging.getLogger("cert_watch.scan")
 
@@ -359,13 +392,39 @@ def _scan_host_via_openssl(
     )
 
 
+def _execute_deferred_post_commit(deferred: dict[str, Any]) -> None:
+    """Execute deferred webhook resolve + event webhooks outside the write lock (H1).
+
+    Shared by ``store_scanned_async`` and the scheduler's ``_scan_all`` so a
+    slow PagerDuty/Alertmanager response doesn't block request-handler writes.
+    """
+    repo_path = typing.cast("str | Path", deferred.get("repo_path"))
+    entry = deferred.get("entry")
+    replaced_cert_id = deferred.get("replaced_cert_id")
+    webhook_config = deferred.get("webhook_config")
+    pending_for_resolve = deferred.get("pending_for_resolve")
+    pending_event_webhooks = deferred.get("pending_event_webhooks")
+    if entry is not None:
+        with contextlib.suppress(Exception):
+            _stage_webhook_resolve(
+                repo_path, entry, replaced_cert_id,
+                webhook_config, pending_for_resolve,
+            )
+    for evt, cfg, rid in (pending_event_webhooks or []):
+        try:
+            from cert_watch.events import _deliver_webhook, _get_pool
+            _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
+        except Exception:
+            logger.warning("deferred event webhook submit failed", exc_info=True)
+
+
 def _stage_resolve_pending_alerts(
     repo_path: str | Path,
     entry: ScannedEntry,
     webhook_config: object | None,
-) -> tuple[list | None, str | None]:
+) -> tuple[list[Any] | None, str | None]:
     """Capture pending alerts BEFORE replace_scanned deletes them (BC-160)."""
-    pending: list | None = None
+    pending: list[Any] | None = None
     old_leaf_id: str | None = None
     if webhook_config is None:
         return None, None
@@ -408,7 +467,7 @@ def _stage_webhook_resolve(
     entry: ScannedEntry,
     replaced_cert_id: str | None,
     webhook_config: object | None,
-    pending_for_resolve: list | None,
+    pending_for_resolve: list[Any] | None,
 ) -> None:
     """Send resolve events for open incidents on the replaced cert."""
     if not replaced_cert_id or webhook_config is None:
@@ -431,7 +490,7 @@ def _stage_webhook_resolve(
 class _PostureEval:
     """Result of posture evaluation (WI-113: computed pre-transaction)."""
     grade: str = ""
-    findings: list[dict] = field(default_factory=list)
+    findings: list[dict[str, Any]] = field(default_factory=list)
     chain_status: str | None = None
     protocol_version: str = ""
     ocsp_stapling: bool | None = None
@@ -522,7 +581,7 @@ def _evaluate_posture(
 
     return _PostureEval(
         grade=result.grade,
-        findings=typing.cast("list[dict]", result.findings),
+        findings=typing.cast("list[dict[str, Any]]", result.findings),
         chain_status=cs,
         protocol_version=result.protocol_version,
         ocsp_stapling=result.ocsp_stapling,
@@ -540,7 +599,7 @@ def _stage_posture(
     *,
     conn: sqlite3.Connection,
     eval_result: _PostureEval,
-) -> tuple[str, list[dict], str | None]:
+) -> tuple[str, list[dict[str, Any]], str | None]:
     """Store TLS posture results. Returns (grade, findings, chain_status).
 
     WI-113: posture *evaluation* (CAA DNS, OCSP/CRL) now runs pre-transaction
@@ -591,7 +650,7 @@ def _stage_policy(
     leaf_id: str,
     entry: ScannedEntry,
     posture_grade: str,
-    original_findings: list[dict],
+    original_findings: list[dict[str, Any]],
     stored_chain_status: str | None,
     *,
     conn: sqlite3.Connection,
@@ -728,7 +787,7 @@ def _stage_events(
     *,
     conn: sqlite3.Connection,
     event_config: EventStreamConfig,
-) -> list[tuple]:
+) -> list[tuple[Any, ...]]:
     """Emit cert_added/cert_renewed and posture_changed events.
 
     Webhook delivery is deferred (``_defer_webhook=True``) so the webhook
@@ -738,7 +797,7 @@ def _stage_events(
     """
     from cert_watch.events import Event, emit_event
 
-    pending: list[tuple] = []
+    pending: list[tuple[Any, ...]] = []
 
     evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
     event = Event(
@@ -785,7 +844,7 @@ def store_scanned(
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
-    _deferred: dict | None = None,
+    _deferred: dict[str, Any] | None = None,
 ) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
@@ -812,7 +871,7 @@ def store_scanned(
                 entry.host, entry.port,
             )
 
-        def _stage(name: str, fn, *args, **kwargs):
+        def _stage(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
             """Run a stage; on failure log with stage name and re-raise."""
             try:
                 return fn(*args, **kwargs)
@@ -824,7 +883,7 @@ def store_scanned(
                 )
                 raise
 
-        pending_for_resolve: list | None = None
+        pending_for_resolve: list[Any] | None = None
         old_leaf_id: str | None = None
         previous_grade: str | None = None
 
@@ -866,9 +925,9 @@ def store_scanned(
         leaf_id: str = ""
         replaced_cert_id: str | None = None
         posture_grade: str = ""
-        original_findings: list[dict] = []
+        original_findings: list[dict[str, Any]] = []
         stored_chain_status: str | None = None
-        pending_event_webhooks: list[tuple] = []
+        pending_event_webhooks: list[tuple[Any, ...]] = []
 
         try:
             # WI-113: evaluate posture (network I/O — CAA DNS, OCSP/CRL)
@@ -965,7 +1024,7 @@ def _evaluate_and_store_posture(
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> tuple[str, list[dict], str | None]:
+) -> tuple[str, list[dict[str, Any]], str | None]:
     """Evaluate TLS posture and store the result. Returns (grade, findings, chain_status).
 
     Backward-compat wrapper: ``_evaluate_posture`` (pre-transaction, network I/O)
@@ -1063,7 +1122,7 @@ async def store_scanned_async(
     all other writes.
     """
     def _run() -> str:
-        deferred: dict = {}
+        deferred: dict[str, Any] = {}
         with get_write_lock():
             leaf_id = store_scanned(
                 entry,
@@ -1077,20 +1136,6 @@ async def store_scanned_async(
             )
         # Execute post-transaction HTTP outside the write lock.
         if leaf_id and deferred:
-            repo_path: str | Path = deferred.get("repo_path")  # type: ignore[assignment]
-            replaced_cert_id = deferred.get("replaced_cert_id")
-            pending_for_resolve = deferred.get("pending_for_resolve")
-            pending_event_webhooks = deferred.get("pending_event_webhooks")
-            with contextlib.suppress(Exception):
-                _stage_webhook_resolve(
-                    repo_path, entry, replaced_cert_id,
-                    webhook_config, pending_for_resolve,
-                )
-            for evt, cfg, rid in (pending_event_webhooks or []):
-                try:
-                    from cert_watch.events import _deliver_webhook, _get_pool
-                    _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
-                except Exception:
-                    logger.warning("deferred event webhook submit failed", exc_info=True)
+            _execute_deferred_post_commit(deferred)
         return leaf_id
     return await asyncio.to_thread(_run)

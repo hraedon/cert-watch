@@ -16,7 +16,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from cert_watch.alerts import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
-from cert_watch.database import SqliteHostRepository, get_write_lock
+from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
@@ -511,7 +511,9 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
 
     sem = asyncio.Semaphore(10)
 
-    async def _limited_scan(h):
+    async def _limited_scan(
+        h: HostEntry,
+    ) -> tuple[HostEntry, tuple[Literal["success", "scan_error", "store_error"], str | None]]:
         async with sem:
             return h, await _scan_and_store(
                 h.hostname,
@@ -578,6 +580,7 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
         return RedirectResponse(
             url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
         )
+    assert status == "scan_error"
     msg = f"scan failed for {host.hostname}:{host.port}: {error}"
     logger.warning("manual scan failed for %s:%d: %s", host.hostname, host.port, error)
     return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)

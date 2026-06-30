@@ -7,6 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository
 from cert_watch.middleware import require_admin_write, require_auth, require_write
@@ -106,7 +107,7 @@ async def api_update_host_owner(
                 status_code=400,
             )
     owner_email = body.get("owner_email")
-    if owner_email is not None and owner_email and "@" not in owner_email:
+    if owner_email is not None and owner_email and not _validate_email(owner_email):
         return JSONResponse(content={"error": f"invalid email: {owner_email}"}, status_code=400)
 
     valid_methods = {"", "acme", "cert-manager", "manual"}

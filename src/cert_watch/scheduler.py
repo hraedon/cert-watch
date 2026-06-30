@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from cert_watch.renewal_analytics import RenewalOverdueSignal
@@ -127,12 +127,12 @@ _cycle_lock = threading.Lock()
 
 
 def _run_cycle(
-    scan_fn: Callable[[], dict],
-    alert_fn: Callable[[], dict],
+    scan_fn: Callable[[], dict[str, Any]],
+    alert_fn: Callable[[], dict[str, Any]],
     *,
-    ct_fn: Callable[[], dict] | None = None,
+    ct_fn: Callable[[], dict[str, Any]] | None = None,
     maintenance_fn: Callable[[], None] | None = None,
-    digest_fn: Callable[[], dict] | None = None,
+    digest_fn: Callable[[], dict[str, Any]] | None = None,
 ) -> None:
     """Run one scan → CT → alert → digest → maintenance cycle.
 
@@ -171,12 +171,12 @@ def _run_cycle(
 
 
 def start_scheduler(
-    scan_fn: Callable[[], dict],
-    alert_fn: Callable[[], dict],
+    scan_fn: Callable[[], dict[str, Any]],
+    alert_fn: Callable[[], dict[str, Any]],
     *,
-    ct_fn: Callable[[], dict] | None = None,
+    ct_fn: Callable[[], dict[str, Any]] | None = None,
     maintenance_fn: Callable[[], None] | None = None,
-    digest_fn: Callable[[], dict] | None = None,
+    digest_fn: Callable[[], dict[str, Any]] | None = None,
     hour: int = 6,
     minute: int = 0,
     db_path: str | Path | None = None,
@@ -233,7 +233,7 @@ def run_scan_now(
     alert_fn: Callable[[], dict[str, int]],
     *,
     db_path: str | Path | None = None,
-    repo=None,
+    repo: Any = None,
     host_provider: Callable[[], list[tuple[str, int]]] | None = None,
     store_fn: Callable[[object], str] | None = None,
 ) -> dict[str, int]:

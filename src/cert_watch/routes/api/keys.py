@@ -7,12 +7,13 @@ exactly once, in the ``POST`` response; thereafter only metadata is exposed.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.database import SqliteApiKeyRepository
+from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.middleware import require_admin, require_admin_write
 from cert_watch.routes._deps import IdParam, _db_path
@@ -22,7 +23,7 @@ logger = logging.getLogger("cert_watch.routes.api.keys")
 router = APIRouter()
 
 
-def _entry_json(entry) -> dict:
+def _entry_json(entry: ApiKeyEntry) -> dict[str, Any]:
     return {
         "id": entry.id,
         "name": entry.name,

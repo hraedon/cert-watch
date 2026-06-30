@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from .protocol import AuthProvider, AuthResult
 
@@ -58,7 +59,7 @@ class LDAPAuthProvider(AuthProvider):
                 "Install it with: pip install cert-watch[auth-ldap]"
             ) from None
 
-    def _build_tls(self) -> tuple:
+    def _build_tls(self) -> tuple[Any, list[Any]]:
         """Build ldap3.Tls and server list from config.
 
         Returns (tls_obj, servers) where servers is a list of ldap3.Server.
@@ -75,7 +76,7 @@ class LDAPAuthProvider(AuthProvider):
         is_ldaps = any(s.lower().startswith("ldaps://") for s in server_urls)
 
         if is_ldaps or self.start_tls:
-            tls_kwargs: dict = {}
+            tls_kwargs: dict[str, Any] = {}
             if self.ca_cert:
                 tls_kwargs["validate"] = ssl.CERT_REQUIRED
                 ca_path = self._resolve_ca_cert()

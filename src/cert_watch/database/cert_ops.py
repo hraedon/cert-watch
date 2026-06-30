@@ -6,6 +6,7 @@ import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database.connection import _connect, _iso, _parse_iso
@@ -66,6 +67,18 @@ def _do_replace(
         ).fetchall()
     ]
 
+    if old_all_ids:
+        ph = ",".join("?" * len(old_all_ids))
+        conn.execute(
+            f"DELETE FROM scan_posture WHERE cert_id IN ({ph})", old_all_ids
+        )
+        conn.execute(
+            f"DELETE FROM alerts WHERE cert_id IN ({ph})", old_all_ids
+        )
+        conn.execute(
+            f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",
+            old_all_ids,
+        )
     for old_id in old_leaves:
         conn.execute(
             "DELETE FROM certificates WHERE parent_cert_id = ?", (old_id,)
@@ -74,15 +87,6 @@ def _do_replace(
         "DELETE FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
         (hostname, port),
     )
-    if old_all_ids:
-        ph = ",".join("?" * len(old_all_ids))
-        conn.execute(
-            f"DELETE FROM alerts WHERE cert_id IN ({ph})", old_all_ids
-        )
-        conn.execute(
-            f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",
-            old_all_ids,
-        )
 
     cv: int | None = None if chain_valid is None else (1 if chain_valid else 0)
     conn.execute(
@@ -198,7 +202,7 @@ def replace_scanned(
     return _do_replace(conn, hostname, port, leaf, chain, chain_valid)
 
 
-def _compute_renewal_diff(old_row, new_leaf: Certificate) -> list[str]:
+def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> list[str]:
     """Compute human-readable diff between old and new leaf certificates."""
     changes: list[str] = []
     old_na = old_row["not_after"]
@@ -257,7 +261,7 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
 
 def get_renewal_history(
     db_path: str | Path, cert_id: str, limit: int = 10
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Walk the replaces_cert_id chain backwards from this cert.
 
     Returns list of dicts oldest-first: [{id, subject, fingerprint_sha256,
@@ -265,7 +269,7 @@ def get_renewal_history(
     The given cert_id is marked is_current=True.
     """
     init_schema(db_path)
-    entries: list[dict] = []
+    entries: list[dict[str, Any]] = []
     current_id = cert_id
     seen: set[str] = set()
     while current_id and current_id not in seen and len(entries) < limit:

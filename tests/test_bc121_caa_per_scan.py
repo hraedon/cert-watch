@@ -13,9 +13,23 @@ from cryptography.x509.oid import NameOID
 from cert_watch.certificate_model import Certificate
 from cert_watch.compliance import build_compliance_report
 from cert_watch.database import init_schema, replace_scanned, store_scan_posture
+from cert_watch.database.connection import _connect
 from cert_watch.database.posture import get_posture_for_cert
 from cert_watch.database.schema import ensure_base
 from cert_watch.posture import evaluate_posture
+
+
+def _insert_certificate(db, cert_id: str) -> None:
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cert_id, "CN=test", "CN=CA", "2026-01-01T00:00:00+00:00",
+             "2027-01-01T00:00:00+00:00", "[]", f"fp-{cert_id}", b"", "scanned",
+             "test", 443, 1, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
 
 
 def _valid_cert_der() -> bytes:
@@ -49,6 +63,7 @@ def test_store_scan_posture_persists_caa_data(tmp_path):
     db = tmp_path / "test.db"
     init_schema(db)
     cert_id = "cert-001"
+    _insert_certificate(db, cert_id)
     store_scan_posture(
         db_path=db,
         cert_id=cert_id,

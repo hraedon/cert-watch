@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from fastapi import Request
 
 
-def scope_tags_from_auth(auth_ctx) -> tuple[str, ...]:
+def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
     """Return the active scope tags for tag-scoped access control (WI-051).
 
     Admins and unscoped users get an empty tuple (see everything). Scoped

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -41,7 +41,9 @@ def _tags_from_body(body: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _pagination_links(request: Request, path: str, page: int, limit: int, total: int) -> dict:
+def _pagination_links(
+    request: Request, path: str, page: int, limit: int, total: int,
+) -> dict[str, str | None]:
     """Build HATEOAS pagination links for a JSON API response."""
     pages = (total + limit - 1) // limit if limit else 0
     base = str(request.base_url).rstrip("/") + path
@@ -80,7 +82,7 @@ def _validate_webhook_url(url: str) -> JSONResponse | None:
     return None
 
 
-def _alert_group_json(g: Any) -> dict:
+def _alert_group_json(g: Any) -> dict[str, Any]:
     return {
         "id": g.id,
         "name": g.name,
@@ -103,4 +105,4 @@ def compliance_signing_key(request: Request) -> str:
     security = getattr(request.app.state, "security", None)
     if security is None or not getattr(security, "signing_key", ""):
         raise HTTPException(status_code=503, detail="signing key unavailable")
-    return security.signing_key
+    return cast(str, security.signing_key)

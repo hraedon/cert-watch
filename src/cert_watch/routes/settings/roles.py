@@ -12,6 +12,7 @@ from cert_watch.database import (
     SqliteRoleRepository,
     SqliteUserRepository,
     User,
+    bump_session_version,
 )
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
@@ -114,6 +115,11 @@ async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
     role.scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
     role.alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     repo.update(role)
+    # Invalidate active sessions for all users with this role — a permission
+    # tier or scope change must take effect immediately, not at TTL expiry.
+    db = _db_path(request)
+    for username in SqliteUserRepository(db).list_usernames_by_role_id(role_id):
+        bump_session_version(db, username)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -127,7 +133,12 @@ async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
     if csrf_err:
         return RedirectResponse(url=f"/settings?tab=roles&error={csrf_err}", status_code=303)
 
-    SqliteRoleRepository(_db_path(request)).delete(role_id)
+    db = _db_path(request)
+    # Invalidate active sessions for all users with this role before the role
+    # is deleted (delete() clears their role_id).
+    for username in SqliteUserRepository(db).list_usernames_by_role_id(role_id):
+        bump_session_version(db, username)
+    SqliteRoleRepository(db).delete(role_id)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -223,6 +234,7 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
     user.role_id = role_id
     # Password is optional on edit: only re-hash when a new one is supplied,
     # otherwise the existing hash is kept.
+    db = _db_path(request)
     if password:
         if len(password) < 8:
             return RedirectResponse(
@@ -231,6 +243,9 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
             )
         user.password_hash = _scrypt_hash(password)
     repo.update(user)
+    # Invalidate active sessions for this user — a password change or role
+    # reassignment must take effect immediately, not at TTL expiry.
+    bump_session_version(db, username)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
@@ -244,5 +259,13 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
     if csrf_err:
         return RedirectResponse(url=f"/settings?tab=users&error={csrf_err}", status_code=303)
 
-    SqliteUserRepository(_db_path(request)).delete(user_id)
+    db = _db_path(request)
+    repo = SqliteUserRepository(db)
+    user = repo.get(user_id)
+    # Invalidate the user's active sessions BEFORE deleting the row — after
+    # deletion there's no username to bump. A deleted user's cookie must not
+    # keep working until TTL expiry.
+    if user:
+        bump_session_version(db, user.username)
+    repo.delete(user_id)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)

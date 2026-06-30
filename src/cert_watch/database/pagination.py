@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from cert_watch.database.connection import _connect
 from cert_watch.database.schema import init_schema
@@ -17,7 +18,7 @@ def list_alerts_with_subject(
     unread_only: bool = False,
     critical_only: bool = False,
     warning_only: bool = False,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Return alerts joined with the cert subject, newest first.
 
     When ``limit > 0``, applies SQL-level pagination.
@@ -28,7 +29,7 @@ def list_alerts_with_subject(
     """
     init_schema(db_path)
     conditions: list[str] = []
-    params: list = []
+    params: list[Any] = []
     if unread_only:
         conditions.append("a.read = 0")
     if critical_only:
@@ -104,7 +105,9 @@ def _total_scan_history(db_path: str | Path) -> int:
     return row[0] if row else 0
 
 
-def list_scan_history(db_path: str | Path, *, page: int = 1, limit: int = 0) -> list[dict]:
+def list_scan_history(
+    db_path: str | Path, *, page: int = 1, limit: int = 0,
+) -> list[dict[str, Any]]:
     """Return scan_history rows, newest first.
 
     When ``limit > 0``, applies SQL-level pagination.
@@ -130,7 +133,9 @@ def _total_scan_batches(db_path: str | Path) -> int:
     return len(_group_scan_batches(rows))
 
 
-def _group_scan_batches(rows: list[dict], window_minutes: int = 5) -> list[dict]:
+def _group_scan_batches(
+    rows: list[dict[str, Any]], window_minutes: int = 5,
+) -> list[dict[str, Any]]:
     """Group per-host scan rows into batch-oriented runs.
 
     A batch is a set of scans whose first and last record are within
@@ -152,7 +157,7 @@ def _group_scan_batches(rows: list[dict], window_minutes: int = 5) -> list[dict]
                 continue
         return datetime.now(UTC)
 
-    batches: list[dict] = []
+    batches: list[dict[str, Any]] = []
     for row in rows:
         ts = _parse(row.get("scanned_at", ""))
         placed = False
@@ -197,7 +202,7 @@ def list_scan_batches(
     *,
     page: int = 1,
     per_page: int = 20,
-) -> tuple[list[dict], int]:
+) -> tuple[list[dict[str, Any]], int]:
     """Return scan batches paginated, plus total batch count."""
     rows = list_scan_history(db_path, limit=0)
     batches = _group_scan_batches(rows)
