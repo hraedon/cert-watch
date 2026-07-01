@@ -2217,3 +2217,119 @@ def test_stage_events_posture_unchanged(tmp_path, self_signed_leaf):
         "SELECT event_type FROM event_log WHERE event_type = 'posture_changed'"
     ).fetchall()
     assert len(rows) == 0
+
+
+def test_stage_policy_posture_findings_suppress_policy(tmp_path, self_signed_leaf):
+    """Regression (WI-014): Finding objects from posture must reach evaluate_policy.
+
+    Before the fix, _stage_policy used typing.cast() that pretended Finding
+    objects were dicts, then the list comprehension filtered with
+    isinstance(f, dict) — silently dropping all Finding objects.  This meant
+    posture_findings was always None and WI-014 suppression was dead.
+    """
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.policy import default_policy_set
+    from cert_watch.posture import Finding
+    from cert_watch.scan import _stage_policy
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id
+
+    ruleset = default_policy_set()
+    for r in ruleset.rules:
+        if r.rule_id == "self_signed":
+            r.enabled = True
+
+    posture_findings = [
+        Finding(check="self_signed", status="fail", message="Certificate is self-signed"),
+    ]
+
+    conn = _connect(db)
+    result = _stage_policy(
+        db, leaf_id, entry, "A", posture_findings, None,
+        conn=conn, ruleset=ruleset,
+    )
+    conn.commit()
+
+    assert result == "A"
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM alerts WHERE cert_id = ? AND alert_type = 'policy_violation'",
+        (leaf_id,),
+    ).fetchone()
+    assert rows["n"] == 0
+
+
+def test_stage_policy_no_posture_findings_policy_fires(tmp_path, self_signed_leaf):
+    """Control for WI-014: without posture findings, the policy violation fires."""
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.policy import default_policy_set
+    from cert_watch.scan import _stage_policy
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id
+
+    ruleset = default_policy_set()
+    for r in ruleset.rules:
+        if r.rule_id == "self_signed":
+            r.enabled = True
+
+    conn = _connect(db)
+    _stage_policy(
+        db, leaf_id, entry, "A", [], None,
+        conn=conn, ruleset=ruleset,
+    )
+    conn.commit()
+
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM alerts WHERE cert_id = ? AND alert_type = 'policy_violation'",
+        (leaf_id,),
+    ).fetchone()
+    assert rows["n"] >= 1
+
+
+def test_stage_policy_dict_findings_also_suppress(tmp_path, self_signed_leaf):
+    """Regression (WI-014): dict-style findings still work (backward compat)."""
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+    from cert_watch.policy import default_policy_set
+    from cert_watch.scan import _stage_policy
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = _scanned_entry_for(leaf)
+    leaf_id = store_scanned(entry, db)
+    assert leaf_id
+
+    ruleset = default_policy_set()
+    for r in ruleset.rules:
+        if r.rule_id == "self_signed":
+            r.enabled = True
+
+    dict_findings = [
+        {"check": "self_signed", "status": "fail", "message": "self-signed"},
+    ]
+
+    conn = _connect(db)
+    result = _stage_policy(
+        db, leaf_id, entry, "A", dict_findings, None,
+        conn=conn, ruleset=ruleset,
+    )
+    conn.commit()
+
+    assert result == "A"
+    rows = conn.execute(
+        "SELECT COUNT(*) AS n FROM alerts WHERE cert_id = ? AND alert_type = 'policy_violation'",
+        (leaf_id,),
+    ).fetchone()
+    assert rows["n"] == 0
