@@ -13,6 +13,7 @@ from cert_watch.database import (
     SqliteUserRepository,
     User,
     bump_session_version,
+    get_write_lock,
 )
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
@@ -85,7 +86,8 @@ async def create_role(request: Request) -> RedirectResponse:
         permission_tier=permission_tier, scope_tag=scope_tag,
         alert_group_id=alert_group_id,
     )
-    SqliteRoleRepository(_db_path(request)).add(role)
+    with get_write_lock():
+        SqliteRoleRepository(_db_path(request)).add(role)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -114,7 +116,8 @@ async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
     role.permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
     role.scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
     role.alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
-    repo.update(role)
+    with get_write_lock():
+        repo.update(role)
     # Invalidate active sessions for all users with this role — a permission
     # tier or scope change must take effect immediately, not at TTL expiry.
     db = _db_path(request)
@@ -138,7 +141,8 @@ async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
     # is deleted (delete() clears their role_id).
     for username in SqliteUserRepository(db).list_usernames_by_role_id(role_id):
         bump_session_version(db, username)
-    SqliteRoleRepository(db).delete(role_id)
+    with get_write_lock():
+        SqliteRoleRepository(db).delete(role_id)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -197,7 +201,8 @@ async def create_user(request: Request) -> RedirectResponse:
         password_hash=_scrypt_hash(password),
         role_id=role_id,
     )
-    SqliteUserRepository(_db_path(request)).add(user)
+    with get_write_lock():
+        SqliteUserRepository(_db_path(request)).add(user)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
@@ -242,7 +247,8 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
                 status_code=303,
             )
         user.password_hash = _scrypt_hash(password)
-    repo.update(user)
+    with get_write_lock():
+        repo.update(user)
     # Invalidate active sessions for this user — a password change or role
     # reassignment must take effect immediately, not at TTL expiry.
     bump_session_version(db, username)
@@ -267,5 +273,6 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
     # keep working until TTL expiry.
     if user:
         bump_session_version(db, user.username)
-    repo.delete(user_id)
+    with get_write_lock():
+        repo.delete(user_id)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)

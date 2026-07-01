@@ -17,7 +17,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.database import SqliteAlertGroupRepository
+from cert_watch.database import SqliteAlertGroupRepository, get_write_lock
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.routes.api._shared import _validate_webhook_url
@@ -220,11 +220,12 @@ async def create_alert_group(request: Request) -> RedirectResponse:
     if repo.get_by_name(values["name"]):
         return _redirect_err(f"alert group '{values['name']}' already exists")
 
-    group_id = repo.create(
-        values["name"], values["recipients"], values["match_tags"],
-        values["webhook_url"], threshold_days=values["threshold_days"],
-        digest_cadence_days=values["digest_cadence_days"],
-    )
+    with get_write_lock():
+        group_id = repo.create(
+            values["name"], values["recipients"], values["match_tags"],
+            values["webhook_url"], threshold_days=values["threshold_days"],
+            digest_cadence_days=values["digest_cadence_days"],
+        )
     record_audit(
         db, actor=resolve_actor(request), action="alert_group.create",
         target_type="alert_group", target_id=group_id,
@@ -257,12 +258,13 @@ async def update_alert_group(group_id: IdParam, request: Request) -> RedirectRes
     if existing is not None and existing.id != group_id:
         return _redirect_err(f"alert group '{values['name']}' already exists")
 
-    repo.update(
-        group_id, name=values["name"], recipients=values["recipients"],
-        match_tags=values["match_tags"], webhook_url=values["webhook_url"],
-        threshold_days=values["threshold_days"],
-        digest_cadence_days=values["digest_cadence_days"],
-    )
+    with get_write_lock():
+        repo.update(
+            group_id, name=values["name"], recipients=values["recipients"],
+            match_tags=values["match_tags"], webhook_url=values["webhook_url"],
+            threshold_days=values["threshold_days"],
+            digest_cadence_days=values["digest_cadence_days"],
+        )
     record_audit(
         db, actor=resolve_actor(request), action="alert_group.update",
         target_type="alert_group", target_id=group_id,
@@ -282,7 +284,9 @@ async def delete_alert_group(group_id: IdParam, request: Request) -> RedirectRes
         return _redirect_err(csrf_err)
 
     db = _db_path(request)
-    if SqliteAlertGroupRepository(db).delete(group_id):
+    with get_write_lock():
+        deleted = SqliteAlertGroupRepository(db).delete(group_id)
+    if deleted:
         record_audit(
             db, actor=resolve_actor(request), action="alert_group.delete",
             target_type="alert_group", target_id=group_id, detail={},

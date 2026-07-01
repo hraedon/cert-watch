@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.alert_adapters import WEBHOOK_KIND_OPTIONS
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.database import get_write_lock
 from cert_watch.events import (
     ALL_EVENT_TYPES,
     EventStreamConfig,
@@ -106,7 +107,8 @@ async def save_settings_events(request: Request) -> RedirectResponse:
         pagerduty_routing_key=pagerduty_routing_key,
         rate_limit_per_second=rate_limit,
     )
-    save_event_config(db, config, encryption_key=enc_key)
+    with get_write_lock():
+        save_event_config(db, config, encryption_key=enc_key)
 
     record_audit(
         str(db),

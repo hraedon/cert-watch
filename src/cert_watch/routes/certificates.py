@@ -467,7 +467,8 @@ async def update_certificate_notes(
     repo = SqliteCertificateRepository(db)
     if repo.get_by_id(cert_id) is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    repo.update_notes(cert_id, notes)
+    with get_write_lock():
+        repo.update_notes(cert_id, notes)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -504,7 +505,8 @@ async def update_certificate_tags(
     from cert_watch.tags import format_tags
 
     normalized = format_tags(parse_tags(tags))
-    repo.set_tags(cert_id, normalized)
+    with get_write_lock():
+        repo.set_tags(cert_id, normalized)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -598,17 +600,18 @@ async def update_certificate_owner(
                 url=f"/certificates/{cert_id}?error={quote(err)}", status_code=303,
             )
 
-    host_repo.update_owner(
-        host_id,
-        owner_name=owner_name,
-        owner_email=owner_email,
-        owner_slack=owner_slack,
-    )
-    host_repo.update_renewal(
-        host_id,
-        renewal_method=renewal_method,
-        runbook_url=runbook_url,
-    )
+    with get_write_lock():
+        host_repo.update_owner(
+            host_id,
+            owner_name=owner_name,
+            owner_email=owner_email,
+            owner_slack=owner_slack,
+        )
+        host_repo.update_renewal(
+            host_id,
+            renewal_method=renewal_method,
+            runbook_url=runbook_url,
+        )
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -712,7 +715,8 @@ async def add_trust_anchor(
             )
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)
-        anchor_id = repo.add(entry.leaf)
+        with get_write_lock():
+            anchor_id = repo.add(entry.leaf)
         record_audit(
             db,
             actor=resolve_actor(request),
@@ -735,7 +739,8 @@ async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectR
         return write_err
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
-    repo.delete(anchor_id)
+    with get_write_lock():
+        repo.delete(anchor_id)
     record_audit(
         db,
         actor=resolve_actor(request),

@@ -53,7 +53,7 @@ async def _save_config_section(
     if admin_err:
         return admin_err
 
-    from cert_watch.database import kv_set, kv_set_secret
+    from cert_watch.database import get_write_lock, kv_set, kv_set_secret
     from cert_watch.middleware import check_csrf
 
     csrf_err = await check_csrf(request)
@@ -66,18 +66,19 @@ async def _save_config_section(
     form = await request.form()
     enc_key = _get_encryption_key(request) if encrypt else None
 
-    for kv_key in keys:
-        raw = form.get(kv_key, "")
-        val = raw.strip() if isinstance(raw, str) else ""
-        if kv_key in _SENSITIVE_KEYS:
-            if not val:
-                continue
-            if enc_key:
-                kv_set_secret(db, kv_key, val, enc_key)
+    with get_write_lock():
+        for kv_key in keys:
+            raw = form.get(kv_key, "")
+            val = raw.strip() if isinstance(raw, str) else ""
+            if kv_key in _SENSITIVE_KEYS:
+                if not val:
+                    continue
+                if enc_key:
+                    kv_set_secret(db, kv_key, val, enc_key)
+                else:
+                    kv_set(db, kv_key, val)
             else:
                 kv_set(db, kv_key, val)
-        else:
-            kv_set(db, kv_key, val)
 
     if rebuild:
         _rebuild_settings(request, db)

@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
 from cert_watch.config import LOCAL_ADMIN_PASSWORD_HASH, LOCAL_ADMIN_USER, SETUP_COMPLETE
-from cert_watch.database import bump_session_version, kv_set
+from cert_watch.database import bump_session_version, get_write_lock, kv_set
 from cert_watch.middleware import check_csrf, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 
@@ -109,24 +109,26 @@ async def setup_submit(
                 )
         # Store in kv_store
         password_hash = _scrypt_hash(password)
-        kv_set(db, LOCAL_ADMIN_USER, username)
         # H3: encrypt the password hash at rest so a DB backup/dump does not
         # expose the scrypt hash for offline cracking.
         from cert_watch.routes.settings.config import _get_encryption_key
 
         enc_key = _get_encryption_key(request)
-        if enc_key:
-            from cert_watch.database import kv_set_secret
-            kv_set_secret(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash, enc_key)
-        else:
-            kv_set(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash)
+        with get_write_lock():
+            kv_set(db, LOCAL_ADMIN_USER, username)
+            if enc_key:
+                from cert_watch.database import kv_set_secret
+                kv_set_secret(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash, enc_key)
+            else:
+                kv_set(db, LOCAL_ADMIN_PASSWORD_HASH, password_hash)
+            if subnet_list:
+                kv_set(db, "allowed_subnets", ",".join(subnet_list))
+            kv_set(db, SETUP_COMPLETE, "1")
         if subnet_list:
-            kv_set(db, "allowed_subnets", ",".join(subnet_list))
             # Apply immediately to the running app (Settings is frozen).
             request.app.state.settings = _dc_replace(s, allowed_subnets=tuple(subnet_list))
             s = request.app.state.settings
             logger.info("setup wizard: scan allowlist set to %s", subnet_list)
-        kv_set(db, SETUP_COMPLETE, "1")
 
         # Rebuild auth provider with the new local admin
         auth = s.build_auth_provider(security=getattr(request.app.state, "security", None))

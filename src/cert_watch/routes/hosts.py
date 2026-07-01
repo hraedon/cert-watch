@@ -300,15 +300,16 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         if row_starttls and row_starttls not in STARTTLS_MODES:
             errors.append(f"row {i}: unsupported starttls_mode '{row_starttls}'")
             continue
-        host_repo.add(
-            hostname,
-            port,
-            threshold_days=threshold,
-            tags=tags_with_scope(request, row_tags),
-            scan_interval_hours=interval_hours,
-            notes=row_notes,
-            starttls_mode=row_starttls,
-        )
+        with get_write_lock():
+            host_repo.add(
+                hostname,
+                port,
+                threshold_days=threshold,
+                tags=tags_with_scope(request, row_tags),
+                scan_interval_hours=interval_hours,
+                notes=row_notes,
+                starttls_mode=row_starttls,
+            )
         scan_jobs.append((hostname, port, threshold, row_pinned_ip, row_starttls))
 
     actor = resolve_actor(request)
@@ -368,7 +369,9 @@ async def update_host_notes(
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     repo = SqliteHostRepository(db)
-    if not repo.update_notes(host_id, notes):
+    with get_write_lock():
+        updated = repo.update_notes(host_id, notes)
+    if not updated:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     record_audit(
         db,
@@ -403,7 +406,9 @@ async def update_host_tags(
 
     normalized = format_tags(parse_tags(tags))
     repo = SqliteHostRepository(db)
-    if not repo.set_tags(host_id, normalized):
+    with get_write_lock():
+        updated = repo.set_tags(host_id, normalized)
+    if not updated:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     record_audit(
         db,
@@ -440,7 +445,8 @@ async def update_host_expected_issuers(
     )
     if len(normalized) > 2000:
         return RedirectResponse(url="/?error=expected+issuers+too+long", status_code=303)
-    repo.set_expected_issuers(host_id, normalized)
+    with get_write_lock():
+        repo.set_expected_issuers(host_id, normalized)
     record_audit(
         db,
         actor=resolve_actor(request),

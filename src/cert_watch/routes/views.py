@@ -20,6 +20,7 @@ from cert_watch.database import (
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
+    get_write_lock,
     list_alerts_with_subject,
     list_dashboard_grouped_page,
     list_dashboard_page,
@@ -467,6 +468,7 @@ async def mark_alert_read(
         denied = scope_write_denied(request, db, cert_id=row["cert_id"])
         if denied:
             return JSONResponse({"ok": False, "error": denied}, status_code=403)
+    with get_write_lock(), _connect(db) as conn:
         cur = conn.execute(
             "UPDATE alerts SET read = 1 WHERE id = ?",
             (alert_id,),
@@ -554,7 +556,8 @@ async def mark_all_alerts_read(request: Request) -> RedirectResponse:
 
     from cert_watch.database import SqliteAlertRepository
 
-    count = SqliteAlertRepository(db).mark_all_read(scope_tags)
+    with get_write_lock():
+        count = SqliteAlertRepository(db).mark_all_read(scope_tags)
 
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 

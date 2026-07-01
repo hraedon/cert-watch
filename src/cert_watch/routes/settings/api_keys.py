@@ -6,7 +6,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.database import SqliteApiKeyRepository
+from cert_watch.database import SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path
@@ -44,7 +44,8 @@ async def api_keys_create(
         return _render_api_keys(request, error="Invalid scope.")
 
     repo = SqliteApiKeyRepository(_db_path(request))
-    entry, raw_token = repo.create_key(name, scope)
+    with get_write_lock():
+        entry, raw_token = repo.create_key(name, scope)
     record_audit(
         _db_path(request),
         actor=resolve_actor(request),
@@ -68,7 +69,8 @@ async def api_keys_revoke(
     csrf_err = await check_csrf(request)
     if csrf_err:
         return _render_api_keys(request, error=csrf_err)
-    SqliteApiKeyRepository(_db_path(request)).revoke_key(key_id)
+    with get_write_lock():
+        SqliteApiKeyRepository(_db_path(request)).revoke_key(key_id)
     record_audit(
         _db_path(request),
         actor=resolve_actor(request),
