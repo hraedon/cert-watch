@@ -121,7 +121,9 @@ def _check_endpoint_reachable(
             allowed_subnets=allowed_subnets,
         )
         with resp:
-            return 200 <= resp.status < 500, ""
+            # 405 = endpoint exists but doesn't support this method
+            # (e.g. OCSP responder returning 405 for HEAD)
+            return (200 <= resp.status < 400) or resp.status == 405, ""
     except SSRFBlockedError:
         return False, "endpoint blocked by SSRF policy"
     except Exception:
@@ -523,7 +525,9 @@ def evaluate_posture(
             ),
         ))
         grade_severity = max(grade_severity, 1)
-    elif chain_status == "incomplete":
+    elif chain_status in ("incomplete", "unknown") or (
+        chain_status is None and not is_self_signed
+    ):
         findings.append(Finding(
             check="chain_completeness", status="warn",
             message="Incomplete chain — server missing intermediate(s)",

@@ -256,7 +256,7 @@ class TestPostureEvaluation:
     def test_tls_12_no_penalty(self):
         der = _ca_signed_cert_der()
         cert = _cert_from_der(der)
-        result = evaluate_posture(cert=cert, protocol_version="TLSv1.2")
+        result = evaluate_posture(cert=cert, protocol_version="TLSv1.2", chain_status="public")
         assert result.grade == "A"
         tls = [f for f in result.findings if f.check == "tls_version"]
         assert len(tls) == 1
@@ -402,7 +402,7 @@ class TestPostureEvaluation:
         monkeypatch.setattr(
             x509, "load_der_x509_certificate", lambda _data: fake_cert,
         )
-        result = evaluate_posture(cert=cert)
+        result = evaluate_posture(cert=cert, chain_status="public")
         assert result.grade == "A"
         key_type = [f for f in result.findings if f.check == "key_type"]
         assert len(key_type) == 1

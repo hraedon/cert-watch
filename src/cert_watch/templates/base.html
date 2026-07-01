@@ -203,7 +203,10 @@
       } else if (action === 'toggle-group') {
         if (typeof toggleGroup === 'function') toggleGroup(el.getAttribute('data-group'));
       } else if (action === 'open-link') {
-        window.location = el.getAttribute('data-href');
+        var href = el.getAttribute('data-href');
+        if (href && (href.charAt(0) === '/' || /^https?:\/\//.test(href))) {
+          window.location = href;
+        }
       } else if (action === 'open-slide') {
         if (typeof openSlide === 'function') openSlide();
       } else if (action === 'close-slide') {

@@ -609,7 +609,7 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     msg = EmailMessage()
     msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
     msg["From"] = config.from_addr
-    all_recipients = list(config.recipients)
+    all_recipients = [r for r in config.recipients if _validate_email(r)]
     for r in alert.extra_recipients:
         if r not in all_recipients and _validate_email(r):
             all_recipients.append(r)
@@ -1214,6 +1214,8 @@ def send_expiry_digest(
     if config is not None:
         seen: set[str] = set()
         for r in config.recipients:
+            if not _validate_email(r):
+                continue
             cf = r.casefold()
             if cf not in seen:
                 seen.add(cf)

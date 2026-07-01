@@ -426,10 +426,16 @@ def purge_old_events(db_path: str | Path, retention_days: int) -> int:
     if retention_days <= 0:
         return 0
     cutoff = (datetime.now(UTC) - timedelta(days=retention_days)).isoformat()
-    with _connect(db_path) as conn:
-        row = conn.execute(
-            "SELECT COUNT(*) FROM event_log WHERE created_at < ?", (cutoff,)
-        ).fetchone()
-        conn.execute("DELETE FROM event_log WHERE created_at < ?", (cutoff,))
-        conn.commit()
-    return int(row[0]) if row is not None else 0
+    try:
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM event_log WHERE created_at < ?", (cutoff,)
+            ).fetchone()
+            conn.execute("DELETE FROM event_log WHERE created_at < ?", (cutoff,))
+            conn.commit()
+        return int(row[0]) if row is not None else 0
+    except (sqlite3.Error, OSError):
+        logging.getLogger("cert_watch.events").warning(
+            "event purge failed", exc_info=True
+        )
+        return 0

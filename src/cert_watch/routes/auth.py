@@ -83,6 +83,10 @@ async def login_submit(
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
+    if len(password) > 1024:
+        return RedirectResponse(
+            url="/login?error=password+too+long", status_code=303
+        )
     result = auth.authenticate(username, password)
     if not result.success:
         return RedirectResponse(

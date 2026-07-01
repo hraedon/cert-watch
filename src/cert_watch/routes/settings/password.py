@@ -50,9 +50,18 @@ async def change_local_admin_password(request: Request) -> RedirectResponse:
         return RedirectResponse(
             url="/settings?tab=auth&error=current+and+new+password+are+required", status_code=303
         )
+    if len(current_password) > 1024:
+        return RedirectResponse(
+            url="/settings?tab=auth&error=current+password+too+long", status_code=303,
+        )
     if len(new_password) < 8:
         return RedirectResponse(
             url="/settings?tab=auth&error=new+password+must+be+at+least+8+characters",
+            status_code=303,
+        )
+    if len(new_password) > 1024:
+        return RedirectResponse(
+            url="/settings?tab=auth&error=new+password+must+not+exceed+1024+characters",
             status_code=303,
         )
     if new_password != confirm_password:

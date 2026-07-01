@@ -187,7 +187,13 @@ def api_health(request: Request) -> JSONResponse:
 
     # Overall color
     overall = "ok"
-    if not checks["scheduler_running"]:
+    db_ok = True
+    try:
+        with _connect(db) as conn:
+            conn.execute("SELECT 1").fetchone()
+    except Exception:
+        db_ok = False
+    if not db_ok or not checks["scheduler_running"]:
         overall = "critical"
     elif (
         (checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0
@@ -332,7 +338,8 @@ def alerts_view(
 ) -> HTMLResponse:
     db = _db_path(request)
     per_page = 50
-    counts = _count_alerts_by_filter(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    counts = _count_alerts_by_filter(db, scope_tags=scope_tags)
     unread_only = filter_type == "unread"
     critical_only = filter_type == "critical"
     warning_only = filter_type == "warning"
@@ -343,6 +350,7 @@ def alerts_view(
         unread_only=unread_only,
         critical_only=critical_only,
         warning_only=warning_only,
+        scope_tags=scope_tags,
     )
     total = counts.get(filter_type, counts["all"])
     total_pages = max((total + per_page - 1) // per_page, 1)

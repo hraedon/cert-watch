@@ -230,6 +230,9 @@ def _is_signed_by(child: Certificate, issuer: Certificate | _AnchorLike) -> bool
     also checks the issuer/subject Name match and the AKI/SKI hints. Returns
     False on any failure (bad signature, name mismatch, unparseable DER,
     unsupported key type).
+
+    Also enforces that the issuer has BasicConstraints.ca=True, preventing a
+    leaf certificate from being used as an intermediate to forge chains.
     """
     child_x = _load_x509(child)
     issuer_x = _load_x509(issuer)
@@ -237,11 +240,17 @@ def _is_signed_by(child: Certificate, issuer: Certificate | _AnchorLike) -> bool
         return False
     try:
         child_x.verify_directly_issued_by(issuer_x)
-        return True
     except Exception:  # noqa: BLE001
-        # InvalidSignature, ValueError (name mismatch), TypeError
-        # (unsupported key), etc. all mean "not verifiably signed by".
         return False
+    try:
+        bc = issuer_x.extensions.get_extension_for_class(x509.BasicConstraints)
+        if not bc.value.ca:
+            return False
+    except x509.ExtensionNotFound:
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+    return True
 
 
 def validate_chain_signatures(chain: list[Certificate]) -> bool | None:

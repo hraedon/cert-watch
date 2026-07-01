@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import time
 from collections.abc import Generator
 from typing import Literal, assert_never
@@ -19,7 +20,8 @@ def backoff_range(
     """Yield attempt numbers 0..max_retries, sleeping between attempts.
 
     Yields 0 first (no initial sleep). Sleeps ``base_delay * 2**attempt``
-    (exponential) or ``base_delay * (attempt + 1)`` (linear) between retries.
+    (exponential) or ``base_delay * (attempt + 1)`` (linear) between retries,
+    with up to 50% random jitter to avoid coordinated retry storms.
 
     Usage::
 
@@ -37,5 +39,10 @@ def backoff_range(
                 delay = base_delay * (attempt + 1)
             else:
                 assert_never(strategy)
-            logger.debug("retry %d/%d, sleeping %.1fs", attempt + 1, max_retries, delay)
-            time.sleep(delay)
+            jitter = random.uniform(0, delay * 0.5)
+            total = delay + jitter
+            logger.debug(
+                "retry %d/%d, sleeping %.1fs (jitter %.1fs)",
+                attempt + 1, max_retries, total, jitter,
+            )
+            time.sleep(total)

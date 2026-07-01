@@ -18,6 +18,7 @@ def list_alerts_with_subject(
     unread_only: bool = False,
     critical_only: bool = False,
     warning_only: bool = False,
+    scope_tags: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Return alerts joined with the cert subject, newest first.
 
@@ -26,6 +27,8 @@ def list_alerts_with_subject(
       - unread_only: only alerts where read=0
       - critical_only: only expired or scan_failure alerts
       - warning_only: only expiry_warning or drift alerts
+    When ``scope_tags`` is non-empty, only alerts whose cert or host
+    tags match any of the scope tags are returned (tag-scoped access control).
     """
     init_schema(db_path)
     conditions: list[str] = []
@@ -37,6 +40,14 @@ def list_alerts_with_subject(
     if warning_only:
         conditions.append("a.alert_type IN ('expiry_warning', 'drift')")
     where = "WHERE " + " AND ".join(conditions) if conditions else ""
+    if scope_tags:
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        base = where if where else "WHERE 1=1"
+        where, params = _add_effective_tag_filter(
+            base, params, scope_tags,
+            col_cert="c.tags", col_host="h.tags",
+        )
     with _connect(db_path) as conn:
         if limit > 0:
             offset = max(0, (page - 1) * limit)
@@ -47,6 +58,7 @@ def list_alerts_with_subject(
                        a.read, c.subject AS subject
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
+                LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
                 {where}
                 ORDER BY a.created_at DESC
                 LIMIT ? OFFSET ?
@@ -61,6 +73,7 @@ def list_alerts_with_subject(
                        a.read, c.subject AS subject
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
+                LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
                 {where}
                 ORDER BY a.created_at DESC
                 """,
@@ -72,25 +85,81 @@ def list_alerts_with_subject(
 # ---------- Pagination helpers ----------
 
 
-def _total_alerts(db_path: str | Path) -> int:
-    with _connect(db_path) as conn:
-        row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
+def _total_alerts(db_path: str | Path, scope_tags: tuple[str, ...] = ()) -> int:
+    if scope_tags:
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        where, params = _add_effective_tag_filter(
+            "WHERE 1=1", [], scope_tags,
+            col_cert="c.tags", col_host="h.tags",
+        )
+        with _connect(db_path) as conn:
+            row = conn.execute(
+                f"""
+                SELECT COUNT(*) FROM alerts a
+                LEFT JOIN certificates c ON c.id = a.cert_id
+                LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
+                {where}
+                """,
+                params,
+            ).fetchone()
+    else:
+        with _connect(db_path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
     return row[0] if row else 0
 
 
-def _count_alerts_by_filter(db_path: str | Path) -> dict[str, int]:
+def _count_alerts_by_filter(
+    db_path: str | Path, scope_tags: tuple[str, ...] = ()
+) -> dict[str, int]:
     """Return counts for all, unread, critical, and warning alerts."""
-    with _connect(db_path) as conn:
-        all_row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
-        unread_row = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE read = 0"
-        ).fetchone()
-        crit_row = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expired', 'scan_failure')"
-        ).fetchone()
-        warn_row = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expiry_warning', 'drift')"
-        ).fetchone()
+    if scope_tags:
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        base_where, base_params = _add_effective_tag_filter(
+            "WHERE 1=1", [], scope_tags, col_cert="c.tags", col_host="h.tags"
+        )
+        with _connect(db_path) as conn:
+            all_row = conn.execute(
+                f"SELECT COUNT(*) FROM alerts a "
+                f"LEFT JOIN certificates c ON c.id = a.cert_id "
+                f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+                f"{base_where}",
+                base_params,
+            ).fetchone()
+            unread_row = conn.execute(
+                f"SELECT COUNT(*) FROM alerts a "
+                f"LEFT JOIN certificates c ON c.id = a.cert_id "
+                f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+                f"{base_where} AND a.read = 0",
+                base_params,
+            ).fetchone()
+            crit_row = conn.execute(
+                f"SELECT COUNT(*) FROM alerts a "
+                f"LEFT JOIN certificates c ON c.id = a.cert_id "
+                f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+                f"{base_where} AND a.alert_type IN ('expired', 'scan_failure')",
+                base_params,
+            ).fetchone()
+            warn_row = conn.execute(
+                f"SELECT COUNT(*) FROM alerts a "
+                f"LEFT JOIN certificates c ON c.id = a.cert_id "
+                f"LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port "
+                f"{base_where} AND a.alert_type IN ('expiry_warning', 'drift')",
+                base_params,
+            ).fetchone()
+    else:
+        with _connect(db_path) as conn:
+            all_row = conn.execute("SELECT COUNT(*) FROM alerts").fetchone()
+            unread_row = conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE read = 0"
+            ).fetchone()
+            crit_row = conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expired', 'scan_failure')"
+            ).fetchone()
+            warn_row = conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE alert_type IN ('expiry_warning', 'drift')"
+            ).fetchone()
     return {
         "all": all_row[0] if all_row else 0,
         "unread": unread_row[0] if unread_row else 0,
