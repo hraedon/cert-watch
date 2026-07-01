@@ -789,6 +789,39 @@ def test_scrypt_hash_custom_params():
     assert verify_scrypt_hash(pw, h) is True
 
 
+def test_scrypt_hash_explicit_salt_roundtrip():
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    salt = b"fixed-salt-12345"
+    h = _scrypt_hash("pw", salt=salt)
+    assert h.startswith("scrypt$")
+    assert verify_scrypt_hash("pw", h) is True
+    assert verify_scrypt_hash("wrong", h) is False
+
+
+def test_dummy_verify_truncates_long_password():
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    h = _scrypt_hash("pw")
+    provider = LocalAdminProvider("admin", h)
+    provider._dummy_verify("x" * 2000, h)
+
+
+def test_dummy_verify_uses_stored_hash_params():
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    stored = _scrypt_hash("pw", n=2**4, r=1, p=1)
+    provider = LocalAdminProvider("admin", stored)
+    provider._dummy_verify("other", stored)
+
+
+def test_dummy_verify_handles_pathological_stored_params():
+    provider = LocalAdminProvider(
+        "admin", "scrypt$999999999$999999999$999999999$AAAA==$AAAA=="
+    )
+    provider._dummy_verify("pw", "scrypt$999999999$999999999$999999999$AAAA==$AAAA==")
+
+
 def test_local_admin_authenticate_success():
     pw = "admin-secret"
     h = _scrypt_hash(pw, n=2**4, r=1, p=1)

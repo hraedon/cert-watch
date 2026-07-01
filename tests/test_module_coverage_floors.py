@@ -33,7 +33,7 @@ MODULE_FLOORS: dict[str, int] = {
     "src/cert_watch/security.py": 100,
     "src/cert_watch/routes/settings/api_keys.py": 90,
     "src/cert_watch/routes/settings/auth.py": 96,
-    "src/cert_watch/routes/settings/password.py": 89,
+    "src/cert_watch/routes/settings/password.py": 90,
     "src/cert_watch/routes/settings/roles.py": 88,
     "src/cert_watch/scan.py": 93,
 }
