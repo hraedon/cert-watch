@@ -42,6 +42,7 @@ def _make_cert(
     days_valid: int = 365,
     san_dns: list[str] | None = None,
     not_before_days_ago: int = 1,
+    ca: bool = False,
 ) -> GeneratedCert:
     key = key or _make_key()
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, subject_cn)])
@@ -57,6 +58,10 @@ def _make_cert(
         .not_valid_before(datetime.now(UTC) - timedelta(days=not_before_days_ago))
         .not_valid_after(datetime.now(UTC) + timedelta(days=days_valid))
     )
+    if ca:
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=True, path_length=None), critical=True
+        )
     if san_dns:
         builder = builder.add_extension(
             x509.SubjectAlternativeName([x509.DNSName(n) for n in san_dns]),
@@ -90,12 +95,13 @@ def expiring_soon_leaf() -> GeneratedCert:
 @pytest.fixture(scope="session")
 def chain_triplet() -> dict[str, GeneratedCert]:
     """root -> intermediate -> leaf, all signed correctly."""
-    root = _make_cert("Test Root CA", days_valid=3650)
+    root = _make_cert("Test Root CA", days_valid=3650, ca=True)
     intermediate = _make_cert(
         "Test Intermediate CA",
         issuer_cert=root.cert,
         issuer_key=root.key,
         days_valid=1825,
+        ca=True,
     )
     leaf = _make_cert(
         "chain-leaf.example.com",

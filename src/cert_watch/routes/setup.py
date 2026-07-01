@@ -90,6 +90,10 @@ async def setup_submit(
             return RedirectResponse(
                 url="/setup?step=1&error=password+must+be+at+least+8+characters", status_code=303
             )
+        if len(password) > 1024:
+            return RedirectResponse(
+                url="/setup?step=1&error=password+must+not+exceed+1024+characters", status_code=303
+            )
         if password != password_confirm:
             return RedirectResponse(
                 url="/setup?step=1&error=passwords+do+not+match", status_code=303

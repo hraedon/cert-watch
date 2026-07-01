@@ -111,6 +111,13 @@ def _parse_pkcs12(
         if isinstance(cp, Certificate):
             cp.is_leaf = False
             chain.append(cp)
+    if len(chain) > 50:
+        return ParseError(
+            error_message=(
+                f"PKCS#12 contains too many additional certificates"
+                f" ({len(chain)}), max 50"
+            )
+        )
     return UploadedEntry(file_name=name, leaf=leaf_parsed, chain=chain)
 
 
@@ -120,6 +127,13 @@ def _parse_pkcs7(name: str, data: bytes) -> UploadedEntry | ParseError:
         certs = extract_chain_pem(data)
     if not certs:
         return ParseError(error_message="could not parse PKCS#7: no certificates found")
+    if len(certs) > 100:
+        return ParseError(
+            error_message=(
+                f"PKCS#7 bundle contains too many certificates"
+                f" ({len(certs)}), max 100"
+            )
+        )
     leaf = certs[0]
     leaf.is_leaf = True
     chain_certs = certs[1:]

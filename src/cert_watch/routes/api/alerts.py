@@ -16,9 +16,9 @@ from cert_watch.database import (
     get_write_lock,
     list_alerts_with_subject,
 )
-from cert_watch.middleware import require_auth, require_write
+from cert_watch.middleware import require_admin_write, require_auth
 from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes._scoped import scope_read_denied
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
     _alert_group_json,
     _normalize_pagination,
@@ -36,9 +36,10 @@ def api_list_alerts(
     request: Request, _auth: str = Depends(require_auth), page: int = 1, limit: int = 50
 ) -> JSONResponse:
     db = _db_path(request)
-    total = _total_alerts(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    total = _total_alerts(db, scope_tags=scope_tags)
     page, limit, pages, _offset = _normalize_pagination(page, limit, total)
-    rows = list_alerts_with_subject(db, page=page, limit=limit)
+    rows = list_alerts_with_subject(db, page=page, limit=limit, scope_tags=scope_tags)
     return JSONResponse(
         content={
             "alerts": rows,
@@ -66,7 +67,7 @@ def api_list_alert_groups(request: Request, _auth: str = Depends(require_auth)) 
 
 @router.post("/api/alert-groups")
 async def api_create_alert_group(
-    request: Request, _auth: str = Depends(require_write)
+    request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     db = _db_path(request)
     try:
@@ -154,7 +155,7 @@ def api_get_alert_group(
 
 @router.patch("/api/alert-groups/{group_id}")
 async def api_update_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -250,7 +251,7 @@ async def api_update_alert_group(
 
 @router.delete("/api/alert-groups/{group_id}")
 async def api_delete_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -274,7 +275,7 @@ async def api_delete_alert_group(
 
 @router.post("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_assign_cert_to_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -300,7 +301,7 @@ async def api_assign_cert_to_group(
 
 @router.delete("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_unassign_cert_from_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)

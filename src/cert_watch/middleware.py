@@ -472,8 +472,13 @@ def is_public_path(path: str) -> bool:
     # unauthenticated API requests get a 401 (see auth_middleware). Only
     # liveness/scrape and the login flow stay open.
     normalized = path.rstrip("/")
-    if normalized in _PUBLIC_PATHS or normalized == "/metrics":
+    if normalized in _PUBLIC_PATHS:
         return True
+    if normalized == "/metrics":
+        # /metrics is public only when gated by a bearer token
+        # (CERT_WATCH_METRICS_TOKEN). Without a token, it requires a
+        # session to prevent fleet metadata disclosure.
+        return _METRICS_TOKEN is not None
     return bool(path.startswith("/static/"))
 
 

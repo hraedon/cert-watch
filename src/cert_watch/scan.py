@@ -847,6 +847,7 @@ def store_scanned(
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
     _deferred: dict[str, Any] | None = None,
+    _posture_eval: _PostureEval | None = None,
 ) -> str:
     """
     Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
@@ -934,7 +935,9 @@ def store_scanned(
         try:
             # WI-113: evaluate posture (network I/O — CAA DNS, OCSP/CRL)
             # BEFORE BEGIN so the write lock isn't held during network calls.
-            posture_eval = _evaluate_posture(
+            # When _posture_eval is provided by the caller, use it directly
+            # (caller already computed it before acquiring the write lock).
+            posture_eval = _posture_eval if _posture_eval is not None else _evaluate_posture(
                 repo_path, entry,
                 check_revocation=check_revocation,
                 allow_private=allow_private,
@@ -1125,6 +1128,25 @@ async def store_scanned_async(
     """
     def _run() -> str:
         deferred: dict[str, Any] = {}
+        # Compute posture evaluation (network I/O — CAA DNS, OCSP/CRL)
+        # BEFORE acquiring the write lock so slow targets don't block
+        # DB writes (AGENTS.md: "Lock wraps DB mutations only, never
+        # network I/O").
+        posture_eval = None
+        if isinstance(repo_path_or_repo, str | Path):
+            try:
+                posture_eval = _evaluate_posture(
+                    repo_path_or_repo,
+                    entry,
+                    check_revocation=check_revocation,
+                    allow_private=allow_private,
+                    allowed_subnets=allowed_subnets,
+                )
+            except Exception:
+                logger.warning(
+                    "pre-lock posture eval failed for %s:%s",
+                    entry.host, entry.port, exc_info=True,
+                )
         with get_write_lock():
             leaf_id = store_scanned(
                 entry,
@@ -1135,6 +1157,7 @@ async def store_scanned_async(
                 allowed_subnets=allowed_subnets,
                 webhook_config=webhook_config,
                 _deferred=deferred,
+                _posture_eval=posture_eval,
             )
         # Execute post-transaction HTTP outside the write lock.
         if leaf_id and deferred:

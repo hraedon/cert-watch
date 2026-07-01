@@ -124,5 +124,5 @@ def test_short_validity_triggers():
 
 def test_cadence_finding_no_grade_penalty():
     cert = _make_cert(validity_days=47)
-    result = evaluate_posture(cert=cert, scan_interval_days=7)
+    result = evaluate_posture(cert=cert, scan_interval_days=7, chain_status="public")
     assert result.grade == "A"

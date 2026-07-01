@@ -329,6 +329,20 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
 
         def _store_with_lock(result: Any) -> str:
             deferred: dict[str, Any] = {}
+            # Pre-compute posture evaluation (network I/O — CAA DNS,
+            # OCSP/CRL) before acquiring the write lock so slow targets
+            # don't block DB writes.
+            posture_eval = None
+            try:
+                from cert_watch.scan import _evaluate_posture
+                posture_eval = _evaluate_posture(
+                    s.db_path, result,
+                    check_revocation=s.check_revocation,
+                    allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                )
+            except Exception:
+                logger.warning("pre-lock posture eval failed", exc_info=True)
             with get_write_lock():
                 leaf_id = store_scanned(
                     result, s.db_path,
@@ -338,6 +352,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
                     allowed_subnets=s.allowed_subnets,
                     webhook_config=webhook_cfg,
                     _deferred=deferred,
+                    _posture_eval=posture_eval,
                 )
             if leaf_id and deferred:
                 deferred_post_commit.append(deferred)
@@ -456,7 +471,10 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
 
     # Purge once at startup too — restarts (e.g. k8s rollouts) are frequent and
     # shouldn't have to wait for the next daily cycle to reclaim the audit log.
-    _maintenance()
+    try:
+        _maintenance()
+    except Exception:
+        logger.warning("startup maintenance purge failed — continuing", exc_info=True)
 
     start_scheduler(
         scan_fn=_scan_all,

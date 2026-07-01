@@ -39,8 +39,11 @@ def fernet_decrypt(value: str, key: str) -> str | None:
 
     try:
         return Fernet(key.encode()).decrypt(value[len(_ENCRYPTED_PREFIX) :].encode()).decode()
-    except (InvalidToken, Exception):
+    except InvalidToken:
         _logger.warning("kv: failed to decrypt value (wrong key or corrupted)")
+        return None
+    except Exception:
+        _logger.warning("kv: unexpected error decrypting value", exc_info=True)
         return None
 
 

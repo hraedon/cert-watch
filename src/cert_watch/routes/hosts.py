@@ -558,6 +558,9 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
     host = SqliteHostRepository(db).get(host_id)
     if host is None:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -596,7 +599,9 @@ async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
 def api_export_hosts_csv(request: Request, _auth: str = Depends(require_auth)) -> PlainTextResponse:
     """Export all tracked hosts as CSV."""
     db = _db_path(request)
-    hosts = SqliteHostRepository(db).list_all()
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    repo = SqliteHostRepository(db)
+    hosts = repo.list_scoped(scope_tags) if scope_tags else repo.list_all()
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(

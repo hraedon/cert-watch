@@ -749,15 +749,11 @@ class SqliteHostRepository:
                 (hostname, port),
             )
             # event_log has no host column; match the JSON payload's hostname
-            # field. Escape LIKE metacharacters so a hostname containing '_' or
-            # '%' (legal in internal/AD names) can't widen the match and purge
-            # unrelated hosts' events.
-            esc_host = (
-                hostname.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            )
+            # field using json_extract for precise targeting (avoids matching
+            # hostnames mentioned in other payload fields).
             conn.execute(
-                "DELETE FROM event_log WHERE payload LIKE ? ESCAPE '\\'",
-                (f'%"hostname": "{esc_host}"%',),
+                "DELETE FROM event_log WHERE json_extract(payload, '$.hostname') = ?",
+                (hostname,),
             )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
             conn.commit()
