@@ -9,6 +9,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.database import get_write_lock
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.policy import PolicyRule, PolicySet, save_policy_set
 from cert_watch.routes._deps import _db_path
@@ -72,7 +73,8 @@ async def save_policy_settings(request: Request) -> RedirectResponse:
         ))
 
     ruleset = PolicySet(rules=rules, default_severity=default_severity)
-    save_policy_set(str(db), ruleset)
+    with get_write_lock():
+        save_policy_set(str(db), ruleset)
 
     record_audit(
         str(db),

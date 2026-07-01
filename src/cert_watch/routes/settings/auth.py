@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.database import kv_set, kv_set_secret
+from cert_watch.database import get_write_lock, kv_set, kv_set_secret
 from cert_watch.middleware import check_csrf, require_admin_form, require_admin_write
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
@@ -92,7 +92,8 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
             # Both cleared → drop the mapping for this role.
             map_data.pop(role.name, None)
 
-    kv_set(db, "ldap_role_map", json.dumps(map_data))
+    with get_write_lock():
+        kv_set(db, "ldap_role_map", json.dumps(map_data))
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -379,10 +380,11 @@ async def pin_ldap_ca(
 
     enc_key = _get_encryption_key(request)
 
-    if enc_key:
-        kv_set_secret(db, "ldap_ca_cert", pem, enc_key)
-    else:
-        kv_set(db, "ldap_ca_cert", pem)
+    with get_write_lock():
+        if enc_key:
+            kv_set_secret(db, "ldap_ca_cert", pem, enc_key)
+        else:
+            kv_set(db, "ldap_ca_cert", pem)
 
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
     from cert_watch.certificate_model import extract_chain_from_pem
