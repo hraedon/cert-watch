@@ -6,6 +6,7 @@ import pytest
 from cert_watch.alerts import (
     AlertConfig,
     WebhookConfig,
+    _validate_email,
     evaluate_thresholds,
     process_pending,
     send_alert,
@@ -1220,3 +1221,49 @@ def test_custom_threshold_routine_skipped_in_digest(alert_repo):
         cert, alert_repo, custom_thresholds=(20, 10, 5, 1), urgent_only=True,
     )
     assert alerts == []
+
+
+class TestValidateEmailHardening:
+    """Regression: _validate_email must reject SMTP header-injection vectors."""
+
+    @pytest.mark.parametrize("addr", [
+        "user@example.com",
+        "a.b@c.d.org",
+        "user+tag@example.com",
+        "user_name@sub.domain.example.com",
+    ])
+    def test_valid_emails_accepted(self, addr):
+        assert _validate_email(addr) is True
+
+    @pytest.mark.parametrize("addr", [
+        "",
+        None,
+    ])
+    def test_empty_rejected(self, addr):
+        assert _validate_email(addr) is False
+
+    def test_comma_rejected(self):
+        assert _validate_email("user@example.com,attacker@evil.com") is False
+
+    def test_semicolon_rejected(self):
+        assert _validate_email("user@example.com;attacker@evil.com") is False
+
+    def test_newline_rejected(self):
+        assert _validate_email("user@example.com\nBcc: attacker@evil.com") is False
+
+    def test_carriage_return_rejected(self):
+        assert _validate_email("user@example.com\r\nBcc: attacker@evil.com") is False
+
+    def test_tab_rejected(self):
+        assert _validate_email("user@example.com\tBcc: attacker@evil.com") is False
+
+    def test_control_chars_rejected(self):
+        assert _validate_email("user\x00@example.com") is False
+        assert _validate_email("user@example.com\x1b") is False
+        assert _validate_email("user\x07@example.com") is False
+
+    def test_no_at_rejected(self):
+        assert _validate_email("not-an-email") is False
+
+    def test_display_name_only_rejected(self):
+        assert _validate_email("John Doe") is False
