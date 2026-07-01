@@ -50,9 +50,10 @@ jobs:
     # Required gate: the committed baselines have matched ubuntu-latest across
     # multiple runs at the configured 0.2 threshold (v0.6.5 review), so a visual
     # diff is a real regression signal, not runner noise. On a deliberate UI
-    # change, re-baseline with `pytest -m visual --update-snapshots` and commit.
-    # If a runner-image change ever causes drift, drop back to continue-on-error
-    # and re-baseline. Diffs are uploaded as an artifact below on failure.
+    # change, run scripts/update-visual-baselines.sh to download this artifact
+    # and overwrite the committed baselines, then commit. If a runner-image
+    # change ever causes drift, drop back to continue-on-error and re-baseline.
+    # Diffs are uploaded as an artifact below on failure.
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0

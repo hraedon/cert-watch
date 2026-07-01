@@ -306,6 +306,85 @@ def test_open_smtp_connection_ssrf_blocked_returns_none():
     mock_smtp.assert_not_called()
 
 
+def test_open_smtp_connection_port465_uses_ssl():
+    """Port 465 (implicit TLS) uses SMTP_SSL regardless of IP pinning."""
+    from cert_watch.alerts import _open_smtp_connection
+
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_port=465,
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    ssl_mock = MagicMock()
+    with patch("cert_watch.alerts.smtplib.SMTP_SSL", return_value=ssl_mock):
+        result = _open_smtp_connection(config)
+    assert result is ssl_mock
+    ssl_mock.login.assert_called_once_with("u", "p")
+
+
+def test_check_smtp_ssrf_blocks_metadata_address():
+    from cert_watch.alerts import _check_smtp_ssrf
+
+    config = AlertConfig(
+        smtp_host="169.254.169.254",
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    err = _check_smtp_ssrf(config)
+    assert err is not None
+    assert "blocked" in err.lower()
+
+
+def test_sanitize_smtp_error_strips_credentials():
+    from cert_watch.alerts import _sanitize_smtp_error
+
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_user="alice@example.com",
+        smtp_password="s3cr3tpassword",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    msg = "Authentication failed for alice@example.com with password s3cr3tpassword"
+    sanitized = _sanitize_smtp_error(msg, config)
+    assert "alice@example.com" not in sanitized
+    assert "s3cr3tpassword" not in sanitized
+    assert "***" in sanitized
+
+
+def test_sanitize_webhook_error_strips_url_headers_and_routing_key():
+    from cert_watch.alerts import _sanitize_webhook_error
+
+    config = WebhookConfig(
+        url="https://hooks.example.com/webhook?token=abc",
+        kind="generic",
+        routing_key="pagerduty-routing-key",
+        headers={"Authorization": "bearer-token-value"},
+    )
+    msg = (
+        "Failed to POST to https://hooks.example.com/webhook?token=abc "
+        "with routing key pagerduty-routing-key and header bearer-token-value"
+    )
+    sanitized = _sanitize_webhook_error(msg, config)
+    assert config.url not in sanitized
+    assert "pagerduty-routing-key" not in sanitized
+    assert "bearer-token-value" not in sanitized
+    assert "***" in sanitized
+
+
+def test_adapter_has_build_resolve():
+    from cert_watch.alerts import _adapter_has_build_resolve
+
+    assert _adapter_has_build_resolve("pagerduty") is True
+    assert _adapter_has_build_resolve("generic") is False
+    assert _adapter_has_build_resolve("nonexistent") is False
+
+
 def test_process_pending_no_config(alert_repo):
     counts = process_pending(alert_repo, None)
     assert counts == {"sent": 0, "failed": 0}

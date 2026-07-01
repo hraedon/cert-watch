@@ -212,7 +212,7 @@ def test_csrf_token_expired(monkeypatch, tmp_path):
 
     old_ts = int(datetime.now(UTC).timestamp()) - 40000  # ~11 hours ago, past 8h TTL
     payload = f"session:{old_ts}"
-    sig = hmac_mod.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:16]
+    sig = hmac_mod.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
     expired_token = f"{payload}:{sig}"
     assert mw.validate_csrf_token(expired_token, "session") is False
 
@@ -306,6 +306,69 @@ def test_extract_client_ip_xff_empty(monkeypatch):
     req.client = None
     req.headers = {"x-forwarded-for": ""}
     assert mw._extract_client_ip(req) == "unknown"
+
+
+# ---------- CSRF edge cases ----------
+
+
+def test_check_csrf_form_parse_exception_ignored(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_CSRF_BYPASS", False)
+    req = MagicMock()
+    req.headers = {}
+    req.cookies = {}
+    req.scope = {}
+
+    async def _bad_form():
+        raise ValueError("malformed body")
+
+    req.form = _bad_form
+    loop = asyncio.new_event_loop()
+    try:
+        err = loop.run_until_complete(mw.check_csrf(req))
+    finally:
+        loop.close()
+    assert err == "missing CSRF token"
+
+
+def test_check_csrf_rejects_invalid_form_token(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from starlette.datastructures import FormData
+
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_CSRF_BYPASS", False)
+    req = MagicMock()
+    req.headers = {}
+    req.cookies = {}
+    req.scope = {}
+
+    async def fake_form():
+        return FormData([("_csrf_token", "invalid-token")])
+
+    req.form = fake_form
+    loop = asyncio.new_event_loop()
+    try:
+        err = loop.run_until_complete(mw.check_csrf(req))
+    finally:
+        loop.close()
+    assert err == "invalid or expired CSRF token"
+
+
+def test_request_db_path_no_settings_returns_none():
+    from unittest.mock import MagicMock
+
+    import cert_watch.middleware as mw
+
+    req = MagicMock()
+    del req.app.state.settings
+    assert mw._request_db_path(req) is None
 
 
 # ---------- Metrics token ----------

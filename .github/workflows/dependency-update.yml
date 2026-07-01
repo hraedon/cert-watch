@@ -1,0 +1,51 @@
+name: dependency-update
+
+on:
+  schedule:
+    # 1st of each month at 07:00 UTC
+    - cron: "0 7 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - run: uv venv
+
+      - name: Refresh lockfile
+        run: uv lock
+
+      - name: Install deps from refreshed lock
+        run: uv pip install -e ".[dev,auth]"
+
+      - name: pip-audit
+        id: audit
+        continue-on-error: true
+        run: |
+          uv pip freeze | grep -v 'cert-watch' > /tmp/audit-reqs.txt
+          uv pip install pip-audit
+          .venv/bin/pip-audit --strict --requirement /tmp/audit-reqs.txt
+
+      - name: Create PR for lockfile update
+        uses: peter-evans/create-pull-request@67ccf791d7cd4286270ff4f6b2b8df4e2c5ab537 # v7
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "deps: monthly uv lock refresh"
+          title: "deps: monthly uv lock refresh"
+          body: |
+            Automated monthly dependency lockfile refresh.
+
+            pip-audit result: ${{ steps.audit.outcome == 'success' && '✅ No vulnerabilities found' || '⚠️ Review pip-audit output in workflow logs' }}
+          branch: deps/monthly-lock
+          delete-branch: true
+          labels: dependencies
+          add-paths: |
+            uv.lock

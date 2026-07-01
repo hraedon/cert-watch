@@ -787,6 +787,33 @@ def test_change_password_success(reload_app, tmp_path, monkeypatch):
     assert "password_changed=1" in r.headers["location"]
 
 
+def test_change_password_success_no_encryption_key(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        app_mod.app.state.security = None
+        r = client.post(
+            "/settings/change-password",
+            data={
+                "current_password": "testpassword",
+                "new_password": "newsecurepass",
+                "confirm_password": "newsecurepass",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "password_changed=1" in r.headers["location"]
+    from cert_watch.auth import verify_scrypt_hash
+    from cert_watch.database import kv_get
+
+    db = tmp_path / "cert-watch.sqlite3"
+    stored = kv_get(db, "local_admin_password_hash")
+    assert stored.startswith("scrypt$")
+    assert verify_scrypt_hash("newsecurepass", stored) is True
+
+
 def test_change_password_wrong_current(reload_app, tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     _seed_local_admin(tmp_path)
@@ -823,6 +850,25 @@ def test_change_password_mismatch(reload_app, tmp_path, monkeypatch):
         )
     assert r.status_code == 303
     assert "do+not+match" in r.headers["location"]
+
+
+def test_change_password_missing_fields(reload_app, tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    _seed_local_admin(tmp_path)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        _login_admin(client, monkeypatch)
+        r = client.post(
+            "/settings/change-password",
+            data={
+                "current_password": "",
+                "new_password": "",
+                "confirm_password": "",
+            },
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "current+and+new+password+are+required" in r.headers["location"]
 
 
 def test_change_password_too_short(reload_app, tmp_path, monkeypatch):
