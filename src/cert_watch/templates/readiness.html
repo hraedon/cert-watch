@@ -63,10 +63,25 @@
         <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('key', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Private-CA</span></div>
         <div class="cw-stat-val cw-stat-val-default">{{ report.private_ca_hosts }}</div>
       </div>
+      {% if report.unknown_hosts > 0 %}
+      <div class="cw-stat">
+        <div class="cw-stat-rail cw-stat-rail-warn"></div>
+        <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('info', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Unknown</span></div>
+        <div class="cw-stat-val cw-stat-val-warn">{{ report.unknown_hosts }}</div>
+      </div>
+      {% endif %}
     </div>
   </div>
 
-  {% if report.workload_forecast %}
+  {% if report.public_trust_hosts == 0 %}
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-private-note">
+      <span class="cw-fz-13">SC-081 applies to <strong>publicly trusted</strong> certificates only. Your estate has no public-trust hosts &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong>.</span>
+    </div>
+  </div>
+  {% endif %}
+
+  {% if report.workload_forecast and report.public_trust_hosts > 0 %}
   <div class="cw-panel cw-p-16-18 cw-mt-16">
     <div class="cw-fz-15 cw-fw-600 cw-mb-4">Workload Forecast</div>
     <p class="cw-fz-13 cw-text-text-3 cw-mt-0 cw-mb-12">
@@ -152,9 +167,46 @@
       </tbody>
     </table>
     {% else %}
-    <div class="cw-empty"><div class="cw-empty-sub">No public-trust hosts found.</div></div>
+    <div class="cw-empty"><div class="cw-empty-sub">No public-trust hosts found. SC-081 requirements do not apply to your estate.</div></div>
     {% endif %}
   </div>
+
+  {% if report.unknown_hosts_list %}
+  <div class="cw-panel cw-p-16-18 cw-mt-16">
+    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Unclassified Hosts</div>
+    <div class="cw-private-note">
+      <span class="cw-fz-13">Chain status is unknown for these hosts &mdash; they may be public-trust or private-CA. Upload the root CA as a trust anchor or scan with a complete chain to classify them.</span>
+    </div>
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Host</th>
+          <th>Classification</th>
+          <th>Lead Time</th>
+          <th>Lifetime</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for h in report.unknown_hosts_list %}
+        <tr>
+          <td class="mono">{{ h.hostname }}</td>
+          <td>
+            {% if h.classification == 'likely-automated' %}
+            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
+            {% elif h.classification == 'manual' %}
+            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
+            {% else %}
+            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
+            {% endif %}
+          </td>
+          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
 
   {% if report.private_hosts %}
   <div class="cw-panel cw-p-16-18 cw-mt-16">

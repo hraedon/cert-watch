@@ -7,6 +7,7 @@ import contextlib
 import logging
 import sqlite3
 import ssl
+import sys
 import typing
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -976,6 +977,13 @@ def store_scanned(
             )
             conn.commit()
         except Exception:
+            # Re-raise database lock errors so the caller's retry logic
+            # can handle them (store_scanned_async retries on
+            # OperationalError("database is locked") — Issue 8).
+            if isinstance(sys.exc_info()[1], sqlite3.OperationalError):
+                with contextlib.suppress(sqlite3.Error):
+                    conn.rollback()
+                raise
             logger.warning(
                 "store_scanned transaction failed for %s:%s",
                 entry.host, entry.port, exc_info=True,
@@ -1147,18 +1155,37 @@ async def store_scanned_async(
                     "pre-lock posture eval failed for %s:%s",
                     entry.host, entry.port, exc_info=True,
                 )
-        with get_write_lock():
-            leaf_id = store_scanned(
-                entry,
-                repo_path_or_repo,
-                drift_alerts=drift_alerts,
-                check_revocation=check_revocation,
-                allow_private=allow_private,
-                allowed_subnets=allowed_subnets,
-                webhook_config=webhook_config,
-                _deferred=deferred,
-                _posture_eval=posture_eval,
-            )
+        # Retry on database-locked errors. The write lock serializes
+        # application-level writes, but SQLite can still raise
+        # OperationalError("database is locked") when a concurrent
+        # reader holds a snapshot or the -wal checkpoint stalls.
+        # A short retry with backoff lets the contender finish.
+        import time as _time
+        leaf_id = ""
+        for attempt in range(3):
+            try:
+                with get_write_lock():
+                    leaf_id = store_scanned(
+                        entry,
+                        repo_path_or_repo,
+                        drift_alerts=drift_alerts,
+                        check_revocation=check_revocation,
+                        allow_private=allow_private,
+                        allowed_subnets=allowed_subnets,
+                        webhook_config=webhook_config,
+                        _deferred=deferred,
+                        _posture_eval=posture_eval,
+                    )
+                break
+            except sqlite3.OperationalError as exc:
+                if "locked" in str(exc).lower() and attempt < 2:
+                    logger.warning(
+                        "store_scanned retry %d for %s:%s (database locked)",
+                        attempt + 1, entry.host, entry.port,
+                    )
+                    _time.sleep(0.5 * (attempt + 1))
+                    continue
+                raise
         # Execute post-transaction HTTP outside the write lock.
         if leaf_id and deferred:
             _execute_deferred_post_commit(deferred)

@@ -228,7 +228,7 @@ def _load_compliance_rows(
     for r in rows:
         d = dict(r)
         days = (_parse_iso(d["not_after"]) - now).days
-        host = f"{d['hostname']}:{d['port']}" if d["hostname"] else f"(uploaded:{d['source']})"
+        host = f"{d['hostname']}:{d['port']}" if d["hostname"] else "(uploaded)"
         urgency = (
             "expired"
             if days < 0
@@ -278,12 +278,39 @@ def build_compliance_report(
     host_set: set[str] = set()
     for r in rows:
         h = r.get("host", "")
-        if h:
+        if h and not h.startswith("(uploaded"):
             host_set.add(h)
     total_hosts = len(host_set)
 
     cert_ids = [r["id"] for r in rows if r.get("id")]
     grade_map = get_posture_grades_for_certs(db_path, cert_ids)
+
+    # Fallback: evaluate posture for certs without stored scan_posture
+    # (typically uploaded certs that were never scanned). This makes the
+    # compliance grade distribution match the cert detail page, which
+    # evaluates posture live for uploaded certs (Issue 10).
+    from cert_watch.certificate_model import Certificate as _Cert
+    from cert_watch.database.connection import _connect as _cmp_conn
+    from cert_watch.posture import evaluate_posture as _eval_posture
+    missing_ids = [r["id"] for r in rows if r.get("id") and r["id"] not in grade_map]
+    if missing_ids:
+        placeholders = ",".join("?" * len(missing_ids))
+        with _cmp_conn(db_path) as conn:
+            cert_rows = conn.execute(
+                f"SELECT id, raw_der FROM certificates WHERE id IN ({placeholders})",
+                missing_ids,
+            ).fetchall()
+        for cr in cert_rows:
+            cid = cr["id"]
+            try:
+                if cr["raw_der"]:
+                    from cert_watch.certificate_model import parse_certificate
+                    parsed = parse_certificate(bytes(cr["raw_der"]))
+                    if isinstance(parsed, _Cert):
+                        result = _eval_posture(cert=parsed, chain_status=None)
+                        grade_map[cid] = result.grade
+            except Exception:
+                pass
 
     grade_dist: dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0, "F": 0}
     all_grades: list[str] = []
@@ -382,6 +409,7 @@ def build_compliance_report(
     expiring_7: list[RemediationEntry] = []
     expiring_30: list[RemediationEntry] = []
     expiring_90: list[RemediationEntry] = []
+    expired: list[RemediationEntry] = []
     failed: list[RemediationEntry] = []
 
     for r in rows:
@@ -410,7 +438,9 @@ def build_compliance_report(
             ]
             if entry.findings:
                 failed.append(entry)
-        if days <= 7:
+        if days < 0:
+            expired.append(entry)
+        elif days <= 7:
             expiring_7.append(entry)
         elif days <= 30:
             expiring_30.append(entry)
@@ -418,6 +448,10 @@ def build_compliance_report(
             expiring_90.append(entry)
 
     remediation = [
+        RemediationBucket(
+            "Expired",
+            sorted(expired, key=lambda e: e.days_remaining),
+        ),
         RemediationBucket(
             "Expiring within 7 days",
             sorted(expiring_7, key=lambda e: e.days_remaining),

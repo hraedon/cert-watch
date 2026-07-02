@@ -305,11 +305,13 @@
               {% if e.san_dns_names %}
                 <div class="cw-san-list cw-mt-7">
                   {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
-                  {% for san in (san_list[:2] if san_list else []) %}
+                  {% set _cn = e.name or e.host or '' %}
+                  {% set _deduped = san_list | reject('==', _cn) | list %}
+                  {% for san in (_deduped[:2] if _deduped else []) %}
                     <span class="cw-chip san">{{ san }}</span>
                   {% endfor %}
-                  {% if san_list and san_list | length > 2 %}
-                    <span class="cw-chip more">+{{ san_list | length - 2 }} more</span>
+                  {% if _deduped and _deduped | length > 2 %}
+                    <span class="cw-chip more">+{{ _deduped | length - 2 }} more</span>
                   {% endif %}
                 </div>
               {% endif %}

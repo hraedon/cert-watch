@@ -197,7 +197,7 @@ def api_health(request: Request) -> JSONResponse:
         overall = "critical"
     elif (
         (checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0
-    ) or checks.get("last_scan_status") == "failure":
+    ) or checks.get("last_scan_status") in ("failure", "partial"):
         overall = "warning"
 
     checks["overall"] = overall
@@ -672,6 +672,25 @@ def insights_view(
         calendar_data = list_calendar(db, bucket="week")
     except Exception:
         logger.exception("insights: calendar query failed")
+
+    _now = datetime.now(UTC)
+    _week_start = _now - timedelta(days=_now.weekday())
+    current_week_start = _week_start.strftime("%Y-%m-%d")
+    next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
+    four_weeks_ahead = (_week_start + timedelta(days=21)).strftime("%Y-%m-%d")
+    for b in calendar_data:
+        bs = b.get("bucket_start", "")
+        if bs <= current_week_start:
+            b["tone"] = "tone-crit"
+        elif bs <= next_week_start:
+            b["tone"] = "tone-warn"
+        else:
+            b["tone"] = ""
+    expiring_soon_count = sum(
+        b.get("count", 0) for b in calendar_data
+        if b.get("bucket_start", "") >= current_week_start
+        and b.get("bucket_start", "") <= four_weeks_ahead
+    )
     try:
         tls_trends, tls_max = _pivot_tls_monthly(list_tls_version_trends(db, days=180))
     except Exception:
@@ -691,6 +710,8 @@ def insights_view(
             "active_page": "insights",
             "tab": tab,
             "calendar_data": calendar_data,
+            "current_week_start": current_week_start,
+            "expiring_soon_count": expiring_soon_count,
             "total_certs": total_certs,
             "tls_trends": tls_trends,
             "tls_max": tls_max,
