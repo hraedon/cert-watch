@@ -436,7 +436,7 @@ def test_import_hosts_store_scanned_async_failure_isolated(
     assert len(rows) == 2
     assert rows[0][0] == "fail.example.com"
     assert rows[0][1] == "failure"
-    assert rows[0][2] == "store failed"
+    assert rows[0][2] == "store failed: store boom"
     assert rows[1][0] == "ok.example.com"
     assert rows[1][1] == "success"
 
@@ -480,7 +480,7 @@ def test_scan_now_store_scanned_async_failure_isolated(
         ).fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "failure"
-    assert rows[0][1] == "store failed"
+    assert rows[0][1] == "store failed: store boom"
 
 
 def test_scan_all_hosts_store_scanned_async_failure_isolated(
@@ -529,7 +529,7 @@ def test_scan_all_hosts_store_scanned_async_failure_isolated(
     assert rows[0][2] is None
     assert rows[1][0] == "batch-b.example.com"
     assert rows[1][1] == "failure"
-    assert rows[1][2] == "store failed"
+    assert rows[1][2] == "store failed: store boom"
 
 
 def test_scan_now_store_scanned_empty_return_treated_as_failure(
@@ -570,7 +570,7 @@ def test_scan_now_store_scanned_empty_return_treated_as_failure(
         ).fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "failure"
-    assert rows[0][1] == "store failed"
+    assert rows[0][1] == "store failed: transaction rolled back"
 
 
 def test_flush_alert_queue(tmp_path, reload_app):

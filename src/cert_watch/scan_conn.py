@@ -178,7 +178,10 @@ _PEM_CERT_PATTERN = re.compile(
 )
 
 
-_PROTOCOL_RE = re.compile(rb"Protocol\s*:\s*(TLSv[\d.]+|SSLv[\d.]+)", re.IGNORECASE)
+_PROTOCOL_RE = re.compile(
+    rb"(?:Protocol\s*:\s*|New,\s*)(TLSv[\d.]+|SSLv[\d.]+)",
+    re.IGNORECASE,
+)
 
 # Protocols whose certificate is served after a cleartext STARTTLS upgrade.
 # Mirrors the `-starttls` values openssl s_client accepts; the value is only ever

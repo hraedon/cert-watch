@@ -106,13 +106,13 @@
                 {% if chain_status == 'public' or chain_status == 'private' %}
                   <span class="cw-chip cw-chip-public">Verified to trusted root</span>
                 {% elif chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">⚠</span> Incomplete — server missing intermediate(s)</span>
+                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">⚠</span> Incomplete — {% if cert.source == 'uploaded' %}missing intermediate(s) in uploaded file{% else %}server missing intermediate(s){% endif %}</span>
                 {% elif chain_status == 'self-signed' %}
                   <span class="cw-chip">Self-signed</span>
                 {% elif chain_status == 'invalid' %}
                   <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">✗</span> Chain validation failed</span>
                 {% else %}
-                  <span class="cw-chip cw-chip-muted">Unknown</span>
+                  <span class="cw-chip cw-chip-muted">Issuer not uploaded</span>
                 {% endif %}
                 {% if posture and posture.get('chain_incomplete') %}
                   <span class="cw-chip tone-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
@@ -519,7 +519,7 @@
         'self-signed': ('var(--panel-2)', 'var(--text-3)', 'key', 'self-signed'),
         'invalid': ('var(--crit-soft)', 'var(--crit)', 'alert', 'chain invalid')
       } %}
-      {% set _bg, _fg, _icon, _label = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text)', 'link', 'unknown')) %}
+      {% set _bg, _fg, _icon, _label = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text-3)', 'link', 'issuer not uploaded')) %}
       <div class="cw-chain-banner cw-mt-4 cw-p-9-11 cw-banner-tone" style="--banner-bg:{{ _bg }};--banner-color:{{ _fg }}">
         {{ icons.svg_icon(_icon, 14) }}
         <span class="cw-fz-12 cw-fw-500">{{ _label }}</span>

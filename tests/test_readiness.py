@@ -63,7 +63,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         ))
         conn.commit()
     store_scan_posture(db_path, "cert-auto", "auto.example.com", 443, "A", [],
-                       protocol_version="TLSv1.3", hsts=True, chain_status="complete")
+                       protocol_version="TLSv1.3", hsts=True, chain_status="public")
 
     manual_cert = Certificate(
         subject="CN=manual.example.com",
@@ -97,7 +97,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         ))
         conn.commit()
     store_scan_posture(db_path, "cert-manual", "manual.example.com", 443, "A", [],
-                       protocol_version="TLSv1.2", hsts=False, chain_status="complete")
+                       protocol_version="TLSv1.2", hsts=False, chain_status="public")
 
     unknown_cert = Certificate(
         subject="CN=new.example.com",
@@ -123,7 +123,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         ))
         conn.commit()
     store_scan_posture(db_path, "cert-unknown", "new.example.com", 443, "A", [],
-                       protocol_version="TLSv1.2", hsts=False, chain_status="complete")
+                       protocol_version="TLSv1.2", hsts=False, chain_status="public")
 
     private_cert = Certificate(
         subject="CN=internal.corp",
@@ -235,10 +235,8 @@ class TestBuildReadinessReport:
         _seed_readiness_fleet(str(db))
         report = build_readiness_report(str(db))
         classifications = {h.hostname: h.classification for h in report.hosts}
-        assert classifications.get("auto.example.com") in (
-            "likely-automated", "manual", "unknown"
-        )
-        assert classifications.get("manual.example.com") in (
+        assert "auto.example.com" in classifications
+        assert classifications["auto.example.com"] in (
             "likely-automated", "manual", "unknown"
         )
 

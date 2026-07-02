@@ -33,6 +33,7 @@ class HostReadiness:
     current_lead_time: float | None
     current_lifetime: int | None
     margins: list[dict[str, Any]] = field(default_factory=list)
+    chain_status: str | None = None
 
 
 @dataclass
@@ -49,9 +50,11 @@ class ReadinessReport:
     total_hosts: int
     public_trust_hosts: int
     private_ca_hosts: int
+    unknown_hosts: int
     milestones: list[dict[str, Any]] = field(default_factory=list)
     hosts: list[HostReadiness] = field(default_factory=list)
     private_hosts: list[HostReadiness] = field(default_factory=list)
+    unknown_hosts_list: list[HostReadiness] = field(default_factory=list)
     workload_forecast: WorkloadForecast | None = None
 
 
@@ -122,6 +125,7 @@ def _compute_host_readiness(
         current_lead_time=lead_time,
         current_lifetime=current_lifetime,
         margins=_compute_margins(lead_time, current_lifetime) if not is_private else [],
+        chain_status=chain_status,
     )
 
 
@@ -174,14 +178,17 @@ def build_readiness_report(db_path: str | Path) -> ReadinessReport:
 
     public_hosts: list[HostReadiness] = []
     private_hosts: list[HostReadiness] = []
+    unknown_hosts: list[HostReadiness] = []
 
     for a in fleet:
         cs = chain_statuses.get(a.hostname)
         readiness = _compute_host_readiness(a, cs)
         if cs == "private":
             private_hosts.append(readiness)
-        else:
+        elif cs == "public":
             public_hosts.append(readiness)
+        else:
+            unknown_hosts.append(readiness)
 
     milestones = [
         {"label": ms["label"], "max_days": ms["max_days"], "date": ms["date"]}
@@ -195,9 +202,11 @@ def build_readiness_report(db_path: str | Path) -> ReadinessReport:
         total_hosts=len(fleet),
         public_trust_hosts=len(public_hosts),
         private_ca_hosts=len(private_hosts),
+        unknown_hosts=len(unknown_hosts),
         milestones=milestones,
         hosts=public_hosts,
         private_hosts=private_hosts,
+        unknown_hosts_list=unknown_hosts,
         workload_forecast=forecast,
     )
 
@@ -210,6 +219,7 @@ def readiness_report_to_dict(report: ReadinessReport) -> dict[str, Any]:
             "current_lead_time": h.current_lead_time,
             "current_lifetime": h.current_lifetime,
             "margins": h.margins,
+            "chain_status": h.chain_status,
         }
 
     d: dict[str, Any] = {
@@ -217,9 +227,11 @@ def readiness_report_to_dict(report: ReadinessReport) -> dict[str, Any]:
         "total_hosts": report.total_hosts,
         "public_trust_hosts": report.public_trust_hosts,
         "private_ca_hosts": report.private_ca_hosts,
+        "unknown_hosts": report.unknown_hosts,
         "milestones": report.milestones,
         "hosts": [_host_dict(h) for h in report.hosts],
         "private_hosts": [_host_dict(h) for h in report.private_hosts],
+        "unknown_hosts_list": [_host_dict(h) for h in report.unknown_hosts_list],
     }
 
     if report.workload_forecast is not None:

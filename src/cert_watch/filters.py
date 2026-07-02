@@ -111,20 +111,20 @@ def compute_urgency_with_chain(
     min_chain_days: int | None = None,
     chain_status_val: str | None = None,
 ) -> str:
-    """Compute urgency considering chain child expiry and chain status.
+    """Compute urgency considering chain child expiry.
 
-    Takes the minimum of leaf_days and min_chain_days (if present),
-    then downgrades "healthy" to "warning" when chain_status is
-    "incomplete" or "invalid".
+    Takes the minimum of leaf_days and min_chain_days (if present)
+    to surface the earliest expiry in the chain. Chain *status*
+    (incomplete/invalid) is NOT downgraded to "warning" here —
+    the chain chip and posture grade already carry that story,
+    and conflating it with time-based urgency makes "Warning"
+    mean two unrelated things (Issue 10).
     """
     all_days = [leaf_days]
     if min_chain_days is not None:
         all_days.append(int(min_chain_days))
     min_days = min(all_days)
-    u = compute_urgency(min_days)
-    if chain_status_val in ("incomplete", "invalid") and u == "healthy":
-        u = "warning"
-    return u
+    return compute_urgency(min_days)
 
 
 def relative_short(days: int) -> str:
@@ -193,6 +193,7 @@ _ACRONYMS = {
     "rsa": "RSA",
     "ec": "EC",
     "san": "SAN",
+    "sans": "SANs",
     "crl": "CRL",
     "caa": "CAA",
     "sni": "SNI",

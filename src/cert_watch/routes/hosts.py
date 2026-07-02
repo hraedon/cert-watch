@@ -89,7 +89,7 @@ async def _scan_and_store(
             allowed_subnets=settings.allowed_subnets,
             webhook_config=webhook_config,
         )
-    except _store_error_types:
+    except _store_error_types as exc:
         logger.exception("store_scanned_async failed for %s:%d", hostname, port)
         record_scan_history(
             db,
@@ -97,10 +97,10 @@ async def _scan_and_store(
                 hostname=hostname,
                 port=port,
                 status="failure",
-                error_message="store failed",
+                error_message=f"store failed: {exc}",
             ),
         )
-        return "store_error", "store failed"
+        return "store_error", f"store failed: {exc}"
     if not leaf_id:
         logger.warning(
             "store_scanned returned empty (transaction rolled back) for %s:%d",
@@ -112,10 +112,10 @@ async def _scan_and_store(
                 hostname=hostname,
                 port=port,
                 status="failure",
-                error_message="store failed",
+                error_message="store failed: transaction rolled back",
             ),
         )
-        return "store_error", "store failed"
+        return "store_error", "store failed: transaction rolled back"
     record_scan_history(db, ScanHistory(hostname=hostname, port=port, status="success"))
     return "success", None
 

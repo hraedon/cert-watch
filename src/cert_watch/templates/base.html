@@ -137,9 +137,18 @@
         if (!data.scheduler_running) {
           parts.push('Scheduler is <b>not running</b>');
         }
-        if (data.last_scan_status === 'failure') {
-          var when = data.last_scan_at ? ' at ' + escHtml(data.last_scan_at) : '';
-          parts.push('Last scan <b>failed</b>' + when);
+        if (data.last_scan_status === 'failure' || data.last_scan_status === 'partial') {
+          var when = '';
+          if (data.last_scan_at) {
+            try {
+              var d = new Date(data.last_scan_at);
+              if (!isNaN(d.getTime())) {
+                when = ' at ' + d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+              }
+            } catch(e) { when = ''; }
+          }
+          var verb = data.last_scan_status === 'partial' ? 'partially <b>failed</b>' : '<b>failed</b>';
+          parts.push('Last scan ' + verb + when);
         }
         if (data.failed_alerts_24h > 0) {
           parts.push(escHtml(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
