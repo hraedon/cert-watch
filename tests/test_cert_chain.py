@@ -328,3 +328,27 @@ def test_self_signed_cert_still_scans_no_inventory_regression(self_signed_leaf):
     assert leaf is not None
     assert leaf.raw_der  # stored/usable for inventory
     assert chain_status(leaf, [], []) == "self-signed"
+
+
+# ── Basic constraints check (leaf without CA bit) ───────────────────────────
+
+
+class TestBasicConstraintsCheck:
+    """Leaf cert without CA bit must not be usable as intermediate."""
+
+    def test_leaf_without_ca_bit_rejected_as_issuer(self, chain_triplet):
+        from cert_watch.cert_chain import _is_signed_by
+
+        leaf = parse_certificate(chain_triplet["leaf"].der)
+        assert not _is_signed_by(leaf, leaf), (
+            "Leaf cert without CA bit should not be accepted as a chain issuer"
+        )
+
+    def test_ca_cert_accepted_as_issuer(self, chain_triplet):
+        from cert_watch.cert_chain import _is_signed_by
+
+        intermediate = parse_certificate(chain_triplet["intermediate"].der)
+        leaf = parse_certificate(chain_triplet["leaf"].der)
+        assert _is_signed_by(leaf, intermediate), (
+            "CA cert with ca=True should be accepted as a chain issuer"
+        )

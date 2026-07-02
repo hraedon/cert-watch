@@ -185,3 +185,74 @@ async def test_csrf_bypass_false_rejects_missing_token(monkeypatch):
     request = _make_request()
     result = await check_csrf(request)
     assert result == "missing CSRF token"
+
+
+# ── Login CSRF (review #19) ─────────────────────────────────────────────────
+
+
+class TestLoginCsrf:
+    """POST /login enforces the double-submit check."""
+
+    def _app(self, reload_app, monkeypatch):
+        from cert_watch.auth.local_admin import _scrypt_hash
+
+        h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        return reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+        )
+
+    def test_post_without_token_rejected(self, reload_app, csrf_strict, monkeypatch):
+        app_mod = self._app(reload_app, monkeypatch)
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            r = client.post(
+                "/login",
+                data={"username": "admin", "password": "right-pw"},
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert "login" in r.headers["location"]  # bounced back, not signed in
+
+    def test_post_with_valid_token_succeeds(self, reload_app, csrf_strict, login_csrf, monkeypatch):
+        app_mod = self._app(reload_app, monkeypatch)
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            token = login_csrf(client)
+            assert token, "login form should render a CSRF token"
+            r = client.post(
+                "/login",
+                data={
+                    "username": "admin",
+                    "password": "right-pw",
+                    "_csrf_token": token,
+                },
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert r.headers["location"] in ("/", "http://testserver/")
+
+
+# ── Response security headers ──────────────────────────────────────────────
+
+
+class TestResponseHeaders:
+    def test_security_headers_present(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.get("/login")
+        assert r.headers.get("Referrer-Policy") == "no-referrer"
+        assert "geolocation=()" in r.headers.get("Permissions-Policy", "")
+        assert r.headers.get("X-Permitted-Cross-Domain-Policies") == "none"
+        assert r.headers.get("X-Content-Type-Options") == "nosniff"
+
+    def test_cw_sid_cookie_is_httponly(self, reload_app):
+        app_mod = reload_app()
+        with TestClient(app_mod.app) as client:
+            r = client.get("/login")
+        set_cookies = [
+            v for k, v in r.headers.items() if k.lower() == "set-cookie"
+        ]
+        raw = "\n".join(set_cookies) or r.headers.get("set-cookie", "")
+        if "cw_sid" in raw:
+            cw_sid_segment = [s for s in raw.split("\n") if "cw_sid" in s]
+            assert any("HttpOnly" in s for s in cw_sid_segment)

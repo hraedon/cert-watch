@@ -1,6 +1,6 @@
 """Exhaustive table test for the first-run posture decision (BC-114).
 
-These cover the pure decision in isolation; `test_bc083_081.py` keeps the
+These cover the pure decision in isolation; `test_secure_by_default.py` keeps the
 end-to-end lifespan checks (actual provisioning, fail-closed SystemExit).
 """
 

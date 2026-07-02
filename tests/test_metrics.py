@@ -106,3 +106,36 @@ def test_prometheus_rules_valid_yaml():
     assert "CertExpiringCritical" in alert_names
     assert "CertExpiringWarning" in alert_names
     assert "CertExpired" in alert_names
+
+
+# ── /metrics auth gate ──────────────────────────────────────────────────────
+
+
+class TestMetricsAuthGate:
+    """/metrics must require auth when no token is configured."""
+
+    def test_is_public_path_metrics_without_token(self):
+        import cert_watch.middleware as mw
+        from cert_watch.middleware import is_public_path
+
+        original = mw._METRICS_TOKEN
+        mw._METRICS_TOKEN = None
+        try:
+            assert not is_public_path("/metrics"), (
+                "/metrics should not be public when no metrics token is set"
+            )
+        finally:
+            mw._METRICS_TOKEN = original
+
+    def test_is_public_path_metrics_with_token(self):
+        import cert_watch.middleware as mw
+        from cert_watch.middleware import is_public_path
+
+        original = mw._METRICS_TOKEN
+        mw._METRICS_TOKEN = "test-token"
+        try:
+            assert is_public_path("/metrics"), (
+                "/metrics should be public when a metrics token is set"
+            )
+        finally:
+            mw._METRICS_TOKEN = original

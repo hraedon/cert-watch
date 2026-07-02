@@ -1,5 +1,7 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from cert_watch.certificate_model import parse_certificate
 from cert_watch.database import (
     Alert,
@@ -502,3 +504,91 @@ def test_connection_cache_evicts_oldest(tmp_path):
         conns[0].execute("SELECT 1")  # evicted + closed
     conns[-1].execute("SELECT 1")  # newest still live
     close_connections()
+
+
+# ── Host deletion event_log cleanup ─────────────────────────────────────────
+
+
+class TestEventLogDeletion:
+    """Event log deletion must use json_extract, not LIKE."""
+
+    def test_delete_uses_json_extract(self):
+        import inspect
+
+        from cert_watch.database.repo import SqliteHostRepository
+
+        source = inspect.getsource(SqliteHostRepository.delete)
+        assert "json_extract" in source, (
+            "Host deletion should use json_extract for event_log cleanup"
+        )
+        assert "LIKE" not in source, (
+            "Host deletion should not use LIKE for event_log cleanup"
+        )
+
+
+# ── chain_status persistence (BC-100) ───────────────────────────────────────
+
+
+def _insert_certificate_for_posture(db, cert_id: str) -> None:
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, "
+            "san_dns_names, fingerprint_sha256, raw_der, source, hostname, port, is_leaf, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (cert_id, "CN=test", "CN=CA", "2026-01-01T00:00:00+00:00",
+             "2027-01-01T00:00:00+00:00", "[]", f"fp-{cert_id}", b"", "scanned",
+             "test", 443, 1, "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+        )
+        conn.commit()
+
+
+def test_store_scan_posture_persists_chain_status(tmp_path):
+    from cert_watch.database import store_scan_posture
+    from cert_watch.database.posture import get_posture_for_cert
+
+    db = tmp_path / "test.db"
+    init_schema(db)
+    cert_id = "cert-001"
+    _insert_certificate_for_posture(db, cert_id)
+    store_scan_posture(
+        db_path=db,
+        cert_id=cert_id,
+        hostname="example.com",
+        port=443,
+        grade="A",
+        findings=[],
+        chain_status="private",
+    )
+    posture = get_posture_for_cert(db, cert_id)
+    assert posture is not None
+    assert posture["chain_status"] == "private"
+
+
+# ── _build_host_filter column whitelist (BC-124) ────────────────────────────
+
+
+def test_build_host_filter_rejects_disallowed_columns():
+    """_build_host_filter must raise ValueError for columns outside the whitelist."""
+    from cert_watch.database.dashboard import _build_host_filter
+
+    with pytest.raises(ValueError, match="disallowed filter column"):
+        _build_host_filter("hostname", ["a"])
+    with pytest.raises(ValueError, match="disallowed filter column"):
+        _build_host_filter("id", ["a"])
+    with pytest.raises(ValueError, match="disallowed filter column"):
+        _build_host_filter("; DROP TABLE hosts; --", ["a"])
+
+
+def test_build_host_filter_accepts_whitelisted_columns():
+    """_build_host_filter must accept the whitelisted columns."""
+    from cert_watch.database.dashboard import _build_host_filter
+
+    clause, params = _build_host_filter("owner_name", ["alice", "bob"])
+    assert "h.owner_name" in clause
+    assert params == ("alice", "bob")
+
+    clause, params = _build_host_filter("renewal_method", ["acme"])
+    assert "h.renewal_method" in clause
+    assert params == ("acme",)

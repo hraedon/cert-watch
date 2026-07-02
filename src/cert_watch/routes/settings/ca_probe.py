@@ -12,8 +12,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
 
 from cert_watch.certificate_model import Certificate, parse_certificate
-from cert_watch.scan import _is_blocked_ip
 from cert_watch.scan_conn import _get_chain_der
+from cert_watch.scan_resolver import _is_blocked_ip
 
 
 def _capture_ldaps_chain(
@@ -139,7 +139,7 @@ def _probe_tls_chain(
 
     # If we only have the leaf (or nothing), try openssl for the full chain
     if len(der_chain) <= 1:
-        from cert_watch.scan import _scan_via_openssl
+        from cert_watch.scan_conn import _scan_via_openssl
 
         try:
             openssl_chain, _ = _scan_via_openssl(

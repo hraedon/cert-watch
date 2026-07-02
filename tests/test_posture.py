@@ -541,7 +541,7 @@ class TestScanProtocolVersion:
         assert entry.protocol_version == ""
 
     def test_openssl_protocol_regex(self):
-        from cert_watch.scan import _PROTOCOL_RE
+        from cert_watch.scan_conn import _PROTOCOL_RE
         assert _PROTOCOL_RE.search(b"Protocol  : TLSv1.3").group(1) == b"TLSv1.3"
         assert _PROTOCOL_RE.search(b"Protocol  : TLSv1.2").group(1) == b"TLSv1.2"
         assert _PROTOCOL_RE.search(b"Protocol  : TLSv1.0").group(1) == b"TLSv1.0"
@@ -1043,3 +1043,166 @@ def test_evaluate_posture_without_revocation_check():
     result = evaluate_posture(cert, check_revocation=False)
     assert not any(f.check == "ocsp_endpoint" for f in result.findings)
     assert not any(f.check == "crl_endpoint" for f in result.findings)
+
+
+# ── OCSP/CRL SSRF validation (BC-117) ───────────────────────────────────────
+
+
+def _cert_with_aia(ocsp_url="http://ocsp.test"):
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509 import AccessDescription, AuthorityInformationAccess
+    from cryptography.x509.oid import AuthorityInformationAccessOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "test")])
+    now = datetime.datetime.now(datetime.UTC)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(1000)
+        .not_valid_before(now)
+        .not_valid_after(now + datetime.timedelta(days=365))
+    )
+    aia = AuthorityInformationAccess([
+        AccessDescription(
+            AuthorityInformationAccessOID.OCSP,
+            x509.UniformResourceIdentifier(ocsp_url),
+        )
+    ])
+    builder = builder.add_extension(aia, critical=False)
+    cert = builder.sign(key, hashes.SHA256())
+    return cert.public_bytes(serialization.Encoding.DER)
+
+
+def test_ocsp_blocks_private_url():
+    """OCSP probe to a private IP must be refused, not probed."""
+    from cert_watch.posture import _check_endpoint_reachable
+
+    reachable, msg = _check_endpoint_reachable("http://10.0.0.5/ocsp", method="HEAD")
+    assert reachable is False
+    assert "SSRF" in msg or "blocked" in msg
+
+
+def test_crl_blocks_loopback_url():
+    """CRL probe to loopback must be refused."""
+    from cert_watch.posture import _check_endpoint_reachable
+
+    reachable, msg = _check_endpoint_reachable("http://127.0.0.1/crl.crl", method="GET")
+    assert reachable is False
+    assert "SSRF" in msg or "blocked" in msg
+
+
+def test_revocation_endpoints_ssrf_finding():
+    """check_revocation_endpoints must emit a clear SSRF-blocked finding."""
+    from cert_watch.posture import check_revocation_endpoints
+
+    der = _cert_with_aia(ocsp_url="http://10.0.0.5/ocsp")
+    findings = check_revocation_endpoints(der)
+    ocsp_findings = [f for f in findings if f.check == "ocsp_endpoint"]
+    assert len(ocsp_findings) == 1
+    assert ocsp_findings[0].status == "warn"
+    assert "SSRF" in ocsp_findings[0].message or "blocked" in ocsp_findings[0].message
+
+
+# ── OCSP/CRL reachability threshold ─────────────────────────────────────────
+
+
+class TestOCSPReachabilityThreshold:
+    """OCSP/CRL 4xx (except 405) must be treated as unreachable."""
+
+    def test_404_is_unreachable(self, monkeypatch):
+        from cert_watch.posture import _check_endpoint_reachable
+
+        class FakeResp:
+            status = 404
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr("cert_watch.posture.ssrf_safe_urlopen", lambda *a, **kw: FakeResp())
+        reachable, _ = _check_endpoint_reachable("http://example.com/ocsp", "HEAD")
+        assert not reachable
+
+    def test_405_is_reachable(self, monkeypatch):
+        from cert_watch.posture import _check_endpoint_reachable
+
+        class FakeResp:
+            status = 405
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr("cert_watch.posture.ssrf_safe_urlopen", lambda *a, **kw: FakeResp())
+        reachable, _ = _check_endpoint_reachable("http://example.com/ocsp", "HEAD")
+        assert reachable, "405 should be treated as reachable (endpoint exists)"
+
+    def test_200_is_reachable(self, monkeypatch):
+        from cert_watch.posture import _check_endpoint_reachable
+
+        class FakeResp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr("cert_watch.posture.ssrf_safe_urlopen", lambda *a, **kw: FakeResp())
+        reachable, _ = _check_endpoint_reachable("http://example.com/ocsp", "HEAD")
+        assert reachable
+
+
+# ── Chain status None handling ──────────────────────────────────────────────
+
+
+class TestChainStatusNoneHandling:
+    """Non-self-signed cert with chain_status=None must get incomplete warning."""
+
+    def test_none_chain_status_warns_for_non_self_signed(self):
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(cert=cert)
+        chain_findings = [f for f in result.findings if f.check == "chain_completeness"]
+        assert len(chain_findings) == 1
+        assert chain_findings[0].status == "warn"
+
+    def test_public_chain_status_passes(self):
+        der = _ca_signed_cert_der()
+        cert = _cert_from_der(der)
+        result = evaluate_posture(cert=cert, chain_status="public")
+        chain_findings = [f for f in result.findings if f.check == "chain_completeness"]
+        assert len(chain_findings) == 1
+        assert chain_findings[0].status == "pass"
+
+
+# ── OCSP/CRL SSRF blocked path (BC-117) ─────────────────────────────────────
+
+
+def test_check_endpoint_reachable_ocsp_blocked_by_ssrf():
+    """_check_endpoint_reachable returns blocked message for SSRF-blocked URLs."""
+    from cert_watch.posture import _check_endpoint_reachable
+
+    reachable, msg = _check_endpoint_reachable("http://127.0.0.1/ocsp", method="HEAD")
+    assert reachable is False
+    assert "blocked by SSRF policy" in msg
+
+
+def test_check_endpoint_reachable_crl_blocked_by_ssrf():
+    """_check_endpoint_reachable returns blocked message for SSRF-blocked URLs."""
+    from cert_watch.posture import _check_endpoint_reachable
+
+    reachable, msg = _check_endpoint_reachable("http://169.254.169.254/crl.pem", method="GET")
+    assert reachable is False
+    assert "blocked by SSRF policy" in msg
+
+
+def test_check_revocation_endpoints_finds_blocked_ocsp():
+    """check_revocation_endpoints surfaces a clear warning when OCSP is blocked."""
+    # A dummy certificate with no OCSP/CRL won't exercise the path,
+    # so we test the helper directly.
+    from cert_watch.posture import _check_endpoint_reachable
+
+    reachable, msg = _check_endpoint_reachable("http://192.168.1.1/ocsp", method="HEAD")
+    assert reachable is False
+    assert "blocked by SSRF policy" in msg

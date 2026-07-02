@@ -13,6 +13,7 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.renewal_analytics import RenewalOverdueSignal
 from cert_watch.scheduler import (
     _check_renewal_overdue,
+    _flush_renewal_webhook_pool,
     _send_renewal_webhook_if_configured,
 )
 from tests._helpers import seed_certificate
@@ -34,6 +35,7 @@ def _no_sleep():
     """Keep the backoff loop from actually sleeping between retries."""
     with patch("cert_watch.retry.time.sleep"):
         yield
+    _flush_renewal_webhook_pool()
 
 
 @pytest.fixture
@@ -61,6 +63,7 @@ def test_configured_sends_built_payload(seeded_db, monkeypatch):
         "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
     ) as send:
         _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
+    _flush_renewal_webhook_pool()
     send.assert_called_once()
     payload, config = send.call_args.args
     assert payload["event"] == "renewal_needed"
@@ -78,6 +81,7 @@ def test_retries_then_succeeds(seeded_db, monkeypatch):
         side_effect=[False, True],
     ) as send:
         _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
+    _flush_renewal_webhook_pool()
     assert send.call_count == 2  # stops as soon as one attempt succeeds
 
 
@@ -89,6 +93,7 @@ def test_retry_exhausted_is_logged(seeded_db, monkeypatch, caplog):
         "cert_watch.renewal_webhook.send_renewal_webhook", return_value=False
     ) as send, caplog.at_level("WARNING", logger="cert_watch.scheduler"):
         _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
+    _flush_renewal_webhook_pool()
     assert send.call_count == 3  # three attempts: 0, +1s, +2s
     assert any("failed after retries" in r.message for r in caplog.records)
 
@@ -109,6 +114,7 @@ def test_check_renewal_overdue_fires_webhook_once_and_dedupes(seeded_db, monkeyp
         # Second cycle: the event was already emitted within 24h, so no resend.
         _check_renewal_overdue(db, hosts)
 
+    _flush_renewal_webhook_pool()
     send.assert_called_once()
 
 

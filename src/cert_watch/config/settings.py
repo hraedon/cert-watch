@@ -5,6 +5,8 @@ Decomposed from the monolithic config.py (BC-144a / config decomposition).
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from cert_watch.alerts import AlertConfig, WebhookConfig
     from cert_watch.auth import AuthProvider
+    from cert_watch.renewal_webhook import RenewalWebhookConfig
     from cert_watch.security import SecurityContext
 
 from cert_watch.config.helpers import (
@@ -22,6 +25,23 @@ from cert_watch.config.helpers import (
     read_secret,
     split_group_dns,
 )
+
+logger = logging.getLogger("cert_watch.config")
+
+
+def _parse_renewal_headers(raw: str) -> dict[str, str] | None:
+    """Parse the RENEWAL_WEBHOOK_HEADERS env var as a JSON dict, or None."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning(
+            "CERT_WATCH_RENEWAL_WEBHOOK_HEADERS is not valid JSON; ignoring"
+        )
+        return None
+    return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else None
 
 
 @dataclass(frozen=True)
@@ -88,6 +108,8 @@ class Settings:
     base_url: str = ""
     allow_unauth: bool = False
     jwks_cache_ttl: int = 86400
+    renewal_webhook_url: str = ""
+    renewal_webhook_headers: dict[str, str] | None = None
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -284,6 +306,12 @@ class Settings:
                 "CERT_WATCH_JWKS_CACHE_TTL",
                 min_value=60, max_value=604800,
             ),
+            renewal_webhook_url=os.environ.get(
+                "CERT_WATCH_RENEWAL_WEBHOOK_URL", ""
+            ).strip(),
+            renewal_webhook_headers=_parse_renewal_headers(
+                os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", "")
+            ),
         )
 
     def build_alert_config(self) -> AlertConfig | None:
@@ -327,6 +355,30 @@ class Settings:
             routing_key=self.pagerduty_routing_key,
             headers=self.webhook_headers or {},
             template=self.webhook_template,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
+        )
+
+    def build_renewal_webhook_config(self) -> RenewalWebhookConfig | None:
+        """Return a RenewalWebhookConfig if the renewal webhook URL is set, else None."""
+        if not self.renewal_webhook_url:
+            return None
+        from cert_watch.http_client import validate_webhook_url
+
+        err = validate_webhook_url(
+            self.renewal_webhook_url,
+            allow_private=self.allow_private,
+            allowed_subnets=self.allowed_subnets,
+        )
+        if err:
+            logger.warning(
+                "CERT_WATCH_RENEWAL_WEBHOOK_URL is invalid and will be skipped: %s",
+                err,
+            )
+            return None
+        return RenewalWebhookConfig(
+            url=self.renewal_webhook_url,
+            headers=self.renewal_webhook_headers or {},
             allow_private=self.allow_private,
             allowed_subnets=self.allowed_subnets,
         )

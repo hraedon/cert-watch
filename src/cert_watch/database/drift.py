@@ -410,21 +410,38 @@ def list_cert_history(
 def list_tls_version_trends(
     db_path: str | Path,
     days: int = 30,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Fleet TLS version distribution over time.
 
     Returns [{date, protocol_version, count}] for the last *days* days.
+
+    ``scope_tags`` restricts results to hosts whose tags match (WI-128).
     """
     init_schema(db_path)
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    where = "scanned_at >= ? AND protocol_version IS NOT NULL AND protocol_version != ''"
+    params: list[Any] = [cutoff]
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = (
+            "SELECT 1 FROM hosts h WHERE h.hostname = cert_history.hostname"
+            " AND h.port = cert_history.port"
+        )
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        where += f" AND EXISTS ({host_sub})"
+        params = params + host_params
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT DATE(scanned_at) as date, protocol_version, COUNT(*) as count
-               FROM cert_history
-               WHERE scanned_at >= ? AND protocol_version IS NOT NULL AND protocol_version != ''
-               GROUP BY DATE(scanned_at), protocol_version
-               ORDER BY date DESC""",
-            (cutoff,),
+            f"""SELECT DATE(scanned_at) as date, protocol_version, COUNT(*) as count
+                FROM cert_history
+                WHERE {where}
+                GROUP BY DATE(scanned_at), protocol_version
+                ORDER BY date DESC""",
+            params,
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -432,20 +449,37 @@ def list_tls_version_trends(
 def list_grade_trends(
     db_path: str | Path,
     days: int = 30,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Fleet posture grade distribution over time.
 
     Returns [{date, posture_grade, count}] for the last *days* days.
+
+    ``scope_tags`` restricts results to hosts whose tags match (WI-128).
     """
     init_schema(db_path)
     cutoff = (datetime.now(UTC) - timedelta(days=days)).isoformat()
+    where = "scanned_at >= ? AND posture_grade IS NOT NULL AND posture_grade != ''"
+    params: list[Any] = [cutoff]
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = (
+            "SELECT 1 FROM hosts h WHERE h.hostname = cert_history.hostname"
+            " AND h.port = cert_history.port"
+        )
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        where += f" AND EXISTS ({host_sub})"
+        params = params + host_params
     with _connect(db_path) as conn:
         rows = conn.execute(
-            """SELECT DATE(scanned_at) as date, posture_grade, COUNT(*) as count
-               FROM cert_history
-               WHERE scanned_at >= ? AND posture_grade IS NOT NULL AND posture_grade != ''
-               GROUP BY DATE(scanned_at), posture_grade
-               ORDER BY date DESC""",
-            (cutoff,),
+            f"""SELECT DATE(scanned_at) as date, posture_grade, COUNT(*) as count
+                FROM cert_history
+                WHERE {where}
+                GROUP BY DATE(scanned_at), posture_grade
+                ORDER BY date DESC""",
+            params,
         ).fetchall()
     return [dict(r) for r in rows]

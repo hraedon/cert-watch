@@ -152,3 +152,49 @@ class TestDefaultCommand:
             raise AssertionError("Should have raised SystemExit(0)")
         except SystemExit as e:
             assert e.code == 0
+
+
+class TestEntrypointHostNormalization:
+    """BC-090: __main__ is the single source of truth for the bind host — it
+    normalizes CERT_WATCH_HOST to what it passes to uvicorn, so the BC-083
+    check (which reads that env var) can never diverge from the real bind."""
+
+    def test_host_arg_normalizes_env(self, monkeypatch):
+        """`--host 127.0.0.1` sets CERT_WATCH_HOST=127.0.0.1 (the IIS path)."""
+        import os
+
+        monkeypatch.delenv("CERT_WATCH_HOST", raising=False)
+        with patch("uvicorn.run") as run:
+            main(["--host", "127.0.0.1", "--port", "12345"])
+
+        assert os.environ["CERT_WATCH_HOST"] == "127.0.0.1"
+        _, kwargs = run.call_args
+        assert kwargs["host"] == "127.0.0.1"
+        assert kwargs["port"] == 12345
+        os.environ.pop("CERT_WATCH_HOST", None)
+
+    def test_host_arg_overrides_env(self, monkeypatch):
+        """--host wins over a pre-set CERT_WATCH_HOST."""
+        import os
+
+        monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
+        with patch("uvicorn.run") as run:
+            main(["--host", "127.0.0.1"])
+
+        assert os.environ["CERT_WATCH_HOST"] == "127.0.0.1"
+        assert run.call_args.kwargs["host"] == "127.0.0.1"
+
+    def test_default_host_falls_back_to_env_then_default(self, monkeypatch):
+        """No --host: use CERT_WATCH_HOST if set, else 0.0.0.0."""
+        import os
+
+        monkeypatch.setenv("CERT_WATCH_HOST", "10.0.0.5")
+        with patch("uvicorn.run") as run:
+            main([])
+        assert run.call_args.kwargs["host"] == "10.0.0.5"
+
+        monkeypatch.delenv("CERT_WATCH_HOST", raising=False)
+        with patch("uvicorn.run") as run:
+            main([])
+        assert run.call_args.kwargs["host"] == "0.0.0.0"
+        assert os.environ["CERT_WATCH_HOST"] == "0.0.0.0"

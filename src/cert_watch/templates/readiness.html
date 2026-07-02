@@ -76,7 +76,7 @@
   {% if report.public_trust_hosts == 0 %}
   <div class="cw-panel cw-p-16-18 cw-mt-16">
     <div class="cw-private-note">
-      <span class="cw-fz-13">SC-081 applies to <strong>publicly trusted</strong> certificates only. Your estate has no public-trust hosts &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong>.</span>
+      <span class="cw-fz-13">SC-081 applies to <strong>publicly trusted</strong> certificates only. No hosts with confirmed public-trust certificates were found{% if report.unknown_hosts > 0 %}, though {{ report.unknown_hosts }} host{{ '' if report.unknown_hosts == 1 else 's' }} with unclassified chain status may include public-trust certs{% endif %} &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong> until public-trust hosts are identified.</span>
     </div>
   </div>
   {% endif %}

@@ -12,24 +12,30 @@ from cert_watch.scan import (
     ScanError,
     ScannedEntry,
     _friendly_scan_error,
-    _get_chain_der,
-    _open_tls_connection,
-    _parse_allowed_subnets,
     _PostureEval,
-    _probe_hsts,
-    _resolve_host,
-    _resolve_with_dns,
     _scan_host_once,
     _scan_host_via_openssl,
-    _scan_via_openssl,
-    resolve_and_validate_host,
-    resolve_hostname,
     scan_host,
     scan_host_async,
     store_scanned,
     store_scanned_async,
 )
-from cert_watch.scan_conn import ScanOutputTooLargeError, _format_connect_host, _run_openssl
+from cert_watch.scan_conn import (
+    ScanOutputTooLargeError,
+    _format_connect_host,
+    _get_chain_der,
+    _open_tls_connection,
+    _probe_hsts,
+    _run_openssl,
+    _scan_via_openssl,
+)
+from cert_watch.scan_resolver import (
+    _parse_allowed_subnets,
+    _resolve_host,
+    _resolve_with_dns,
+    resolve_and_validate_host,
+    resolve_hostname,
+)
 
 
 def _fake_ssl_socket(der_chain: list[bytes]) -> MagicMock:

@@ -254,3 +254,23 @@ def test_oauth_token_exchange_blocked_by_ssrf_policy(monkeypatch):
 
     assert result.success is False
     assert "SSRF" in result.error or "OAuth authentication failed" in result.error
+
+
+# ── JWT algorithm allowlist ─────────────────────────────────────────────────
+
+
+class TestOAuthAlgAllowlist:
+    def test_filters_none_and_symmetric(self):
+        from cert_watch.auth.oauth_provider import _safe_algs
+
+        assert _safe_algs(["none", "HS256", "RS256"]) == ["RS256"]
+        assert _safe_algs(["ES256", "RS512"]) == ["ES256", "RS512"]
+
+    def test_hostile_list_falls_back_to_rs256(self):
+        from cert_watch.auth.oauth_provider import _safe_algs
+
+        # A malicious IdP advertising only "none" must not reduce us to
+        # accepting unsigned tokens.
+        assert _safe_algs(["none"]) == ["RS256"]
+        assert _safe_algs([]) == ["RS256"]
+        assert _safe_algs(["HS256", "HS384"]) == ["RS256"]

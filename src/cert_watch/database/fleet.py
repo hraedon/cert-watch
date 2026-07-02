@@ -151,6 +151,7 @@ def get_pivot_group_entries(
     db_path: str | Path,
     pivot: str,
     group_key: str,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Return unified entries for a single pivot group.
 
@@ -160,6 +161,9 @@ def get_pivot_group_entries(
 
     Uses SQL-level filtering so only matching hosts and their certs are
     materialised at fleet scale.
+
+    ``scope_tags`` restricts results to entries whose effective tags
+    (cert ∪ host) include at least one supplied tag (WI-051/WI-128).
     """
     from cert_watch.filters import friendly_issuer
 
@@ -212,6 +216,11 @@ def get_pivot_group_entries(
         else:
             key = "Unknown"
         e["_pivot_key"] = key
+
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _entry_matches_scope_tag
+
+        entries = [e for e in entries if _entry_matches_scope_tag(e, scope_tags)]
 
     return [e for e in entries if e.get("_pivot_key") == group_key]
 

@@ -916,3 +916,28 @@ class TestPerCertMatchesBatchResolution:
         assert "manual@co.com" in batch[cid_manual]
         assert "role@co.com" in batch[cid_role]
         assert batch.get(cid_none, []) == []
+
+
+# ── Alert-group admin gate ──────────────────────────────────────────────────
+
+
+class TestAlertGroupAdminGate:
+    """Alert-group mutations must require admin, not just write."""
+
+    def test_create_alert_group_imports_admin(self):
+        import inspect
+
+        from cert_watch.routes.api.alerts import api_create_alert_group
+
+        source = inspect.getsource(api_create_alert_group)
+        assert "require_admin_write" in source, (
+            "Alert-group creation should require admin write, not just write"
+        )
+
+    def test_delete_alert_group_imports_admin(self):
+        import inspect
+
+        from cert_watch.routes.api.alerts import api_delete_alert_group
+
+        source = inspect.getsource(api_delete_alert_group)
+        assert "require_admin_write" in source

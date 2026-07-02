@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.compliance import (
@@ -561,3 +562,47 @@ class TestCLI:
             raise AssertionError("should have raised SystemExit")
         except (SystemExit, FileNotFoundError):
             pass
+
+
+# ── Compliance report fails closed ──────────────────────────────────────────
+
+
+class TestComplianceFailsClosed:
+    def test_missing_security_returns_503_not_empty_signature(self):
+        from fastapi import HTTPException
+
+        from cert_watch.routes.api._shared import compliance_signing_key
+
+        class _State:
+            security = None
+
+        class _App:
+            state = _State()
+
+        class _Req:
+            app = _App()
+
+        with pytest.raises(HTTPException) as exc:
+            compliance_signing_key(_Req())
+        assert exc.value.status_code == 503
+
+    def test_empty_signing_key_returns_503(self):
+        from fastapi import HTTPException
+
+        from cert_watch.routes.api._shared import compliance_signing_key
+
+        class _Security:
+            signing_key = ""
+
+        class _State:
+            security = _Security()
+
+        class _App:
+            state = _State()
+
+        class _Req:
+            app = _App()
+
+        with pytest.raises(HTTPException) as exc:
+            compliance_signing_key(_Req())
+        assert exc.value.status_code == 503

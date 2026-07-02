@@ -15,6 +15,7 @@ from cert_watch.database import (
 )
 from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path, _get_settings
+from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.api.insights")
 
@@ -66,9 +67,10 @@ def api_pivot_group_entries(
             status_code=400,
         )
     db = _db_path(request)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     from cert_watch.database import get_pivot_group_entries
 
-    entries = get_pivot_group_entries(db, pivot, group_key)
+    entries = get_pivot_group_entries(db, pivot, group_key, scope_tags=scope_tags)
     # Strip internal _pivot_key field; add urgency + label so the JS
     # consumer doesn't duplicate compute_urgency (WI-071).
     from cert_watch.filters import compute_urgency, urgency_label
@@ -95,7 +97,8 @@ def api_tls_version_trends(
     request: Request, _auth: str = Depends(require_auth), days: int = 30
 ) -> JSONResponse:
     db = _db_path(request)
-    trends = list_tls_version_trends(db, days=min(max(days, 1), 365))
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    trends = list_tls_version_trends(db, days=min(max(days, 1), 365), scope_tags=scope_tags)
     return JSONResponse(content={"days": days, "trends": trends})
 
 
@@ -104,7 +107,8 @@ def api_grade_trends(
     request: Request, _auth: str = Depends(require_auth), days: int = 30
 ) -> JSONResponse:
     db = _db_path(request)
-    trends = list_grade_trends(db, days=min(max(days, 1), 365))
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    trends = list_grade_trends(db, days=min(max(days, 1), 365), scope_tags=scope_tags)
     return JSONResponse(content={"days": days, "trends": trends})
 
 
@@ -122,5 +126,8 @@ def api_calendar(
     if bucket not in ("day", "week", "month"):
         bucket = "month"
     db = _db_path(request)
-    buckets = list_calendar(db, from_date=from_date, to_date=to_date, bucket=bucket)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    buckets = list_calendar(
+        db, from_date=from_date, to_date=to_date, bucket=bucket, scope_tags=scope_tags
+    )
     return JSONResponse(content={"bucket": bucket, "buckets": buckets})

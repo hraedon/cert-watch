@@ -21,7 +21,7 @@ from http.client import HTTPMessage, HTTPResponse
 from typing import IO
 from urllib.parse import urlparse, urlunparse
 
-from cert_watch.scan import _is_blocked_ip
+from cert_watch.scan_resolver import _is_blocked_ip
 
 logger = logging.getLogger("cert_watch.http_client")
 

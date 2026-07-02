@@ -12,8 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from cert_watch.scan import _probe_hsts
-from cert_watch.scan_conn import _get_chain_der, _open_tls_connection
+from cert_watch.scan_conn import _get_chain_der, _open_tls_connection, _probe_hsts
 from tests._integration_servers import allow_loopback_transport, https_server
 
 

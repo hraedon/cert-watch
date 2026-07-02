@@ -190,9 +190,30 @@ def _compute_host_from_entries(
 
 
 def compute_host_analytics(
-    db_path: str | Path, hostname: str, *, port: int | None = None
+    db_path: str | Path,
+    hostname: str,
+    *,
+    port: int | None = None,
+    scope_tags: tuple[str, ...] = (),
 ) -> HostRenewalAnalytics:
     init_schema(db_path)
+
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        scope_sql = "SELECT 1 FROM hosts h WHERE h.hostname = ?"
+        scope_params: list[Any] = [hostname]
+        if port is not None:
+            scope_sql += " AND h.port = ?"
+            scope_params.append(port)
+        scope_sql, scope_params = _add_effective_tag_filter(
+            scope_sql, scope_params, scope_tags, col_cert=None, col_host="h.tags"
+        )
+        scope_sql += " LIMIT 1"
+        with _connect(db_path) as conn:
+            row = conn.execute(scope_sql, scope_params).fetchone()
+        if row is None:
+            return _compute_host_from_entries(hostname, [])
 
     if port is not None:
         with _connect(db_path) as conn:
@@ -217,16 +238,36 @@ def compute_host_analytics(
     return _compute_host_from_entries(hostname, entries)
 
 
-def compute_fleet_analytics(db_path: str | Path) -> list[HostRenewalAnalytics]:
+def compute_fleet_analytics(
+    db_path: str | Path, scope_tags: tuple[str, ...] = ()
+) -> list[HostRenewalAnalytics]:
     init_schema(db_path)
 
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            """SELECT hostname, port, fingerprint_sha256, issuer, not_after, not_before, scanned_at
-               FROM cert_history
-               WHERE hostname IS NOT NULL
-               ORDER BY hostname, port, scanned_at ASC"""
-        ).fetchall()
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        sql = (
+            "SELECT ch.hostname, ch.port, ch.fingerprint_sha256, ch.issuer,"
+            " ch.not_after, ch.not_before, ch.scanned_at"
+            " FROM cert_history ch"
+            " JOIN hosts h ON h.hostname = ch.hostname AND h.port = ch.port"
+            " WHERE ch.hostname IS NOT NULL"
+        )
+        sql, params = _add_effective_tag_filter(
+            sql, [], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        sql += " ORDER BY ch.hostname, ch.port, ch.scanned_at ASC"
+        with _connect(db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
+    else:
+        with _connect(db_path) as conn:
+            rows = conn.execute(
+                """SELECT hostname, port, fingerprint_sha256, issuer,
+                          not_after, not_before, scanned_at
+                   FROM cert_history
+                   WHERE hostname IS NOT NULL
+                   ORDER BY hostname, port, scanned_at ASC"""
+            ).fetchall()
 
     from collections import defaultdict
     by_host: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)

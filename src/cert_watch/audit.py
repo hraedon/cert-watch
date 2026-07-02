@@ -27,22 +27,37 @@ def record_audit(
     target_id: str,
     detail: dict[str, Any] | None = None,
     source_ip: str | None = None,
+    conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Insert one audit row. Best-effort; logs WARNING on failure but never raises."""
+    """Insert one audit row. Best-effort; logs WARNING on failure but never raises.
+
+    When *conn* is provided, the insert is written without committing — the
+    caller manages the transaction (WI-129). This allows the audit entry to
+    be part of the same transaction as the mutation it records, so a crash
+    between the mutation and the audit write rolls back both.
+    """
     try:
         actor = actor[:256] if actor else actor
         target_id = target_id[:256] if target_id else target_id
         row_id = uuid.uuid4().hex
         ts = datetime.now(UTC).isoformat()
         detail_json = json.dumps(detail, default=str) if detail else None
-        with _connect(db_path) as conn:
+        if conn is not None:
             conn.execute(
                 "INSERT INTO audit_log"
                 " (id, ts, actor, action, target_type, target_id, detail, source_ip)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (row_id, ts, actor, action, target_type, target_id, detail_json, source_ip),
             )
-            conn.commit()
+        else:
+            with _connect(db_path) as c:
+                c.execute(
+                    "INSERT INTO audit_log"
+                    " (id, ts, actor, action, target_type, target_id, detail, source_ip)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (row_id, ts, actor, action, target_type, target_id, detail_json, source_ip),
+                )
+                c.commit()
     except Exception:
         logger.warning(
             "audit write failed: action=%s target=%s/%s actor=%s",

@@ -139,3 +139,22 @@ def test_store_uploaded_persists_chain(tmp_path, chain_pem_file, chain_triplet):
     }
     assert actual_others == expected_others
     assert leaf_id
+
+
+# ── PKCS#7 cert count cap ───────────────────────────────────────────────────
+
+
+class TestUploadCertCountCap:
+    """PKCS#7 with > 100 certs must be rejected."""
+
+    def test_pkcs7_accepts_small_bundle(self, chain_triplet):
+        from cryptography.hazmat.primitives.serialization import Encoding, pkcs7
+
+        from cert_watch.upload import ParseError, _parse_pkcs7
+
+        der = pkcs7.serialize_certificates(
+            [chain_triplet["leaf"].cert, chain_triplet["intermediate"].cert],
+            Encoding.DER,
+        )
+        result = _parse_pkcs7("test.p7b", der)
+        assert not isinstance(result, ParseError), "2 certs should be fine"

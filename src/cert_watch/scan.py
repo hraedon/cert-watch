@@ -47,9 +47,10 @@ from cert_watch.scan_resolver import (  # noqa: F401
     resolve_hostname,
 )
 
-# Re-exported for backwards compatibility (these were originally defined in
-# scan.py before extraction to scan_conn / scan_resolver).  Listed in __all__
-# so mypy --strict (no_implicit_reexport) treats them as public surface.
+# Private helpers re-exported so monkeypatch paths (e.g. ``cert_watch.scan._resolve_host``)
+# still resolve at the module attribute level.  They are deliberately NOT in
+# __all__ — private names are not a compatibility surface.  Import them from
+# their source modules (scan_conn / scan_resolver) in new code.
 __all__ = [
     "DEFAULT_SCAN_MAX_OUTPUT_BYTES",
     "DEFAULT_TIMEOUT",
@@ -58,19 +59,6 @@ __all__ = [
     "ScanError",
     "ScanOutputTooLargeError",
     "ScannedEntry",
-    "_ALWAYS_BLOCKED_NETWORKS",
-    "_PRIVATE_NETWORKS",
-    "_PROTOCOL_RE",
-    "_der_enc",
-    "_get_chain_der",
-    "_has_native_chain_api",
-    "_is_blocked_ip",
-    "_open_tls_connection",
-    "_parse_allowed_subnets",
-    "_probe_hsts",
-    "_resolve_host",
-    "_resolve_with_dns",
-    "_scan_via_openssl",
     "resolve_and_validate_host",
     "resolve_hostname",
     "scan_host",
@@ -406,10 +394,16 @@ def _execute_deferred_post_commit(deferred: dict[str, Any]) -> None:
     pending_for_resolve = deferred.get("pending_for_resolve")
     pending_event_webhooks = deferred.get("pending_event_webhooks")
     if entry is not None:
-        with contextlib.suppress(Exception):
+        try:
             _stage_webhook_resolve(
                 repo_path, entry, replaced_cert_id,
                 webhook_config, pending_for_resolve,
+            )
+        except Exception:
+            logger.warning(
+                "deferred webhook resolve failed for %s:%s",
+                getattr(entry, "host", "?"), getattr(entry, "port", "?"),
+                exc_info=True,
             )
     for evt, cfg, rid in (pending_event_webhooks or []):
         try:
@@ -891,11 +885,18 @@ def store_scanned(
         old_leaf_id: str | None = None
         previous_grade: str | None = None
 
-        with contextlib.suppress(Exception):
+        try:
             pending_for_resolve, old_leaf_id = _stage(
                 "resolve_pending_alerts",
                 _stage_resolve_pending_alerts,
                 repo_path, entry, webhook_config,
+            )
+        except Exception:
+            logger.warning(
+                "resolve_pending_alerts failed for %s:%s — "
+                "open incidents may not be auto-resolved",
+                entry.host, entry.port,
+                exc_info=True,
             )
 
         if old_leaf_id:
@@ -1003,12 +1004,19 @@ def store_scanned(
             _deferred["pending_for_resolve"] = pending_for_resolve
             _deferred["pending_event_webhooks"] = pending_event_webhooks
         else:
-            with contextlib.suppress(Exception):
+            try:
                 _stage(
                     "webhook_resolve",
                     _stage_webhook_resolve,
                     repo_path, entry, replaced_cert_id,
                     webhook_config, pending_for_resolve,
+                )
+            except Exception:
+                logger.warning(
+                    "post-commit webhook resolve failed for %s:%s — "
+                    "open incidents may not be auto-resolved",
+                    entry.host, entry.port,
+                    exc_info=True,
                 )
 
             # WI-114: fire deferred event webhooks only after COMMIT succeeded.

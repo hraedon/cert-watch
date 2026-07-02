@@ -18,6 +18,7 @@ from sse_starlette.sse import EventSourceResponse
 from cert_watch.events import get_events, get_failed_deliveries
 from cert_watch.middleware import require_auth
 from cert_watch.routes._deps import _db_path
+from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.api.events")
 
@@ -35,6 +36,7 @@ def api_list_events(
     offset: int = Query(0, ge=0),
 ) -> JSONResponse:
     db = _db_path(request)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     events = get_events(
         db,
         event_type=event_type,
@@ -42,6 +44,7 @@ def api_list_events(
         since=since,
         limit=limit,
         offset=offset,
+        scope_tags=scope_tags,
     )
     return JSONResponse(content={"events": events})
 
@@ -54,6 +57,7 @@ async def api_event_stream(
     source: str | None = Query(None),
 ) -> EventSourceResponse:
     db = str(_db_path(request))
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
 
     async def _generate() -> AsyncIterator[dict[str, Any]]:
         max_id = 0
@@ -61,7 +65,10 @@ async def api_event_stream(
             if await request.is_disconnected():
                 break
             try:
-                events = get_events(db, event_type=event_type, source=source, limit=100)
+                events = get_events(
+                    db, event_type=event_type, source=source, limit=100,
+                    scope_tags=scope_tags,
+                )
             except (sqlite3.DatabaseError, OSError):  # DB query / network
                 logger.warning("SSE event query failed", exc_info=True)
                 events = []

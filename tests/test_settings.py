@@ -1062,7 +1062,7 @@ def test_capture_ldaps_chain_returns_ca_excluding_leaf(monkeypatch, chain_triple
     der_chain = [leaf.der, intermediate.der, root.der]
 
     monkeypatch.setattr(
-        "cert_watch.scan._scan_via_openssl",
+        "cert_watch.scan_conn._scan_via_openssl",
         lambda *a, **k: (der_chain, "TLSv1.3"),
     )
     result = _capture_ldaps_chain("ldaps://dc.example.com")
@@ -1079,7 +1079,7 @@ def test_capture_ldaps_chain_single_cert_returns_none(monkeypatch, self_signed_l
     from cert_watch.routes.settings import _capture_ldaps_chain
 
     monkeypatch.setattr(
-        "cert_watch.scan._scan_via_openssl",
+        "cert_watch.scan_conn._scan_via_openssl",
         lambda *a, **k: ([self_signed_leaf.der], "TLSv1.3"),
     )
     assert _capture_ldaps_chain("ldaps://dc.example.com") is None
@@ -1764,7 +1764,7 @@ def test_probe_tls_chain_openssl_fallback(monkeypatch, chain_triplet):
     monkeypatch.setattr(_ssl.SSLContext, "wrap_socket", fake_wrap_socket)
 
     monkeypatch.setattr(
-        "cert_watch.scan._scan_via_openssl",
+        "cert_watch.scan_conn._scan_via_openssl",
         lambda *a, **k: (der_chain, "TLSv1.3"),
     )
 
@@ -2310,3 +2310,57 @@ def test_no_nested_forms_on_any_settings_tab(reload_app, tmp_path):
             r = client.get(page)
             assert r.status_code == 200
             assert _max_form_nesting_depth(r.text) == 1, f"nested form on {page}"
+
+
+# ── Password change env-override (BC-124) ───────────────────────────────────
+
+
+def test_change_password_env_override_redirects(reload_app, tmp_path, monkeypatch):
+    """When CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH is set, UI rotation is blocked."""
+    from starlette.requests import Request as StRequest
+
+    import cert_watch.middleware as mw
+    import cert_watch.routes.auth as auth_routes
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.auth.local_admin import _scrypt_hash
+    from cert_watch.database import init_schema, kv_set
+    from cert_watch.middleware import _request_security
+
+    monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
+    monkeypatch.setenv(
+        "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH",
+        _scrypt_hash("testpassword"),
+    )
+
+    # Seed a local admin in kv_store
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    kv_set(db, "local_admin_user", "admin")
+    kv_set(db, "local_admin_password_hash", _scrypt_hash("testpassword"))
+    kv_set(db, "setup_complete", "1")
+
+    # Rebuild app with the env hash
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+        monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
+        # Create session directly (same as _login_admin helper)
+        scope = {
+            "type": "http", "method": "GET", "path": "/",
+            "query_string": b"", "headers": [],
+            "app": client.app,
+            "session": {},
+        }
+        req = StRequest(scope)
+        security = _request_security(req)
+        token = create_session("admin", security, version=0)
+        client.cookies.set(SESSION_COOKIE, token)
+
+        # Try to change password — should be blocked because env var wins
+        r = client.post("/settings/change-password", data={
+            "current_password": "testpassword",
+            "new_password": "newsecurepass",
+            "confirm_password": "newsecurepass",
+        }, follow_redirects=False)
+    assert r.status_code == 303
+    assert "CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH" in r.headers["location"]

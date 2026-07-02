@@ -604,3 +604,30 @@ def test_backup_cli_subcommand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     with sqlite3.connect(str(backup_path)) as conn:
         count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
         assert count == 1
+
+
+# ── chain_status column (BC-100) ────────────────────────────────────────────
+
+
+def test_migration_0016_adds_chain_status_column(tmp_path):
+    from cert_watch.database.schema import ensure_base
+
+    db = tmp_path / "test.db"
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
+    assert "chain_status" in cols
+
+
+# ── CAA columns (BC-121) ────────────────────────────────────────────────────
+
+
+def test_migration_0017_adds_caa_columns(tmp_path):
+    from cert_watch.database.schema import ensure_base
+
+    db = tmp_path / "test.db"
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
+    assert "caa_present" in cols
+    assert "caa_records" in cols

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import sqlite3
 import threading
@@ -125,6 +126,21 @@ _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
 
+_renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="renewal-webhook",
+)
+_renewal_webhook_pool_lock = threading.Lock()
+
+
+def _flush_renewal_webhook_pool() -> None:
+    """Wait for all pending renewal webhook tasks to finish (test helper)."""
+    global _renewal_webhook_pool
+    with _renewal_webhook_pool_lock:
+        _renewal_webhook_pool.shutdown(wait=True)
+        _renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="renewal-webhook",
+        )
+
 
 def _run_cycle(
     scan_fn: Callable[[], dict[str, Any]],
@@ -226,6 +242,8 @@ def stop_scheduler() -> None:
     _scheduler_stop.set()
     if _scheduler_thread is not None:
         _scheduler_thread.join(timeout=30)
+    with _renewal_webhook_pool_lock:
+        _renewal_webhook_pool.shutdown(wait=True)
 
 
 def run_scan_now(
@@ -236,12 +254,16 @@ def run_scan_now(
     repo: Any = None,
     host_provider: Callable[[], list[tuple[str, int]]] | None = None,
     store_fn: Callable[[object], str] | None = None,
+    settings: Any = None,
 ) -> dict[str, int]:
     """
     Execute one scan + alert cycle. See AC-02/AC-03/AC-05/AC-06.
 
     Defaults: pulls hosts from the DB via host_provider, calls scan_fn(host, port)
     for each, stores results via store_fn, then calls alert_fn() once at the end.
+
+    When *settings* is provided, renewal webhook config is read from it instead
+    of env vars (WI-133). When None, falls back to env vars for backward compat.
     """
     if host_provider is None and db_path is not None:
         host_provider = lambda: _hosts_from_db(db_path)  # noqa: E731
@@ -326,7 +348,7 @@ def run_scan_now(
                 ScanHistory(hostname=hostname, port=port, status="success"),
             )
 
-    _check_renewal_overdue(db_path, hosts)
+    _check_renewal_overdue(db_path, hosts, settings=settings)
 
     alert_counts = alert_fn() or {"sent": 0, "failed": 0}
     return {
@@ -339,6 +361,8 @@ def run_scan_now(
 def _check_renewal_overdue(
     db_path: str | Path | None,
     hosts: list[tuple[str, int]],
+    *,
+    settings: Any = None,
 ) -> None:
     if db_path is None:
         return
@@ -391,7 +415,9 @@ def _check_renewal_overdue(
                     db_path,
                 )
                 already_emitted.add((signal.hostname, signal.cert_fingerprint))
-                _send_renewal_webhook_if_configured(signal, hostname, port, db_path)
+                _send_renewal_webhook_if_configured(
+                    signal, hostname, port, db_path, settings=settings,
+                )
     except Exception:  # noqa: BLE001 — best-effort overdue check; must not crash scan cycle
         logger.exception("renewal overdue check failed")
 
@@ -401,9 +427,9 @@ def _send_renewal_webhook_if_configured(
     hostname: str,
     port: int,
     db_path: str | Path,
+    *,
+    settings: Any = None,
 ) -> None:
-    import os
-
     from cert_watch.renewal_webhook import (
         build_renewal_payload,
         load_renewal_webhook_config,
@@ -411,29 +437,49 @@ def _send_renewal_webhook_if_configured(
     )
     from cert_watch.retry import backoff_range
 
-    config = load_renewal_webhook_config(
-        env_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
-        env_headers=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", ""),
-        allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
-        allowed_subnets=tuple(
-            s.strip()
-            for s in os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "").split(",")
-            if s.strip()
-        ),
-    )
+    if settings is not None:
+        config = (
+            settings.build_renewal_webhook_config()
+            if hasattr(settings, "build_renewal_webhook_config")
+            else None
+        )
+        base_url = getattr(settings, "base_url", "")
+    else:
+        import os
+
+        config = load_renewal_webhook_config(
+            env_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
+            env_headers=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", ""),
+            allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
+            allowed_subnets=tuple(
+                s.strip()
+                for s in os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "").split(",")
+                if s.strip()
+            ),
+        )
+        base_url = os.environ.get("CERT_WATCH_BASE_URL", "")
     if config is None:
         return
-    base_url = os.environ.get("CERT_WATCH_BASE_URL", "")
     payload = build_renewal_payload(signal, db_path, port=port, base_url=base_url)
-    # Retry on transient delivery failure, matching the alert/event webhook paths
-    # (single-attempt primitive, backoff at the orchestration layer). Three
-    # attempts total: 0, +1s, +2s.
-    for _ in backoff_range(2, 1.0, strategy="exponential"):
-        if send_renewal_webhook(payload, config):
-            return
-    logger.warning(
-        "renewal webhook for %s failed after retries", signal.hostname
-    )
+
+    def _deliver_with_retry() -> None:
+        for _ in backoff_range(2, 1.0, strategy="exponential"):
+            if send_renewal_webhook(payload, config):
+                return
+        logger.warning(
+            "renewal webhook for %s failed after retries", signal.hostname
+        )
+
+    try:
+        with _renewal_webhook_pool_lock:
+            _renewal_webhook_pool.submit(_deliver_with_retry)
+    except Exception:
+        logger.warning(
+            "renewal webhook pool submit failed for %s; delivering inline",
+            signal.hostname,
+            exc_info=True,
+        )
+        _deliver_with_retry()
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:

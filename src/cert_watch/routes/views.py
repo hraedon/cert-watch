@@ -1028,7 +1028,8 @@ def readiness_report_view(request: Request) -> HTMLResponse:
     from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 
     db = _db_path(request)
-    report = build_readiness_report(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    report = build_readiness_report(db, scope_tags=scope_tags)
     return templates.TemplateResponse(
         request=request,
         name="readiness.html",
