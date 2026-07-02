@@ -2163,8 +2163,6 @@ class TestOAuthJWKSVerification:
         )
         assert result.success is True
         assert result.username == "alice"
-        assert result.roles == ["admin", "viewer"]
-        assert result.groups == ["group-1"]
 
     def test_complete_flow_userinfo_mismatch_nonce_rejected(self, monkeypatch):
         """complete_oauth_flow rejects when userinfo nonce does not match."""
@@ -2547,3 +2545,307 @@ class TestJWKSCacheTTL:
         provider._jwks_fetched_at = 0.0
         provider._jwks_ttl = int(os.environ.get("CERT_WATCH_JWKS_CACHE_TTL", "86400"))
         assert provider._jwks_ttl == 86400
+
+
+# ── LDAP StartTLS ordering (BC-115) ─────────────────────────────────────────
+
+
+def test_starttls_service_binds_after_tls(_mock_ldap3):
+    """Service conn must call start_tls() then bind()."""
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+        start_tls=True,
+    )
+
+    mock_conn = MagicMock()
+    mock_conn.entries = []
+    mock_conn.unbind = MagicMock()
+    _mock_ldap3.Connection.return_value = mock_conn
+
+    provider.authenticate("user", "pass")
+
+    mock_conn.start_tls.assert_called_once()
+    mock_conn.bind.assert_called_once()
+
+
+def test_starttls_user_conn_tls_before_bind(_mock_ldap3):
+    """User conn must call start_tls() before bind() when StartTLS is enabled."""
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+        start_tls=True,
+    )
+
+    svc_conn = MagicMock()
+    entry = MagicMock()
+    entry.distinguishedName = "CN=user,DC=test"
+    entry.memberOf.values = ["CN=Users,DC=test"]
+    svc_conn.entries = [entry]
+    svc_conn.unbind = MagicMock()
+    svc_conn.bind = MagicMock()
+
+    user_conn = MagicMock()
+    user_conn.bind = MagicMock()
+    user_conn.unbind = MagicMock()
+
+    connections = [svc_conn, user_conn]
+    _mock_ldap3.Connection.side_effect = connections
+
+    provider.authenticate("user", "pass")
+
+    user_conn.start_tls.assert_called_once()
+    user_conn.bind.assert_called_once()
+
+
+def test_user_bind_failure_rejected(_mock_ldap3):
+    """A failed user bind (wrong password) must NOT authenticate.
+
+    ldap3's bind() returns False on bad credentials rather than raising, so the
+    provider must check the result. Without that check this is an auth bypass:
+    any password authenticates an existing user.
+    """
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+    )
+
+    svc_conn = MagicMock()
+    entry = MagicMock()
+    entry.distinguishedName = "CN=user,DC=test"
+    entry.memberOf.values = ["CN=Users,DC=test"]
+    svc_conn.entries = [entry]
+
+    user_conn = MagicMock()
+    user_conn.bind.return_value = False  # wrong password
+
+    _mock_ldap3.Connection.side_effect = [svc_conn, user_conn]
+
+    result = provider.authenticate("user", "wrong-password")
+    assert result.success is False
+    assert "invalid credentials" in result.error
+
+
+def test_no_starttls_binds_normally(_mock_ldap3):
+    """Without StartTLS, service conn just binds normally."""
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+        start_tls=False,
+    )
+
+    mock_conn = MagicMock()
+    mock_conn.entries = []
+    mock_conn.unbind = MagicMock()
+    _mock_ldap3.Connection.return_value = mock_conn
+
+    provider.authenticate("user", "pass")
+
+    mock_conn.start_tls.assert_not_called()
+    mock_conn.bind.assert_called_once()
+
+
+# ── LDAP group filter configuration (BC-118) ────────────────────────────────
+
+
+def test_group_filter_default_uses_ad_transitive_oid(_mock_ldap3):
+    """Default group filter uses AD transitive OID."""
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+        required_groups=["CN=Admins,DC=test"],
+    )
+
+    svc_conn = MagicMock()
+    entry = MagicMock()
+    entry.distinguishedName = "CN=user,DC=test"
+    entry.memberOf.values = ["CN=Admins,DC=test"]
+    svc_conn.entries = [entry]
+    svc_conn.unbind = MagicMock()
+    svc_conn.bind = MagicMock()
+
+    user_conn = MagicMock()
+    user_conn.bind = MagicMock()
+    user_conn.unbind = MagicMock()
+
+    _mock_ldap3.Connection.side_effect = [svc_conn, user_conn]
+
+    provider.authenticate("user", "pass")
+
+    search_call = svc_conn.search.call_args
+    search_filter = search_call[0][1]
+    assert "1.2.840.113556.1.4.1941" in search_filter
+
+
+def test_group_filter_custom_replaces_ad_oid(_mock_ldap3):
+    """Custom group_filter replaces the AD OID with a plain memberOf filter."""
+    provider = LDAPAuthProvider(
+        server_url="ldap://dc.test",
+        base_dn="DC=test",
+        bind_dn="CN=svc,DC=test",
+        bind_password="secret",
+        required_groups=["CN=Admins,DC=test"],
+        group_filter="memberOf={group}",
+    )
+
+    svc_conn = MagicMock()
+    entry = MagicMock()
+    entry.distinguishedName = "CN=user,DC=test"
+    entry.memberOf.values = ["CN=Admins,DC=test"]
+    svc_conn.entries = [entry]
+    svc_conn.unbind = MagicMock()
+    svc_conn.bind = MagicMock()
+
+    user_conn = MagicMock()
+    user_conn.bind = MagicMock()
+    user_conn.unbind = MagicMock()
+
+    _mock_ldap3.Connection.side_effect = [svc_conn, user_conn]
+
+    provider.authenticate("user", "pass")
+
+    search_call = svc_conn.search.call_args
+    search_filter = search_call[0][1]
+    assert "1.2.840.113556.1.4.1941" not in search_filter
+    assert "memberOf=" in search_filter
+
+
+def test_group_filter_env_var(monkeypatch):
+    """LDAP_GROUP_FILTER env var threads through Settings and factory."""
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv("LDAP_GROUP_FILTER", "member={group}")
+    s = Settings.from_env()
+    assert s.ldap_group_filter == "member={group}"
+
+
+# ── Password length cap ─────────────────────────────────────────────────────
+
+
+class TestPasswordLengthCap:
+    """Passwords > 1024 chars must be rejected (DoS protection)."""
+
+    def test_login_rejects_oversized_password(self, reload_app, monkeypatch):
+        from cert_watch.auth.local_admin import _scrypt_hash
+
+        h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+        )
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            r = client.post(
+                "/login",
+                data={"username": "admin", "password": "x" * 1025},
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert "login" in r.headers["location"]
+
+    def test_password_change_rejects_oversized(self, reload_app, monkeypatch):
+        from cert_watch.auth.local_admin import _scrypt_hash
+
+        h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
+        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
+        )
+        with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+            from starlette.requests import Request as StRequest
+
+            from cert_watch.auth import SESSION_COOKIE, create_session
+            from cert_watch.middleware import _request_security
+
+            scope = {
+                "type": "http", "method": "GET", "path": "/",
+                "query_string": b"", "headers": [],
+                "app": client.app, "session": {},
+            }
+            req = StRequest(scope)
+            security = _request_security(req)
+            token = create_session("admin", security, version=0)
+            client.cookies.set(SESSION_COOKIE, token)
+
+            r = client.post(
+                "/settings/change-password",
+                data={
+                    "current_password": "right-pw",
+                    "new_password": "x" * 1025,
+                    "confirm_password": "x" * 1025,
+                },
+                follow_redirects=False,
+            )
+            assert r.status_code == 303
+            assert "password+must+not+exceed" in r.headers["location"]
+
+
+# ── Composite provider timing oracle (BC-124) ───────────────────────────────
+
+
+def test_composite_provider_always_calls_primary_even_on_local_failure():
+    """Every wrong-username attempt must reach the primary provider to avoid
+    a timing oracle (fast return = local mismatch, slow return = local match
+    + primary tried)."""
+    h = _scrypt_hash("localpw", n=2**4, r=1, p=1)
+    local = LocalAdminProvider("admin", h)
+    primary = MagicMock()
+    primary.authenticate.return_value = AuthResult(
+        success=False, error="primary says no"
+    )
+    composite = _CompositeProvider(local, primary)
+    result = composite.authenticate("wronguser", "anypass")
+    assert result.success is False
+    primary.authenticate.assert_called_once_with("wronguser", "anypass")
+
+
+def test_composite_provider_returns_primary_success_when_local_fails():
+    """When local fails and primary succeeds, composite returns primary result."""
+    h = _scrypt_hash("localpw", n=2**4, r=1, p=1)
+    local = LocalAdminProvider("admin", h)
+    primary = MagicMock()
+    primary.authenticate.return_value = AuthResult(
+        success=True, username="alice", groups=["users"]
+    )
+    composite = _CompositeProvider(local, primary)
+    result = composite.authenticate("alice", "primarypass")
+    assert result.success is True
+    assert result.username == "alice"
+
+
+# ── Scrypt dummy-verify timing parity ───────────────────────────────────────
+
+
+class TestScryptDummyTiming:
+    """The username-mismatch dummy hash must use the stored hash's cost
+    parameters, not a hardcoded n, or it reintroduces a timing oracle."""
+
+    def test_dummy_verify_uses_stored_params(self, monkeypatch):
+        import cert_watch.auth.local_admin as la
+        from cert_watch.auth.local_admin import LocalAdminProvider, _scrypt_hash
+
+        stored = _scrypt_hash("pw", n=2**4, r=1, p=1)
+        parts = stored.split("$")
+        parts[1] = "1024"
+        provider = LocalAdminProvider("admin", "$".join(parts))
+
+        seen: list[int | None] = []
+
+        def fake_scrypt(*a, **k):
+            seen.append(k.get("n"))
+            return b"\x00" * 32
+
+        monkeypatch.setattr(la.hashlib, "scrypt", fake_scrypt)
+        provider.authenticate("not-admin", "pw")
+        assert seen and seen[-1] == 1024

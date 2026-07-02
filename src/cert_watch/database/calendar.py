@@ -13,12 +13,16 @@ def list_calendar(
     from_date: str | None = None,
     to_date: str | None = None,
     bucket: str = "month",
+    scope_tags: list[str] | tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
     """Return certificate expiry buckets for the calendar view.
 
     Buckets: ``day``, ``week``, ``month``.  Each result has
     ``bucket_start``, ``count``, and ``cert_ids`` (JSON array).
     Only leaf certificates are included.
+
+    ``scope_tags`` restricts results to certificates/hosts whose effective
+    tags match (WI-128).
     """
     init_schema(db_path)
     if bucket not in ("day", "week", "month"):
@@ -41,6 +45,19 @@ def list_calendar(
     if to_date:
         conditions.append("not_after <= ?")
         params.append(to_date)
+
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = (
+            "SELECT 1 FROM hosts h WHERE h.hostname = certificates.hostname"
+            " AND h.port = certificates.port"
+        )
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert="certificates.tags", col_host="h.tags"
+        )
+        conditions.append(f"EXISTS ({host_sub})")
+        params = params + host_params
 
     where = " AND ".join(conditions)
 

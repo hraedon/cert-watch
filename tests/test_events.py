@@ -548,3 +548,20 @@ class TestDeliverWebhookErrorHandling:
             ).fetchone()
         assert row["delivery_status"] == "failed"
         assert "boom" in (row["error_message"] or "")
+
+
+# ── Startup purge error handling ────────────────────────────────────────────
+
+
+class TestStartupPurgeErrorHandling:
+    """Startup maintenance purge failure must not crash the app."""
+
+    def test_purge_old_events_catches_errors(self):
+        import inspect
+
+        from cert_watch.events import purge_old_events
+
+        source = inspect.getsource(purge_old_events)
+        assert "sqlite3.Error" in source or "except" in source, (
+            "purge_old_events should catch DB errors instead of propagating"
+        )

@@ -539,3 +539,39 @@ class TestScopedFlushFullContract:
             statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())
         assert statuses["alert-a"] == "sent"
         assert statuses["alert-b"] == "pending"
+
+
+# ── Scope filtering in exports and alert counts ────────────────────────────
+
+
+class TestHostExportScopeFiltering:
+    """Host CSV export must respect scope tags."""
+
+    def test_csv_export_scoped(self, tmp_path):
+        from cert_watch.database import SqliteHostRepository, get_write_lock, init_schema
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+        repo = SqliteHostRepository(db)
+        with get_write_lock():
+            repo.add("host-a.example.com", 443, tags="team-a")
+            repo.add("host-b.example.com", 443, tags="team-b")
+
+        scoped_hosts = repo.list_scoped(("team-a",))
+        all_hosts = repo.list_all()
+        assert len(all_hosts) == 2
+        assert len(scoped_hosts) == 1
+        assert scoped_hosts[0].hostname == "host-a.example.com"
+
+
+class TestAlertScopeFiltering:
+    """Alert list endpoints must respect scope tags."""
+
+    def test_total_alerts_accepts_scope_tags(self, tmp_path):
+        from cert_watch.database import init_schema
+        from cert_watch.database.pagination import _total_alerts
+
+        db = str(tmp_path / "test.db")
+        init_schema(db)
+        assert _total_alerts(db) == 0
+        assert _total_alerts(db, scope_tags=("team-a",)) == 0

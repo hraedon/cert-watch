@@ -373,6 +373,7 @@ def get_events(
     since: str | None = None,
     limit: int = 100,
     offset: int = 0,
+    scope_tags: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     conditions: list[str] = []
     params: list[Any] = []
@@ -385,6 +386,18 @@ def get_events(
     if since:
         conditions.append("timestamp >= ?")
         params.append(since)
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = "SELECT hostname FROM hosts WHERE 1=1"
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="tags"
+        )
+        conditions.append("json_extract(payload, '$.hostname') IS NOT NULL")
+        conditions.append(
+            f"json_extract(payload, '$.hostname') IN ({host_sub})"
+        )
+        params = params + host_params
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     with _connect(db_path) as conn:
         rows = conn.execute(

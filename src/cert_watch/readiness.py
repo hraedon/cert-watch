@@ -169,9 +169,11 @@ def _compute_workload_forecast(
     )
 
 
-def build_readiness_report(db_path: str | Path) -> ReadinessReport:
+def build_readiness_report(
+    db_path: str | Path, scope_tags: tuple[str, ...] = ()
+) -> ReadinessReport:
     init_schema(db_path)
-    fleet = compute_fleet_analytics(db_path)
+    fleet = compute_fleet_analytics(db_path, scope_tags=scope_tags)
 
     hostnames = [a.hostname for a in fleet]
     chain_statuses = _batch_chain_statuses(db_path, hostnames)

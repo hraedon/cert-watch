@@ -252,7 +252,8 @@ def api_readiness_report_json(
     request: Request, _auth: str = Depends(require_auth)
 ) -> JSONResponse:
     db = _db_path(request)
-    report = build_readiness_report(db)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    report = build_readiness_report(db, scope_tags=scope_tags)
     return JSONResponse(
         content=readiness_report_to_dict(report),
         headers={"Content-Disposition": "attachment; filename=readiness-report.json"},

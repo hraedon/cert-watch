@@ -479,6 +479,9 @@ def send_renewal_digest(
         return False
 
     if isinstance(webhook_config, WebhookConfig):
+        from cert_watch.alerts import ALERT_MAX_RETRIES, ALERT_RETRY_DELAY, send_webhook
+        from cert_watch.retry import backoff_range
+
         for od in digests:
             body = _build_digest_message(od)
             alert = Alert(
@@ -490,8 +493,18 @@ def send_renewal_digest(
                 hostname="",
                 subject=f"Renewal Digest ({days}d)",
             )
-            from cert_watch.alerts import send_webhook
-            if not send_webhook(alert, webhook_config):
+            delivered = False
+            for _ in backoff_range(
+                ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
+            ):
+                if send_webhook(alert, webhook_config):
+                    delivered = True
+                    break
+            if not delivered:
+                logger.warning(
+                    "renewal digest webhook failed after %d attempts",
+                    ALERT_MAX_RETRIES,
+                )
                 return False
         return True
 

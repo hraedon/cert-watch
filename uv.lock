@@ -93,9 +93,10 @@ wheels = [
 
 [[package]]
 name = "cert-watch"
-version = "0.9.3"
+version = "0.9.4"
 source = { editable = "." }
 dependencies = [
+    { name = "certifi" },
     { name = "cryptography" },
     { name = "dnspython" },
     { name = "fastapi" },
@@ -143,6 +144,7 @@ windows = [
 requires-dist = [
     { name = "authlib", marker = "extra == 'auth-oauth'", specifier = ">=1.3" },
     { name = "cert-watch", extras = ["auth-ldap", "auth-oauth"], marker = "extra == 'auth'" },
+    { name = "certifi", specifier = ">=2024.2.2" },
     { name = "cryptography", specifier = ">=48.0.1" },
     { name = "djlint", marker = "extra == 'dev'", specifier = ">=1.36" },
     { name = "dnspython", specifier = ">=2.6" },

@@ -393,3 +393,23 @@ def test_api_download_pem_not_found(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/api/certificates/00000000-0000-0000-0000-000000000000/pem")
     assert r.status_code == 404
+
+
+# ── Runbook URL scheme validation ───────────────────────────────────────────
+
+
+class TestRunbookUrlGuard:
+    def test_javascript_scheme_rejected(self):
+        from cert_watch.routes.api._shared import _runbook_url_error
+
+        assert _runbook_url_error("javascript:alert(1)") is not None
+        assert _runbook_url_error("data:text/html,<script>") is not None
+        assert _runbook_url_error("vbscript:msgbox") is not None
+
+    def test_http_and_empty_allowed(self):
+        from cert_watch.routes.api._shared import _runbook_url_error
+
+        assert _runbook_url_error("https://wiki.example.com/runbook") is None
+        assert _runbook_url_error("http://10.0.0.5/wiki") is None
+        assert _runbook_url_error("") is None
+        assert _runbook_url_error("   ") is None

@@ -53,7 +53,7 @@ def _make_fake_resolver(mapping, *, record=None):
 def test_resolve_with_dns_returns_a_records(monkeypatch):
     import dns.resolver
 
-    from cert_watch import scan
+    from cert_watch import scan_resolver as scan
 
     monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({"A": ["10.0.0.5"]}))
     results = scan._resolve_with_dns("host.internal", 443, ("10.0.0.1",))
@@ -63,7 +63,7 @@ def test_resolve_with_dns_returns_a_records(monkeypatch):
 def test_resolve_with_dns_returns_aaaa_as_four_tuple(monkeypatch):
     import dns.resolver
 
-    from cert_watch import scan
+    from cert_watch import scan_resolver as scan
 
     monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({"AAAA": ["fd00::1"]}))
     results = scan._resolve_with_dns("host.internal", 443, ("10.0.0.1",))
@@ -74,7 +74,7 @@ def test_resolve_with_dns_returns_aaaa_as_four_tuple(monkeypatch):
 def test_resolve_with_dns_empty_on_failure(monkeypatch):
     import dns.resolver
 
-    from cert_watch import scan
+    from cert_watch import scan_resolver as scan
 
     monkeypatch.setattr(dns.resolver, "Resolver", _make_fake_resolver({}))
     assert scan._resolve_with_dns("nope.internal", 443, ("10.0.0.1",)) == []
@@ -83,7 +83,7 @@ def test_resolve_with_dns_empty_on_failure(monkeypatch):
 def test_resolve_with_dns_uses_configured_nameservers(monkeypatch):
     import dns.resolver
 
-    from cert_watch import scan
+    from cert_watch import scan_resolver as scan
 
     record: list = []
     monkeypatch.setattr(
@@ -95,7 +95,7 @@ def test_resolve_with_dns_uses_configured_nameservers(monkeypatch):
 
 
 def test_resolve_hostname_falls_back_to_system(monkeypatch):
-    from cert_watch.scan import resolve_hostname
+    from cert_watch.scan_resolver import resolve_hostname
 
     called = False
 
@@ -113,7 +113,7 @@ def test_resolve_hostname_falls_back_to_system(monkeypatch):
 def test_resolve_hostname_uses_custom_dns(monkeypatch):
     import dns.resolver
 
-    from cert_watch.scan import resolve_hostname
+    from cert_watch.scan_resolver import resolve_hostname
 
     system_called = False
 
@@ -135,7 +135,7 @@ def test_resolve_hostname_custom_empty_falls_back_to_system(monkeypatch):
     resolver (preserves prior behaviour)."""
     import dns.resolver
 
-    from cert_watch.scan import resolve_hostname
+    from cert_watch.scan_resolver import resolve_hostname
 
     system_called = False
 

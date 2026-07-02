@@ -15,6 +15,7 @@ dependencies = [
     # cryptography>=48.0.1 fixes GHSA-537c-gmf6-5ccf (vulnerable OpenSSL in wheels)
     "cryptography>=48.0.1",
     "prometheus-client>=0.21",
+    "certifi>=2024.2.2",
     "dnspython>=2.6",
     "sse-starlette>=2.0",
     # Direct security floor: starlette>=1.3.1 fixes CVE-2026-54283 (request.form()

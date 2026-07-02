@@ -12,67 +12,67 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-# ── SSRF: scan._is_blocked_ip ──────────────────────────────────────────────
+# ── SSRF: scan_resolver._is_blocked_ip ─────────────────────────────────────
 
 def test_is_blocked_ip_loopback_always_blocked():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1"), allow_private=False)
     assert _is_blocked_ip(ipaddress.ip_address("127.0.0.1"), allow_private=True)
 
 
 def test_is_blocked_ip_private_10():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("10.0.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_private_172():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("172.16.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_private_192():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("192.168.1.1"), allow_private=False)
 
 
 def test_is_blocked_ip_link_local():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("169.254.1.1"))
 
 
 def test_is_blocked_ip_this_host():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("0.0.0.0"))
 
 
 def test_is_blocked_ip_ipv6_loopback():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("::1"))
 
 
 def test_is_blocked_ip_ipv6_mapped_loopback_always_blocked():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1"), allow_private=False)
     assert _is_blocked_ip(ipaddress.ip_address("::ffff:127.0.0.1"), allow_private=True)
 
 
 def test_is_blocked_ip_ipv6_mapped_private():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("::ffff:10.0.0.1"), allow_private=False)
 
 
 def test_is_blocked_ip_ipv6_unspecified():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert _is_blocked_ip(ipaddress.ip_address("::"))
 
 
 def test_is_not_blocked_public():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert not _is_blocked_ip(ipaddress.ip_address("93.184.216.34"))
 
 
 def test_is_not_blocked_ipv6_public():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     assert not _is_blocked_ip(ipaddress.ip_address("2606:4700::1"))
 
 
@@ -81,7 +81,7 @@ def test_is_not_blocked_ipv6_public():
 # wrapper tunnels loopback / cloud-metadata past the SSRF filter.
 
 def test_is_blocked_ip_6to4_wrapped_loopback_always():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     # 2002:7f00:0001:: embeds 127.0.0.1
     addr = ipaddress.ip_address("2002:7f00:0001::")
     assert _is_blocked_ip(addr, allow_private=False)
@@ -89,7 +89,7 @@ def test_is_blocked_ip_6to4_wrapped_loopback_always():
 
 
 def test_is_blocked_ip_6to4_wrapped_metadata_always():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     # 2002:a9fe:a9fe:: embeds 169.254.169.254 (cloud metadata)
     addr = ipaddress.ip_address("2002:a9fe:a9fe::")
     assert _is_blocked_ip(addr, allow_private=False)
@@ -97,7 +97,7 @@ def test_is_blocked_ip_6to4_wrapped_metadata_always():
 
 
 def test_is_blocked_ip_6to4_wrapped_private_follows_policy():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     # 2002:0a00:0001:: embeds 10.0.0.1 (RFC1918) — governed by allow_private
     addr = ipaddress.ip_address("2002:0a00:0001::")
     assert _is_blocked_ip(addr, allow_private=False)
@@ -105,13 +105,13 @@ def test_is_blocked_ip_6to4_wrapped_private_follows_policy():
 
 
 def test_is_not_blocked_ip_6to4_wrapped_public():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     # 2002:0808:0808:: embeds 8.8.8.8 (public) — allowed
     assert not _is_blocked_ip(ipaddress.ip_address("2002:0808:0808::"))
 
 
 def test_is_blocked_ip_teredo_always_blocked():
-    from cert_watch.scan import _is_blocked_ip
+    from cert_watch.scan_resolver import _is_blocked_ip
     # Teredo (2001::/32) is blocked wholesale regardless of policy.
     addr = ipaddress.ip_address("2001:0:4136:e378:8000:63bf:3fff:fdd2")
     assert _is_blocked_ip(addr, allow_private=False)
@@ -121,7 +121,7 @@ def test_is_blocked_ip_teredo_always_blocked():
 # ── SSRF: scan._resolve_host rejects blocked hosts ─────────────────────────
 
 def test_resolve_host_blocks_loopback_when_private_disallowed(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("127.0.0.1", 443)),
     ])
@@ -130,7 +130,7 @@ def test_resolve_host_blocks_loopback_when_private_disallowed(monkeypatch):
 
 
 def test_resolve_host_blocks_ipv6_loopback(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET6, 1, 0, "", ("::1", 443, 0, 0)),
     ])
@@ -139,7 +139,7 @@ def test_resolve_host_blocks_ipv6_loopback(monkeypatch):
 
 
 def test_resolve_host_blocks_ipv4_mapped_loopback_when_private_disallowed(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET6, 1, 0, "", ("::ffff:127.0.0.1", 443, 0, 0)),
     ])
@@ -148,7 +148,7 @@ def test_resolve_host_blocks_ipv4_mapped_loopback_when_private_disallowed(monkey
 
 
 def test_resolve_host_allows_public(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", 443)),
     ])
@@ -157,7 +157,7 @@ def test_resolve_host_allows_public(monkeypatch):
 
 
 def test_resolve_host_skips_blocked_uses_next(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET6, 1, 0, "", ("::1", 443, 0, 0)),
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", 443)),
@@ -167,7 +167,7 @@ def test_resolve_host_skips_blocked_uses_next(monkeypatch):
 
 
 def test_resolve_host_dns_failure(monkeypatch):
-    from cert_watch.scan import _resolve_host
+    from cert_watch.scan_resolver import _resolve_host
 
     def _raise(*a, **kw):
         raise socket.gaierror("fail")
@@ -180,7 +180,7 @@ def test_resolve_host_dns_failure(monkeypatch):
 # ── SSRF: app._is_blocked_host (UX pre-check) ──────────────────────────────
 
 def test_app_is_blocked_host_private(monkeypatch):
-    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
+    from cert_watch.scan_resolver import resolve_and_validate_host as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("10.0.0.1", None)),
     ])
@@ -188,7 +188,7 @@ def test_app_is_blocked_host_private(monkeypatch):
 
 
 def test_app_is_blocked_host_public(monkeypatch):
-    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
+    from cert_watch.scan_resolver import resolve_and_validate_host as _is_blocked_host
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", None)),
     ])
@@ -196,7 +196,7 @@ def test_app_is_blocked_host_public(monkeypatch):
 
 
 def test_app_is_blocked_host_unresolvable(monkeypatch):
-    from cert_watch.scan import resolve_and_validate_host as _is_blocked_host
+    from cert_watch.scan_resolver import resolve_and_validate_host as _is_blocked_host
 
     def _raise(*a, **kw):
         raise socket.gaierror("nope")

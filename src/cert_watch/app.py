@@ -372,6 +372,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
             db_path=s.db_path,
             host_provider=lambda: hosts,
             store_fn=_store_with_lock,
+            settings=s,
         )
         # H1: Execute deferred webhook/event resolves outside the write lock.
         from cert_watch.scan import _execute_deferred_post_commit

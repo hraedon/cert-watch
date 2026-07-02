@@ -138,8 +138,7 @@ def _check_ldap_ssrf(
     maps each hostname to its pinned IP so the subsequent LDAP connection can
     use the IP directly (prevents DNS rebinding — M8).
     """
-    from cert_watch.scan import _is_blocked_ip
-    from cert_watch.scan_resolver import resolve_and_validate_host
+    from cert_watch.scan_resolver import _is_blocked_ip, resolve_and_validate_host
 
     resolved_ips: dict[str, str] = {}
     for s in [s.strip() for s in server.split(",") if s.strip()]:

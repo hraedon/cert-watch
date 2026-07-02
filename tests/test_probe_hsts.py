@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock, patch
 
-from cert_watch.scan import _probe_hsts
+from cert_watch.scan_conn import _probe_hsts
 
 
 def _make_hsts_mock(has_hsts=True):
