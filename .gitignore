@@ -48,3 +48,6 @@ ui-review/
 dashboard-*.png
 insights-*.png
 review-*.png
+
+# never commit the local denylist (identifier gate)
+.identifiers-denylist.local
