@@ -19,6 +19,15 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from cryptography.x509.oid import NameOID
 
+# Pre-import ldap3 submodules so test-suite-wide monkeypatching of
+# ldap3.Connection doesn't leave sys.modules with a partially-loaded
+# ldap3 module (missing the 'core' attribute). This prevents test
+# pollution when tests in different files both use ldap3.
+try:
+    import ldap3.core.exceptions  # noqa: F401
+except ImportError:
+    pass
+
 
 @dataclass
 class GeneratedCert:

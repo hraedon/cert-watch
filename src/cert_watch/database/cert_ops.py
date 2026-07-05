@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso
+from cert_watch.database.connection import _connect, _iso, _parse_iso, get_write_lock
 from cert_watch.database.schema import init_schema
 
 
@@ -195,7 +195,7 @@ def replace_scanned(
     insert with no prior leaf).
     """
     if conn is None:
-        with _connect(db_path) as conn:
+        with get_write_lock(), _connect(db_path) as conn:
             result = _do_replace(conn, hostname, port, leaf, chain, chain_valid)
             conn.commit()
         return result
@@ -226,7 +226,7 @@ def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> lis
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
     """Delete a leaf cert, its chain children, and associated alerts."""
-    with _connect(db_path) as conn:
+    with get_write_lock(), _connect(db_path) as conn:
         r = conn.execute(
             "SELECT id FROM certificates WHERE id = ?", (cert_id,)
         ).fetchone()

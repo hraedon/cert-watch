@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from cert_watch.database.connection import _connect, _iso
+from cert_watch.database.connection import _connect, _iso, get_write_lock
 from cert_watch.database.schema import init_schema
 
 
@@ -34,7 +34,7 @@ def bump_session_version(db_path: str | Path, username: str) -> int:
     """
     init_schema(db_path)
     now = _iso(datetime.now(UTC))
-    with _connect(db_path) as conn:
+    with get_write_lock(), _connect(db_path) as conn:
         row = conn.execute(
             "INSERT INTO session_versions (username, version, updated_at)"
             " VALUES (?, 1, ?)"

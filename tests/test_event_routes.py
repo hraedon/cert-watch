@@ -162,7 +162,7 @@ def test_settings_events_save(reload_app, login_csrf, tmp_path):
 
 
 def test_settings_events_pagerduty_key_encrypted_and_masked(reload_app, tmp_path):
-    """WI-065: the PagerDuty routing key is encrypted at rest (enc:v1: in a
+    """WI-065: the PagerDuty routing key is encrypted at rest (enc:v2: in a
     dedicated kv key, not in the config blob) and never rendered into the
     Events settings page; a blank re-save preserves it (leave-unchanged)."""
     from cert_watch.database import init_schema, kv_get
@@ -186,10 +186,10 @@ def test_settings_events_pagerduty_key_encrypted_and_masked(reload_app, tmp_path
             follow_redirects=False,
         )
         assert r.status_code == 303
-        # At rest: dedicated kv secret is enc:v1:, and the config blob has no key.
+        # At rest: dedicated kv secret is enc:v2:, and the config blob has no key.
         raw_secret = kv_get(db, "event_stream_pagerduty_routing_key")
         assert raw_secret is not None
-        assert raw_secret.startswith("enc:v1:")
+        assert raw_secret.startswith("enc:v2:")
         assert "rk-secret-123" not in (kv_get(db, "event_stream_config") or "")
         # In page: the real key is never rendered into the HTML; mask is shown.
         page = client.get("/settings/events")

@@ -2,18 +2,72 @@
 
 from __future__ import annotations
 
-import contextlib
 import ipaddress
 import socket
 import ssl
 from typing import Any
+from urllib.parse import urlparse
 
 from cryptography import x509
 from cryptography.hazmat.primitives.serialization import Encoding
 
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.scan_conn import _get_chain_der
-from cert_watch.scan_resolver import _is_blocked_ip
+from cert_watch.scan_resolver import _is_blocked_ip, resolve_and_validate_host
+
+
+def _parse_ldaps_url(url: str) -> tuple[str, int] | None:
+    """Parse an ``ldaps://`` URL into (host, port). Returns None on parse failure."""
+    lowered = url.lower()
+    if not lowered.startswith("ldaps://"):
+        return None
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        return None
+    port = parsed.port or 636
+    return host, port
+
+
+def _parse_ldap_url(url: str) -> tuple[str, int] | None:
+    """Parse an ``ldap://`` URL into (host, port). Returns None on parse failure."""
+    lowered = url.lower()
+    if not lowered.startswith("ldap://"):
+        return None
+    parsed = urlparse(url)
+    host = parsed.hostname or ""
+    if not host:
+        return None
+    port = parsed.port or 389
+    return host, port
+
+
+_BLOCKED = object()
+
+
+def _resolve_and_pin(
+    host: str, port: int, *, allow_private: bool, allowed_subnets: tuple[str, ...],
+) -> Any:
+    """Validate *host* and return the pinned IP, or a sentinel for blocked.
+
+    Returns:
+        - ``_BLOCKED`` if the host resolves to a blocked/SSRF address
+        - A string IP to pin (prevents DNS rebinding) when resolution succeeds
+        - ``None`` when DNS doesn't resolve (caller uses hostname directly;
+          the connection will simply fail)
+    """
+    try:
+        ip = ipaddress.ip_address(host)
+        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
+            return _BLOCKED
+        return host
+    except ValueError:
+        err, pinned_ip = resolve_and_validate_host(
+            host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
+        )
+        if err:
+            return _BLOCKED
+        return pinned_ip
 
 
 def _capture_ldaps_chain(
@@ -24,15 +78,10 @@ def _capture_ldaps_chain(
     allowed_subnets: tuple[str, ...] = (),
 ) -> list[dict[str, Any]] | None:
     """Capture the certificate chain presented by an LDAPS server using a non-validating probe."""
-    lowered = url.lower()
-    if not lowered.startswith("ldaps://"):
+    parsed = _parse_ldaps_url(url)
+    if parsed is None:
         return None
-    rest = url[8:]
-    host = rest.split(":")[0].split("/")[0]
-    port = 636
-    if ":" in rest:
-        with contextlib.suppress(ValueError):
-            port = int(rest.split(":")[1].split("/")[0])
+    host, port = parsed
     return _probe_tls_chain(
         host, port, timeout,
         allow_private=allow_private, allowed_subnets=allowed_subnets,
@@ -47,29 +96,17 @@ def _capture_starttls_chain(
     allowed_subnets: tuple[str, ...] = (),
 ) -> list[dict[str, Any]] | None:
     """Capture the certificate chain presented by an LDAP server via StartTLS."""
-    lowered = url.lower()
-    if not lowered.startswith("ldap://"):
+    parsed = _parse_ldap_url(url)
+    if parsed is None:
         return None
-    rest = url[7:]
-    host = rest.split(":")[0].split("/")[0]
-    port = 389
-    if ":" in rest:
-        with contextlib.suppress(ValueError):
-            port = int(rest.split(":")[1].split("/")[0])
+    host, port = parsed
 
-    # SSRF guard — resolve hostnames to catch DNS-based bypasses
-    try:
-        ip = ipaddress.ip_address(host)
-        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            return None
-    except ValueError:
-        from cert_watch.scan_resolver import resolve_and_validate_host
-
-        err, _ = resolve_and_validate_host(
-            host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
-        )
-        if err:
-            return None
+    # SSRF guard — resolve and pin the IP to prevent DNS rebinding TOCTOU
+    pinned_ip = _resolve_and_pin(
+        host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
+    )
+    if pinned_ip is _BLOCKED:
+        return None
 
     # Try ldap3 StartTLS first
     try:
@@ -79,7 +116,14 @@ def _capture_starttls_chain(
 
     der_chain: list[bytes] = []
     try:
-        srv = ldap3.Server(url, get_info=ldap3.NONE, connect_timeout=timeout)
+        # Use the pinned IP for the connection to prevent DNS rebinding.
+        # When DNS didn't resolve (pinned_ip is None), fall back to the
+        # hostname — the connection will fail on its own.
+        connect_target = pinned_ip if pinned_ip else host
+        srv = ldap3.Server(
+            connect_target, port=port, use_ssl=False,
+            get_info=ldap3.NONE, connect_timeout=timeout,
+        )
         conn = ldap3.Connection(srv, auto_bind=False, receive_timeout=timeout)
         conn.open()
         conn.start_tls()
@@ -90,12 +134,13 @@ def _capture_starttls_chain(
     except Exception:  # noqa: BLE001 — LDAPS probe; failure must not crash settings save
         pass
 
-    # Fallback: raw TLS probe on the same port
+    # Fallback: raw TLS probe on the same port (also uses pinned IP)
     if not der_chain:
         return _probe_tls_chain(
             host, port, timeout,
             allow_private=allow_private,
             allowed_subnets=allowed_subnets,
+            _pinned_ip=pinned_ip,
         )
 
     return _der_chain_to_ca_dicts(der_chain)
@@ -108,29 +153,35 @@ def _probe_tls_chain(
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
+    _pinned_ip: str | None = None,
 ) -> list[dict[str, Any]] | None:
-    """Non-validating TLS probe to capture the certificate chain from *host:port*."""
-    # SSRF guard — resolve hostnames to catch DNS-based bypasses
-    try:
-        ip = ipaddress.ip_address(host)
-        if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            return None
-    except ValueError:
-        from cert_watch.scan_resolver import resolve_and_validate_host
+    """Non-validating TLS probe to capture the certificate chain from *host:port*.
 
-        err, _ = resolve_and_validate_host(
+    When ``_pinned_ip`` is provided (by a caller that already validated the
+    hostname), the connection uses that IP directly to prevent DNS rebinding.
+    Otherwise, the SSRF guard resolves and validates the hostname here.
+    """
+    if _pinned_ip is not None:
+        pinned: str | None = _pinned_ip
+    else:
+        pinned = _resolve_and_pin(
             host, port, allow_private=allow_private, allowed_subnets=allowed_subnets,
         )
-        if err:
+        if pinned is _BLOCKED:
             return None
+
+    # When DNS didn't resolve (pinned is None), fall back to hostname.
+    connect_target = pinned if pinned else host
 
     der_chain: list[bytes] = []
     try:
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        # Use the pinned IP for the connection to prevent DNS rebinding.
+        # server_hostname is set to the original host for SNI.
         with (
-            socket.create_connection((host, port), timeout=timeout) as sock,
+            socket.create_connection((connect_target, port), timeout=timeout) as sock,
             ctx.wrap_socket(sock, server_hostname=host) as ssl_sock,
         ):
             der_chain = _get_chain_der(ssl_sock)

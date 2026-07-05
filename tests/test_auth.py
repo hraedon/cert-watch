@@ -2127,14 +2127,15 @@ class TestOAuthJWKSVerification:
         assert any("lacks nonce" in r.message for r in caplog.records)
 
     def test_validate_claims_manual_no_exp(self):
-        """_validate_claims_manual accepts claims without exp."""
+        """_validate_claims_manual rejects claims without exp (OIDC Core §2)."""
         from cert_watch.auth.oauth_provider import _validate_claims_manual
         claims = {
             "iss": "https://login.example.com",
             "aud": "test-client",
             "sub": "u",
         }
-        _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+        with pytest.raises(ValueError, match="missing required 'exp'"):
+            _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
 
     def test_complete_flow_userinfo_with_roles_groups(self, monkeypatch):
         """complete_oauth_flow extracts roles and groups from userinfo response."""

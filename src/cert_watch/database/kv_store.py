@@ -6,15 +6,20 @@ from pathlib import Path
 from typing import cast
 
 from cert_watch.database.connection import _connect, _iso
-from cert_watch.database.encryption import _ENCRYPTED_PREFIX, fernet_decrypt, fernet_encrypt
+from cert_watch.database.encryption import (
+    _ENCRYPTED_PREFIX,
+    _ENCRYPTED_PREFIX_V2,
+    fernet_decrypt,
+    fernet_encrypt,
+)
 from cert_watch.database.schema import init_schema
 
 
 def kv_get(db_path: str | Path, key: str, encryption_key: str | None = None) -> str | None:
     """Get a value from the kv_store table. Returns None if key not found.
 
-    When *encryption_key* is set and the stored value has the ``enc:v1:``
-    prefix, the value is transparently decrypted (BC-082).
+    When *encryption_key* is set and the stored value has an ``enc:``
+    prefix (v1 or v2), the value is transparently decrypted (BC-082).
     """
     init_schema(db_path)
     with _connect(db_path) as conn:
@@ -22,7 +27,9 @@ def kv_get(db_path: str | Path, key: str, encryption_key: str | None = None) -> 
     if row is None:
         return None
     val = row["value"]
-    if encryption_key and val.startswith(_ENCRYPTED_PREFIX):
+    if encryption_key and (
+        val.startswith(_ENCRYPTED_PREFIX) or val.startswith(_ENCRYPTED_PREFIX_V2)
+    ):
         val = fernet_decrypt(val, encryption_key)
     return cast("str | None", val)
 

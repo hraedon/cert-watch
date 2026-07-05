@@ -126,7 +126,7 @@ class TestEventStreamConfig:
         assert c.pagerduty_routing_key == "legacy-rk"
 
     def test_pagerduty_routing_key_encrypted_round_trip(self, db):
-        # WI-065: with an encryption key, the routing key is stored as enc:v1:
+        # WI-065: with an encryption key, the routing key is stored as enc:v2:
         # in a dedicated kv key (not in the JSON blob) and decrypts on load.
         from cert_watch.database.encryption import derive_encryption_key
         from cert_watch.database.kv_store import kv_get
@@ -139,7 +139,7 @@ class TestEventStreamConfig:
         assert "secret-rk" not in blob  # not in the JSON blob
         raw_secret = kv_get(db, "event_stream_pagerduty_routing_key")
         assert raw_secret is not None
-        assert raw_secret.startswith("enc:v1:")  # encrypted at rest
+        assert raw_secret.startswith("enc:v2:")  # encrypted at rest
         assert "secret-rk" not in raw_secret
         loaded = load_event_config(db, encryption_key=enc_key)
         assert loaded.pagerduty_routing_key == "secret-rk"
@@ -265,9 +265,10 @@ class TestEmitEvent:
                 source="scan",
             )
             results.append(emit_event(e, db, config=c))
+        # All events are persisted to event_log (rate limiting only gates
+        # webhook delivery, not DB persistence).
         accepted = sum(1 for r in results if r is not None)
-        assert accepted >= 1
-        assert None in results
+        assert accepted == 5
 
     def test_no_rate_limit_without_webhook(self, db):
         c = EventStreamConfig(rate_limit_per_second=2, webhook_url=None)

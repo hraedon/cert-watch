@@ -939,27 +939,31 @@ def store_scanned(
             # BEFORE BEGIN so the write lock isn't held during network calls.
             # When _posture_eval is provided by the caller, use it directly
             # (caller already computed it before acquiring the write lock).
-            posture_eval = _posture_eval if _posture_eval is not None else _evaluate_posture(
-                repo_path, entry,
-                check_revocation=check_revocation,
-                allow_private=allow_private,
-                allowed_subnets=allowed_subnets,
-            )
+            # When _posture_eval is None (pre-lock eval failed or caller
+            # didn't provide one), do NOT fall back to _evaluate_posture()
+            # here — that would run network I/O inside the write lock,
+            # violating the AGENTS.md rule "Lock wraps DB mutations only,
+            # never network I/O." Instead, use a safe default that will be
+            # evaluated lazily on the cert detail page.
+            posture_eval = _posture_eval
             conn.execute("BEGIN")
             leaf_id, replaced_cert_id = _stage(
                 "replace", _stage_replace, repo_path, entry, conn,
             )
-            posture_grade, original_findings, stored_chain_status = _stage(
-                "posture", _stage_posture, repo_path, leaf_id, entry,
-                conn=conn,
-                eval_result=posture_eval,
-            )
-            posture_grade = _stage(
-                "policy", _stage_policy,
-                repo_path, leaf_id, entry,
-                posture_grade, original_findings, stored_chain_status,
-                conn=conn, ruleset=ruleset,
-            )
+            if posture_eval is not None:
+                posture_grade, original_findings, stored_chain_status = _stage(
+                    "posture", _stage_posture, repo_path, leaf_id, entry,
+                    conn=conn,
+                    eval_result=posture_eval,
+                )
+                posture_grade = _stage(
+                    "policy", _stage_policy,
+                    repo_path, leaf_id, entry,
+                    posture_grade, original_findings, stored_chain_status,
+                    conn=conn, ruleset=ruleset,
+                )
+            else:
+                posture_grade = ""
             _stage(
                 "drift", _stage_drift,
                 repo_path, leaf_id, entry, posture_grade, drift_alerts,

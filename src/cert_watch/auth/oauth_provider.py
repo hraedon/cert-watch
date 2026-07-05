@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
 import logging
 import secrets
@@ -449,7 +450,7 @@ class OAuthProvider(AuthProvider):
                     # degraded.
                     if nonce:
                         userinfo_nonce = info.get("nonce")
-                        if userinfo_nonce and userinfo_nonce == nonce:
+                        if userinfo_nonce and hmac.compare_digest(userinfo_nonce, nonce):
                             logger.info(
                                 "OAuth: userinfo response includes verified nonce claim; "
                                 "nonce binding intact."
@@ -517,7 +518,9 @@ def _validate_claims_manual(
     if expected_audience not in aud_list:
         raise ValueError(f"audience mismatch: {aud} does not contain {expected_audience}")
     exp = claims.get("exp")
-    if exp and exp < time.time():
+    if exp is None:
+        raise ValueError("ID token missing required 'exp' claim")
+    if exp < time.time():
         raise ValueError("ID token has expired")
-    if nonce and claims.get("nonce") != nonce:
+    if nonce and not hmac.compare_digest(str(claims.get("nonce", "")), nonce):
         raise ValueError("nonce mismatch")

@@ -263,12 +263,25 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     encryption_key = derive_encryption_key(security.signing_key)
     undecryptable = check_encrypted_values(s.db_path, encryption_key)
     if undecryptable:
-        logger.warning(
-            "kv_store: %d encrypted value(s) could not be decrypted with the "
-            "current signing key: %s. If .auth_secret was recently regenerated, "
-            "run 'cert-watch re-encrypt <old_key>' to re-encrypt with the new key.",
-            len(undecryptable), ", ".join(undecryptable),
+        from cert_watch.database.encryption import (
+            derive_encryption_key_legacy,
+            re_encrypt_kv_store,
         )
+        legacy_key = derive_encryption_key_legacy(security.signing_key)
+        migrated = re_encrypt_kv_store(s.db_path, legacy_key, encryption_key)
+        if migrated:
+            logger.info(
+                "kv_store: migrated %d value(s) from enc:v1 to enc:v2 (HKDF)", migrated,
+            )
+        # Re-check after migration
+        still_undecryptable = check_encrypted_values(s.db_path, encryption_key)
+        if still_undecryptable:
+            logger.warning(
+                "kv_store: %d encrypted value(s) could not be decrypted with the "
+                "current signing key: %s. If .auth_secret was recently regenerated, "
+                "run 'cert-watch re-encrypt <old_key>' to re-encrypt with the new key.",
+                len(still_undecryptable), ", ".join(still_undecryptable),
+            )
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
     if os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") != "1":

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
 import pytest
 from fastapi import Request
 from fastapi.exceptions import HTTPException
@@ -11,10 +14,20 @@ from cert_watch.middleware import require_auth, require_write
 
 pytestmark = pytest.mark.usefixtures("csrf_strict")
 
+_FAKE_DB_PATH = os.path.join(tempfile.mkdtemp(prefix="test_middleware_deps_"), "fake.db")
+
 
 class _FakeApp:
     def __init__(self, auth_provider=None):
-        self.state = type("State", (), {"auth_provider": auth_provider})()
+        self.state = type("State", (), {
+            "auth_provider": auth_provider,
+            "settings": type("Settings", (), {
+                "db_path": _FAKE_DB_PATH,
+                "write_users": [],
+                "admin_users": [],
+                "role_map": {},
+            })(),
+        })()
 
 
 class _FakeClient:

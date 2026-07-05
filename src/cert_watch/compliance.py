@@ -242,6 +242,7 @@ def _load_compliance_rows(
             {
                 "id": d["id"],
                 "host": host,
+                "port": d["port"],
                 "source": d["source"],
                 "subject": d["subject"],
                 "issuer": d["issuer"],

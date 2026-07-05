@@ -12,7 +12,7 @@ from typing import Any
 from cert_watch.certificate_model import Certificate
 
 _conn_local = threading.local()
-_write_lock = threading.Lock()
+_write_lock = threading.RLock()
 
 # Per-thread cache cap (WI-024). Production touches one or two database
 # paths per thread, so eviction never fires there; long-lived worker
@@ -24,8 +24,12 @@ _write_lock = threading.Lock()
 _MAX_CACHED_CONNECTIONS = 8
 
 
-def get_write_lock() -> threading.Lock:
-    """Return the module-level write lock for cross-thread SQLite coordination."""
+def get_write_lock() -> threading.RLock:
+    """Return the module-level write lock for cross-thread SQLite coordination.
+
+    Uses RLock (reentrant) so functions that already hold the lock can
+    call other lock-acquiring functions without deadlocking.
+    """
     return _write_lock
 
 

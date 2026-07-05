@@ -29,6 +29,10 @@ _PRIVATE_NETWORKS = [
 # IPv6 transition mechanisms that tunnel an IPv4 address.
 _SIXTO4_NETWORK = ipaddress.ip_network("2002::/16")
 _TEREDO_NETWORK = ipaddress.ip_network("2001::/32")
+# Deprecated IPv4-compatible addresses (::/96, e.g. ::127.0.0.1).
+_IPV4_COMPATIBLE_NETWORK = ipaddress.ip_network("::/96")
+# NAT64 (RFC 6052) well-known prefix.
+_NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
 
 
 @lru_cache(maxsize=64)
@@ -84,6 +88,14 @@ def _is_blocked_ip(
             # Teredo (2001::/32): the embedded client IPv4 is XOR-obfuscated and not
             # a sound basis for a policy decision — block the whole range (RFC 4380).
             return True
+        elif ip in _NAT64_NETWORK:
+            # NAT64 (64:ff9b::/96): the embedded IPv4 is in the low 32 bits.
+            check_ip = ipaddress.IPv4Address(int.from_bytes(ip.packed[12:16], "big"))
+        elif ip in _IPV4_COMPATIBLE_NETWORK and ip != ipaddress.IPv6Address("::"):
+            # Deprecated IPv4-compatible (::/96, e.g. ::127.0.0.1): the
+            # embedded IPv4 is in the low 32 bits. Exclude :: (unspecified)
+            # which is already in _ALWAYS_BLOCKED_NETWORKS.
+            check_ip = ipaddress.IPv4Address(int.from_bytes(ip.packed[12:16], "big"))
 
     # Always-blocked ranges (loopback, link-local / cloud metadata, unspecified)
     # are blocked regardless of policy, evaluated on the effective address.

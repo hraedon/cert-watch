@@ -558,7 +558,7 @@ class TestScanPosturePersistence:
 
     def test_store_scanned_persists_posture(self, tmp_path):
         from cert_watch.certificate_model import parse_certificate
-        from cert_watch.scan import ScannedEntry, store_scanned
+        from cert_watch.scan import ScannedEntry, _evaluate_posture, store_scanned
 
         db = str(tmp_path / "cert-watch.sqlite3")
         leaf = parse_certificate(_self_signed_cert_der())
@@ -567,7 +567,10 @@ class TestScanPosturePersistence:
             protocol_version="TLSv1.3",
         )
 
-        cert_id = store_scanned(entry, db)
+        # Pre-compute posture evaluation (store_scanned no longer
+        # evaluates posture inside the write lock when _posture_eval is None).
+        posture_eval = _evaluate_posture(db, entry)
+        cert_id = store_scanned(entry, db, _posture_eval=posture_eval)
 
         posture = get_posture_for_cert(db, cert_id)
         assert posture is not None, "store_scanned did not persist posture"

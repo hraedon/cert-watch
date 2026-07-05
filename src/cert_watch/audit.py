@@ -29,7 +29,10 @@ def record_audit(
     source_ip: str | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> None:
-    """Insert one audit row. Best-effort; logs WARNING on failure but never raises.
+    """Insert one audit row. Best-effort; logs WARNING on failure but never raises
+    when *conn* is None. When *conn* is provided, re-raises so the caller can
+    roll back the transaction — the audit entry is part of the caller's
+    transaction and a failure must not be silently swallowed.
 
     When *conn* is provided, the insert is written without committing — the
     caller manages the transaction (WI-129). This allows the audit entry to
@@ -59,6 +62,8 @@ def record_audit(
                 )
                 c.commit()
     except Exception:
+        if conn is not None:
+            raise
         logger.warning(
             "audit write failed: action=%s target=%s/%s actor=%s",
             action, target_type, target_id, actor,
