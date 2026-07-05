@@ -100,13 +100,14 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "re-encrypt":
         from cert_watch.config import Settings, resolve_or_persist_secret
         from cert_watch.database import derive_encryption_key, init_schema, re_encrypt_kv_store
+        from cert_watch.database.encryption import derive_encryption_key_legacy
 
         s = Settings.from_env()
         init_schema(s.db_path)
         new_key = derive_encryption_key(
             resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
         )
-        old_enc_key = derive_encryption_key(args.old_key)
+        old_enc_key = derive_encryption_key_legacy(args.old_key)
         count = re_encrypt_kv_store(s.db_path, old_enc_key, new_key)
         print(f"Re-encrypted {count} kv_store value(s).")
         return

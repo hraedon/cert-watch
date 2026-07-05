@@ -345,14 +345,24 @@ def emit_event(
             config = load_event_config(db_path)
         if event.event_type not in config.enabled_event_types:
             return None
-        if config.webhook_url and not _check_rate(config.rate_limit_per_second):
-            logger.debug("event rate-limited: %s", event.event_type)
-            return None
+        # Always write to event_log — the DB record is the source of truth.
+        # Rate limiting only gates webhook delivery, not persistence.
+        webhook_rate_limited = (
+            config.webhook_url and not _check_rate(config.rate_limit_per_second)
+        )
         delivery_status = "pending"
         if not config.webhook_url:
             delivery_status = "delivered"
+        elif webhook_rate_limited:
+            delivery_status = "rate_limited"
+            logger.debug("event webhook rate-limited: %s", event.event_type)
         row_id = _write_event_log(db_path, event, delivery_status, conn=conn)
-        if config.webhook_url and row_id is not None and not _defer_webhook:
+        if (
+            config.webhook_url
+            and row_id is not None
+            and not _defer_webhook
+            and not webhook_rate_limited
+        ):
             try:
                 _get_pool().submit(_deliver_webhook, event, config, str(db_path), row_id)
             except Exception:

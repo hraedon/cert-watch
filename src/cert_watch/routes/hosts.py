@@ -328,17 +328,19 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         job: tuple[str, int, int | None, str | None, str],
     ) -> None:
         hostname, port, _, pinned, row_starttls = job
-        await _scan_and_store(
-            hostname,
-            port,
-            db,
-            s,
-            pinned_ip=pinned,
-            starttls_mode=row_starttls,
-            source="scan",
-            webhook_config=s.build_webhook_config(),
-        )
+        async with _import_sem:
+            await _scan_and_store(
+                hostname,
+                port,
+                db,
+                s,
+                pinned_ip=pinned,
+                starttls_mode=row_starttls,
+                source="scan",
+                webhook_config=s.build_webhook_config(),
+            )
 
+    _import_sem = asyncio.Semaphore(10)
     statuses = await asyncio.gather(*[_scan_one(j) for j in scan_jobs])
     imported = len(statuses)
     if errors and imported == 0:

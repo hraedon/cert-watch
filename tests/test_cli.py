@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from cert_watch.__main__ import main
 from cert_watch.database import derive_encryption_key, fernet_encrypt, init_schema, kv_set
+from cert_watch.database.encryption import derive_encryption_key_legacy
 
 
 def _make_db(tmp_path: Path) -> Path:
@@ -98,7 +99,7 @@ class TestReEncryptSubcommand:
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         old_key_raw = "old-signing-key-for-test"
         new_key_raw = "new-signing-key-for-test"
-        old_key = derive_encryption_key(old_key_raw)
+        old_key = derive_encryption_key_legacy(old_key_raw)
         encrypted = fernet_encrypt("secret-value", old_key)
         kv_set(db, "smtp_password", encrypted)
         monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", new_key_raw)
@@ -129,7 +130,7 @@ class TestReEncryptSubcommand:
         db = _make_db(tmp_path)
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         old_key_raw = "old-key"
-        old_key = derive_encryption_key(old_key_raw)
+        old_key = derive_encryption_key_legacy(old_key_raw)
         encrypted = fernet_encrypt("val1", old_key)
         kv_set(db, "k1", encrypted)
         monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "new-key")

@@ -96,7 +96,11 @@
             <div class="cw-col-span-2">
               <div class="cw-detail-label">Runbook</div>
               <div class="mono cw-fz-12-5">
+                {% if host_info.runbook_url.startswith(('http://', 'https://')) %}
                 <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
+                {% else %}
+                {{ host_info.runbook_url }}
+                {% endif %}
               </div>
             </div>
             {% endif %}

@@ -229,6 +229,12 @@ def ensure_base(db_path: str | Path) -> None:
     # then lingers until GC (which on 3.14 may not be prompt), keeping the -wal
     # open and blocking a later file replace on Windows.
     with contextlib.closing(sqlite3.connect(str(path))) as conn:
+        # Enable WAL mode and set pragmas matching _connect() so that
+        # initial schema creation doesn't leave the DB in rollback journal
+        # mode (finding 26).
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA foreign_keys=ON")
         # 1. Create tables (no-op if they already exist)
         conn.executescript(_BASE_TABLES)
 

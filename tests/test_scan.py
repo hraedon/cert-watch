@@ -1226,8 +1226,9 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
         "cert_watch.scan.replace_scanned",
         lambda *a, **kw: ("leaf-id-1", None),
     )
+    # Mock store_scan_posture to raise, testing the posture stage exception path
     monkeypatch.setattr(
-        "cert_watch.scan._evaluate_posture",
+        "cert_watch.database.store_scan_posture",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("posture boom")),
     )
     monkeypatch.setattr(
@@ -1239,7 +1240,11 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
         lambda *a, **kw: "hist-id",
     )
 
-    leaf_id = store_scanned(entry, db)
+    # Provide a posture eval so the posture stage is entered; the mock
+    # on store_scan_posture will raise inside _stage_posture.
+    from cert_watch.scan import _PostureEval
+
+    leaf_id = store_scanned(entry, db, _posture_eval=_PostureEval())
     assert leaf_id == ""
 
 
@@ -1864,12 +1869,16 @@ def test_store_scanned_rolls_back_replace_when_posture_fails(
     assert len(initial) == 1
     initial_fp = initial[0].fingerprint_sha256
 
+    # Mock store_scan_posture to raise — this tests that the posture
+    # stage failure rolls back the replace stage (cert insertion).
     monkeypatch.setattr(
-        "cert_watch.scan._evaluate_posture",
+        "cert_watch.database.store_scan_posture",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("posture boom")),
     )
 
-    result = store_scanned(entry, db)
+    from cert_watch.scan import _PostureEval
+
+    result = store_scanned(entry, db, _posture_eval=_PostureEval())
     assert result == ""
     certs = repo.list_all()
     assert len(certs) == 1

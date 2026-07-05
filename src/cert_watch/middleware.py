@@ -54,6 +54,9 @@ if not _csrf_secret_val:
 _CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 2  # 2 hours
 _SID_COOKIE_TTL = 3600 * 8  # 8 hours — matches session cookie TTL
+
+# Test-only flag: when True, check_csrf() auto-generates and validates a token
+# instead of requiring one from the request. Never enabled in production.
 _CSRF_BYPASS = False
 
 
@@ -174,6 +177,11 @@ def _extract_client_ip(request: Request) -> str:
     L10 hardening: when ``TRUSTED_PROXIES`` is empty AND there is only one XFF
     entry, that entry is entirely client-controlled (no proxy rewrote it), so
     we fall back to ``request.client.host`` (the TCP peer) instead.
+
+    X-Real-IP is only trusted when ``TRUSTED_PROXIES`` is configured (the
+    proxy is explicitly trusted to have set it correctly). Without
+    ``TRUSTED_PROXIES``, X-Real-IP is client-controlled and must not be
+    used for rate limiting.
     """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
@@ -188,14 +196,13 @@ def _extract_client_ip(request: Request) -> str:
             # Multi-entry XFF: rightmost = the proxy that directly contacted us (BC-029)
             return parts[-1]
         # Single-entry XFF with no TRUSTED_PROXIES: entirely client-controlled.
-        # Fall through to X-Real-IP / TCP peer below.
-    real_ip = request.headers.get("x-real-ip", "")
-    if real_ip:
-        logger.warning(
-            "TRUST_PROXY=1: using X-Real-IP (%s) — ensure your reverse proxy "
-            "strips or overwrites this header from clients", real_ip,
-        )
-        return real_ip
+        # Fall through to TCP peer below — do NOT trust X-Real-IP either,
+        # since without TRUSTED_PROXIES the proxy that set it is unidentified.
+    # When TRUSTED_PROXIES is configured, trust X-Real-IP (the identified proxy set it).
+    if _TRUSTED_PROXIES:
+        real_ip = request.headers.get("x-real-ip", "")
+        if real_ip:
+            return real_ip
     return request.client.host if request.client else "unknown"
 
 
@@ -771,7 +778,7 @@ def _may_write(request: Request, username: str) -> bool:
         return True
     settings = getattr(request.app.state, "settings", None)
     if not settings:
-        return True
+        return False
     if not settings.write_users:
         return True
     if username in settings.write_users:

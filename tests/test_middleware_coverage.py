@@ -274,11 +274,19 @@ def test_extract_client_ip_real_ip(monkeypatch):
 
     import cert_watch.middleware as mw
 
+    # X-Real-IP is only trusted when TRUSTED_PROXIES is configured.
+    # Without TRUSTED_PROXIES, X-Real-IP is client-controlled and must
+    # not be used for rate limiting (finding 12).
     monkeypatch.setattr(mw, "_TRUST_PROXY", True)
     monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "203.0.113.2"}
+    # Should fall back to TCP peer, not trust X-Real-IP
+    assert mw._extract_client_ip(req) == "10.0.0.1"
+
+    # With TRUSTED_PROXIES configured, X-Real-IP is trusted
+    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     assert mw._extract_client_ip(req) == "203.0.113.2"
 
 

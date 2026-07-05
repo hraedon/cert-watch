@@ -83,10 +83,10 @@ def test_encrypted_webhook_headers_with_wrong_key_falls_back(db, monkeypatch):
 
 
 def test_save_alerts_route_encrypts_webhook_headers(reload_app, tmp_path):
-    """Posting webhook_headers via /settings/alerts stores it encrypted (enc:v1:).
+    """Posting webhook_headers via /settings/alerts stores it encrypted (enc:v2:).
 
     Break-and-watch for ``routes/settings/alerts.py`` encrypt=True: reverting to
-    encrypt=False stores plaintext, so the ``enc:v1:`` prefix assertion fails.
+    encrypt=False stores plaintext, so the ``enc:v2:`` prefix assertion fails.
     """
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -100,7 +100,7 @@ def test_save_alerts_route_encrypts_webhook_headers(reload_app, tmp_path):
 
     stored = kv_get(tmp_path / "cert-watch.sqlite3", "webhook_headers")
     assert stored is not None
-    assert stored.startswith("enc:v1:"), "webhook_headers was not encrypted at rest"
+    assert stored.startswith("enc:v2:"), "webhook_headers was not encrypted at rest"
 
 
 def test_save_alerts_route_blank_webhook_headers_preserves_existing(reload_app, tmp_path):

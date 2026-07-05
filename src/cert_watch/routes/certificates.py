@@ -56,9 +56,6 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
-    denied = scope_read_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
@@ -67,6 +64,9 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         host_repo = SqliteHostRepository(db)
         host = host_repo.get(cert_id)
         if host is not None:
+            denied = scope_read_denied(request, db, host_id=cert_id)
+            if denied:
+                return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
             # Get latest scan status/error for this host
             with _connect(db) as conn:
                 scan_row = conn.execute(
@@ -97,6 +97,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                     "slack_configured": slack_configured,
                 },
             )
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
     from cryptography import x509
@@ -538,15 +542,15 @@ async def update_certificate_owner(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
     db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
 
     # If no cert exists, the cert_id may be a host_id (pending/failed scan).
     host_repo = SqliteHostRepository(db)
     host = host_repo.get(cert_id)
     if host is not None:
-        # Pending host path — apply updates directly.
+        # Pending host path — check scope against the host_id.
+        denied = scope_write_denied(request, db, host_id=cert_id)
+        if denied:
+            return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
         host_id = cert_id
         hostname = host.hostname
         port = host.port
@@ -555,6 +559,10 @@ async def update_certificate_owner(
         cert = repo.get_by_id(cert_id)
         if cert is None:
             return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+
+        denied = scope_write_denied(request, db, cert_id=cert_id)
+        if denied:
+            return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
 
         # Find host by certificate hostname/port
         hostname = ""
