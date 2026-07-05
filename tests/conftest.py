@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,10 +24,8 @@ from cryptography.x509.oid import NameOID
 # ldap3.Connection doesn't leave sys.modules with a partially-loaded
 # ldap3 module (missing the 'core' attribute). This prevents test
 # pollution when tests in different files both use ldap3.
-try:
+with contextlib.suppress(ImportError):
     import ldap3.core.exceptions  # noqa: F401
-except ImportError:
-    pass
 
 
 @dataclass
