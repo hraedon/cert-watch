@@ -1,10 +1,12 @@
 """Renewal digest — volume-shaped reporting (WI-3.1 / Plan 048)."""
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 import sqlite3
 import statistics
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -18,7 +20,32 @@ from cert_watch.database.schema import init_schema
 if TYPE_CHECKING:
     from cert_watch.alerts import AlertConfig, WebhookConfig
 
-logger = logging.getLogger("cert_watch.digest")
+logger = logging.getLogger(__name__)
+
+_digest_pool = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="cw-digest",
+)
+_digest_pool_lock = threading.Lock()
+
+
+def _flush_digest_pool() -> None:
+    """Wait for all pending digest webhook tasks to finish (test helper)."""
+    global _digest_pool
+    with _digest_pool_lock:
+        _digest_pool.shutdown(wait=True)
+        _digest_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="cw-digest",
+        )
+
+
+def shutdown_digest_pool() -> None:
+    """Shut down the digest webhook pool (called from stop_scheduler)."""
+    global _digest_pool
+    with _digest_pool_lock:
+        _digest_pool.shutdown(wait=True)
+        _digest_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=2, thread_name_prefix="cw-digest",
+        )
 
 
 @dataclass
@@ -346,7 +373,9 @@ def send_renewal_digest(
 
     When SMTP and webhook configs are both absent, returns False.
     Sends one digest per owner plus one global digest for unowned hosts.
-    Returns True only when all deliveries succeeded; False on partial or total failure.
+    For SMTP delivery, returns True only when all deliveries succeeded.
+    For webhook delivery, returns True after submitting to the thread pool
+    (delivery happens asynchronously; failures are logged, not surfaced).
     """
     from cert_watch.alerts import (
         AlertConfig,
@@ -482,7 +511,7 @@ def send_renewal_digest(
         from cert_watch.alerts import ALERT_MAX_RETRIES, ALERT_RETRY_DELAY, send_webhook
         from cert_watch.retry import backoff_range
 
-        for od in digests:
+        def _deliver_digest_webhook(od: RenewalDigest) -> None:
             body = _build_digest_message(od)
             alert = Alert(
                 cert_id=f"renewal-digest:{days}",
@@ -493,19 +522,26 @@ def send_renewal_digest(
                 hostname="",
                 subject=f"Renewal Digest ({days}d)",
             )
-            delivered = False
             for _ in backoff_range(
                 ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
             ):
                 if send_webhook(alert, webhook_config):
-                    delivered = True
-                    break
-            if not delivered:
+                    return
+            logger.warning(
+                "renewal digest webhook failed after %d attempts",
+                ALERT_MAX_RETRIES,
+            )
+
+        for od in digests:
+            try:
+                with _digest_pool_lock:
+                    _digest_pool.submit(_deliver_digest_webhook, od)
+            except Exception:
                 logger.warning(
-                    "renewal digest webhook failed after %d attempts",
-                    ALERT_MAX_RETRIES,
+                    "digest webhook pool submit failed; delivering inline",
+                    exc_info=True,
                 )
-                return False
+                _deliver_digest_webhook(od)
         return True
 
     return False

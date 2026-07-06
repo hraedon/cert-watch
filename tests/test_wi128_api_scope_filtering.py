@@ -142,14 +142,65 @@ class TestEventsScopeFiltering:
         assert hostnames == {"host-a.example.com"}
 
     def test_scoped_excludes_events_without_hostname(self, db: Path):
+        """Events without hostname and without a matching cert are excluded."""
         from cert_watch.events import get_events
 
         _seed_two_teams(db)
         events = get_events(db, scope_tags=("team-a",))
-        # All returned events must have a hostname in payload
-        for e in events:
-            payload = json.loads(e["payload"]) if e["payload"] else {}
-            assert payload.get("hostname") is not None
+        cert_ids = {
+            json.loads(e["payload"]).get("cert_id")
+            for e in events
+            if e["payload"]
+        }
+        assert "admin-level" not in cert_ids
+
+    def test_scoped_sees_upload_event_via_cert_tags(self, db: Path):
+        """WI-135: Events without hostname visible when cert tags match scope."""
+        from cert_watch.events import get_events
+
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            _insert_cert(conn, "cert-up-a", "", port=0, tags="team-a", source="uploaded")
+            payload = json.dumps({"cert_id": "cert-up-a", "source": "upload"})
+            conn.execute(
+                "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                " delivery_status, error_message, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("cert_added", datetime.now(UTC).isoformat(), "upload", payload,
+                 "delivered", None, datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+        events = get_events(db, scope_tags=("team-a",))
+        cert_ids = {
+            json.loads(e["payload"]).get("cert_id")
+            for e in events
+            if e["payload"]
+        }
+        assert "cert-up-a" in cert_ids
+
+    def test_scoped_excludes_upload_event_wrong_tag(self, db: Path):
+        """WI-135: Events for certs with non-matching tags are excluded."""
+        from cert_watch.events import get_events
+
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            _insert_cert(conn, "cert-up-b", "", port=0, tags="team-b", source="uploaded")
+            payload = json.dumps({"cert_id": "cert-up-b", "source": "upload"})
+            conn.execute(
+                "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                " delivery_status, error_message, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ("cert_added", datetime.now(UTC).isoformat(), "upload", payload,
+                 "delivered", None, datetime.now(UTC).isoformat()),
+            )
+            conn.commit()
+        events = get_events(db, scope_tags=("team-a",))
+        cert_ids = {
+            json.loads(e["payload"]).get("cert_id")
+            for e in events
+            if e["payload"]
+        }
+        assert "cert-up-b" not in cert_ids
 
     def test_unscoped_sees_all_events(self, db: Path):
         from cert_watch.events import get_events
@@ -296,6 +347,28 @@ class TestCalendarScopeFiltering:
         buckets = list_calendar(db, bucket="month", scope_tags=("team-c",))
         total = sum(b["count"] for b in buckets)
         assert total == 1
+
+    def test_calendar_scoped_uploaded_cert_without_host(self, db: Path):
+        """WI-136: Uploaded certs without a hosts row visible via cert tags."""
+        from cert_watch.database import list_calendar
+
+        with _connect(db) as conn:
+            _insert_cert(conn, "cert-up", "", port=0, tags="team-a", source="uploaded")
+            conn.commit()
+        buckets = list_calendar(db, bucket="month", scope_tags=("team-a",))
+        total = sum(b["count"] for b in buckets)
+        assert total == 1
+
+    def test_calendar_scoped_excludes_uploaded_cert_wrong_tag(self, db: Path):
+        """WI-136: Uploaded certs with non-matching tags are excluded."""
+        from cert_watch.database import list_calendar
+
+        with _connect(db) as conn:
+            _insert_cert(conn, "cert-up", "", port=0, tags="team-b", source="uploaded")
+            conn.commit()
+        buckets = list_calendar(db, bucket="month", scope_tags=("team-a",))
+        total = sum(b["count"] for b in buckets)
+        assert total == 0
 
 
 # ── readiness ──────────────────────────────────────────────────────────────

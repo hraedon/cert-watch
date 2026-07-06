@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.digest import (
+    _flush_digest_pool,
     build_renewal_digest,
     send_renewal_digest,
 )
@@ -135,8 +137,6 @@ class TestSendRenewalDigest:
         assert result is True
 
     def test_with_activity_sends_smtp(self, empty_db):
-        from unittest.mock import MagicMock, patch
-
         from cert_watch.alerts import AlertConfig
 
         db = empty_db
@@ -156,3 +156,66 @@ class TestSendRenewalDigest:
             result = send_renewal_digest(db, config, None, days=7)
         assert result is True
         smtp_mock.send_message.assert_called()
+
+    def test_webhook_offloaded_to_pool(self, empty_db):
+        """WI-134: Webhook delivery is offloaded to a thread pool, not blocking."""
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        with patch("cert_watch.alerts.send_webhook", return_value=True) as mock_send, \
+             patch("cert_watch.retry.time.sleep"):
+            result = send_renewal_digest(db, None, wh, days=7)
+            _flush_digest_pool()
+        assert result is True
+        assert mock_send.call_count >= 1
+
+    def test_webhook_retries_on_failure(self, empty_db):
+        """WI-134: Retries still work when offloaded."""
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        with patch("cert_watch.alerts.send_webhook", side_effect=[False, True]) as mock_send, \
+             patch("cert_watch.retry.time.sleep"):
+            result = send_renewal_digest(db, None, wh, days=7)
+            _flush_digest_pool()
+        assert result is True
+        assert mock_send.call_count == 2
+
+    def test_webhook_inline_fallback_on_submit_error(self, empty_db):
+        """WI-134: Falls back to inline delivery if pool submit fails."""
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        with patch("cert_watch.alerts.send_webhook", return_value=True) as mock_send, \
+             patch(
+                 "cert_watch.digest._digest_pool.submit",
+                 side_effect=RuntimeError("pool closed"),
+             ), \
+             patch("cert_watch.retry.time.sleep"):
+            result = send_renewal_digest(db, None, wh, days=7)
+            _flush_digest_pool()
+        assert result is True
+        assert mock_send.call_count >= 1
+
+    def test_webhook_all_retries_fail_returns_true(self, empty_db):
+        """WI-134: All retries failing logs a warning, returns True (async)."""
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        with patch("cert_watch.alerts.send_webhook", return_value=False), \
+             patch("cert_watch.retry.time.sleep"):
+            result = send_renewal_digest(db, None, wh, days=7)
+            _flush_digest_pool()
+        assert result is True

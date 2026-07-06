@@ -49,15 +49,20 @@ def list_calendar(
     if scope_tags:
         from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
 
+        cert_condition = "1=1"
+        cert_condition, cert_params = _add_effective_tag_filter(
+            cert_condition, [], scope_tags,
+            col_cert="certificates.tags", col_host="''",
+        )
         host_sub = (
             "SELECT 1 FROM hosts h WHERE h.hostname = certificates.hostname"
             " AND h.port = certificates.port"
         )
         host_sub, host_params = _add_effective_tag_filter(
-            host_sub, [], scope_tags, col_cert="certificates.tags", col_host="h.tags"
+            host_sub, [], scope_tags, col_cert=None, col_host="h.tags"
         )
-        conditions.append(f"EXISTS ({host_sub})")
-        params = params + host_params
+        conditions.append(f"({cert_condition} OR EXISTS ({host_sub}))")
+        params = params + cert_params + host_params
 
     where = " AND ".join(conditions)
 
