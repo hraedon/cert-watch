@@ -653,6 +653,8 @@ def insights_view(
     db = _db_path(request)
     from cert_watch.database import list_calendar, list_grade_trends, list_tls_version_trends
 
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+
     calendar_data: list[dict[str, Any]] = []
     tls_trends: list[dict[str, Any]] = []
     tls_max: int = 1
@@ -662,14 +664,35 @@ def insights_view(
     total_certs = 0
     try:
         with _connect(db) as conn:
-            row = conn.execute(
-                "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
-            ).fetchone()
+            if scope_tags:
+                from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+                cert_cond = "1=1"
+                cert_cond, cert_params = _add_effective_tag_filter(
+                    cert_cond, [], scope_tags,
+                    col_cert="certificates.tags", col_host="''",
+                )
+                host_sub = (
+                    "SELECT 1 FROM hosts h WHERE h.hostname = certificates.hostname"
+                    " AND h.port = certificates.port"
+                )
+                host_sub, host_params = _add_effective_tag_filter(
+                    host_sub, [], scope_tags, col_cert=None, col_host="h.tags",
+                )
+                row = conn.execute(
+                    f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+                    f" AND ({cert_cond} OR EXISTS ({host_sub}))",
+                    cert_params + host_params,
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+                ).fetchone()
             total_certs = row[0] if row else 0
     except Exception:
         logger.exception("insights: total certs query failed")
     try:
-        calendar_data = list_calendar(db, bucket="week")
+        calendar_data = list_calendar(db, bucket="week", scope_tags=scope_tags)
     except Exception:
         logger.exception("insights: calendar query failed")
 
@@ -692,11 +715,15 @@ def insights_view(
         and b.get("bucket_start", "") <= four_weeks_ahead
     )
     try:
-        tls_trends, tls_max = _pivot_tls_monthly(list_tls_version_trends(db, days=180))
+        tls_trends, tls_max = _pivot_tls_monthly(
+            list_tls_version_trends(db, days=180, scope_tags=scope_tags)
+        )
     except Exception:
         logger.exception("insights: TLS trends query failed")
     try:
-        grade_trends, grade_max = _pivot_grade_monthly(list_grade_trends(db, days=180))
+        grade_trends, grade_max = _pivot_grade_monthly(
+            list_grade_trends(db, days=180, scope_tags=scope_tags)
+        )
     except Exception:
         logger.exception("insights: grade trends query failed")
 

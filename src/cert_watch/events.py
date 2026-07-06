@@ -403,11 +403,21 @@ def get_events(
         host_sub, host_params = _add_effective_tag_filter(
             host_sub, [], scope_tags, col_cert=None, col_host="tags"
         )
-        conditions.append("json_extract(payload, '$.hostname') IS NOT NULL")
-        conditions.append(
-            f"json_extract(payload, '$.hostname') IN ({host_sub})"
+        cert_sub = (
+            "SELECT 1 FROM certificates c"
+            " WHERE c.id = json_extract(payload, '$.cert_id')"
         )
-        params = params + host_params
+        cert_sub, cert_params = _add_effective_tag_filter(
+            cert_sub, [], scope_tags, col_cert="c.tags", col_host="''",
+        )
+        conditions.append(
+            "(json_extract(payload, '$.hostname') IS NOT NULL"
+            f" AND json_extract(payload, '$.hostname') IN ({host_sub})"
+            f" OR (json_extract(payload, '$.hostname') IS NULL"
+            f" AND json_extract(payload, '$.cert_id') IS NOT NULL"
+            f" AND EXISTS ({cert_sub})))"
+        )
+        params = params + host_params + cert_params
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     with _connect(db_path) as conn:
         rows = conn.execute(

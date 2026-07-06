@@ -244,6 +244,8 @@ def stop_scheduler() -> None:
         _scheduler_thread.join(timeout=30)
     with _renewal_webhook_pool_lock:
         _renewal_webhook_pool.shutdown(wait=True)
+    from cert_watch.digest import shutdown_digest_pool
+    shutdown_digest_pool()
 
 
 def run_scan_now(
