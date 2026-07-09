@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
-from cert_watch.middleware import require_admin, require_admin_write
+from cert_watch.middleware import _request_security, require_admin, require_admin_write
 from cert_watch.routes._deps import IdParam, _db_path
 
 logger = logging.getLogger("cert_watch.routes.api.keys")
@@ -26,7 +26,7 @@ router = APIRouter()
 def _repository(request: Request) -> SqliteApiKeyRepository:
     return SqliteApiKeyRepository(
         _db_path(request),
-        security=getattr(request.app.state, "security", None),
+        security=_request_security(request),
     )
 
 

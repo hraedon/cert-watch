@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import uuid
@@ -31,6 +32,8 @@ from pathlib import Path
 
 from cert_watch.database.connection import _connect
 from cert_watch.security import SecurityContext
+
+logger = logging.getLogger("cert_watch.database.api_keys")
 
 VALID_SCOPES = ("read", "write", "admin")
 
@@ -182,6 +185,24 @@ class SqliteApiKeyRepository:
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]
             if row["key_hash"] != new_hash:
+                # Verified under a non-current hash: either an earlier pepper or
+                # the pre-pepper unkeyed SHA-256. Surface it so an operator can
+                # see which keys still trail the current signing material — the
+                # legacy candidates offer no DB-leak protection, so a straggler
+                # here is worth rotating.
+                legacy_kind = (
+                    "an earlier pepper"
+                    if row["key_hash"].startswith(_HMAC_PREFIX)
+                    else "an unkeyed SHA-256 hash"
+                )
+                logger.warning(
+                    "API key %s (scope=%s) verified under %s; upgrading to the "
+                    "current signing pepper. Rotate the key if the earlier "
+                    "material is considered exposed.",
+                    row["id"],
+                    row["scope"],
+                    legacy_kind,
+                )
                 updates.append("key_hash = ?")
                 params.append(new_hash)
             params.append(row["id"])

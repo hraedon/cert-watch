@@ -13,7 +13,9 @@ All notable changes to cert-watch are documented in this file.
   application `SecurityContext` signing material. Existing raw SHA-256 keys and
   keys hashed with the earlier environment/default pepper remain valid and are
   transparently upgraded on use. The migration now records a valid
-  `last_used_at` timestamp instead of corrupting it during the SQL update.
+  `last_used_at` timestamp instead of corrupting it during the SQL update, and
+  a key verifying under a legacy pepper or unkeyed hash is logged at WARNING so
+  an operator can spot stragglers that still trail the current signing material.
 - **Request-loop responsiveness.** LDAP/local login verification, SMTP tests,
   and webhook tests now run their synchronous network or password-hashing work
   off the async request loop, so a slow external service cannot stall unrelated
