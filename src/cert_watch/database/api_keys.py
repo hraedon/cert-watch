@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import uuid
@@ -30,6 +31,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from cert_watch.database.connection import _connect
+from cert_watch.security import SecurityContext
+
+logger = logging.getLogger("cert_watch.database.api_keys")
 
 VALID_SCOPES = ("read", "write", "admin")
 
@@ -40,8 +44,10 @@ _TOKEN_PREFIX = "cwk_"
 # Prefix for peppered HMAC hashes (new format).
 _HMAC_PREFIX = "hmac:"
 
-# Length of legacy SHA-256 hex hashes (64 chars, no prefix).
-_LEGACY_HASH_LEN = 64
+# The pepper used by releases before API-key hashing was wired to the
+# application SecurityContext. It remains a verification-only fallback so
+# existing keys can be upgraded on use.
+_LEGACY_DEFAULT_PEPPER = b"cert-watch-default-pepper"
 
 
 @dataclass
@@ -66,14 +72,13 @@ class ApiKeyAuth:
 
 
 def _get_pepper() -> bytes:
-    """Return the pepper for API key hashing.
+    """Return the pre-SecurityContext pepper for compatibility/test use.
 
-    Falls back to a static pepper when no signing key is available
-    (e.g. during tests without a SecurityContext).
+    Standalone repository users retain the historical environment/default
+    behaviour. Production request paths inject a SecurityContext instead.
     """
-    return os.environ.get(
-        "CERT_WATCH_AUTH_SECRET", "cert-watch-default-pepper"
-    ).encode()
+    value = os.environ.get("CERT_WATCH_AUTH_SECRET")
+    return value.encode() if value is not None else _LEGACY_DEFAULT_PEPPER
 
 
 def hash_token(raw_token: str, *, pepper: bytes | None = None) -> str:
@@ -94,22 +99,6 @@ def _hash_token_legacy(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
 
 
-def _verify_token(raw_token: str, stored_hash: str, *, pepper: bytes | None = None) -> bool:
-    """Verify a raw token against a stored hash (HMAC or legacy SHA-256)."""
-    if stored_hash.startswith(_HMAC_PREFIX):
-        expected = stored_hash[len(_HMAC_PREFIX):]
-        if pepper is None:
-            pepper = _get_pepper()
-        computed = hmac.new(
-            pepper, raw_token.encode("utf-8"), hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(computed, expected)
-    if len(stored_hash) == _LEGACY_HASH_LEN and not stored_hash.startswith(_HMAC_PREFIX):
-        legacy = _hash_token_legacy(raw_token)
-        return hmac.compare_digest(legacy, stored_hash)
-    return False
-
-
 def generate_token() -> str:
     """Generate a new opaque raw token."""
     return _TOKEN_PREFIX + secrets.token_urlsafe(32)
@@ -118,8 +107,29 @@ def generate_token() -> str:
 class SqliteApiKeyRepository:
     """SQLite-backed API key store."""
 
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(
+        self,
+        db_path: str | Path,
+        *,
+        security: SecurityContext | None = None,
+    ) -> None:
         self.db_path = db_path
+        # Request paths inject the immutable application signing material.
+        # The old resolver remains the standalone/test default.
+        self._pepper = (
+            security.signing_key.encode("utf-8") if security is not None else _get_pepper()
+        )
+
+    def _candidate_hashes(self, raw_token: str) -> list[str]:
+        """Return current and legacy hashes, ordered by preference."""
+        peppers = (self._pepper, _get_pepper(), _LEGACY_DEFAULT_PEPPER)
+        candidates: list[str] = []
+        for pepper in peppers:
+            candidate = hash_token(raw_token, pepper=pepper)
+            if candidate not in candidates:
+                candidates.append(candidate)
+        candidates.append(_hash_token_legacy(raw_token))
+        return candidates
 
     def create_key(self, name: str, scope: str) -> tuple[ApiKeyEntry, str]:
         """Create a key. Returns (stored entry, raw token shown once)."""
@@ -134,7 +144,13 @@ class SqliteApiKeyRepository:
             conn.execute(
                 "INSERT INTO api_keys (id, key_hash, name, scope, created_at, revoked)"
                 " VALUES (?, ?, ?, ?, ?, 0)",
-                (key_id, hash_token(raw), name.strip(), scope, created.isoformat()),
+                (
+                    key_id,
+                    hash_token(raw, pepper=self._pepper),
+                    name.strip(),
+                    scope,
+                    created.isoformat(),
+                ),
             )
             conn.commit()
         entry = ApiKeyEntry(id=key_id, name=name.strip(), scope=scope, created_at=created)
@@ -149,27 +165,49 @@ class SqliteApiKeyRepository:
         """
         if not raw_token:
             return None
-        new_hash = hash_token(raw_token)
-        legacy_hash = _hash_token_legacy(raw_token)
+        candidates = self._candidate_hashes(raw_token)
+        new_hash = candidates[0]
+        placeholders = ", ".join("?" for _ in candidates)
         with _connect(self.db_path) as conn:
-            row = conn.execute(
+            rows = conn.execute(
                 "SELECT id, name, scope, key_hash, revoked FROM api_keys"
-                " WHERE key_hash = ? OR key_hash = ?",
-                (new_hash, legacy_hash),
-            ).fetchone()
+                f" WHERE key_hash IN ({placeholders})",
+                candidates,
+            ).fetchall()
+            rows_by_hash = {row["key_hash"]: row for row in rows}
+            row = next(
+                (rows_by_hash[candidate] for candidate in candidates if candidate in rows_by_hash),
+                None,
+            )
             if row is None or row["revoked"]:
-                return None
-            if not _verify_token(raw_token, row["key_hash"]):
                 return None
             now_iso = datetime.now(UTC).isoformat()
             updates = ["last_used_at = ?"]
             params: list[str] = [now_iso]
-            if not row["key_hash"].startswith(_HMAC_PREFIX):
+            if row["key_hash"] != new_hash:
+                # Verified under a non-current hash: either an earlier pepper or
+                # the pre-pepper unkeyed SHA-256. Surface it so an operator can
+                # see which keys still trail the current signing material — the
+                # legacy candidates offer no DB-leak protection, so a straggler
+                # here is worth rotating.
+                legacy_kind = (
+                    "an earlier pepper"
+                    if row["key_hash"].startswith(_HMAC_PREFIX)
+                    else "an unkeyed SHA-256 hash"
+                )
+                logger.warning(
+                    "API key %s (scope=%s) verified under %s; upgrading to the "
+                    "current signing pepper. Rotate the key if the earlier "
+                    "material is considered exposed.",
+                    row["id"],
+                    row["scope"],
+                    legacy_kind,
+                )
                 updates.append("key_hash = ?")
                 params.append(new_hash)
             params.append(row["id"])
             conn.execute(
-                f"UPDATE api_keys SET {' AND '.join(updates)} WHERE id = ?",
+                f"UPDATE api_keys SET {', '.join(updates)} WHERE id = ?",
                 params,
             )
             conn.commit()

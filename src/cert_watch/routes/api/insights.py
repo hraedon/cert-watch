@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Request
@@ -26,7 +27,9 @@ router = APIRouter()
 async def api_webhook_test(request: Request, _auth: str = Depends(require_write)) -> JSONResponse:
     """Send a test payload to the configured webhook URL."""
     settings = _get_settings(request)
-    webhook_cfg = settings.build_webhook_config()
+    # Configuration validation resolves the destination host, and delivery is
+    # synchronous HTTP I/O; neither belongs on the request event-loop thread.
+    webhook_cfg = await asyncio.to_thread(settings.build_webhook_config)
     if webhook_cfg is None:
         return JSONResponse(
             content={"error": "webhook not configured (set ALERT_WEBHOOK_URL)"},
@@ -40,7 +43,7 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
         message="[cert-watch] Webhook test — verify your webhook configuration.",
         threshold_days=0,
     )
-    success = send_webhook(test_alert, webhook_cfg)
+    success = await asyncio.to_thread(send_webhook, test_alert, webhook_cfg)
     if success:
         return JSONResponse(content={"status": "ok", "message": "webhook test delivered"})
     return JSONResponse(

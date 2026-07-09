@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import logging
 from urllib.parse import quote
@@ -87,7 +88,10 @@ async def login_submit(
         return RedirectResponse(
             url="/login?error=password+too+long", status_code=303
         )
-    result = auth.authenticate(username, password)
+    # LDAP binds and local-admin password verification are synchronous.  Run
+    # either provider outside the event-loop thread so one slow directory (or
+    # an intentionally expensive password hash) cannot stall other requests.
+    result = await asyncio.to_thread(auth.authenticate, username, password)
     if not result.success:
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303

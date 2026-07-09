@@ -17,7 +17,7 @@ jobs:
       - run: uv venv
       # Include the auth extras so the LDAP/OAuth providers are exercised (and
       # counted toward coverage) in CI, not just skipped for want of authlib/ldap3.
-      - run: uv pip install -e ".[dev,auth]"
+      - run: uv sync --frozen --extra dev --extra auth
       - name: pip-audit
         run: |
           # Audit the third-party dependency closure. Snapshot it before
@@ -67,7 +67,7 @@ jobs:
       # setup-uv@v8 no longer auto-creates a project venv (v5 did), so create
       # one explicitly — the steps below invoke tools via `.venv/bin/...`.
       - run: uv venv
-      - run: uv pip install -e ".[dev,auth]"
+      - run: uv sync --frozen --extra dev --extra auth
       - name: pytest (integration)
         # Container-bound tests: no coverage, single-threaded, --no-cov mirrors
         # the e2e job convention.

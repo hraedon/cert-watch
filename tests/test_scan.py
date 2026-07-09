@@ -67,9 +67,19 @@ def _fake_open_err(exc):
     return _open
 
 
+def _mock_scan_network(monkeypatch):
+    """Keep mocked TLS scan tests independent of DNS and HTTP availability."""
+    monkeypatch.setattr(
+        "cert_watch.scan._resolve_host",
+        lambda *a, **kw: (socket.AF_INET, ("93.184.216.34", 443)),
+    )
+    monkeypatch.setattr("cert_watch.scan._probe_hsts", lambda *a, **kw: None)
+
+
 def test_scan_host_success_native(monkeypatch, chain_triplet):
     """Test native Python TLS path (Python 3.13+ chain API)."""
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    _mock_scan_network(monkeypatch)
 
     monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
@@ -135,6 +145,7 @@ def test_scan_host_no_cert_native(monkeypatch):
 def test_scan_host_via_openssl_success(monkeypatch, chain_triplet):
     """Test that the openssl fallback path returns leaf + chain from a single connection."""
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    _mock_scan_network(monkeypatch)
 
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
@@ -152,6 +163,7 @@ def test_scan_host_via_openssl_success(monkeypatch, chain_triplet):
 
 def test_scan_host_via_openssl_fallback_to_leaf_only(monkeypatch, chain_triplet):
     """Test that when openssl fails, we fall back to Python TLS for leaf-only."""
+    _mock_scan_network(monkeypatch)
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: False)
     monkeypatch.setattr(
         "cert_watch.scan._scan_via_openssl",
@@ -193,6 +205,7 @@ def test_scan_host_via_openssl_connection_failure(monkeypatch):
 
 def test_store_scanned_with_db_path(tmp_path, chain_triplet, monkeypatch):
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    _mock_scan_network(monkeypatch)
     monkeypatch.setattr("cert_watch.scan._has_native_chain_api", lambda: True)
     monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
@@ -1470,6 +1483,7 @@ def test_evaluate_and_store_posture_caa_value_error(monkeypatch, tmp_path, self_
 
 def test_scan_host_async(monkeypatch, chain_triplet):
     der_chain = [chain_triplet["leaf"].der, chain_triplet["intermediate"].der]
+    _mock_scan_network(monkeypatch)
     monkeypatch.setattr(
         "cert_watch.scan._open_tls_connection", _fake_open_ok(der_chain),
     )
