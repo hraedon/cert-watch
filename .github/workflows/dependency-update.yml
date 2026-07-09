@@ -24,7 +24,7 @@ jobs:
         run: uv lock
 
       - name: Install deps from refreshed lock
-        run: uv pip install -e ".[dev,auth]"
+        run: uv sync --frozen --extra dev --extra auth
 
       - name: pip-audit
         id: audit

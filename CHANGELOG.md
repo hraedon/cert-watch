@@ -4,6 +4,28 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+- **Immutable release and deployment image tags.** Ordinary `main` builds now
+  publish and deploy the commit-SHA image tag; a semantic-version image tag is
+  published only when that exact tag points at the build commit. This prevents
+  post-release commits from silently overwriting the previous release image.
+- **API-key hash migration and key derivation.** New API keys use the
+  application `SecurityContext` signing material. Existing raw SHA-256 keys and
+  keys hashed with the earlier environment/default pepper remain valid and are
+  transparently upgraded on use. The migration now records a valid
+  `last_used_at` timestamp instead of corrupting it during the SQL update, and
+  a key verifying under a legacy pepper or unkeyed hash is logged at WARNING so
+  an operator can spot stragglers that still trail the current signing material.
+- **Request-loop responsiveness.** LDAP/local login verification, SMTP tests,
+  and webhook tests now run their synchronous network or password-hashing work
+  off the async request loop, so a slow external service cannot stall unrelated
+  requests.
+
+### Changed
+- CI and E2E jobs install from the committed `uv.lock`, Starlette's test client
+  uses its supported `httpx2` backend, and the Docker build pins the `uv` image
+  by digest for reproducible builds.
+
 ### Added
 - **Renewal webhook (automation seam).** When the daily scan cycle detects a
   **renewal-overdue** certificate (inside its renewal window with no successor

@@ -15,7 +15,7 @@ jobs:
       # setup-uv@v8 no longer auto-creates a project venv (v5 did), so create
       # one explicitly — the steps below invoke tools via `.venv/bin/...`.
       - run: uv venv
-      - run: uv pip install -e ".[dev,e2e]"
+      - run: uv sync --frozen --extra dev --extra e2e
       - name: pip-audit (e2e deps)
         run: |
           # Lightweight audit of the e2e extra dependency closure (BC-153).
@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: "3.13"
       - run: uv venv
-      - run: uv pip install -e ".[dev,e2e,auth]"
+      - run: uv sync --frozen --extra dev --extra e2e --extra auth
       - name: Install Playwright browsers + OS deps
         run: .venv/bin/playwright install --with-deps chromium
       - name: Run LDAP E2E tests (Samba-AD container)
@@ -62,7 +62,7 @@ jobs:
       # setup-uv@v8 no longer auto-creates a project venv (v5 did), so create
       # one explicitly — the steps below invoke tools via `.venv/bin/...`.
       - run: uv venv
-      - run: uv pip install -e ".[dev,e2e]"
+      - run: uv sync --frozen --extra dev --extra e2e
       - name: Install Playwright browsers + OS deps
         run: .venv/bin/playwright install --with-deps chromium
       - name: Run visual-regression tests

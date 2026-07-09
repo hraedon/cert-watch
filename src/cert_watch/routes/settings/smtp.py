@@ -2,14 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
+import smtplib
+from email.message import EmailMessage
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from cert_watch.alerts import negotiate_starttls
 from cert_watch.middleware import require_admin_write
 from cert_watch.routes.settings.config import _SMTP_KEYS
 from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section
 
 router = APIRouter()
+
+
+def _send_smtp_test(
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    msg: EmailMessage,
+) -> str | None:
+    """Send the probe message synchronously, returning a policy error if any."""
+    if port == 465:
+        smtp: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=10)
+    else:
+        smtp = smtplib.SMTP(host, port, timeout=10)
+    with smtp:
+        if not negotiate_starttls(smtp, port, bool(user)):
+            return (
+                "STARTTLS not supported by server; refusing to send "
+                "credentials in cleartext. Use port 465, clear the username/"
+                "password, or use a server that supports STARTTLS."
+            )
+        if user:
+            smtp.login(user, password)
+        smtp.send_message(msg)
+    return None
 
 
 @router.post("/settings/smtp")
@@ -23,10 +53,7 @@ async def test_smtp_connection(
     _auth: str = Depends(require_admin_write),
 ) -> JSONResponse:
     import logging
-    import smtplib
-    from email.message import EmailMessage
 
-    from cert_watch.alerts import negotiate_starttls
     from cert_watch.http_client import validate_smtp_host
     from cert_watch.routes._deps import _get_settings
 
@@ -57,7 +84,8 @@ async def test_smtp_connection(
     # Uses the actual CERT_WATCH_ALLOW_PRIVATE_IPS / ALLOWED_SUBNETS settings so
     # the test path matches the real alert-delivery path (BC-116 SMTP parity).
     settings = _get_settings(request)
-    ssrf_err = validate_smtp_host(
+    ssrf_err = await asyncio.to_thread(
+        validate_smtp_host,
         host,
         allow_private=settings.allow_private,
         allowed_subnets=settings.allowed_subnets,
@@ -81,21 +109,11 @@ async def test_smtp_connection(
     )
 
     try:
-        if port == 465:
-            s: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=10)
-        else:
-            s = smtplib.SMTP(host, port, timeout=10)
-        with s:
-            if not negotiate_starttls(s, port, bool(user)):
-                return JSONResponse({
-                    "ok": False,
-                    "error": "STARTTLS not supported by server; refusing to send "
-                    "credentials in cleartext. Use port 465, clear the username/"
-                    "password, or use a server that supports STARTTLS.",
-                })
-            if user:
-                s.login(user, password)
-            s.send_message(msg)
+        policy_error = await asyncio.to_thread(
+            _send_smtp_test, host, port, user, password, msg
+        )
+        if policy_error:
+            return JSONResponse({"ok": False, "error": policy_error})
         return JSONResponse({"ok": True, "message": f"Test email sent to {recipients}"})
     except Exception as exc:
         logger.warning("SMTP test failed: %s", exc)

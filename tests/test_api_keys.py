@@ -7,6 +7,8 @@ authenticating via an ``Authorization: Bearer cwk_…`` token.
 
 from __future__ import annotations
 
+import hashlib
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +23,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write,
 )
+from cert_watch.security import SecurityContext
 
 # ── repository ───────────────────────────────────────────────────────────
 
@@ -66,6 +69,99 @@ def test_verify_updates_last_used(repo):
     assert refreshed.last_used_at is not None
 
 
+def test_verify_legacy_sha256_upgrades_hash_and_valid_timestamp(repo):
+    raw = "cwk_legacy-sha256-token"
+    legacy_hash = hashlib.sha256(raw.encode()).hexdigest()
+    created = datetime.now(UTC).isoformat()
+    with repo_conn(repo) as conn:
+        conn.execute(
+            "INSERT INTO api_keys"
+            " (id, key_hash, name, scope, created_at, revoked)"
+            " VALUES (?, ?, ?, ?, ?, 0)",
+            ("legacy-sha", legacy_hash, "legacy", "read", created),
+        )
+        conn.commit()
+
+    auth = repo.verify_key(raw)
+
+    assert auth is not None
+    with repo_conn(repo) as conn:
+        row = conn.execute(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?",
+            ("legacy-sha",),
+        ).fetchone()
+    assert row["key_hash"] == hash_token(raw)
+    last_used = datetime.fromisoformat(row["last_used_at"])
+    assert last_used.tzinfo == UTC
+
+
+def test_security_context_pepper_is_used_for_new_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "old-environment-pepper")
+    db = tmp_path / "security-context.sqlite3"
+    init_schema(db)
+    security = SecurityContext(
+        signing_key="persisted-auth-secret",
+        csrf_secret="persisted-csrf-secret",
+    )
+    secure_repo = SqliteApiKeyRepository(db, security=security)
+
+    entry, raw = secure_repo.create_key("secure", "read")
+
+    with repo_conn(secure_repo) as conn:
+        row = conn.execute("SELECT key_hash FROM api_keys WHERE id = ?", (entry.id,)).fetchone()
+    expected = hash_token(raw, pepper=security.signing_key.encode())
+    assert row["key_hash"] == expected
+    assert row["key_hash"] != hash_token(raw)
+
+
+@pytest.mark.parametrize(
+    ("legacy_pepper", "environment_pepper"),
+    [
+        (b"cert-watch-default-pepper", "unrelated-current-environment"),
+        (b"old-environment-pepper", "old-environment-pepper"),
+    ],
+)
+def test_prior_hmac_peppers_authenticate_and_upgrade(
+    tmp_path, monkeypatch, legacy_pepper, environment_pepper
+):
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", environment_pepper)
+    db = tmp_path / "legacy-hmac.sqlite3"
+    init_schema(db)
+    raw = "cwk_legacy-hmac-token"
+    created = datetime.now(UTC).isoformat()
+    with repo_conn(SimpleNamespace(db_path=db)) as conn:
+        conn.execute(
+            "INSERT INTO api_keys"
+            " (id, key_hash, name, scope, created_at, revoked)"
+            " VALUES (?, ?, ?, ?, ?, 0)",
+            (
+                "legacy-hmac",
+                hash_token(raw, pepper=legacy_pepper),
+                "legacy",
+                "write",
+                created,
+            ),
+        )
+        conn.commit()
+    security = SecurityContext(
+        signing_key="persisted-auth-secret",
+        csrf_secret="persisted-csrf-secret",
+    )
+    secure_repo = SqliteApiKeyRepository(db, security=security)
+
+    auth = secure_repo.verify_key(raw)
+
+    assert auth is not None
+    assert auth.scope == "write"
+    with repo_conn(secure_repo) as conn:
+        row = conn.execute(
+            "SELECT key_hash, last_used_at FROM api_keys WHERE id = ?",
+            ("legacy-hmac",),
+        ).fetchone()
+    assert row["key_hash"] == hash_token(raw, pepper=security.signing_key.encode())
+    assert datetime.fromisoformat(row["last_used_at"]).tzinfo == UTC
+
+
 def test_revoke_then_verify_fails(repo):
     entry, raw = repo.create_key("ci", "admin")
     assert repo.revoke_key(entry.id) is True
@@ -103,7 +199,7 @@ class _Provider:
     """A non-NoAuth provider so the auth path is exercised."""
 
 
-def _make_request(db_path, *, bearer=None, role_map=None) -> Request:
+def _make_request(db_path, *, bearer=None, role_map=None, security=None) -> Request:
     headers = []
     if bearer is not None:
         headers.append((b"authorization", f"Bearer {bearer}".encode()))
@@ -114,7 +210,9 @@ def _make_request(db_path, *, bearer=None, role_map=None) -> Request:
         admin_users=[],
     )
     app = SimpleNamespace(
-        state=SimpleNamespace(auth_provider=_Provider(), settings=settings, security=None)
+        state=SimpleNamespace(
+            auth_provider=_Provider(), settings=settings, security=security
+        )
     )
     scope = {
         "type": "http",
@@ -143,6 +241,19 @@ async def test_require_auth_accepts_api_key(seeded):
     request = _make_request(db, bearer=raw)
     assert await require_auth(request) == "svc"
     assert request.state.api_key_auth is True
+
+
+@pytest.mark.anyio
+async def test_authenticate_api_key_uses_request_security_context(seeded):
+    db, _ = seeded
+    security = SecurityContext(
+        signing_key="persisted-auth-secret",
+        csrf_secret="persisted-csrf-secret",
+    )
+    _, raw = SqliteApiKeyRepository(db, security=security).create_key("svc", "read")
+    request = _make_request(db, bearer=raw, security=security)
+
+    assert authenticate_api_key(request, db) is not None
 
 
 @pytest.mark.anyio

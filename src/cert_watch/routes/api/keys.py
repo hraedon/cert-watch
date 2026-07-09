@@ -15,12 +15,19 @@ from fastapi.responses import JSONResponse
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
-from cert_watch.middleware import require_admin, require_admin_write
+from cert_watch.middleware import _request_security, require_admin, require_admin_write
 from cert_watch.routes._deps import IdParam, _db_path
 
 logger = logging.getLogger("cert_watch.routes.api.keys")
 
 router = APIRouter()
+
+
+def _repository(request: Request) -> SqliteApiKeyRepository:
+    return SqliteApiKeyRepository(
+        _db_path(request),
+        security=_request_security(request),
+    )
 
 
 def _entry_json(entry: ApiKeyEntry) -> dict[str, Any]:
@@ -38,7 +45,7 @@ def _entry_json(entry: ApiKeyEntry) -> dict[str, Any]:
 def api_list_keys(
     request: Request, _auth: str = Depends(require_admin)
 ) -> JSONResponse:
-    repo = SqliteApiKeyRepository(_db_path(request))
+    repo = _repository(request)
     return JSONResponse(content={"api_keys": [_entry_json(e) for e in repo.list_keys()]})
 
 
@@ -61,7 +68,7 @@ async def api_create_key(
             status_code=400,
         )
 
-    repo = SqliteApiKeyRepository(_db_path(request))
+    repo = _repository(request)
     with get_write_lock():
         entry, raw_token = repo.create_key(name, scope)
         record_audit(
@@ -84,7 +91,7 @@ async def api_create_key(
 async def api_revoke_key(
     key_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
 ) -> JSONResponse:
-    repo = SqliteApiKeyRepository(_db_path(request))
+    repo = _repository(request)
     with get_write_lock():
         revoked = repo.revoke_key(key_id)
         if not revoked:
