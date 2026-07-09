@@ -28,7 +28,7 @@ are on a pre-0.9.0 release, take the two-step path below.
 1. **Back up first.** The app makes its own pre-migration backup, but take your
    own as well:
    ```bash
-   cert-watch backup            # writes a WAL-safe copy via VACUUM INTO
+   cert-watch backup /backups/cert-watch-pre-upgrade.sqlite3
    ```
    or simply stop the app and copy the `.sqlite3` file (plus any `-wal`/`-shm`).
 2. **Deploy 1.0** over the same data directory / volume.

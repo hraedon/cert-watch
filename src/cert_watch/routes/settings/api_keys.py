@@ -15,6 +15,13 @@ from cert_watch.routes.settings.render import _render_api_keys
 router = APIRouter()
 
 
+def _repository(request: Request) -> SqliteApiKeyRepository:
+    return SqliteApiKeyRepository(
+        _db_path(request),
+        security=getattr(request.app.state, "security", None),
+    )
+
+
 @router.get("/settings/api-keys", response_model=None)
 def api_keys_page(request: Request) -> RedirectResponse:
     redirect_resp = require_admin_form(request)
@@ -43,7 +50,7 @@ async def api_keys_create(
     if scope not in VALID_SCOPES:
         return _render_api_keys(request, error="Invalid scope.")
 
-    repo = SqliteApiKeyRepository(_db_path(request))
+    repo = _repository(request)
     with get_write_lock():
         entry, raw_token = repo.create_key(name, scope)
     record_audit(
@@ -70,7 +77,7 @@ async def api_keys_revoke(
     if csrf_err:
         return _render_api_keys(request, error=csrf_err)
     with get_write_lock():
-        SqliteApiKeyRepository(_db_path(request)).revoke_key(key_id)
+        _repository(request).revoke_key(key_id)
     record_audit(
         _db_path(request),
         actor=resolve_actor(request),

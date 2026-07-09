@@ -597,7 +597,9 @@ def authenticate_api_key(
         return None
     from cert_watch.database.api_keys import SqliteApiKeyRepository
 
-    result = SqliteApiKeyRepository(db_path).verify_key(token)
+    result = SqliteApiKeyRepository(
+        db_path, security=_request_security(request)
+    ).verify_key(token)
     if result is None:
         return None
     role = _API_KEY_SCOPE_ROLE.get(result.scope, ROLE_VIEWER)
