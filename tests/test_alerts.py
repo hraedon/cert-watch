@@ -1206,6 +1206,51 @@ def test_expiry_digest_partial_smtp_failure_returns_false(tmp_path):
     assert result is False
 
 
+def test_expiry_digest_conn_break_retries_remaining_owners(tmp_path):
+    """Regression: if a send fails on the shared SMTP connection (connection
+    breaks), remaining owner digests must be retried via _send_digest_smtp
+    (which creates a new connection per send), not silently lost."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+
+    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
+    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
+    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
+    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
+
+    config = AlertConfig(
+        smtp_host="smtp.test", smtp_user="", smtp_password="",
+        from_addr="from@test", recipients=["admin@example.com"],
+    )
+
+    shared_calls = 0
+
+    def _shared_send(msg):
+        nonlocal shared_calls
+        shared_calls += 1
+        if shared_calls >= 2:
+            raise ConnectionError("connection dropped")
+        return None
+
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_conn = mock_smtp.SMTP.return_value
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.send_message.side_effect = _shared_send
+        result = send_expiry_digest(db, config)
+
+    # Global succeeded, owner send broke the connection, remaining owner was
+    # retried via _send_digest_smtp (same mock → same failure).  The result
+    # is False because not all sends succeeded, and no webhook is configured.
+    assert result is False
+    # Global + failed owner on shared conn + at least 1 retry = > 2 calls.
+    assert mock_conn.send_message.call_count > 2
+
+
 def test_expiry_digest_webhook_strips_owner_email_pii(tmp_path):
     """WI-A.2: webhook payload must not contain owner_email PII."""
     from datetime import UTC, datetime, timedelta

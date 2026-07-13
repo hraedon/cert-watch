@@ -1245,7 +1245,11 @@ def send_expiry_digest(
 
     if config is not None:
         smtp_conn = _open_smtp_connection(config)
+        global_sent = False
+        sent_owners: set[str] = set()
+
         if smtp_conn is not None:
+            conn_broken = False
             try:
                 if global_recipients_cf:
                     msg = _build_digest_email(
@@ -1254,40 +1258,47 @@ def send_expiry_digest(
                     try:
                         smtp_conn.send_message(msg)
                         any_smtp_success = True
+                        global_sent = True
                     except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
                         logger.warning(
                             "global digest failed: %s",
                             _sanitize_smtp_error(str(exc), config),
                         )
                         any_smtp_failure = True
-                for cf_email, certs in owner_certs.items():
-                    original = original_emails.get(cf_email, cf_email)
-                    oname = owner_names.get(cf_email)
-                    msg = _build_digest_email(
-                        certs, [original], config.from_addr, owner_name=oname,
-                    )
-                    try:
-                        smtp_conn.send_message(msg)
-                        any_smtp_success = True
-                    except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
-                        logger.warning(
-                            "owner digest for %s failed: %s",
-                            original,
-                            _sanitize_smtp_error(str(exc), config),
+                        conn_broken = True
+                if not conn_broken:
+                    for cf_email, certs in owner_certs.items():
+                        original = original_emails.get(cf_email, cf_email)
+                        oname = owner_names.get(cf_email)
+                        msg = _build_digest_email(
+                            certs, [original], config.from_addr, owner_name=oname,
                         )
-                        any_smtp_failure = True
+                        try:
+                            smtp_conn.send_message(msg)
+                            any_smtp_success = True
+                            sent_owners.add(cf_email)
+                        except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
+                            logger.warning(
+                                "owner digest for %s failed: %s",
+                                original,
+                                _sanitize_smtp_error(str(exc), config),
+                            )
+                            any_smtp_failure = True
+                            conn_broken = True
+                            break
             finally:
                 with contextlib.suppress(Exception):
                     smtp_conn.quit()
-        else:
-            if global_recipients_cf:
-                if _send_digest_smtp(
-                    expiring, global_recipients_original, config,
-                ):
-                    any_smtp_success = True
-                else:
-                    any_smtp_failure = True
-            for cf_email, certs in owner_certs.items():
+
+        if not global_sent and global_recipients_cf:
+            if _send_digest_smtp(
+                expiring, global_recipients_original, config,
+            ):
+                any_smtp_success = True
+            else:
+                any_smtp_failure = True
+        for cf_email, certs in owner_certs.items():
+            if cf_email not in sent_owners:
                 original = original_emails.get(cf_email, cf_email)
                 oname = owner_names.get(cf_email)
                 if _send_digest_smtp(

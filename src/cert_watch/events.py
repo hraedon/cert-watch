@@ -427,11 +427,41 @@ def get_events(
     return [dict(r) for r in rows]
 
 
-def get_failed_deliveries(db_path: str | Path, *, limit: int = 50) -> list[dict[str, Any]]:
+def get_failed_deliveries(
+    db_path: str | Path,
+    *,
+    limit: int = 50,
+    scope_tags: tuple[str, ...] = (),
+) -> list[dict[str, Any]]:
+    conditions = ["delivery_status = 'failed'"]
+    params: list[Any] = []
+    if scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        host_sub = "SELECT hostname FROM hosts WHERE 1=1"
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="tags"
+        )
+        cert_sub = (
+            "SELECT 1 FROM certificates c"
+            " WHERE c.id = json_extract(payload, '$.cert_id')"
+        )
+        cert_sub, cert_params = _add_effective_tag_filter(
+            cert_sub, [], scope_tags, col_cert="c.tags", col_host="''",
+        )
+        conditions.append(
+            "(json_extract(payload, '$.hostname') IS NOT NULL"
+            f" AND json_extract(payload, '$.hostname') IN ({host_sub})"
+            f" OR (json_extract(payload, '$.hostname') IS NULL"
+            f" AND json_extract(payload, '$.cert_id') IS NOT NULL"
+            f" AND EXISTS ({cert_sub})))"
+        )
+        params = params + host_params + cert_params
+    where = " WHERE " + " AND ".join(conditions)
     with _connect(db_path) as conn:
         rows = conn.execute(
-            "SELECT * FROM event_log WHERE delivery_status = 'failed' ORDER BY id DESC LIMIT ?",
-            (limit,),
+            f"SELECT * FROM event_log{where} ORDER BY id DESC LIMIT ?",
+            params + [limit],
         ).fetchall()
     return [dict(r) for r in rows]
 

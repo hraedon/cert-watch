@@ -391,7 +391,17 @@ def send_renewal_digest(
     # Surface orphaned certs (no alert routing) to admins as part of the digest
     # run — independent of renewal activity, so a quiet week still flags them.
     # Logs its own failures; does not gate the renewal-digest return value.
-    send_orphan_notice(db_path, alert_config)
+    # Offloaded to the thread pool so SMTP latency does not block the scheduler
+    # thread (same bug class as WI-134 webhook path).
+    try:
+        with _digest_pool_lock:
+            _digest_pool.submit(send_orphan_notice, db_path, alert_config)
+    except Exception:
+        logger.warning(
+            "orphan notice pool submit failed; delivering inline",
+            exc_info=True,
+        )
+        send_orphan_notice(db_path, alert_config)
 
     digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
     if not digests:
@@ -411,12 +421,14 @@ def send_renewal_digest(
                 global_recipients_original.append(r)
         global_recipients_cf = seen
 
+    original_emails: dict[str, str] = {}
     owner_digests: dict[str, RenewalDigest] = {}
     for d in digests:
         if not _validate_email(d.owner_email):
             logger.warning("skipping invalid owner_email digest: %r", d.owner_email)
             continue
         cf = d.owner_email.casefold()
+        original_emails.setdefault(cf, d.owner_email)
         if cf and cf not in global_recipients_cf:
             owner_digests.setdefault(cf, d)
 
@@ -424,79 +436,94 @@ def send_renewal_digest(
     any_smtp_failure = False
 
     if isinstance(alert_config, AlertConfig):
+        import contextlib
+
+        effective_days = cadence_days if cadence_days is not None else days
+
+        global_digest = RenewalDigest(
+            days=effective_days,
+            renewed_count=sum(d.renewed_count for d in digests),
+            renewed_hosts=sorted({h for d in digests for h in d.renewed_hosts}),
+            overdue_count=sum(d.overdue_count for d in digests),
+            overdue_hosts=sorted({h for d in digests for h in d.overdue_hosts}),
+            shortened_count=sum(d.shortened_count for d in digests),
+            shortened_hosts=sorted({h for d in digests for h in d.shortened_hosts}),
+        )
+        global_body = _build_digest_message(global_digest)
+        global_subject = (
+            f"[cert-watch] Renewal Digest: "
+            f"{global_digest.renewed_count} renewed, "
+            f"{global_digest.overdue_count} overdue"
+        )
+
+        def _build_global_msg() -> EmailMessage:
+            m = EmailMessage()
+            m["Subject"] = global_subject
+            m["From"] = alert_config.from_addr
+            m["To"] = ", ".join(global_recipients_original)
+            m.set_content(global_body)
+            return m
+
+        def _build_owner_msg(cf_email: str, od: RenewalDigest) -> EmailMessage:
+            body = _build_digest_message(od)
+            subject = (
+                f"[cert-watch] Renewal Digest: "
+                f"{od.renewed_count} renewed, {od.overdue_count} overdue"
+            )
+            original = original_emails.get(cf_email, cf_email)
+            m = EmailMessage()
+            m["Subject"] = subject
+            m["From"] = alert_config.from_addr
+            m["To"] = original
+            m.set_content(body)
+            return m
+
         smtp_conn = _open_smtp_connection(alert_config)
+        global_sent = False
+        sent_owners: set[str] = set()
+
         if smtp_conn is not None:
+            conn_broken = False
             try:
-                # Global digest: aggregate all owner digests into one fleet summary.
-                global_digest = RenewalDigest(
-                    days=days,
-                    renewed_count=sum(d.renewed_count for d in digests),
-                    renewed_hosts=sorted({h for d in digests for h in d.renewed_hosts}),
-                    overdue_count=sum(d.overdue_count for d in digests),
-                    overdue_hosts=sorted({h for d in digests for h in d.overdue_hosts}),
-                    shortened_count=sum(d.shortened_count for d in digests),
-                    shortened_hosts=sorted({h for d in digests for h in d.shortened_hosts}),
-                )
-                global_body = _build_digest_message(global_digest)
-                global_subject = (
-                    f"[cert-watch] Renewal Digest: "
-                    f"{global_digest.renewed_count} renewed, "
-                    f"{global_digest.overdue_count} overdue"
-                )
-                from email.message import EmailMessage
-                global_msg = EmailMessage()
-                global_msg["Subject"] = global_subject
-                global_msg["From"] = alert_config.from_addr
-                global_msg["To"] = ", ".join(global_recipients_original)
-                global_msg.set_content(global_body)
-                try:
-                    smtp_conn.send_message(global_msg)
-                    any_smtp_success = True
-                except Exception as exc:
-                    logger.warning(
-                        "global renewal digest failed: %s",
-                        _sanitize_smtp_error(str(exc), alert_config),
-                    )
-                    any_smtp_failure = True
-                for cf_email, od in owner_digests.items():
-                    body = _build_digest_message(od)
-                    subject = (
-                        f"[cert-watch] Renewal Digest: "
-                        f"{od.renewed_count} renewed, {od.overdue_count} overdue"
-                    )
-                    m = EmailMessage()
-                    m["Subject"] = subject
-                    m["From"] = alert_config.from_addr
-                    m["To"] = cf_email
-                    m.set_content(body)
+                if global_recipients_original:
                     try:
-                        smtp_conn.send_message(m)
+                        smtp_conn.send_message(_build_global_msg())
                         any_smtp_success = True
+                        global_sent = True
                     except Exception as exc:
                         logger.warning(
-                            "owner digest for %s failed: %s",
-                            cf_email,
+                            "global renewal digest failed: %s",
                             _sanitize_smtp_error(str(exc), alert_config),
                         )
                         any_smtp_failure = True
+                        conn_broken = True
+                if not conn_broken:
+                    for cf_email, od in owner_digests.items():
+                        try:
+                            smtp_conn.send_message(_build_owner_msg(cf_email, od))
+                            any_smtp_success = True
+                            sent_owners.add(cf_email)
+                        except Exception as exc:
+                            logger.warning(
+                                "owner digest for %s failed: %s",
+                                original_emails.get(cf_email, cf_email),
+                                _sanitize_smtp_error(str(exc), alert_config),
+                            )
+                            any_smtp_failure = True
+                            conn_broken = True
+                            break
             finally:
-                import contextlib
                 with contextlib.suppress(Exception):
                     smtp_conn.quit()
-        else:
-            for cf_email, od in owner_digests.items():
-                body = _build_digest_message(od)
-                subject = (
-                    f"[cert-watch] Renewal Digest: "
-                    f"{od.renewed_count} renewed, {od.overdue_count} overdue"
-                )
-                from email.message import EmailMessage
-                m = EmailMessage()
-                m["Subject"] = subject
-                m["From"] = alert_config.from_addr
-                m["To"] = cf_email
-                m.set_content(body)
-                if _send_digest_email_msg(m, alert_config):
+
+        if not global_sent and global_recipients_original:
+            if _send_digest_email_msg(_build_global_msg(), alert_config):
+                any_smtp_success = True
+            else:
+                any_smtp_failure = True
+        for cf_email, od in owner_digests.items():
+            if cf_email not in sent_owners:
+                if _send_digest_email_msg(_build_owner_msg(cf_email, od), alert_config):
                     any_smtp_success = True
                 else:
                     any_smtp_failure = True
@@ -504,7 +531,7 @@ def send_renewal_digest(
     if any_smtp_success and not any_smtp_failure:
         return True
 
-    if any_smtp_failure:
+    if any_smtp_failure and webhook_config is None:
         return False
 
     if isinstance(webhook_config, WebhookConfig):

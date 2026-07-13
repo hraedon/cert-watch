@@ -444,6 +444,71 @@ def test_re_encrypt_skips_undecryptable(tmp_path):
     assert kv_get(db, "smtp_password", encryption_key=good_key) == "hunter2"
 
 
+def test_re_encrypt_v1_to_v2_migration(tmp_path):
+    """Simulate a real production migration from enc:v1: (legacy SHA-256) to
+    enc:v2: (HKDF) values.
+
+    The existing re_encrypt tests use derive_encryption_key (v2) for both old
+    and new keys — they never exercise the v1→v2 path. This test creates
+    genuine enc:v1: values with the legacy key derivation, migrates them, and
+    verifies the output is enc:v2: and decrypts correctly with the new key.
+    """
+    from cryptography.fernet import Fernet
+
+    from cert_watch.database.encryption import (
+        _ENCRYPTED_PREFIX,
+        _ENCRYPTED_PREFIX_V2,
+        derive_encryption_key,
+        derive_encryption_key_legacy,
+        fernet_decrypt,
+    )
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    signing_key = "production-signing-key-2025"
+    legacy_key = derive_encryption_key_legacy(signing_key)
+    new_key = derive_encryption_key(signing_key)
+
+    # Simulate v1-encrypted values as they'd exist in a production DB
+    # before the HKDF migration.
+    secrets = {
+        "smtp_password": "hunter2",
+        "ldap_bind_password": "secret123",
+        "webhook_headers": '{"Authorization": "Bearer tok"}',
+    }
+    for k, v in secrets.items():
+        token = Fernet(legacy_key.encode()).encrypt(v.encode()).decode()
+        kv_set(db, k, _ENCRYPTED_PREFIX + token)
+
+    # Also include a plaintext value and a v2 value to verify they're handled.
+    kv_set(db, "alert_recipients", "admin@example.com")
+    v2_token = Fernet(new_key.encode()).encrypt(b"already-v2").decode()
+    kv_set(db, "event_webhook_url", _ENCRYPTED_PREFIX_V2 + v2_token)
+
+    # Run the migration
+    count = re_encrypt_kv_store(db, legacy_key, new_key)
+    assert count == 3  # only the 3 v1 secrets
+
+    # All v1 values should now be v2 and decrypt correctly with new key
+    for k, expected_plain in secrets.items():
+        stored = kv_get(db, k)
+        assert stored.startswith(_ENCRYPTED_PREFIX_V2), f"{k} not migrated to v2"
+        assert not stored.startswith(_ENCRYPTED_PREFIX), f"{k} still v1"
+        decrypted = fernet_decrypt(stored, new_key)
+        assert decrypted == expected_plain, f"{k} plaintext mismatch after migration"
+
+    # Plaintext value untouched
+    assert kv_get(db, "alert_recipients") == "admin@example.com"
+
+    # Pre-existing v2 value untouched (still v2, still decrypts)
+    v2_stored = kv_get(db, "event_webhook_url")
+    assert v2_stored.startswith(_ENCRYPTED_PREFIX_V2)
+    assert fernet_decrypt(v2_stored, new_key) == "already-v2"
+
+    # No v1 values remain
+    assert check_encrypted_values(db, new_key) == []
+
+
 # --- WI-024: connection lifetime ---------------------------------------------
 
 

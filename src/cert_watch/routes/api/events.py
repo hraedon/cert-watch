@@ -102,5 +102,6 @@ def api_failed_deliveries(
     limit: int = Query(50, ge=1, le=500),
 ) -> JSONResponse:
     db = _db_path(request)
-    failures = get_failed_deliveries(db, limit=limit)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    failures = get_failed_deliveries(db, limit=limit, scope_tags=scope_tags)
     return JSONResponse(content={"events": failures})

@@ -75,6 +75,9 @@ from cert_watch.database.dashboard_helpers import (
 from cert_watch.database.dashboard_helpers import (
     _sort_unified as _sort_unified,
 )
+from cert_watch.database.dashboard_helpers import (
+    build_scope_tag_clause as build_scope_tag_clause,
+)
 
 # --- page ------------------------------------------------------------------
 from cert_watch.database.dashboard_page import (
@@ -132,6 +135,7 @@ __all__ = [
     "_SQL_DIRS",
     "_UNIFIED_SORT_KEYS",
     "_add_effective_tag_filter",
+    "build_scope_tag_clause",
     "_add_grouped_effective_tag_filter",
     "_safe_col",
     "_safe_dir",

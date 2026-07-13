@@ -219,3 +219,117 @@ class TestSendRenewalDigest:
             result = send_renewal_digest(db, None, wh, days=7)
             _flush_digest_pool()
         assert result is True
+
+    def test_global_digest_sent_in_smtp_fallback(self, empty_db):
+        """Global digest must be sent even when the initial SMTP connection fails.
+
+        Regression: when _open_smtp_connection returned None, the fallback path
+        only sent owner-specific digests and silently dropped the global digest.
+        """
+        from cert_watch.alerts import AlertConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="alice@test")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["global@recipient.test"],
+        )
+        with patch("cert_watch.alerts.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")), \
+             patch("cert_watch.retry.time.sleep"), \
+             patch("cert_watch.digest._send_digest_email_msg", return_value=True) as mock_fallback:
+            result = send_renewal_digest(db, config, None, days=7)
+        assert result is True  # global + owner retried via _send_digest_email_msg, both succeeded
+        sent_tos = [
+            str(call.args[0]["To"]) for call in mock_fallback.call_args_list
+        ]
+        assert any("global@recipient.test" in to for to in sent_tos), \
+            "global digest must be sent via fallback when initial SMTP connection fails"
+
+    def test_owner_digest_to_header_uses_original_casing(self, empty_db):
+        """The To header must use the original email casing, not casefolded."""
+        from cert_watch.alerts import AlertConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="Alice@Example.COM")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["global@recipient.test"],
+        )
+        smtp_mock = MagicMock()
+        with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+            send_renewal_digest(db, config, None, days=7)
+
+        sent_msgs = smtp_mock.send_message.call_args_list
+        owner_msgs = [
+            call.args[0] for call in sent_msgs
+            if "Alice@Example.COM" in str(call.args[0]["To"])
+        ]
+        assert len(owner_msgs) == 1, "owner digest To header must use original casing"
+
+    def test_webhook_tried_when_smtp_fails(self, empty_db):
+        """Webhook must be tried as a fallback when SMTP delivery fails.
+
+        Regression: when SMTP had failures, the function returned False
+        immediately without trying the webhook fallback.
+        """
+        from cert_watch.alerts import AlertConfig, WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["global@recipient.test"],
+        )
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        with patch("cert_watch.alerts.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")), \
+             patch("cert_watch.retry.time.sleep"), \
+             patch("cert_watch.alerts.send_webhook", return_value=True) as mock_wh:
+            result = send_renewal_digest(db, config, wh, days=7)
+            _flush_digest_pool()
+        assert result is True
+        assert mock_wh.call_count >= 1
+
+    def test_smtp_connection_break_falls_back_to_per_send(self, empty_db):
+        """If a send fails on the shared SMTP connection, remaining sends
+        must be retried with new connections via _send_digest_email_msg."""
+        from cert_watch.alerts import AlertConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="alice@test")
+        _add_host(db, "host-b.example.com", owner_email="bob@test")
+        _emit_renewal(db, "host-a.example.com")
+        _emit_renewal(db, "host-b.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["global@test"],
+        )
+        smtp_mock = MagicMock()
+        # First send (global) succeeds, second send (first owner) fails,
+        # breaking the connection. Remaining owner should be retried.
+        smtp_mock.send_message.side_effect = [None, ConnectionError("conn dropped")]
+        with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock), \
+             patch("cert_watch.retry.time.sleep"), \
+             patch("cert_watch.digest._send_digest_email_msg", return_value=True) as mock_fallback:
+            send_renewal_digest(db, config, None, days=7)
+
+        # The shared connection made 2 calls (global + failed owner).
+        # The fallback _send_digest_email_msg must have been called for the
+        # remaining unsent owner (proving the retry fired).
+        assert smtp_mock.send_message.call_count == 2
+        assert mock_fallback.call_count >= 1, \
+            "unsent owner digest must be retried via _send_digest_email_msg"

@@ -211,5 +211,42 @@ def test_send_renewal_digest_invokes_orphan_notice(db_path: Path):
     _add_leaf(db_path, "lonely.example.com")  # orphan, no renewal activity
     with patch("cert_watch.digest.send_orphan_notice") as spy:
         send_renewal_digest(db_path, _cfg(), None, days=7)
+        from cert_watch.digest import _flush_digest_pool
+        _flush_digest_pool()
     spy.assert_called_once()
     assert spy.call_args[0][0] == db_path
+
+
+def test_orphan_notice_offloaded_to_pool_not_blocking(db_path: Path):
+    """The orphan notice SMTP delivery must not block the scheduler thread.
+
+    Same bug class as WI-134 (webhook path): if send_orphan_notice runs
+    synchronously in send_renewal_digest, a slow SMTP server stalls the
+    scheduler. Verify the call is submitted to the thread pool.
+    """
+    from cert_watch.digest import _flush_digest_pool
+
+    _make_admin(db_path, "boss@co.com")
+    _add_leaf(db_path, "lonely.example.com")
+    submit_mock = MagicMock(wraps=lambda *a, **kw: None)
+    with patch("cert_watch.digest._digest_pool.submit", new=submit_mock):
+        send_renewal_digest(db_path, _cfg(), None, days=7)
+        _flush_digest_pool()
+    assert submit_mock.called, "orphan notice must be submitted to the thread pool"
+
+
+def test_orphan_notice_pool_submit_fallback_inline(db_path: Path):
+    """When the pool submit fails, orphan notice falls back to inline delivery."""
+    from cert_watch.digest import _flush_digest_pool
+
+    _make_admin(db_path, "boss@co.com")
+    _add_leaf(db_path, "lonely.example.com")
+    conn = _patch_smtp()
+    with patch("cert_watch.alerts._open_smtp_connection", return_value=conn), \
+         patch(
+             "cert_watch.digest._digest_pool.submit",
+             side_effect=RuntimeError("pool closed"),
+         ):
+        send_renewal_digest(db_path, _cfg(), None, days=7)
+        _flush_digest_pool()
+    conn.send_message.assert_called_once()
