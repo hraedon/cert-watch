@@ -665,24 +665,13 @@ def insights_view(
     try:
         with _connect(db) as conn:
             if scope_tags:
-                from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+                from cert_watch.database.dashboard_helpers import build_scope_tag_clause
 
-                cert_cond = "1=1"
-                cert_cond, cert_params = _add_effective_tag_filter(
-                    cert_cond, [], scope_tags,
-                    col_cert="certificates.tags", col_host="''",
-                )
-                host_sub = (
-                    "SELECT 1 FROM hosts h WHERE h.hostname = certificates.hostname"
-                    " AND h.port = certificates.port"
-                )
-                host_sub, host_params = _add_effective_tag_filter(
-                    host_sub, [], scope_tags, col_cert=None, col_host="h.tags",
-                )
+                scope_clause, scope_params = build_scope_tag_clause(scope_tags)
                 row = conn.execute(
                     f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
-                    f" AND ({cert_cond} OR EXISTS ({host_sub}))",
-                    cert_params + host_params,
+                    f" AND {scope_clause}",
+                    scope_params,
                 ).fetchone()
             else:
                 row = conn.execute(

@@ -210,6 +210,52 @@ class TestEventsScopeFiltering:
         assert len(events) == 3
 
 
+# ── get_failed_deliveries ──────────────────────────────────────────────────
+
+
+class TestFailedDeliveriesScopeFiltering:
+    def test_scoped_sees_only_team_failures(self, db: Path):
+        from cert_watch.events import get_failed_deliveries
+
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            for hostname in ("host-a.example.com", "host-b.example.com"):
+                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                conn.execute(
+                    "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                    " delivery_status, error_message, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("scan_failed", datetime.now(UTC).isoformat(), "scan", payload,
+                     "failed", "conn refused", datetime.now(UTC).isoformat()),
+                )
+            conn.commit()
+        failures = get_failed_deliveries(db, scope_tags=("team-a",))
+        hostnames = {
+            json.loads(e["payload"]).get("hostname")
+            for e in failures
+            if e.get("payload")
+        }
+        assert hostnames == {"host-a.example.com"}
+
+    def test_unscoped_sees_all_failures(self, db: Path):
+        from cert_watch.events import get_failed_deliveries
+
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            for hostname in ("host-a.example.com", "host-b.example.com"):
+                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                conn.execute(
+                    "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                    " delivery_status, error_message, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("scan_failed", datetime.now(UTC).isoformat(), "scan", payload,
+                     "failed", "conn refused", datetime.now(UTC).isoformat()),
+                )
+            conn.commit()
+        failures = get_failed_deliveries(db, scope_tags=())
+        assert len(failures) == 2
+
+
 # ── renewal analytics ─────────────────────────────────────────────────────
 
 
@@ -371,6 +417,73 @@ class TestCalendarScopeFiltering:
         assert total == 0
 
 
+# ── build_scope_tag_clause (shared helper) ─────────────────────────────────
+
+
+class TestBuildScopeTagClause:
+    """Tests for the shared scope-filter helper extracted from calendar.py
+    and views.py to eliminate duplicated logic."""
+
+    def test_empty_scope_returns_no_filter(self):
+        from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+        clause, params = build_scope_tag_clause(())
+        assert clause == "1=1"
+        assert params == []
+
+    def test_none_scope_returns_no_filter(self):
+        from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+        clause, params = build_scope_tag_clause(None)
+        assert clause == "1=1"
+        assert params == []
+
+    def test_clause_matches_scoped_certs(self, db: Path):
+        from cert_watch.database.connection import _connect
+        from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+        _seed_two_teams(db)
+        clause, params = build_scope_tag_clause(("team-a",))
+        with _connect(db) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 AND ({clause})",
+                params,
+            ).fetchone()
+        assert row[0] == 1
+
+    def test_clause_matches_scoped_hosts(self, db: Path):
+        """Cert with no tag but whose host has matching tag is visible."""
+        from cert_watch.database.connection import _connect
+        from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+        with _connect(db) as conn:
+            _insert_host(conn, "host-d.example.com", tags="team-d")
+            _insert_cert(conn, "cert-d", "host-d.example.com", tags="")
+            conn.commit()
+        clause, params = build_scope_tag_clause(("team-d",))
+        with _connect(db) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 AND ({clause})",
+                params,
+            ).fetchone()
+        assert row[0] == 1
+
+    def test_clause_excludes_wrong_tag(self, db: Path):
+        from cert_watch.database.connection import _connect
+        from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+        with _connect(db) as conn:
+            _insert_cert(conn, "cert-x", "", port=0, tags="team-x", source="uploaded")
+            conn.commit()
+        clause, params = build_scope_tag_clause(("team-a",))
+        with _connect(db) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 AND ({clause})",
+                params,
+            ).fetchone()
+        assert row[0] == 0
+
+
 # ── readiness ──────────────────────────────────────────────────────────────
 
 
@@ -445,6 +558,53 @@ class TestApiRoutesScopeFiltering:
             if e.get("payload")
         }
         assert hostnames == {"host-a.example.com"}
+
+    def test_api_events_failed_scoped(self, db: Path, tmp_path: Path):
+        """get_failed_deliveries must apply scope_tags (same as get_events)."""
+        _seed_two_teams(db)
+        # Insert failed delivery events for both teams
+        with _connect(db) as conn:
+            for hostname in ("host-a.example.com", "host-b.example.com"):
+                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                conn.execute(
+                    "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                    " delivery_status, error_message, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("scan_failed", datetime.now(UTC).isoformat(), "scan", payload,
+                     "failed", "conn refused", datetime.now(UTC).isoformat()),
+                )
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client:
+            r = client.get("/api/events/failed")
+        assert r.status_code == 200
+        events = r.json()["events"]
+        hostnames = {
+            json.loads(e["payload"]).get("hostname")
+            for e in events
+            if e.get("payload")
+        }
+        assert hostnames == {"host-a.example.com"}
+
+    def test_api_events_failed_unscoped(self, db: Path, tmp_path: Path):
+        """Unscoped users see all failed deliveries."""
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            for hostname in ("host-a.example.com", "host-b.example.com"):
+                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                conn.execute(
+                    "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                    " delivery_status, error_message, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    ("scan_failed", datetime.now(UTC).isoformat(), "scan", payload,
+                     "failed", "conn refused", datetime.now(UTC).isoformat()),
+                )
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="")
+        with _scoped_client(app, groups) as client:
+            r = client.get("/api/events/failed")
+        assert r.status_code == 200
+        assert len(r.json()["events"]) == 2
 
     def test_api_renewal_analytics_scoped(self, db: Path, tmp_path: Path):
         _seed_two_teams(db)

@@ -64,6 +64,42 @@ def _add_effective_tag_filter(
     return f"{sql} AND ({' OR '.join(conditions)})", params + new_params
 
 
+def build_scope_tag_clause(
+    scope_tags: list[str] | tuple[str, ...] | None,
+    *,
+    cert_table: str = "certificates",
+    cert_tags_col: str = "tags",
+    host_alias: str = "h",
+) -> tuple[str, list[Any]]:
+    """Build a ``(cert_tags OR EXISTS host_tags)`` scope filter clause.
+
+    Returns a SQL fragment (without leading ``AND``) and its parameters,
+    suitable for appending to a ``WHERE`` clause on the ``certificates`` table.
+    When *scope_tags* is empty or None, returns ``("1=1", [])`` (no filter).
+
+    This is the shared helper for the scope-filter pattern that was
+    duplicated between ``database/calendar.py`` and ``routes/views.py``
+    (insights_view total-certs count).
+    """
+    if not scope_tags:
+        return "1=1", []
+    cert_cond = "1=1"
+    cert_cond, cert_params = _add_effective_tag_filter(
+        cert_cond, [], scope_tags,
+        col_cert=f"{cert_table}.{cert_tags_col}", col_host="''",
+    )
+    host_sub = (
+        f"SELECT 1 FROM hosts {host_alias}"
+        f" WHERE {host_alias}.hostname = {cert_table}.hostname"
+        f" AND {host_alias}.port = {cert_table}.port"
+    )
+    host_sub, host_params = _add_effective_tag_filter(
+        host_sub, [], scope_tags, col_cert=None, col_host=f"{host_alias}.tags",
+    )
+    clause = f"({cert_cond} OR EXISTS ({host_sub}))"
+    return clause, cert_params + host_params
+
+
 def _add_grouped_effective_tag_filter(
     sql: str,
     params: list[Any],
