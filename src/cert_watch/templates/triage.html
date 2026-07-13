@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — triage{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+{% import "macros/urgency.html" as urgency_macros %}
+
+{% block content %}
+<div class="cw-page-wrap">
+  {# ---- Page header ---- #}
+  <div class="cw-page-head">
+    <div>
+      <h1 data-testid="triage-heading">Triage</h1>
+      <div class="cw-page-head-sub">What needs attention now — and what breaks next if nothing is done.</div>
+    </div>
+  </div>
+
+  {# ---- 90-day horizon timeline ---- #}
+  <div class="cw-panel cw-p-16-18 cw-mb-18">
+    <div class="cw-flex cw-items-center cw-gap-9 cw-mb-4">
+      {{ icons.svg_icon('calendar', 16) }}
+      <span class="cw-fz-14 cw-fw-600">Next {{ horizon_days }} days</span>
+      <span class="cw-fz-12 cw-text-text-3" data-testid="horizon-summary">
+        {%- if horizon_cert_count -%}
+          {{ horizon_cert_count }} certificate{{ 's' if horizon_cert_count != 1 }} expiring
+        {%- else -%}
+          no expiries in this window
+        {%- endif -%}
+      </span>
+      <div class="cw-spacer"></div>
+      <div class="cw-flex cw-gap-14 cw-fz-11-5 cw-text-text-2">
+        <span class="cw-inline-flex cw-items-center cw-gap-5"><span class="cw-legend-dot crit"></span>&lt; 7d</span>
+        <span class="cw-inline-flex cw-items-center cw-gap-5"><span class="cw-legend-dot warn"></span>&lt; 30d</span>
+        <span class="cw-inline-flex cw-items-center cw-gap-5"><span class="cw-legend-dot ok"></span>later</span>
+      </div>
+    </div>
+    {% if horizon %}
+    <div class="cw-timeline" data-testid="triage-timeline" role="img"
+         aria-label="Expiry timeline: {{ horizon_cert_count }} certificate{{ 's' if horizon_cert_count != 1 }} expiring in the next {{ horizon_days }} days">
+      <div class="cw-timeline-axis"></div>
+      {% for tick in [0, 30, 60, 90] %}
+      <div class="cw-timeline-tick" style="left:{{ (tick / horizon_days * 100) | round(2) }}%">
+        <span class="mono{% if tick == 0 %} cw-tick-first{% elif tick == horizon_days %} cw-tick-last{% endif %}">{{ 'Today' if tick == 0 else tick ~ 'd' }}</span>
+      </div>
+      {% endfor %}
+      {% for day in horizon %}
+        {% set left = (day.days / horizon_days * 100) | round(2) %}
+        {% set tone = day.urgency | urgency_tone %}
+        {% if day.count == 1 %}
+        <a class="cw-timeline-marker" href="/certificates/{{ day.certs[0].id }}"
+           style="left:{{ left }}%;--tone:{{ tone }}"
+           title="{{ day.certs[0].name }} — expires {{ day.date }}"
+           aria-label="{{ day.certs[0].name }} expires {{ day.date }}"></a>
+        {% else %}
+        <a class="cw-timeline-marker cw-timeline-marker-multi" href="/insights?tab=calendar"
+           style="left:{{ left }}%;--tone:{{ tone }}"
+           title="{{ day.date }} — {{ day.count }} certificates: {{ day.certs[:5] | map(attribute='name') | join(', ') }}{% if day.count > 5 %} +{{ day.count - 5 }} more{% endif %}"
+           aria-label="{{ day.count }} certificates expire {{ day.date }}">{{ day.count }}</a>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <div class="cw-timeline cw-timeline-empty" data-testid="triage-timeline">
+      <div class="cw-timeline-axis"></div>
+      {% for tick in [0, 30, 60, 90] %}
+      <div class="cw-timeline-tick" style="left:{{ (tick / horizon_days * 100) | round(2) }}%">
+        <span class="mono{% if tick == 0 %} cw-tick-first{% elif tick == horizon_days %} cw-tick-last{% endif %}">{{ 'Today' if tick == 0 else tick ~ 'd' }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {# ---- Work queue ---- #}
+  {% if queue_total == 0 %}
+  <div class="cw-panel">
+    <div class="cw-empty" data-testid="triage-all-clear">
+      <div class="cw-empty-icon ok">{{ icons.svg_icon('check-circle', 20) }}</div>
+      <div class="cw-empty-title">Nothing needs attention</div>
+      <div class="cw-empty-sub">No expired or critical certificates, no stalled renewals, no failed scans or alert deliveries.</div>
+    </div>
+  </div>
+  {% else %}
+  <div class="cw-queue" data-testid="triage-queue">
+
+    {% if expired %}
+    <div class="cw-panel cw-queue-section" data-testid="queue-expired">
+      <div class="cw-queue-head">
+        {{ icons.svg_icon('alert', 15, 1.8) }}
+        <span class="cw-queue-title">Expired</span>
+        <span class="cw-queue-count mono">{{ expired | length }}</span>
+        <span class="cw-queue-hint">still being served or tracked past expiry</span>
+      </div>
+      {% for e in expired %}
+      <div class="cw-queue-row">
+        <a class="cw-host cw-no-decoration" href="/certificates/{{ e.id }}">{{ e.name }}</a>
+        {% if e.hostname %}<span class="mono cw-fz-11-5 cw-text-text-3">{{ e.hostname }}:{{ e.port }}</span>{% endif %}
+        <span class="cw-queue-reason">{{ e.days_remaining | relative_short }} ({{ e.not_after[:10] }})</span>
+        <div class="cw-spacer"></div>
+        {{ urgency_macros.urgency_pill('expired') }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if stalls %}
+    <div class="cw-panel cw-queue-section" data-testid="queue-stalled">
+      <div class="cw-queue-head">
+        {{ icons.svg_icon('refresh', 15, 1.8) }}
+        <span class="cw-queue-title">Renewal stalled</span>
+        <span class="cw-queue-count mono">{{ stalls | length }}</span>
+        <span class="cw-queue-hint">a successor should exist by now and none has been seen</span>
+      </div>
+      {% for s in stalls %}
+      <div class="cw-queue-row">
+        <a class="cw-host cw-no-decoration" href="/certificates/{{ s.cert_id }}">{{ s.hostname }}:{{ s.port }}</a>
+        <span class="cw-queue-reason">
+          {{ s.days_overdue | round | int }} day{{ 's' if (s.days_overdue | round | int) != 1 }} past its usual renewal point
+          · normally renews {{ s.expected_renewal_at_days | round | int }} days before expiry
+        </span>
+        <span class="cw-fz-11-5 cw-text-text-3">{{ s.confidence }} confidence</span>
+        <div class="cw-spacer"></div>
+        <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.7) }}stalled</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if critical %}
+    <div class="cw-panel cw-queue-section" data-testid="queue-critical">
+      <div class="cw-queue-head">
+        {{ icons.svg_icon('clock', 15, 1.8) }}
+        <span class="cw-queue-title">Expiring within 7 days</span>
+        <span class="cw-queue-count mono">{{ critical | length }}</span>
+      </div>
+      {% for e in critical %}
+      <div class="cw-queue-row">
+        <a class="cw-host cw-no-decoration" href="/certificates/{{ e.id }}">{{ e.name }}</a>
+        {% if e.hostname %}<span class="mono cw-fz-11-5 cw-text-text-3">{{ e.hostname }}:{{ e.port }}</span>{% endif %}
+        <span class="cw-queue-reason">expires {{ e.days_remaining | relative_short }} ({{ e.not_after[:10] }})</span>
+        <div class="cw-spacer"></div>
+        {{ urgency_macros.urgency_pill('critical') }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if failed_scans %}
+    <div class="cw-panel cw-queue-section" data-testid="queue-failed-scans">
+      <div class="cw-queue-head">
+        {{ icons.svg_icon('server', 15, 1.8) }}
+        <span class="cw-queue-title">Failed scans</span>
+        <span class="cw-queue-count mono">{{ failed_scans | length }}</span>
+        <span class="cw-queue-hint">the last scan of these hosts did not complete</span>
+      </div>
+      {% for f in failed_scans %}
+      <div class="cw-queue-row">
+        <span class="cw-host">{{ f.hostname }}:{{ f.port }}</span>
+        <span class="cw-queue-reason">{{ f.error_message or 'scan failed' }}</span>
+        <span class="cw-fz-11-5 cw-text-text-3">{{ f.scanned_at[:16] | replace('T', ' ') }}</span>
+        <div class="cw-spacer"></div>
+        {% if may_write %}
+        <form method="post" action="/hosts/{{ f.host_id }}/scan" class="cw-inline">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-btn sm" data-testid="triage-scan-now">{{ icons.svg_icon('refresh', 13) }}Scan now</button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if failed_alerts_24h %}
+    <div class="cw-panel cw-queue-section" data-testid="queue-failed-alerts">
+      <div class="cw-queue-head">
+        {{ icons.svg_icon('alert', 15, 1.8) }}
+        <span class="cw-queue-title">Failed alert deliveries</span>
+        <span class="cw-queue-count mono">{{ failed_alerts_24h }}</span>
+      </div>
+      <div class="cw-queue-row">
+        <span class="cw-queue-reason">{{ failed_alerts_24h }} deliver{{ 'y' if failed_alerts_24h == 1 else 'ies' }} failed in the last 24 hours — notifications may not be reaching anyone.</span>
+        <div class="cw-spacer"></div>
+        <a href="/alerts" class="cw-btn sm">Review alerts</a>
+      </div>
+    </div>
+    {% endif %}
+
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

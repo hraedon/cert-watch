@@ -329,6 +329,61 @@ def dashboard(
     )
 
 
+@router.get("/triage", response_class=HTMLResponse)
+def triage(request: Request) -> HTMLResponse:
+    """Triage — what needs attention now, what breaks next (Plan 053 Phase 1).
+
+    Renders existing signals only: expired/critical leaf certs, renewal
+    stalls (renewal_analytics), failed scans, failed alert deliveries, and
+    the 90-day expiry horizon. Tag-scoped like the dashboard.
+    """
+    from cert_watch.database.triage import (
+        HORIZON_DAYS,
+        count_failed_alerts_24h,
+        list_critical_certs,
+        list_expired_certs,
+        list_expiry_horizon,
+        list_failed_scans,
+        list_renewal_stalls,
+    )
+
+    db = _db_path(request)
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
+    expired = list_expired_certs(db, scope_tags)
+    critical = list_critical_certs(db, scope_tags)
+    stalls = list_renewal_stalls(db, scope_tags)
+    failed_scans = list_failed_scans(db, scope_tags)
+    failed_alerts_24h = count_failed_alerts_24h(db)
+    horizon = list_expiry_horizon(db, scope_tags)
+
+    queue_total = (
+        len(expired) + len(critical) + len(stalls) + len(failed_scans)
+        + (1 if failed_alerts_24h else 0)
+    )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="triage.html",
+        context={
+            "version": __version__, "commit": __commit__,
+            **get_auth_context(request),
+            "active_page": "triage",
+            "expired": expired,
+            "critical": critical,
+            "stalls": stalls,
+            "failed_scans": failed_scans,
+            "failed_alerts_24h": failed_alerts_24h,
+            "horizon": horizon,
+            "horizon_days": HORIZON_DAYS,
+            "horizon_cert_count": sum(d["count"] for d in horizon),
+            "queue_total": queue_total,
+            **get_csrf_context(request),
+        },
+    )
+
+
 @router.get("/alerts", response_class=HTMLResponse)
 def alerts_view(
     request: Request,

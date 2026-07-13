@@ -28,6 +28,7 @@
       </a>
       <nav class="cw-nav">
         <a href="/" data-testid="nav-dashboard" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
+        <a href="/triage" data-testid="nav-triage" {% if active_page == 'triage' %}class="active"{% endif %}>Triage</a>
         <a href="/alerts" data-testid="nav-alerts" {% if active_page == 'alerts' %}class="active"{% endif %}>Alerts</a>
         <a href="/scan-history" data-testid="nav-scans" {% if active_page == 'scans' %}class="active"{% endif %}>Scan history</a>
         <a href="/insights" data-testid="nav-insights" {% if active_page == 'insights' %}class="active"{% endif %}>Insights</a>

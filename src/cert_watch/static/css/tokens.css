@@ -1226,6 +1226,60 @@ body {
 /* ---------- NEW badge ---------- */
 .cw-badge-new { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; background: var(--accent); color: var(--accent-fg); font-size: 10px; font-weight: 700; letter-spacing: 0.05em; }
 
+/* ---------- Triage: 90-day horizon timeline (Plan 053) ----------
+   Markers carry status color via --tone; axis, ticks, and labels stay
+   neutral (color budget). Markers are positioned left:% by days/horizon. */
+.cw-legend-dot { width: 8px; height: 8px; border-radius: 4px; display: inline-block; }
+.cw-legend-dot.crit { background: var(--crit); }
+.cw-legend-dot.warn { background: var(--warn); }
+.cw-legend-dot.ok { background: var(--ok); }
+.cw-timeline { position: relative; height: 56px; margin: 22px 10px 20px; }
+.cw-timeline-axis { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--border-2); }
+.cw-timeline-tick { position: absolute; top: 12px; bottom: 12px; width: 1px; background: var(--border); }
+.cw-timeline-tick span {
+  position: absolute; top: 100%; margin-top: 5px; transform: translateX(-50%);
+  font-size: 11px; color: var(--text-3); white-space: nowrap;
+}
+.cw-timeline-tick span.cw-tick-first { transform: translateX(0); }
+.cw-timeline-tick span.cw-tick-last { transform: translateX(-100%); }
+.cw-timeline-marker {
+  position: absolute; top: 50%; transform: translate(-50%, -50%);
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--tone, var(--text-3));
+  border: 2px solid var(--panel);
+  text-decoration: none; z-index: 2;
+}
+.cw-timeline-marker:hover { box-shadow: 0 0 0 2px var(--tone, var(--text-3)); z-index: 3; }
+.cw-timeline-marker:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; z-index: 3; }
+.cw-timeline-marker-multi {
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+  color: var(--bg); font-variant-numeric: tabular-nums;
+}
+.cw-timeline-empty { opacity: .7; }
+
+/* ---------- Triage: work queue (Plan 053) ----------
+   Sections render only when non-empty; counts stay neutral. */
+.cw-queue { display: flex; flex-direction: column; gap: 14px; }
+.cw-queue-section { overflow: hidden; }
+.cw-empty-icon.ok { color: var(--ok); }
+.cw-queue-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 12px 18px; border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+}
+.cw-queue-title { font-size: 13.5px; font-weight: 600; color: var(--text); }
+.cw-queue-count {
+  font-size: 11.5px; color: var(--text-2); background: var(--inset);
+  border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
+  font-variant-numeric: tabular-nums;
+}
+.cw-queue-hint { font-size: 11.5px; color: var(--text-3); }
+.cw-queue-row { display: flex; align-items: center; gap: 10px; padding: 10px 18px; flex-wrap: wrap; }
+.cw-queue-row + .cw-queue-row { border-top: 1px solid var(--border); }
+.cw-queue-reason { font-size: 12.5px; color: var(--text-2); }
+
 /* ---------- Responsive layout ---------- */
 @media (max-width: 960px) {
   .cw-layout-16-1 { grid-template-columns: 1fr; }

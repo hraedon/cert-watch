@@ -4,6 +4,17 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Triage page** (`/triage`, Plan 053 Phase 1). A work-queue home for the
+  operator's daily question — what needs attention now, what breaks next:
+  expired and critical certificates, **stalled renewals** (the renewal-overdue
+  signal, surfaced in the UI for the first time), failed scans with a
+  scan-now action, and failed alert deliveries. Sections render only when
+  non-empty; an all-clear state says so at a glance. Above the queue, a
+  **90-day expiry timeline** shows every upcoming expiry positioned by date,
+  clustered per day, colored by urgency. Tag-scoped like the dashboard. The
+  UI design system now has a written style guide (`docs/design/style-guide.md`).
+
 ### Fixed
 - **Immutable release and deployment image tags.** Ordinary `main` builds now
   publish and deploy the commit-SHA image tag; a semantic-version image tag is

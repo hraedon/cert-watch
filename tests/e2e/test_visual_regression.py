@@ -75,6 +75,9 @@ _MASKS = ["[data-testid=auth-user]", ".cw-ver", "#cw-health-banner"]
 # Empty-state pages with stable layout (no certs/dates seeded).
 _VISUAL_PAGES = {
     "dashboard": ("/", "dashboard-heading"),
+    # Empty-state only: populated triage can't be baselined — timeline marker
+    # positions and queue relative-time strings move with the wall clock.
+    "triage": ("/triage", "triage-heading"),
     "alerts": ("/alerts", "alerts-heading"),
     "insights": ("/insights", "insights-heading"),
     "audit": ("/audit", "audit-heading"),

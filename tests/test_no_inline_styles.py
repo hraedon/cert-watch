@@ -39,6 +39,9 @@ INLINE_STYLE_BUDGET: dict[str, int] = {
     "settings.html": 2,
     "setup.html": 2,
     "team_dashboard.html": 1,
+    # Timeline ticks + markers bind data-driven left:% and --tone via inline
+    # style (2 tick lines + 2 marker lines in template source); nothing else.
+    "triage.html": 4,
 }
 
 
