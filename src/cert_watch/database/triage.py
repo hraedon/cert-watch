@@ -165,14 +165,43 @@ def list_failed_scans(
     return [dict(r) for r in rows]
 
 
-def count_failed_alerts_24h(db_path: str | Path) -> int:
-    """Alert deliveries that failed in the last 24 hours (fleet-wide)."""
+def count_failed_alerts_24h(
+    db_path: str | Path,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Alert deliveries that failed in the last 24 hours.
+
+    Scoped like the rest of the queue: an alert counts when its certificate
+    is in scope over the cert ∪ host effective-tag model, so a tag-scoped
+    operator's failed-delivery signal agrees with the inventory they can see.
+    With no scope (global admin) the count is fleet-wide.
+    """
     init_schema(db_path)
     cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+    conditions = ["status = 'failed'", "created_at > ?"]
+    params: list[Any] = [cutoff]
+    if scope_tags:
+        cert_cond = "1=1"
+        cert_cond, cert_params = _add_effective_tag_filter(
+            cert_cond, [], scope_tags, col_cert="c.tags", col_host="''",
+        )
+        host_sub = (
+            "SELECT 1 FROM hosts h WHERE h.hostname = c.hostname"
+            " AND h.port = c.port"
+        )
+        host_sub, host_params = _add_effective_tag_filter(
+            host_sub, [], scope_tags, col_cert=None, col_host="h.tags",
+        )
+        conditions.append(
+            "EXISTS (SELECT 1 FROM certificates c WHERE c.id = alerts.cert_id"
+            f" AND ({cert_cond} OR EXISTS ({host_sub})))"
+        )
+        params = params + cert_params + host_params
+    where = " AND ".join(conditions)
     with _connect(db_path) as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
-            (cutoff,),
+            f"SELECT COUNT(*) FROM alerts WHERE {where}",
+            params,
         ).fetchone()
     return int(row[0]) if row else 0
 

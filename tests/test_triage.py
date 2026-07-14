@@ -90,13 +90,15 @@ def _insert_scan(
     conn.commit()
 
 
-def _insert_alert(conn, status: str, *, hours_ago: float = 0) -> None:
+def _insert_alert(
+    conn, status: str, *, hours_ago: float = 0, cert_id: str | None = None
+) -> None:
     conn.execute(
         "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at)"
         " VALUES (?, ?, ?, ?, ?, ?)",
         (
-            str(uuid.uuid4()), str(uuid.uuid4()), "expiry", status, "msg",
-            _iso(datetime.now(UTC) - timedelta(hours=hours_ago)),
+            str(uuid.uuid4()), cert_id or str(uuid.uuid4()), "expiry", status,
+            "msg", _iso(datetime.now(UTC) - timedelta(hours=hours_ago)),
         ),
     )
     conn.commit()
@@ -227,6 +229,27 @@ class TestFailedAlerts:
             _insert_alert(conn, "failed", hours_ago=25)
             _insert_alert(conn, "sent", hours_ago=1)
         assert count_failed_alerts_24h(db_path) == 1
+
+    def test_scope_filters_by_cert_tags(self, db_path: Path):
+        with _connect(db_path) as conn:
+            a_cert = _insert_cert(conn, "a.example.com", 30, tags="team-a")
+            b_cert = _insert_cert(conn, "b.example.com", 30, tags="team-b")
+            _insert_alert(conn, "failed", hours_ago=1, cert_id=a_cert)
+            _insert_alert(conn, "failed", hours_ago=1, cert_id=b_cert)
+        # No scope (global admin) sees the fleet-wide count.
+        assert count_failed_alerts_24h(db_path) == 2
+        # Scoped to team-a sees only its own cert's failed alert.
+        assert count_failed_alerts_24h(db_path, scope_tags=("team-a",)) == 1
+
+    def test_scope_matches_host_tags(self, db_path: Path):
+        # Cert carries no tags; scope is granted via the host's tags
+        # (the cert ∪ host effective-tag model).
+        with _connect(db_path) as conn:
+            _insert_host(conn, "h.example.com", tags="team-c")
+            cert = _insert_cert(conn, "h.example.com", 30, tags="")
+            _insert_alert(conn, "failed", hours_ago=1, cert_id=cert)
+        assert count_failed_alerts_24h(db_path, scope_tags=("team-c",)) == 1
+        assert count_failed_alerts_24h(db_path, scope_tags=("team-x",)) == 0
 
 
 class TestRenewalStalls:

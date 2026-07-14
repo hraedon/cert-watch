@@ -355,7 +355,7 @@ def triage(request: Request) -> HTMLResponse:
     critical = list_critical_certs(db, scope_tags)
     stalls = list_renewal_stalls(db, scope_tags)
     failed_scans = list_failed_scans(db, scope_tags)
-    failed_alerts_24h = count_failed_alerts_24h(db)
+    failed_alerts_24h = count_failed_alerts_24h(db, scope_tags)
     horizon = list_expiry_horizon(db, scope_tags)
 
     queue_total = (
