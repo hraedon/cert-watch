@@ -118,12 +118,19 @@ _PEM_CERT_RE = re.compile(
 )
 
 
-def extract_chain_from_pem(pem_text: str) -> list[Certificate]:
-    """Extract all certificates from a multi-cert PEM file. See AC-09."""
+def extract_chain_from_pem(pem_text: str, *, max_certs: int = 100) -> list[Certificate]:
+    """Extract all certificates from a multi-cert PEM file. See AC-09.
+
+    Raises ValueError if more than *max_certs* certificates are found, to
+    prevent DoS via crafted PEM bundles.
+    """
     out: list[Certificate] = []
     if not pem_text:
         return out
-    for block in _PEM_CERT_RE.findall(pem_text):
+    blocks = _PEM_CERT_RE.findall(pem_text)
+    if len(blocks) > max_certs:
+        raise ValueError(f"PEM file contains {len(blocks)} certificates; maximum is {max_certs}")
+    for block in blocks:
         parsed = parse_pem_certificate(block)
         if isinstance(parsed, Certificate):
             out.append(parsed)

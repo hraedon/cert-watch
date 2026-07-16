@@ -16,7 +16,7 @@ from cert_watch.database import (
     get_write_lock,
     list_alerts_with_subject,
 )
-from cert_watch.middleware import require_admin_write, require_auth
+from cert_watch.middleware import require_admin, require_admin_write, require_auth
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
@@ -58,7 +58,7 @@ def api_list_alerts(
 
 
 @router.get("/api/alert-groups")
-def api_list_alert_groups(request: Request, _auth: str = Depends(require_auth)) -> JSONResponse:
+def api_list_alert_groups(request: Request, _auth: str = Depends(require_admin)) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
     groups = repo.list_all()
@@ -143,7 +143,7 @@ async def api_create_alert_group(
 
 @router.get("/api/alert-groups/{group_id}")
 def api_get_alert_group(
-    request: Request, group_id: IdParam, _auth: str = Depends(require_auth)
+    request: Request, group_id: IdParam, _auth: str = Depends(require_admin)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)

@@ -76,7 +76,10 @@ def upload_certificate(
 def _parse_pem_or_der(name: str, data: bytes) -> UploadedEntry | ParseError:
     text = data.decode("utf-8", errors="ignore")
     if "-----BEGIN CERTIFICATE-----" in text:
-        certs = extract_chain_from_pem(text)
+        try:
+            certs = extract_chain_from_pem(text)
+        except ValueError as exc:
+            return ParseError(error_message=str(exc))
         if not certs:
             return ParseError(error_message="no valid PEM certificates found")
         return UploadedEntry(file_name=name, leaf=certs[0], chain=certs[1:])

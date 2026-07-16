@@ -509,6 +509,11 @@ async def update_certificate_tags(
     from cert_watch.tags import format_tags
 
     normalized = format_tags(parse_tags(tags))
+    from cert_watch.routes._scoped import scope_new_tags_denied
+
+    new_tags_denied = scope_new_tags_denied(request, normalized)
+    if new_tags_denied:
+        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     with get_write_lock():
         repo.set_tags(cert_id, normalized)
     record_audit(
