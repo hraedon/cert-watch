@@ -506,6 +506,9 @@ class OAuthProvider(AuthProvider):
         return False
 
 
+_EXP_LEEWAY = 120
+
+
 def _validate_claims_manual(
     claims: dict[str, Any], expected_issuer: str, expected_audience: str, nonce: str | None,
 ) -> None:
@@ -520,7 +523,7 @@ def _validate_claims_manual(
     exp = claims.get("exp")
     if exp is None:
         raise ValueError("ID token missing required 'exp' claim")
-    if exp < time.time():
+    if exp < time.time() - _EXP_LEEWAY:
         raise ValueError("ID token has expired")
     if nonce and not hmac.compare_digest(str(claims.get("nonce", "")), nonce):
         raise ValueError("nonce mismatch")
