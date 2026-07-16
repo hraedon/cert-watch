@@ -433,7 +433,13 @@ def get_failed_deliveries(
     limit: int = 50,
     scope_tags: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
-    conditions = ["delivery_status = 'failed'"]
+    """Return events whose webhook delivery failed or was rate-limited.
+
+    Includes ``delivery_status = 'failed'`` (delivery attempted and failed)
+    and ``delivery_status = 'rate_limited'`` (delivery not attempted due to
+    the rate-limit gate).  Delivered and pending events are excluded.
+    """
+    conditions = ["delivery_status IN ('failed', 'rate_limited')"]
     params: list[Any] = []
     if scope_tags:
         from cert_watch.database.dashboard_helpers import _add_effective_tag_filter

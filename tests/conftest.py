@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -19,13 +18,6 @@ from cryptography.hazmat.primitives.serialization import (
     pkcs12,
 )
 from cryptography.x509.oid import NameOID
-
-# Pre-import ldap3 submodules so test-suite-wide monkeypatching of
-# ldap3.Connection doesn't leave sys.modules with a partially-loaded
-# ldap3 module (missing the 'core' attribute). This prevents test
-# pollution when tests in different files both use ldap3.
-with contextlib.suppress(ImportError):
-    import ldap3.core.exceptions  # noqa: F401
 
 
 @dataclass

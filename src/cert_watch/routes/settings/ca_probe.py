@@ -25,7 +25,10 @@ def _parse_ldaps_url(url: str) -> tuple[str, int] | None:
     host = parsed.hostname or ""
     if not host:
         return None
-    port = parsed.port or 636
+    try:
+        port = parsed.port or 636
+    except ValueError:
+        return None
     return host, port
 
 
@@ -38,7 +41,10 @@ def _parse_ldap_url(url: str) -> tuple[str, int] | None:
     host = parsed.hostname or ""
     if not host:
         return None
-    port = parsed.port or 389
+    try:
+        port = parsed.port or 389
+    except ValueError:
+        return None
     return host, port
 
 

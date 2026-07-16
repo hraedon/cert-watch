@@ -61,8 +61,14 @@ def _restore_modules():
 
 
 @pytest.fixture
-def _mock_ldap3():
-    """Inject a mock ldap3 module so LDAPAuthProvider.__init__ doesn't raise."""
+def _mock_ldap3(monkeypatch):
+    """Inject a mock ldap3 module so LDAPAuthProvider.__init__ doesn't raise.
+
+    Uses monkeypatch.setitem so sys.modules is automatically restored at
+    teardown — even if an exception occurs mid-test. This prevents the
+    test-pollution race where another worker imports ldap3 between mock
+    installation and manual cleanup.
+    """
     mock_ldap3 = MagicMock()
     mock_ldap3.core = MagicMock()
     mock_ldap3.core.exceptions = MagicMock()
@@ -74,14 +80,12 @@ def _mock_ldap3():
     mock_ldap3.ServerPool = MagicMock()
     mock_ldap3.FIRST = "FIRST"
     mock_ldap3.NONE = "NONE"
-    sys.modules["ldap3"] = mock_ldap3
-    sys.modules["ldap3.core"] = mock_ldap3.core
-    sys.modules["ldap3.core.exceptions"] = mock_ldap3.core.exceptions
-    sys.modules["ldap3.utils"] = mock_ldap3.utils
-    sys.modules["ldap3.utils.conv"] = mock_ldap3.utils.conv
+    monkeypatch.setitem(sys.modules, "ldap3", mock_ldap3)
+    monkeypatch.setitem(sys.modules, "ldap3.core", mock_ldap3.core)
+    monkeypatch.setitem(sys.modules, "ldap3.core.exceptions", mock_ldap3.core.exceptions)
+    monkeypatch.setitem(sys.modules, "ldap3.utils", mock_ldap3.utils)
+    monkeypatch.setitem(sys.modules, "ldap3.utils.conv", mock_ldap3.utils.conv)
     yield mock_ldap3
-    for mod in ("ldap3", "ldap3.core", "ldap3.core.exceptions", "ldap3.utils", "ldap3.utils.conv"):
-        sys.modules.pop(mod, None)
 
 
 # ---------- Session token tests ----------
@@ -2390,6 +2394,31 @@ class TestValidateClaimsManual:
             "aud": "test-client",
             "sub": "user-123",
             "exp": int(time.time()) - 3600,
+        }
+        with pytest.raises(ValueError, match="expired"):
+            _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_exp_within_leeway_accepted(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) - 60,
+        }
+        _validate_claims_manual(claims, "https://login.example.com", "test-client", None)
+
+    def test_exp_beyond_leeway_rejected(self):
+        import time
+
+        from cert_watch.auth import _validate_claims_manual
+        claims = {
+            "iss": "https://login.example.com",
+            "aud": "test-client",
+            "sub": "user-123",
+            "exp": int(time.time()) - 200,
         }
         with pytest.raises(ValueError, match="expired"):
             _validate_claims_manual(claims, "https://login.example.com", "test-client", None)

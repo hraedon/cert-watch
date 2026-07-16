@@ -60,8 +60,9 @@ def fernet_encrypt(plaintext: str, key: str) -> str:
 def fernet_decrypt(value: str, key: str) -> str | None:
     """Decrypt an ``enc:v1:`` or ``enc:v2:`` value; pass through plaintext unchanged.
 
-    Tries the provided *key* first, then falls back to the legacy
-    key derivation for ``enc:v1:`` values.
+    Attempts decryption with the provided *key*. For ``enc:v1:`` values that
+    fail, the caller is responsible for retrying with a legacy-derived key
+    (see :func:`derive_encryption_key_legacy`).
 
     Returns ``None`` when decryption fails (wrong key or corrupted data)
     instead of silently returning the raw ciphertext.

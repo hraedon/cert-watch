@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -167,7 +168,7 @@ _TRUSTED_PROXIES = frozenset(
 
 
 def _extract_client_ip(request: Request) -> str:
-    """Extract the real client IP, respecting X-Forwarded-For when trusted proxy is configured.
+    """Extract the real client IP, respecting proxy headers when configured.
 
     When ``TRUST_PROXY=1`` and ``TRUSTED_PROXIES`` is empty, we use the **rightmost**
     XFF entry (the hop the trusted proxy appended) rather than the leftmost
@@ -176,12 +177,14 @@ def _extract_client_ip(request: Request) -> str:
 
     L10 hardening: when ``TRUSTED_PROXIES`` is empty AND there is only one XFF
     entry, that entry is entirely client-controlled (no proxy rewrote it), so
-    we fall back to ``request.client.host`` (the TCP peer) instead.
+    we fall through to X-Real-IP or the TCP peer.
 
-    X-Real-IP is only trusted when ``TRUSTED_PROXIES`` is configured (the
-    proxy is explicitly trusted to have set it correctly). Without
-    ``TRUSTED_PROXIES``, X-Real-IP is client-controlled and must not be
-    used for rate limiting.
+    X-Real-IP is trusted when ``TRUST_PROXY=1`` (operator opt-in) and validated
+    as a well-formed IP address. The operator has explicitly declared they are
+    behind a proxy, so the proxy-set X-Real-IP header is used for rate limiting.
+    Malformed or non-IP values are rejected to prevent rate-limit evasion via
+    header spoofing. Without ``TRUST_PROXY=1``, X-Real-IP is ignored and the
+    TCP peer is used.
     """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
@@ -193,16 +196,16 @@ def _extract_client_ip(request: Request) -> str:
                 if part not in _TRUSTED_PROXIES:
                     return part
         elif len(parts) > 1:
-            # Multi-entry XFF: rightmost = the proxy that directly contacted us (BC-029)
             return parts[-1]
-        # Single-entry XFF with no TRUSTED_PROXIES: entirely client-controlled.
-        # Fall through to TCP peer below — do NOT trust X-Real-IP either,
-        # since without TRUSTED_PROXIES the proxy that set it is unidentified.
-    # When TRUSTED_PROXIES is configured, trust X-Real-IP (the identified proxy set it).
-    if _TRUSTED_PROXIES:
+    if _TRUST_PROXY:
         real_ip = request.headers.get("x-real-ip", "")
         if real_ip:
-            return real_ip
+            try:
+                ipaddress.ip_address(real_ip)
+            except ValueError:
+                pass
+            else:
+                return real_ip
     return request.client.host if request.client else "unknown"
 
 
