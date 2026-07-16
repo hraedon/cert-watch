@@ -145,3 +145,28 @@ def enforce_scope_tag(
     if not any(t in scope_tags for t in user_tags):
         return "requested tag is outside your team scope"
     return None
+
+
+def scope_new_tags_denied(
+    request: Request,
+    new_tags: str,
+) -> str | None:
+    """Validate that *new_tags* are within the caller's scope.
+
+    For scoped users, every submitted tag must be in their scope set.
+    Admins and unscoped users can set any tags.  Returns an error message
+    if any tag is outside scope, or None if all tags are allowed.
+    """
+    auth_ctx = getattr(request.state, "auth_context", None)
+    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
+        return None
+    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
+    if not scope_tag:
+        return None
+    from cert_watch.tags import parse_tags
+
+    scope_tags = set(parse_tags(scope_tag))
+    for tag in parse_tags(new_tags):
+        if tag not in scope_tags:
+            return f"tag '{tag}' is outside your team scope"
+    return None

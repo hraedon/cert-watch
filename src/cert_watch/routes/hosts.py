@@ -123,6 +123,7 @@ async def _scan_and_store(
 router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_CSV_ROWS = 500
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
 
 
@@ -256,6 +257,11 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
     errors: list[str] = []
     scan_jobs: list[tuple[str, int, int | None, str | None, str]] = []
     for i, row in enumerate(reader, start=2):
+        if i - 1 > MAX_CSV_ROWS:
+            return RedirectResponse(
+                url=f"/?error={quote(f'CSV import limited to {MAX_CSV_ROWS} rows')}",
+                status_code=303,
+            )
         hostname = row.get("hostname", "").strip()
         if not hostname:
             errors.append(f"row {i}: missing hostname")
@@ -407,6 +413,11 @@ async def update_host_tags(
     from cert_watch.tags import format_tags
 
     normalized = format_tags(parse_tags(tags))
+    from cert_watch.routes._scoped import scope_new_tags_denied
+
+    new_tags_denied = scope_new_tags_denied(request, normalized)
+    if new_tags_denied:
+        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     repo = SqliteHostRepository(db)
     with get_write_lock():
         updated = repo.set_tags(host_id, normalized)

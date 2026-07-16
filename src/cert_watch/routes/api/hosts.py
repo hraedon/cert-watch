@@ -243,6 +243,11 @@ async def api_set_host_tags(
         return JSONResponse(
             content={"error": "tags must be a string or list of strings"}, status_code=400
         )
+    from cert_watch.routes._scoped import scope_new_tags_denied
+
+    new_tags_denied = scope_new_tags_denied(request, tags)
+    if new_tags_denied:
+        return JSONResponse(status_code=403, content={"error": new_tags_denied})
     with get_write_lock():
         if not repo.set_tags(host_id, tags):
             return JSONResponse(content={"error": "not found"}, status_code=404)
