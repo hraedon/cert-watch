@@ -226,7 +226,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     if trust_proxy and not trusted_proxies:
         logger.warning(
             "CERT_WATCH_TRUST_PROXY=1 but CERT_WATCH_TRUSTED_PROXIES is empty. "
-            "Trusting X-Real-IP and rightmost X-Forwarded-For entry for client IP. "
+            "Using rightmost X-Forwarded-For entry for client IP. "
             "Set CERT_WATCH_TRUSTED_PROXIES if you have multiple proxy hops."
         )
     exposed = is_network_exposed(bind_host, trust_proxy)

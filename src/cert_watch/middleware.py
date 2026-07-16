@@ -177,14 +177,13 @@ def _extract_client_ip(request: Request) -> str:
 
     L10 hardening: when ``TRUSTED_PROXIES`` is empty AND there is only one XFF
     entry, that entry is entirely client-controlled (no proxy rewrote it), so
-    we fall through to X-Real-IP or the TCP peer.
+    we fall back to ``request.client.host`` (the TCP peer) instead.
 
-    X-Real-IP is trusted when ``TRUST_PROXY=1`` (operator opt-in) and validated
-    as a well-formed IP address. The operator has explicitly declared they are
-    behind a proxy, so the proxy-set X-Real-IP header is used for rate limiting.
-    Malformed or non-IP values are rejected to prevent rate-limit evasion via
-    header spoofing. Without ``TRUST_PROXY=1``, X-Real-IP is ignored and the
-    TCP peer is used.
+    X-Real-IP is only trusted when ``TRUSTED_PROXIES`` is configured (the
+    proxy is explicitly trusted to have set it correctly). Without
+    ``TRUSTED_PROXIES``, X-Real-IP is client-controlled and must not be
+    used for rate limiting. When trusted, the value is validated as a
+    well-formed IP address to prevent garbage injection.
     """
     if not _TRUST_PROXY:
         return request.client.host if request.client else "unknown"
@@ -197,7 +196,7 @@ def _extract_client_ip(request: Request) -> str:
                     return part
         elif len(parts) > 1:
             return parts[-1]
-    if _TRUST_PROXY:
+    if _TRUSTED_PROXIES:
         real_ip = request.headers.get("x-real-ip", "")
         if real_ip:
             try:
