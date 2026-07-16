@@ -274,12 +274,15 @@ def test_extract_client_ip_real_ip(monkeypatch):
 
     import cert_watch.middleware as mw
 
+    # X-Real-IP is only trusted when TRUSTED_PROXIES is configured.
+    # Without TRUSTED_PROXIES, X-Real-IP is client-controlled and must
+    # not be used for rate limiting.
     monkeypatch.setattr(mw, "_TRUST_PROXY", True)
     monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "203.0.113.2"}
-    assert mw._extract_client_ip(req) == "203.0.113.2"
+    assert mw._extract_client_ip(req) == "10.0.0.1"
 
     monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     assert mw._extract_client_ip(req) == "203.0.113.2"
@@ -295,7 +298,7 @@ def test_extract_client_ip_real_ip_no_xff(monkeypatch):
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "198.51.100.5"}
-    assert mw._extract_client_ip(req) == "198.51.100.5"
+    assert mw._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip_single_xff(monkeypatch):
@@ -308,7 +311,7 @@ def test_extract_client_ip_real_ip_single_xff(monkeypatch):
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "203.0.113.1", "x-real-ip": "198.51.100.5"}
-    assert mw._extract_client_ip(req) == "198.51.100.5"
+    assert mw._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip_disabled(monkeypatch):
@@ -329,7 +332,7 @@ def test_extract_client_ip_real_ip_validated(monkeypatch):
     import cert_watch.middleware as mw
 
     monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "not-an-ip"}
