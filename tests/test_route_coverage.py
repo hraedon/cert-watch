@@ -1138,16 +1138,23 @@ def test_upload_rate_limit(reload_app, tmp_path, monkeypatch, leaf_pem_file):
 # ---------- trust anchors ----------
 
 
-def test_add_trust_anchor_valid(reload_app, tmp_path, chain_pem_file):
+def test_add_trust_anchor_accepts_chain_pem(reload_app, tmp_path, chain_pem_file):
+    """Plan 054 Phase 3: a chain PEM (leaf+intermediate+root) is accepted —
+    the route extracts the root CA rather than rejecting the non-CA leaf
+    (previously this upload was rejected with 'error' in the redirect)."""
     app_mod = reload_app()
     with TestClient(app_mod.app) as client, open(chain_pem_file, "rb") as f:
         r = client.post(
             "/trust-anchors",
-            files={"file": ("root.pem", f, "application/x-pem-file")},
+            files={"file": ("bundle.pem", f, "application/x-pem-file")},
             follow_redirects=False,
         )
     assert r.status_code == 303
-    assert "error" in r.headers["location"]
+    assert "error" not in r.headers["location"]
+    with TestClient(app_mod.app) as client:
+        dash = client.get("/")
+    assert "Test Root CA" in dash.text               # the root was stored…
+    assert "chain-leaf.example.com" not in dash.text  # …not the leaf
 
 
 def test_add_trust_anchor_invalid_cert(reload_app, tmp_path, leaf_pem_file):

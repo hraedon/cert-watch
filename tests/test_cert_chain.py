@@ -134,6 +134,29 @@ def test_chain_status_unknown_no_chain(chain_triplet):
     assert chain_status(leaf, [], []) == "unknown"
 
 
+def test_chain_status_leaf_only_directly_anchored(chain_triplet):
+    """Plan 054 Phase 2: a leaf-only scan (no intermediates served) whose leaf
+    is DIRECTLY issued by an uploaded anchor grades 'private', not 'unknown'.
+
+    Uses the intermediate (signed directly by the root) as the scanned leaf —
+    its CA-ness is irrelevant to the empty-chain anchor check; what matters is
+    that the anchor cryptographically signed it.
+    """
+    root = parse_certificate(chain_triplet["root"].der)
+    direct_leaf = parse_certificate(chain_triplet["intermediate"].der)
+    assert chain_status(direct_leaf, [], [root]) == "private"
+
+
+def test_chain_status_leaf_only_indirect_stays_unknown(chain_triplet):
+    """Plan 054 Phase 2 boundary: a leaf signed by an INTERMEDIATE (not the
+    anchor), served leaf-only, stays 'unknown' — we can't validate without the
+    intermediate, and synthesizing/chasing it would drift to private-CA
+    discovery (declined). The anchor consult is leaf-terminating only."""
+    root = parse_certificate(chain_triplet["root"].der)
+    leaf = parse_certificate(chain_triplet["leaf"].der)
+    assert chain_status(leaf, [], [root]) == "unknown"
+
+
 def test_chain_status_public_root(chain_pem_bytes, monkeypatch):
     certs = extract_chain_from_pem(chain_pem_bytes.decode())
     monkeypatch.setattr(

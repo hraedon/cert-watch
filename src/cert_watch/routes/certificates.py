@@ -720,8 +720,17 @@ async def add_trust_anchor(
         entry = upload_certificate(tmp_path)
         if isinstance(entry, ParseError):
             return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
-        # Validate that the certificate is suitable as a CA trust anchor
-        ca_err = validate_is_ca_certificate(entry.leaf.raw_der)
+        # Pick the CA cert to anchor on. A chain PEM (leaf+intermediate+root)
+        # has a non-CA leaf, so entry.leaf would be rejected; prefer the self-
+        # signed root (typically last), else the first CA cert in the bundle.
+        # Falls through to entry.leaf so validate emits the canonical "not a CA"
+        # error when the bundle contains no CA. (Plan 054 P3.)
+        bundle = [entry.leaf, *entry.chain]
+        anchor_cert = next(
+            (c for c in reversed(bundle) if validate_is_ca_certificate(c.raw_der) is None),
+            entry.leaf,
+        )
+        ca_err = validate_is_ca_certificate(anchor_cert.raw_der)
         if ca_err:
             return RedirectResponse(
                 url=f"/?error={quote('Invalid trust anchor: ' + ca_err)}", status_code=303
@@ -729,17 +738,17 @@ async def add_trust_anchor(
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)
         with get_write_lock():
-            anchor_id = repo.add(entry.leaf)
+            anchor_id = repo.add(anchor_cert)
         record_audit(
             db,
             actor=resolve_actor(request),
             action="trust_anchor.add",
             target_type="trust_anchor",
             target_id=anchor_id,
-            detail={"subject": entry.leaf.subject},
+            detail={"subject": anchor_cert.subject},
             source_ip=resolve_source_ip(request),
         )
-        logger.info("uploaded trust anchor: %s", entry.leaf.subject)
+        logger.info("uploaded trust anchor: %s", anchor_cert.subject)
     finally:
         tmp_path.unlink(missing_ok=True)
     return RedirectResponse(url="/", status_code=303)

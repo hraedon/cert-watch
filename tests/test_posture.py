@@ -1179,6 +1179,20 @@ class TestChainStatusNoneHandling:
         assert chain_findings[0].status == "pass"
 
 
+def test_private_chain_status_grades_a():
+    """Plan 054 Phase 4: a private-CA chain (anchored by an uploaded root)
+    grades A. This path was implicit via fall-through in posture.py's
+    chain_completeness check; pinned explicitly so a future refactor that
+    drops the 'private' branch (or routes it to a warning) is caught."""
+    der = _ca_signed_cert_der()
+    cert = _cert_from_der(der)
+    result = evaluate_posture(cert=cert, chain_status="private")
+    chain_findings = [f for f in result.findings if f.check == "chain_completeness"]
+    assert len(chain_findings) == 1
+    assert chain_findings[0].status == "pass"
+    assert result.grade == "A"
+
+
 # ── OCSP/CRL SSRF blocked path (BC-117) ─────────────────────────────────────
 
 

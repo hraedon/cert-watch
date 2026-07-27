@@ -527,7 +527,7 @@ def _evaluate_posture(
         raw_der=a.raw_der,
     ) for a in SqliteTrustAnchorRepository(db_path).list_entries()]
 
-    cs = chain_status(cert, chain, anchors) if chain else None
+    cs = chain_status(cert, chain, anchors)
 
     caa_present: bool | None = None
     caa_records: list[str] | None = None

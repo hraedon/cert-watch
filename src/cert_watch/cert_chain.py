@@ -382,7 +382,8 @@ def chain_status(
     "invalid" — a forged intermediate is detected (BC-061).
 
     - "self-signed"   : leaf is its own issuer.
-    - "unknown"       : no intermediates available (can't validate).
+    - "unknown"       : no intermediates available and the leaf isn't directly
+                        issued by an uploaded anchor (can't validate).
     - "invalid"       : chain order is structurally broken OR a link's signature
                         does not verify (names may match but the key does not).
     - "private"       : chain is signature-verified end to end and anchored by a
@@ -397,6 +398,16 @@ def chain_status(
             return "public"
         return "self-signed"
     if not chain:
+        # Leaf-only scan (server served no intermediates). If the leaf is
+        # directly issued by an uploaded anchor (a private root signing the
+        # leaf with no intermediate in between), treat it as a complete
+        # private chain — the leaf-terminating anchor consult (Plan 054 P2).
+        # We do NOT chase AIA or synthesize a missing intermediate; a leaf
+        # whose issuing intermediate wasn't served stays "unknown". (Synthesizing
+        # intermediates would drift toward private-CA discovery — declined,
+        # Plan 030 / positioning.md.)
+        if anchors and _is_signature_anchored_by_user([leaf], anchors):
+            return "private"
         return "unknown"
     full = [leaf, *chain]
     # Names must line up AND every link must be signature-verified. A
