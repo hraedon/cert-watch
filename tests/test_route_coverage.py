@@ -1204,6 +1204,42 @@ def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_fil
     assert "Trust anchors" in r.text  # anchor panel renders alongside the rows
 
 
+def test_dashboard_shows_trust_anchor_upload_form_with_zero_anchors(reload_app, tmp_path):
+    """WI-139 Phase 1: a writer must see the upload form even when there are
+    zero trust anchors — otherwise there is no UI path to add the first one
+    (the gap that left the mvmcitest01 AD CS certs grading B/incomplete).
+    """
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/")
+    assert r.status_code == 200
+    assert 'action="/trust-anchors"' in r.text
+    assert 'data-testid="trust-anchor-upload-btn"' in r.text
+    assert 'data-testid="trust-anchor-file-input"' in r.text
+
+
+def test_trust_anchor_upload_via_ui_creates_anchor(reload_app, tmp_path, chain_triplet):
+    """Posting a single root CA PEM via the dashboard form stores it (303 to /,
+    no error) and surfaces it in the Trust anchors table."""
+    app_mod = reload_app()
+    root_pem = tmp_path / "root.pem"
+    root_pem.write_bytes(chain_triplet["root"].pem)
+    with TestClient(app_mod.app) as client, open(root_pem, "rb") as f:
+        r = client.post(
+            "/trust-anchors",
+            files={"file": ("root.pem", f, "application/x-pem-file")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "error" not in r.headers["location"]
+    with TestClient(app_mod.app) as client:
+        dash = client.get("/")
+    assert "Trust anchors" in dash.text
+    # The delete button only renders inside the anchors loop — its presence
+    # proves the uploaded anchor row is displayed.
+    assert 'data-testid="delete-trust-anchor-btn"' in dash.text
+
+
 def test_certificate_detail_scan_form_posts_host_id(reload_app, tmp_path, self_signed_leaf):
     """WI-029 regression: the 'Scan now' form must target the host id.
 

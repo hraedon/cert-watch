@@ -421,14 +421,32 @@
     </div>
   {% endif %}
 
-  {# ---- Trust anchors ---- #}
-  {% if trust_anchors %}
+  {# ---- Trust anchors (private root CAs for chain validation) ---- #}
+  {% if may_write or trust_anchors %}
     <div class="cw-mt-24">
       <div class="cw-trust-anchors-header">
         {{ icons.svg_icon('link', 16) }}
         <span class="cw-fz-14 cw-fw-600">Trust anchors</span>
       </div>
-      <div class="cw-panel cw-table-wrap">
+      <div class="cw-fz-12 cw-text-text-3 cw-mt-4">
+        Private root CAs uploaded here validate your internal certs' chains
+        (private-CA certs grade complete instead of B/incomplete).
+      </div>
+      {% if may_write %}
+      <form method="post" action="/trust-anchors" enctype="multipart/form-data" class="cw-form-stack cw-mt-12">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label" for="anchor-file">Root CA certificate</label>
+          <input class="cw-input" type="file" name="file" id="anchor-file" accept=".pem,.crt,.cer,.der" required data-testid="trust-anchor-file-input">
+          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-4">PEM · DER · CER · CRT — a single CA/root certificate.</div>
+        </div>
+        <div class="cw-form-footer">
+          <button type="submit" class="cw-btn primary" data-testid="trust-anchor-upload-btn">{{ icons.svg_icon('upload', 14) }}Add trust anchor</button>
+        </div>
+      </form>
+      {% endif %}
+      {% if trust_anchors %}
+      <div class="cw-panel cw-table-wrap cw-mt-12">
         <table class="cw-table">
           <thead>
             <tr><th>Subject</th><th>Added</th><th class="cw-w-100"></th></tr>
@@ -451,6 +469,7 @@
           </tbody>
         </table>
       </div>
+      {% endif %}
     </div>
   {% endif %}
 </div>
