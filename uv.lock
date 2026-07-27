@@ -111,6 +111,7 @@ dependencies = [
 [package.optional-dependencies]
 auth = [
     { name = "authlib" },
+    { name = "joserfc" },
     { name = "ldap3" },
     { name = "requests" },
 ]
@@ -119,6 +120,7 @@ auth-ldap = [
 ]
 auth-oauth = [
     { name = "authlib" },
+    { name = "joserfc" },
     { name = "requests" },
 ]
 dev = [
@@ -152,6 +154,7 @@ requires-dist = [
     { name = "freezegun", marker = "extra == 'dev'", specifier = ">=1.5" },
     { name = "httpx2", marker = "extra == 'dev'", specifier = ">=2.0.0" },
     { name = "jinja2", specifier = ">=3.1" },
+    { name = "joserfc", marker = "extra == 'auth-oauth'", specifier = ">=1.0" },
     { name = "ldap3", marker = "extra == 'auth-ldap'", specifier = ">=2.9" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.13" },
     { name = "playwright", marker = "extra == 'e2e'", specifier = ">=1.49" },

@@ -1635,34 +1635,6 @@ class TestOAuthJWKSVerification:
         assert result is not None
         assert "CertWatch.Admin" in result.get("roles", [])
 
-    @pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
-    def test_valid_token_verified_authlib_path(self, monkeypatch):
-        """Test _verify_id_token via authlib path (simulates joserfc missing)."""
-        import cert_watch.auth.oauth_provider as op_mod
-        key, _, jwks = _generate_rsa_jwk()
-        provider = _make_oauth_provider(jwks=jwks)
-
-        # Mock away joserfc by monkeypatching the module-level import results.
-        try:
-            monkeypatch.setattr(op_mod, "_jwt", None, raising=False)
-            monkeypatch.setattr(op_mod, "KeySet", None, raising=False)
-
-            import time
-            claims = {
-                "iss": "https://login.example.com",
-                "aud": "test-client",
-                "sub": "user-123",
-                "preferred_username": "alice",
-                "exp": int(time.time()) + 3600,
-                "iat": int(time.time()),
-            }
-            token = _sign_jwt(claims, key)
-            result = provider._verify_id_token(token)
-            assert result is not None
-            assert result["preferred_username"] == "alice"
-        finally:
-            monkeypatch.undo()
-
     def test_discovery_network_fallback(self, monkeypatch):
         """_discover() fetches .well-known when no static endpoints configured."""
         from cert_watch.auth import OAuthConfig

@@ -8,9 +8,8 @@ import json
 import logging
 import secrets
 import time
-import typing
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
@@ -33,18 +32,12 @@ _ALLOWED_JWT_ALGS = (
 )
 
 # Exception types that JWT decode / claims validation can raise.
-# Built conditionally so the module imports cleanly without optional deps.
+# Built conditionally so the module imports cleanly without the optional dep.
 _ID_TOKEN_ERRORS: tuple[type[Exception], ...] = (ValueError, KeyError, TypeError)
-try:  # noqa: I001
-    from joserfc.errors import JoseError as _JoseRfcError  # noqa: I001
+try:
+    from joserfc.errors import JoseError as _JoseRfcError
 
     _ID_TOKEN_ERRORS = (_JoseRfcError,) + _ID_TOKEN_ERRORS
-except ImportError:
-    pass
-try:  # noqa: I001
-    from authlib.jose.errors import JoseError as _JoseError  # noqa: I001
-
-    _ID_TOKEN_ERRORS = (_JoseError,) + _ID_TOKEN_ERRORS
 except ImportError:
     pass
 
@@ -235,18 +228,12 @@ class OAuthProvider(AuthProvider):
         nonce: str | None = None,
     ) -> dict[str, Any] | None:
         """Verify an OIDC ID token using JWKS. Returns validated claims or None."""
-        _jwt: typing.Any = None
-        KeySet: typing.Any = None
         try:
             import joserfc.jwt as _jwt
             from joserfc.jwk import KeySet
         except ImportError:
-            try:
-                import authlib.jose.jwt as _jwt  # type: ignore[no-redef]
-                KeySet = None
-            except ImportError:
-                logger.warning("Neither joserfc nor authlib.jose available for JWT verification")
-                return None
+            logger.warning("joserfc not available for JWT verification")
+            return None
 
         jwks = self._fetch_jwks()
         if jwks is None:
@@ -260,20 +247,7 @@ class OAuthProvider(AuthProvider):
 
         issuer = self.config.issuer_url.rstrip("/")
 
-        try:
-            if KeySet is not None:
-                key_set = KeySet.import_key_set(jwks)
-                token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
-                raw_claims = token.claims
-            else:
-                from authlib.jose import JsonWebKey, JsonWebToken
-                key_set = JsonWebKey.import_key_set(jwks)
-                # authlib's module-level jwt.decode allows a broad default alg
-                # set; pin it to our asymmetric allowlist instead.
-                restricted = JsonWebToken(alg_values)
-                data = restricted.decode(id_token, key=key_set)
-                raw_claims = data
-
+        def _validate_claims(raw_claims: dict[str, Any]) -> dict[str, Any]:
             claims_options = {
                 "iss": {"essential": True, "value": issuer},
                 "aud": {"essential": True, "value": self.config.client_id},
@@ -281,7 +255,6 @@ class OAuthProvider(AuthProvider):
             claims_params: dict[str, Any] = {"client_id": self.config.client_id}
             if nonce:
                 claims_params["nonce"] = nonce
-
             try:
                 from authlib.oidc.core import CodeIDToken
 
@@ -291,39 +264,27 @@ class OAuthProvider(AuthProvider):
                 oidt.validate(leeway=120)
             except ImportError:
                 _validate_claims_manual(raw_claims, issuer, self.config.client_id, nonce)
-
+            except Exception as exc:  # noqa: BLE001 — normalize authlib oidc validation errors to ValueError
+                raise ValueError(str(exc)) from exc
             return dict(raw_claims)
+
+        try:
+            key_set = KeySet.import_key_set(cast(Any, jwks))
+            token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
+            return _validate_claims(token.claims)
         except _ID_TOKEN_ERRORS as exc:
-            if KeySet is not None:
-                try:
-                    from joserfc.errors import InvalidKeyIdError
-                    if isinstance(exc, InvalidKeyIdError):
-                        fresh_jwks = self._fetch_jwks(force=True)
-                        if fresh_jwks:
-                            key_set = KeySet.import_key_set(fresh_jwks)
-                            token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
-                            raw_claims = token.claims
-                            claims_options = {
-                                "iss": {"essential": True, "value": issuer},
-                                "aud": {"essential": True, "value": self.config.client_id},
-                            }
-                            claims_params = {"client_id": self.config.client_id}
-                            if nonce:
-                                claims_params["nonce"] = nonce
-                            try:
-                                from authlib.oidc.core import CodeIDToken
-                                oidt = CodeIDToken(raw_claims, {}, claims_options, claims_params)
-                                if access_token:
-                                    oidt.params["access_token"] = access_token
-                                oidt.validate(leeway=120)
-                            except ImportError:
-                                _validate_claims_manual(
-                                    raw_claims, issuer,
-                                    self.config.client_id, nonce,
-                                )
-                            return dict(raw_claims)
-                except Exception:  # noqa: BLE001 — retry path safety net
-                    pass
+            # JWKS key-rotation: if the kid was unknown, force-refresh JWKS and retry once.
+            try:
+                from joserfc.errors import InvalidKeyIdError
+
+                if isinstance(exc, InvalidKeyIdError):
+                    fresh_jwks = self._fetch_jwks(force=True)
+                    if fresh_jwks:
+                        key_set = KeySet.import_key_set(cast(Any, fresh_jwks))
+                        token = _jwt.decode(id_token, key=key_set, algorithms=alg_values)
+                        return _validate_claims(token.claims)
+            except Exception:  # noqa: BLE001 — retry is best-effort; fall through to the failure log
+                pass
             logger.warning("ID token verification failed: %s", exc)
             return None
 
