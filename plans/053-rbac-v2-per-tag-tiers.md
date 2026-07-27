@@ -170,9 +170,17 @@ confirm `test_rbac_per_tag_tiers.py` catches it before merging.
   (roles resolved live), so tier changes take effect on the next request — no
   token-minting change needed. Confirm no path caches `tier` beyond the request.
 
-## 7. Decision register (human inputs needed before Phase 2)
+## 7. Decision register — DECIDED 2026-07-27 (human-approved)
 
-1. D1 schema (child table vs JSON) — recommend child table.
-2. D2 multi-tag semantics (max-over-intersecting) — recommend max.
-3. D3 local-user M2M now or defer — recommend defer (ship D1 first).
-4. Is a JSON `/api/settings/roles` in scope for 1.0, or form-POST only?
+1. **D1 schema — child table `role_tag_tiers`.** No-op migration (empty =
+   inherit `permission_tier`); queryable; composes with future M2M.
+2. **D2 multi-tag semantics — max-over-intersecting-tags.** Aligns tier with
+   the existing union-based visibility model (avoid see-it-can't-edit
+   confusion). Privilege-creep risk countered by audit logging + tag hygiene,
+   not a min rule.
+3. **D3 local-user M2M — DEFER.** D1's child table already expresses
+   multi-tag tiers within a single role; IdP users get multi-role composition
+   via the role map. M2M is purely additive later if a customer needs
+   shared-role composition for local users.
+4. **JSON `/api/settings/roles` — NOT in 1.0.** Form-POST only. Additive slice
+   if automation is later requested.

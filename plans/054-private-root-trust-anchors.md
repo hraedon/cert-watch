@@ -92,16 +92,18 @@ already tells operators to "Upload the root CA as a trust anchor."
   grade B/incomplete **unless** the operator uploads the root").
 - P4.3 Close via cross-lineage review.
 
-## 4. Decision register (human inputs)
+## 4. Decision register — DECIDED 2026-07-27 (human-approved)
 
-1. **Phase 2 scope** — is leaf-terminating anchor check acceptable, or should
-   we require the server to serve intermediates (no scan-side help)? Recommend
-   the leaf-terminating check (it's pure trust validation, not discovery).
-2. **Re-grade on upload** — when an anchor is added, should existing certs be
-   re-evaluated automatically (background re-scan) or only on next scan?
-   Recommend: do **not** auto-trigger scans (maintenance simplicity); document
-   that a re-scan lifts the grade. (An explicit "re-evaluate posture" button is
-   a separate, optional slice.)
+1. **Phase 2 scope — leaf-terminating anchor check, IMPLEMENT.** Pure trust
+   validation (signature check against an operator-provided anchor), not
+   discovery. Resolves the direct-issuance (root→leaf) empty-chain case;
+   missing-intermediate chains correctly stay "incomplete" (reconstructing
+   them would mean chasing AIA — that's the discovery line).
+2. **Re-grade on upload — next-scan only (no auto-rescan).** Auto-rescanning
+   on a trust-config change is a surprising side-effect; the hourly scheduler
+   or a manual re-scan lifts the grade within the hour. Flag a **posture-only
+   re-evaluate** (re-run chain_status + grading against stored cert data + new
+   anchors, no network) as a clean future slice — do not bundle into Phase 1.
 
 ## 5. Why this is the right "way to correct" the B/incomplete issue
 
