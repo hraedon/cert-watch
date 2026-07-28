@@ -50,6 +50,8 @@ def test_readyz_with_scan_history(tmp_path, reload_app):
 
 
 def test_readyz_db_error(monkeypatch, reload_app):
+    """Degraded readiness must be HTTP 503 — the status code is the probe
+    contract (kubelet/blackbox judge on it, not on the body)."""
     app_mod = reload_app()
     import cert_watch.routes.views as views_mod
 
@@ -61,10 +63,61 @@ def test_readyz_db_error(monkeypatch, reload_app):
     monkeypatch.setattr(views_mod, "_connect", bad_connect)
     with TestClient(app_mod.app) as client:
         r = client.get("/readyz")
-    assert r.status_code == 200
+    assert r.status_code == 503
     data = r.json()
     assert data["status"] == "degraded"
     monkeypatch.setattr(views_mod, "_connect", orig)
+
+
+def test_readyz_shallow_body_when_unauthenticated(reload_app):
+    """Under an auth provider, unauthenticated probes get status only —
+    operational detail (last scan, counts) stays behind auth. Uses the
+    local-admin provider (no ldap3 import, no network) as the auth fixture.
+
+    Note: the env var is CERT_WATCH_LOCAL_ADMIN_* — AUTH_PROVIDER has no
+    "local" value; build_auth_provider returns LocalAdminProvider when the
+    provider is unset but local-admin credentials are present."""
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-readyz"),
+    )
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        r = client.get("/readyz")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "ok"
+    assert "checks" not in data
+
+
+def test_readyz_full_body_when_open(reload_app):
+    """Open mode (no provider) keeps the full detailed body."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/readyz")
+    assert r.status_code == 200
+    assert "checks" in r.json()
+
+
+def test_readyz_full_body_when_authenticated(reload_app):
+    """Auth on + authenticated operator → full detailed body; only anonymous
+    probes get the shallow shape. (Minted session cookie, not a /login
+    POST — the login response sets a Secure cookie TestClient won't
+    resend over plain http.)"""
+    from cert_watch.auth import SESSION_COOKIE, create_session
+    from cert_watch.auth.local_admin import _scrypt_hash
+
+    app_mod = reload_app(
+        CERT_WATCH_LOCAL_ADMIN_USER="admin",
+        CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("pw-for-tests-readyz"),
+    )
+    token = create_session("admin")
+    with TestClient(app_mod.app, raise_server_exceptions=False) as client:
+        client.cookies.set(SESSION_COOKIE, token)
+        r = client.get("/readyz")
+    assert r.status_code == 200
+    assert "checks" in r.json()
 
 
 def test_readyz_strips_version_and_commit(reload_app):

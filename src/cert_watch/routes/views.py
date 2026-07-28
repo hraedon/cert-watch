@@ -59,8 +59,16 @@ def healthz(request: Request) -> dict[str, str]:
 
 
 @router.get("/readyz")
-def readyz(request: Request) -> dict[str, Any]:
-    """Readiness probe — DB reachable, writable, and scheduler healthy."""
+def readyz(request: Request) -> JSONResponse:
+    """Readiness probe — DB reachable, writable, and scheduler healthy.
+
+    Probe contract: HTTP 200 when ready, **503 when degraded** — the status
+    code is what kubelet/blackbox probes judge (a 200-with-`degraded` body
+    reads as Ready to a kubelet). When an auth provider is configured,
+    unauthenticated callers get a shallow body (status only); the detailed
+    checks stay behind session/API-key auth (disclosure hygiene, same class
+    as WI-124 #5).
+    """
     db = _db_path(request)
     checks: dict[str, str] = {}
     ok = True
@@ -125,10 +133,37 @@ def readyz(request: Request) -> dict[str, Any]:
         checks["expired"] = str(expired_row[0] if expired_row else 0)
     except Exception:
         logger.warning("readyz cert count query failed", exc_info=True)
-    return {
-        "status": "ok" if ok else "degraded",
-        "checks": checks,
-    }
+    # Shallow body for unauthenticated callers under an auth provider; open
+    # mode (no provider) and authenticated callers get the full detail.
+    # /readyz is a public path, so auth_middleware never runs on it and
+    # scope["auth_user"] is never set here — validate presented credentials
+    # (API key, then session cookie) directly.
+    from cert_watch.auth import SESSION_COOKIE, validate_session
+    from cert_watch.middleware import (
+        _is_auth_enabled,
+        _request_security,
+        authenticate_api_key,
+    )
+
+    full = True
+    if _is_auth_enabled(request):
+        authed = authenticate_api_key(request, db) is not None
+        if not authed:
+            _settings = getattr(request.app.state, "settings", None)
+            _ttl = getattr(_settings, "session_ttl", None) if _settings else None
+            authed = bool(
+                validate_session(
+                    request.cookies.get(SESSION_COOKIE, ""),
+                    _request_security(request),
+                    db_path=str(db),
+                    session_ttl=_ttl,
+                )
+            )
+        full = authed
+    body: dict[str, Any] = {"status": "ok" if ok else "degraded"}
+    if full:
+        body["checks"] = checks
+    return JSONResponse(body, status_code=200 if ok else 503)
 
 
 @router.get("/favicon.ico")
