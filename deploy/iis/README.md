@@ -164,6 +164,28 @@ Set-ItemProperty IIS:\AppPools\$pool -Name startMode -Value "AlwaysRunning"
 Set-ItemProperty IIS:\AppPools\$pool -Name recycling.periodicRestart.time -Value "00:00:00"
 ```
 
+**AlwaysRunning alone is not enough — the application also needs preload.**
+`startMode=AlwaysRunning` only starts the `w3wp` worker process; the
+HttpPlatformHandler spawns `python.exe` on the *first HTTP request* unless the
+application has `preloadEnabled=true`. Without preload, a reboot (or process
+exit) with no inbound traffic silently stops all scanning until someone
+visits the site — this failure mode ran undetected for 12 days on the
+mvmcitest01 test estate (WI-140). Enable preload on the site (the install
+script does this for you):
+
+```powershell
+Set-ItemProperty "IIS:\Sites\cert-watch" -Name applicationDefaults.preloadEnabled -Value $true
+```
+
+Applying the setting to an *existing* site **recycles that site's
+applications** (a brief backend restart) — schedule the change accordingly;
+it is not a zero-downtime config edit. The preload behavior itself takes
+effect on the next pool start. Verify after the next reboot/recycle that
+`python.exe` starts without any inbound request. As belt-and-braces you can
+additionally keep the app warm with a scheduled task that requests the
+public `/healthz` endpoint every few minutes (liveness only; do not depend
+on `/readyz`, which requires auth when a provider is configured).
+
 ### 2a.5 — Grant the app-pool identity access to data, secrets, and Python
 
 Now that the app pool exists, re-run the install script with `-AppPool` to set

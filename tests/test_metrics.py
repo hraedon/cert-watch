@@ -88,6 +88,41 @@ def test_metrics_scan_errors(tmp_path, reload_app):
     assert 'host="ok.example.com:443"' not in text
 
 
+def test_metrics_last_scan_timestamp(tmp_path, reload_app):
+    """The last-scan gauge powers scan-stall alerting (WI-140): a scheduler
+    that silently stops (app alive, scans not happening) is invisible to
+    cert-count metrics — only the scan timestamp betrays it."""
+    import re
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import init_schema
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    init_schema(db)
+    record_scan_history(db, ScanHistory(
+        hostname="ok.example.com", port=443, status="success",
+    ))
+
+    with TestClient(app_mod.app) as client:
+        r = client.get("/metrics")
+    assert r.status_code == 200
+    m = re.search(r"cert_watch_last_scan_timestamp_seconds ([\d.eE+]+)", r.text)
+    assert m, "last-scan gauge missing from /metrics output"
+    assert float(m.group(1)) > 1577836800  # after 2020-01-01 — a real timestamp
+
+
+def test_metrics_last_scan_absent_when_never_scanned(reload_app):
+    """With zero scan rows the series is genuinely absent (no HELP/TYPE/
+    sample) — prometheus_client would otherwise emit 0.0, which reads as
+    'stalled since 1970' to a time()-based staleness rule."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get("/metrics")
+    assert r.status_code == 200
+    assert "cert_watch_last_scan_timestamp_seconds" not in r.text
+
+
 def test_prometheus_rules_valid_yaml():
     """FEAT-011: prometheus-rules.yaml must be valid YAML with expected alerts."""
     from pathlib import Path

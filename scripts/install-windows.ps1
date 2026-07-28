@@ -542,6 +542,19 @@ if ($ConfigureIIS) {
             }
         }
 
+        # 4b. Application preload - REQUIRED for the scheduler to survive
+        # reboots/recycles. AlwaysRunning only starts the w3wp worker; the
+        # HttpPlatformHandler spawns python.exe on the FIRST HTTP request
+        # unless the application has preloadEnabled=true. Without preload, a
+        # reboot (or process exit) with no inbound traffic silently stops all
+        # scanning until someone visits the site (observed in production:
+        # 12-day scan gap, WI-140). Applying applicationDefaults to an
+        # EXISTING site recycles that site's applications (a brief backend
+        # restart); the preload behavior itself takes effect on the next
+        # pool start.
+        Set-ItemProperty $sitePathIIS -Name applicationDefaults.preloadEnabled -Value $true
+        Write-Host "    Application preload enabled (backend warm-starts with the app pool)."
+
         # 5. TLS cert binding
         # Idempotent helper: ensures http.sys has the requested binding for the
         # supplied thumbprint, and removes the opposite binding so SNI and

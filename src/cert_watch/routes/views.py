@@ -988,6 +988,16 @@ def metrics(request: Request) -> PlainTextResponse:
                 error_counts.get((host_label, reason), 0) + r["cnt"]
             )
 
+        last_scan_row = conn.execute(
+            "SELECT MAX(scanned_at) FROM scan_history"
+        ).fetchone()
+        last_scan_ts: float = 0.0
+        if last_scan_row and last_scan_row[0]:
+            try:
+                last_scan_ts = _parse_iso(last_scan_row[0]).timestamp()
+            except (ValueError, TypeError):
+                last_scan_ts = 0.0
+
     for urgency, count in urgency_counts.items():
         urgency_gauge.labels(urgency=urgency).set(count)
     for grade, count in grade_counts.items():
@@ -998,6 +1008,21 @@ def metrics(request: Request) -> PlainTextResponse:
     hosts_gauge.set(total_hosts)
     certs_gauge.set(total_certs)
     expired_gauge.set(expired)
+    if last_scan_ts > 0:
+        # Registered only when a scan exists so the series is genuinely
+        # ABSENT on never-scanned installs — prometheus_client would
+        # otherwise emit 0.0, which reads as "stalled since 1970" to a
+        # time()-based staleness rule and pages on every fresh deploy.
+        Gauge(
+            "cert_watch_last_scan_timestamp_seconds",
+            "Unix timestamp of the most recent recorded scan. Alert on "
+            "staleness (e.g. time() - metric > 1.5x scan interval) to catch a "
+            "silently stalled scheduler — the failure mode where the process "
+            "is alive but scans have stopped (or, with external scraping, "
+            "where the whole app was down and Prometheus shows the series "
+            "going stale on resume).",
+            registry=registry,
+        ).set(last_scan_ts)
 
     return PlainTextResponse(
         generate_latest(registry).decode("utf-8"),

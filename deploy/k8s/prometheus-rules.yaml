@@ -34,7 +34,10 @@ spec:
               expires in {{ $value }} days. Plan renewal soon.
 
         - alert: CertExpired
-          expr: cert_watch_cert_expiry_days < 0
+          # Negated so $value is *positive* days-since-expiry — the raw
+          # metric is negative for expired certs, and "expired -16 days ago"
+          # is nonsense in a pager. (cert_watch_cert_expiry_days < 0)
+          expr: 0 - cert_watch_cert_expiry_days > 0
           for: 5m
           labels:
             severity: critical
@@ -44,7 +47,7 @@ spec:
               Certificate {{ $labels.subject }} on host {{ $labels.host }}
               expired {{ $value }} days ago. Renew immediately.
 
-        - alert: CertWatchScanFailures
+        - alert: CertWatchExpiredCertificates
           expr: cert_watch_certificates_expired > 0
           for: 30m
           labels:
@@ -54,3 +57,22 @@ spec:
             description: >-
               {{ $value }} certificate(s) have expired. Check the cert-watch
               dashboard for details.
+
+        - alert: CertWatchScanStalled
+          # No successful scan recorded in > 36h against a daily 06:00
+          # schedule (1.5x interval): the app is alive but the scheduler
+          # has silently stopped — or (with external scraping) the whole
+          # app was down and the series resumes stale. WI-140: this exact
+          # failure mode ran undetected for 12 days on an IIS-hosted
+          # instance.
+          expr: time() - cert_watch_last_scan_timestamp_seconds > 129600
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "cert-watch scans have stalled"
+            description: >-
+              No scan has been recorded in over 36 hours (last scan was
+              {{ $value | humanizeDuration }} ago). Check that the scheduler
+              is running and the hosting environment keeps the process
+              alive (IIS: application preload; systemd/k8s: service health).
