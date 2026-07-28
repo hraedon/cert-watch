@@ -400,11 +400,24 @@
     {% endif %}
 
     {% if not entries and not pivot_groups %}
+      {% if filter_q or filter_urgency or filter_source %}
+      {# Filtered-empty: the estate has certs, this filter just matches none. #}
       <div class="cw-empty">
         <div class="cw-empty-icon">{{ icons.svg_icon('search', 20) }}</div>
         <div class="cw-empty-title">No matching certificates</div>
         <div class="cw-empty-sub">Try a different search or filter.</div>
       </div>
+      {% else %}
+      {# Fresh install: nothing tracked at all — onboard, don't "no results". #}
+      <div class="cw-empty" data-testid="empty-onboarding">
+        <div class="cw-empty-icon">{{ icons.svg_icon('plus', 20) }}</div>
+        <div class="cw-empty-title">No certificates yet</div>
+        <div class="cw-empty-sub">Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.</div>
+        <div class="cw-mt-4">
+          <button type="button" class="cw-btn primary" data-action="open-slide" data-testid="empty-add-btn">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</button>
+        </div>
+      </div>
+      {% endif %}
     {% endif %}
   </div>
 

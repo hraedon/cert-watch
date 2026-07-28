@@ -166,6 +166,11 @@ Plan status:
 - **Plan 025** (compliance/auditor report): **done** — `compliance.py` with `build_compliance_report()` (reads stored posture + certs, computes grade distribution, compliance metrics, remediation buckets), HMAC-SHA256 tamper-evident signing via `SecurityContext.signing_key`, and `verify_report_signature()` for CLI verification. Three export routes: `GET /api/reports/compliance.json` (signed JSON), `GET /api/reports/compliance.csv` (signed CSV with tamper-evidence footer), `GET /reports/compliance` (print-optimized HTML with CSS `@media print`). CLI subcommand `cert-watch verify-report <file>`. Link from Insights page. 27 tests covering aggregation, signing round-trip, tamper detection, route auth-gating, and CLI verification. Deferred: CAA metric (marked N/A — not stored per scan), native PDF (`weasyprint` optional extra).
 - **Plan 049** (maintenance entry): **done 2026-06-13** — the last development plan; the project is now in maintenance mode (see the *Maintenance mode* section below). P0 decided (AD CS **declined** — see positioning.md + Plan 047 decision 4; positioning window thesis written). P2 entry-fee debt done (WI-031 settings decomposition, WI-025 bare-except triage, WI-026 SSRF integration tests, settings-POST + /readiness e2e). P3 boring ops done (real-DB migration test with dashboard-query smoke read, SC-081 freeze-time boundary tests, dependency cadence). P4 maintenance contract written. **Operator-paced tails** (need the production instance / lab, tracked separately): P1 validate analytics against the real estate, P1.3 confirm WI-024 `-wal` stability on the Windows VM, P3.2 exercise the restore runbook end-to-end. See `plans/049-maintenance-entry.md`.
 - **Plan 048** (47-day regime — SC-081 readiness): **done** — Workstream 1: lifetime-relative alert thresholds (certs ≤90d use % of lifetime, long-lived unchanged), renewal-overdue detection with event dedup. Workstream 2: `renewal_analytics.py` (per-host lifetimes, lead times, cadence, automation inference), `readiness.py` (SC-081 milestone timeline, margin analysis, workload forecast), `policy_packs/cab_forum_sc081.py` (opt-in PolicySet with date-aware max-validity rules, non-grade-affecting). Workstream 3: `digest.py` (weekly renewal digest), scan-cadence finding (warns when interval >10% of lifetime). Migration 0023 adds `not_before` to `cert_history`. Nav link from Insights page.
+- **Plan 050** (alert routing e2e): **done** — `resolve_cert_recipients()` single source of truth; orphan-cert detection + admin digest notice.
+- **Plan 051** (estate discovery): scoped, **deferred to post-1.0** by operator (2026-06-20).
+- **Plan 052** (alert lifecycle: ack/snooze + escalation): proposed, **pre-1.0 candidate** (operator call).
+- **Plan 053** (RBAC v2 / WI-064 per-tag-scoped tiers): proposed 2026-07-26, human-approved 2026-07-27 — the **1.0 vehicle**.
+- **Plan 054** (private-root trust anchors / WI-139): human-approved 2026-07-27, **landed** — trust-anchor upload on the dashboard, `SqliteTrustAnchorRepository`, private-CA chains grade complete instead of B/incomplete.
 
 ## Architecture notes
 
@@ -200,7 +205,7 @@ Project is registered with agent-notes and routes to its regista schema via path
 
 ## Maintenance mode
 
-This project entered maintenance mode after Plan 049 (2026-06-13). Development is done; the surface is closed. Work is now limited to:
+This project entered maintenance mode after Plan 049 (2026-06-13). As of 2026-07-27 the operator has softened this to **"mostly maintenance"**: no planned feature development, but defects found in real use get fixed opportunistically, and occasionally a piece of deferred work gets closed when leaving it would be riskier than landing it (e.g. WI-139 private-root trust anchors, landed 2026-07-27 under operator-approved Plan 054). Plans 051–054 record the items scoped after Plan 049. The contract below still governs what lands by default:
 
 **What gets done:**
 - **Defect fixes** — bugs in existing functionality

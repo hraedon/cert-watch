@@ -469,6 +469,51 @@ class TestComplianceRoutes:
         assert "Compliance Report" in r.text
         assert "Content SHA-256" in r.text
 
+    def test_compliance_html_metrics_coverage_note(self, tmp_path, reload_app):
+        """When some certs have no stored posture yet, the metrics card must
+        say how many of the fleet are covered — an auditor shouldn't have to
+        guess whether 'N/A' means failed, absent, or not-yet-evaluated."""
+        from datetime import UTC, datetime, timedelta
+
+        from cert_watch.certificate_model import Certificate
+        from tests._helpers import seed_certificate
+
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        _seed_fleet(str(db))  # 5 certs, all with stored posture
+        # One uploaded cert with NO stored posture → 5 of 6 covered.
+        now = datetime.now(UTC)
+        seed_certificate(
+            str(db),
+            Certificate(
+                subject="CN=uploaded.example.com",
+                issuer="CN=Test CA",
+                not_before=now - timedelta(days=30),
+                not_after=now + timedelta(days=90),
+                fingerprint_sha256="fp-uploaded",
+                raw_der=b"\x00",
+                is_leaf=True,
+                source="uploaded",
+            ),
+            cert_id="cert-uploaded",
+            source="uploaded",
+        )
+        with TestClient(app_mod.app) as client:
+            r = client.get("/reports/compliance")
+        assert r.status_code == 200
+        assert 'data-testid="metrics-coverage"' in r.text
+        assert "5 of 6" in r.text
+
+    def test_compliance_html_full_coverage_hides_note(self, tmp_path, reload_app):
+        """Full posture coverage → no coverage caveat clutters the report."""
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        _seed_fleet(str(db))
+        with TestClient(app_mod.app) as client:
+            r = client.get("/reports/compliance")
+        assert r.status_code == 200
+        assert 'data-testid="metrics-coverage"' not in r.text
+
     def test_compliance_json_auth_gated(self, reload_app):
         # No auth provider + ALLOW_UNAUTH=0 → secure-by-default auto-provisions an
         # admin and the report API rejects the unauthenticated request with 401.

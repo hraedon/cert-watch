@@ -13,9 +13,11 @@ def test_health_banner_shows_on_dashboard(page: Page, cert_watch_server: str) ->
     banner = page.locator("#cw-health-banner")
     expect(banner).to_be_visible()
 
-    # Should contain operational text (scheduler is running, no failed scans)
+    # Should contain pipeline-health text (scheduler is running, no failed
+    # scans). Wording names the *monitoring pipeline* — not certificate
+    # health — so a green banner can't be misread as "all certs are fine".
     text = page.locator("#cw-health-text")
-    expect(text).to_have_text("All systems operational")
+    expect(text).to_have_text("Monitoring pipeline healthy")
 
     # Should have the ok tone class
     expect(banner).to_have_class("cw-health-banner cw-health-ok")

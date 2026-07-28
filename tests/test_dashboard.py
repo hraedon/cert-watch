@@ -6,10 +6,32 @@ from tests.conftest import _make_cert
 
 
 def test_dashboard_empty_state():
+    """Fresh install (no certs, no filters): onboarding copy, not the
+    filtered-empty 'no results' message — first run should guide the
+    operator to add something."""
     with TestClient(app) as client:
         r = client.get("/")
     assert r.status_code == 200
+    assert "No certificates yet" in r.text
+    assert "No matching certificates" not in r.text
+
+
+def test_dashboard_filtered_empty_state(reload_app, leaf_pem_file):
+    """Estate has certs but the filter matches none: the 'no results'
+    message applies here instead."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        with open(leaf_pem_file, "rb") as f:
+            r = client.post(
+                "/upload",
+                files={"file": ("leaf.pem", f, "application/x-pem-file")},
+                follow_redirects=True,
+            )
+        assert r.status_code == 200
+        r = client.get("/?q=no-such-cert-exists")
+    assert r.status_code == 200
     assert "No matching certificates" in r.text
+    assert "No certificates yet" not in r.text
 
 
 def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):

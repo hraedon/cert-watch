@@ -84,6 +84,13 @@
 
   <div class="cw-panel cw-p-16-18 cw-mt-16">
     <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Compliance metrics</div>
+    {% set covered = (report.compliance_metrics | map(attribute='total') | max) if report.compliance_metrics else 0 %}
+    {% if covered < report.total_certs %}
+      <div class="cw-fz-13 cw-muted cw-mb-4" data-testid="metrics-coverage">
+        Metrics cover the {{ covered }} of {{ report.total_certs }} certificates
+        with a completed scan; the rest are not yet evaluated (N/A).
+      </div>
+    {% endif %}
     {% for m in report.compliance_metrics %}
       <div class="cw-metric-row">
         <div class="cw-flex-1 cw-fz-13">{{ m.label }}</div>

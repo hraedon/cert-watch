@@ -154,7 +154,11 @@
           parts.push(escHtml(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
         }
         if (data.overall === 'ok') {
-          parts = ['All systems operational'];
+          // This banner reports the *monitoring pipeline* (scheduler, scans,
+          // alert delivery) — not certificate health. Name the subject so a
+          // green banner above an estate full of expiring certs can't be
+          // misread as "all certificates are fine".
+          parts = ['Monitoring pipeline healthy'];
         }
 
         TEXT.innerHTML = parts.join(' · ') || 'System status unknown';

@@ -410,12 +410,64 @@ def test_process_pending_sends_and_marks(alert_repo, expiring_cert):
 
 
 def test_alert_formatting_includes_required_fields(alert_repo, expiring_cert):
+    from cert_watch.filters import subject_cn
+
     alerts = evaluate_thresholds(expiring_cert, alert_repo)
     assert alerts
     msg = alerts[0].message
-    assert expiring_cert.display_name in msg or expiring_cert.subject in msg
+    assert subject_cn(expiring_cert.subject) in msg
     assert "days remaining" in msg
     assert "Recommended action" in msg
+
+
+def test_alert_message_uses_friendly_cn_not_raw_dn(alert_repo, expiring_cert):
+    """Operator-facing text (email body, webhook, UI): show the CN, not the
+    raw X.509 DN — and don't duplicate it as '(subject: …)'."""
+    from cert_watch.filters import subject_cn
+
+    alerts = evaluate_thresholds(expiring_cert, alert_repo)
+    msg = alerts[0].message
+    assert subject_cn(expiring_cert.subject) in msg
+    assert "(subject:" not in msg
+    # Raw DN (e.g. "O=…,CN=…") must not appear when a CN is extractable.
+    if subject_cn(expiring_cert.subject) != expiring_cert.subject:
+        assert expiring_cert.subject not in msg
+
+
+def test_alert_message_has_no_iso8601_timestamp(alert_repo, expiring_cert):
+    """Embarrassment-checklist class: raw ISO timestamps with the 'T'
+    separator belong in logs, not in operator-facing alert text."""
+    import re
+
+    alerts = evaluate_thresholds(expiring_cert, alert_repo)
+    msg = alerts[0].message
+    assert not re.search(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", msg), msg
+    # Calendar date (day-granularity) is kept.
+    assert expiring_cert.not_after.date().isoformat() in msg
+
+
+def test_alert_message_expired_phrasing(alert_repo):
+    """Expired certs read 'expired N days ago (<date>)' — never a negative
+    'days remaining'."""
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+
+    cert = Certificate(
+        subject="O=Demo Estate,CN=legacy.example.com",
+        issuer="CN=Demo CA",
+        not_before=datetime.now(UTC) - timedelta(days=381),
+        not_after=datetime.now(UTC) - timedelta(days=16),
+        fingerprint_sha256="ab" * 32,
+    )
+    alerts = evaluate_thresholds(cert, alert_repo)
+    assert alerts
+    msg = alerts[0].message
+    assert "expired 1" in msg and "days ago" in msg
+    assert "ago (" in msg  # calendar date retained
+    assert "remaining" not in msg
+    assert "legacy.example.com" in msg  # CN, not the raw DN
+    assert "O=Demo Estate" not in msg
 
 
 def test_send_webhook_success():
