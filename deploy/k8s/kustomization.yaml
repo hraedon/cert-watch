@@ -14,4 +14,4 @@ resources:
 images:
 - name: ghcr.io/hraedon/cert-watch
   newName: ghcr.io/hraedon/cert-watch
-  newTag: e28e560
+  newTag: 110a7fa
