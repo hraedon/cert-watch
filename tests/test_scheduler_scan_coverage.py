@@ -531,7 +531,7 @@ def test_scan_error_dataclass():
 
 
 def test_scan_error_reason_variants():
-    from cert_watch.routes.views import _scan_error_reason
+    from cert_watch.routes.metrics import _scan_error_reason
 
     assert _scan_error_reason("connection refused") == "connection_refused"
     assert _scan_error_reason("Connection Refused") == "connection_refused"

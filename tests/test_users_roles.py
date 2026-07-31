@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import LocalAdminProvider, _scrypt_hash
@@ -11,16 +10,7 @@ from cert_watch.database import (
     SqliteRoleRepository,
     SqliteUserRepository,
     User,
-    init_schema,
 )
-
-
-@pytest.fixture
-def db(tmp_path):
-    path = tmp_path / "test.db"
-    init_schema(path)
-    return path
-
 
 # ---------- Role repository ----------
 

@@ -66,6 +66,7 @@ def _resolve_automation_hint(
         analytics = compute_host_analytics(db_path, hostname)
         return analytics.automation_classification
     except Exception:
+        logger.debug("automation hint lookup failed for %s", hostname, exc_info=True)
         return "unknown"
 
 

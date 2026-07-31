@@ -24,7 +24,6 @@ from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
     SqliteRoleRepository,
-    init_schema,
 )
 
 # ---------- helpers ----------
@@ -52,15 +51,8 @@ def _make_cert(
 # ---------- fixtures ----------
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    return db
-
-
-@pytest.fixture
-def group_repo(db_path: Path) -> SqliteAlertGroupRepository:
-    return SqliteAlertGroupRepository(db_path)
+def group_repo(db: Path) -> SqliteAlertGroupRepository:
+    return SqliteAlertGroupRepository(db)
 
 
 # ---------- Repository CRUD ----------
@@ -103,9 +95,9 @@ class TestAlertGroupRepository:
         gid = group_repo.create("g", ["a@b.com"], [])
         assert group_repo.update(gid) is True  # no-op
 
-    def test_delete_cascades_certs(self, group_repo: SqliteAlertGroupRepository, db_path: Path):
+    def test_delete_cascades_certs(self, group_repo: SqliteAlertGroupRepository, db: Path):
         gid = group_repo.create("g", ["a@b.com"], [])
-        cert_repo = SqliteCertificateRepository(db_path)
+        cert_repo = SqliteCertificateRepository(db)
         cid = _make_cert(cert_repo)
         group_repo.assign_cert(gid, cid)
         assert group_repo.groups_for_cert_manual(cid) == [gid]
@@ -121,9 +113,9 @@ class TestAlertGroupRepository:
         with pytest.raises(sqlite3.IntegrityError):
             group_repo.create("dup", ["c@d.com"], [])
 
-    def test_assign_unassign_cert(self, group_repo: SqliteAlertGroupRepository, db_path: Path):
+    def test_assign_unassign_cert(self, group_repo: SqliteAlertGroupRepository, db: Path):
         gid = group_repo.create("g", ["a@b.com"], [])
-        cert_repo = SqliteCertificateRepository(db_path)
+        cert_repo = SqliteCertificateRepository(db)
         cid = _make_cert(cert_repo)
         group_repo.assign_cert(gid, cid)
         assert group_repo.groups_for_cert_manual(cid) == [gid]
@@ -131,10 +123,10 @@ class TestAlertGroupRepository:
         assert group_repo.groups_for_cert_manual(cid) == []
 
     def test_assign_ignored_on_duplicate(
-        self, group_repo: SqliteAlertGroupRepository, db_path: Path
+        self, group_repo: SqliteAlertGroupRepository, db: Path
     ):
         gid = group_repo.create("g", ["a@b.com"], [])
-        cert_repo = SqliteCertificateRepository(db_path)
+        cert_repo = SqliteCertificateRepository(db)
         cid = _make_cert(cert_repo)
         group_repo.assign_cert(gid, cid)
         group_repo.assign_cert(gid, cid)  # no error
@@ -154,80 +146,80 @@ class TestAlertGroupRepository:
 # ---------- Routing ----------
 
 class TestAlertGroupRouting:
-    def _setup_cert_with_tags(self, db_path: Path) -> str:
+    def _setup_cert_with_tags(self, db: Path) -> str:
         """Create a host + cert with tags, return cert_id."""
-        host_repo = SqliteHostRepository(db_path)
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, tags="team-web, prod")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         cert_id = _make_cert(cert_repo)
         cert_repo.set_tags(cert_id, "pci")
         return cert_id
 
-    def test_tag_match_routes_to_group(self, db_path: Path):
+    def test_tag_match_routes_to_group(self, db: Path):
         """AC-3: cert with effective tags matching a group gets group recipients."""
-        cert_id = self._setup_cert_with_tags(db_path)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        cert_id = self._setup_cert_with_tags(db)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("web-team", ["web@co.com"], ["team-web"])
 
-        recipients = resolve_group_recipients(db_path, cert_id)
+        recipients = resolve_group_recipients(db, cert_id)
         assert "web@co.com" in recipients
 
-    def test_manual_assignment_routes_regardless_of_tags(self, db_path: Path):
+    def test_manual_assignment_routes_regardless_of_tags(self, db: Path):
         """AC-4: manual assignment routes even without tag match."""
-        cert_id = self._setup_cert_with_tags(db_path)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        cert_id = self._setup_cert_with_tags(db)
+        group_repo = SqliteAlertGroupRepository(db)
         gid = group_repo.create("special", ["special@co.com"], ["nonexistent-tag"])
         group_repo.assign_cert(gid, cert_id)
 
-        recipients = resolve_group_recipients(db_path, cert_id)
+        recipients = resolve_group_recipients(db, cert_id)
         assert "special@co.com" in recipients
 
-    def test_no_match_returns_empty(self, db_path: Path):
+    def test_no_match_returns_empty(self, db: Path):
         """AC-5: cert matching no group returns empty recipients."""
-        cert_id = self._setup_cert_with_tags(db_path)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        cert_id = self._setup_cert_with_tags(db)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("other", ["other@co.com"], ["unrelated"])
 
-        recipients = resolve_group_recipients(db_path, cert_id)
+        recipients = resolve_group_recipients(db, cert_id)
         assert recipients == []
 
-    def test_no_groups_defined_returns_empty(self, db_path: Path):
+    def test_no_groups_defined_returns_empty(self, db: Path):
         """AC-6: no groups defined → empty recipients (backward compatible)."""
-        cert_id = self._setup_cert_with_tags(db_path)
-        recipients = resolve_group_recipients(db_path, cert_id)
+        cert_id = self._setup_cert_with_tags(db)
+        recipients = resolve_group_recipients(db, cert_id)
         assert recipients == []
 
-    def test_inherited_host_tag_drives_routing(self, db_path: Path):
+    def test_inherited_host_tag_drives_routing(self, db: Path):
         """AC-1 dependency: host tag inheritance drives group routing."""
-        host_repo = SqliteHostRepository(db_path)
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, tags="team-infra")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         cert_id = _make_cert(cert_repo)
         # Cert has no own tags, but inherits team-infra from host
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("infra-team", ["infra@co.com"], ["team-infra"])
 
-        recipients = resolve_group_recipients(db_path, cert_id)
+        recipients = resolve_group_recipients(db, cert_id)
         assert "infra@co.com" in recipients
 
-    def test_deduped_across_groups(self, db_path: Path):
+    def test_deduped_across_groups(self, db: Path):
         """Recipients appearing in multiple groups are de-duped."""
-        cert_id = self._setup_cert_with_tags(db_path)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        cert_id = self._setup_cert_with_tags(db)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("g1", ["shared@co.com"], ["team-web"])
         group_repo.create("g2", ["shared@co.com", "extra@co.com"], ["prod"])
 
-        recipients = resolve_group_recipients(db_path, cert_id)
+        recipients = resolve_group_recipients(db, cert_id)
         assert recipients.count("shared@co.com") == 1
         assert "extra@co.com" in recipients
 
-    def test_evaluate_all_certs_merges_group_and_owner(self, db_path: Path):
+    def test_evaluate_all_certs_merges_group_and_owner(self, db: Path):
         """evaluate_all_certs merges group recipients with owner_email."""
-        host_repo = SqliteHostRepository(db_path)
+        host_repo = SqliteHostRepository(db)
         host_repo.add(
             "h.example.com", 443,
             tags="team-web",
@@ -235,40 +227,40 @@ class TestAlertGroupRouting:
             owner_email="alice@co.com",
         )
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         _make_cert(cert_repo)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("web-team", ["webteam@co.com"], ["team-web"])
 
-        alert_repo = SqliteAlertRepository(db_path)
-        alerts = evaluate_all_certs(db_path, alert_repo)
+        alert_repo = SqliteAlertRepository(db)
+        alerts = evaluate_all_certs(db, alert_repo)
         assert len(alerts) > 0
         for a in alerts:
             assert "webteam@co.com" in a.extra_recipients
             assert "alice@co.com" in a.extra_recipients
 
-    def test_evaluate_all_certs_no_groups_uses_owner_only(self, db_path: Path):
+    def test_evaluate_all_certs_no_groups_uses_owner_only(self, db: Path):
         """Without groups, extra_recipients is just owner_email (backward compat)."""
-        host_repo = SqliteHostRepository(db_path)
+        host_repo = SqliteHostRepository(db)
         host_repo.add(
             "h.example.com", 443,
             owner_email="alice@co.com",
         )
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         _make_cert(cert_repo)
 
-        alert_repo = SqliteAlertRepository(db_path)
-        alerts = evaluate_all_certs(db_path, alert_repo)
+        alert_repo = SqliteAlertRepository(db)
+        alerts = evaluate_all_certs(db, alert_repo)
         assert len(alerts) > 0
         for a in alerts:
             assert a.extra_recipients == ["alice@co.com"]
 
-    def test_evaluate_thresholds_accepts_extra_recipients(self, db_path: Path):
+    def test_evaluate_thresholds_accepts_extra_recipients(self, db: Path):
         """evaluate_thresholds uses passed extra_recipients when provided."""
-        alert_repo = SqliteAlertRepository(db_path)
+        alert_repo = SqliteAlertRepository(db)
         cert = Certificate(
             subject="CN=test",
             issuer="CN=issuer",
@@ -558,91 +550,91 @@ class TestAlertGroupConfig:
 
 
 class TestGroupThresholdOverride:
-    def test_resolve_group_thresholds_returns_matching(self, db_path: Path):
-        host_repo = SqliteHostRepository(db_path)
+    def test_resolve_group_thresholds_returns_matching(self, db: Path):
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, tags="team-web")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         cert_id = _make_cert(cert_repo)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("web-team", ["web@co.com"], ["team-web"], threshold_days=10)
 
-        result = resolve_group_thresholds(db_path)
+        result = resolve_group_thresholds(db)
         assert cert_id in result
         assert result[cert_id] == 10
 
-    def test_resolve_group_thresholds_ignores_null(self, db_path: Path):
-        host_repo = SqliteHostRepository(db_path)
+    def test_resolve_group_thresholds_ignores_null(self, db: Path):
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, tags="team-web")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         cert_id = _make_cert(cert_repo)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("web-team", ["web@co.com"], ["team-web"])
 
-        result = resolve_group_thresholds(db_path)
+        result = resolve_group_thresholds(db)
         assert cert_id not in result
 
-    def test_resolve_group_thresholds_picks_most_urgent(self, db_path: Path):
-        host_repo = SqliteHostRepository(db_path)
+    def test_resolve_group_thresholds_picks_most_urgent(self, db: Path):
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, tags="team-web, prod")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         cert_id = _make_cert(cert_repo)
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create("web-team", ["a@co.com"], ["team-web"], threshold_days=20)
         group_repo.create("prod-team", ["b@co.com"], ["prod"], threshold_days=5)
 
-        result = resolve_group_thresholds(db_path)
+        result = resolve_group_thresholds(db)
         assert result[cert_id] == 5
 
-    def test_evaluate_all_certs_uses_group_threshold(self, db_path: Path):
-        host_repo = SqliteHostRepository(db_path)
+    def test_evaluate_all_certs_uses_group_threshold(self, db: Path):
+        host_repo = SqliteHostRepository(db)
         host_repo.add(
             "h.example.com", 443,
             tags="team-web",
             owner_email="owner@co.com",
         )
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         _make_cert(cert_repo, not_after=datetime.now(UTC) + timedelta(days=8))
-        group_repo = SqliteAlertGroupRepository(db_path)
+        group_repo = SqliteAlertGroupRepository(db)
         group_repo.create(
             "web-team", ["web@co.com"], ["team-web"], threshold_days=10,
         )
 
-        alert_repo = SqliteAlertRepository(db_path)
-        alerts = evaluate_all_certs(db_path, alert_repo)
+        alert_repo = SqliteAlertRepository(db)
+        alerts = evaluate_all_certs(db, alert_repo)
         assert len(alerts) > 0
         assert any(a.threshold_days == 10 for a in alerts)
 
-    def test_evaluate_all_certs_without_group_uses_default(self, db_path: Path):
-        host_repo = SqliteHostRepository(db_path)
+    def test_evaluate_all_certs_without_group_uses_default(self, db: Path):
+        host_repo = SqliteHostRepository(db)
         host_repo.add("h.example.com", 443, owner_email="owner@co.com")
         cert_repo = SqliteCertificateRepository(
-            db_path, hostname="h.example.com", port=443
+            db, hostname="h.example.com", port=443
         )
         _make_cert(cert_repo, not_after=datetime.now(UTC) + timedelta(days=8))
 
-        alert_repo = SqliteAlertRepository(db_path)
-        alerts = evaluate_all_certs(db_path, alert_repo)
+        alert_repo = SqliteAlertRepository(db)
+        alerts = evaluate_all_certs(db, alert_repo)
         for a in alerts:
             assert a.threshold_days in (14, 7, 3, 1)
 
 
 class TestDigestCadence:
-    def test_build_renewal_digest_cadence_days(self, db_path: Path):
+    def test_build_renewal_digest_cadence_days(self, db: Path):
         """cadence_days controls the lookback window for renewal events."""
         from cert_watch.database.connection import _connect, _iso
         from cert_watch.digest import build_renewal_digest
 
         # Seed a cert_renewed event 10 days ago
         event_ts = _iso(datetime.now(UTC) - timedelta(days=10))
-        with _connect(db_path) as conn:
+        with _connect(db) as conn:
             conn.execute(
                 "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
                 "VALUES ('cert_renewed', ?, '', ?, ?)",
@@ -650,29 +642,29 @@ class TestDigestCadence:
             )
 
         # With cadence_days=14, the event 10 days ago is inside the window
-        result_14 = build_renewal_digest(db_path, cadence_days=14)
+        result_14 = build_renewal_digest(db, cadence_days=14)
         assert len(result_14) > 0
         assert any("h.example.com" in d.renewed_hosts for d in result_14)
 
         # With cadence_days=5, the event 10 days ago is outside the window
-        result_5 = build_renewal_digest(db_path, cadence_days=5)
+        result_5 = build_renewal_digest(db, cadence_days=5)
         assert result_5 == []
 
-    def test_build_renewal_digest_default_days(self, db_path: Path):
+    def test_build_renewal_digest_default_days(self, db: Path):
         """Default days=7 includes events within the last 7 days."""
         from cert_watch.database.connection import _connect, _iso
         from cert_watch.digest import build_renewal_digest
 
         # Seed a cert_renewed event 3 days ago
         event_ts = _iso(datetime.now(UTC) - timedelta(days=3))
-        with _connect(db_path) as conn:
+        with _connect(db) as conn:
             conn.execute(
                 "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
                 "VALUES ('cert_renewed', ?, '', ?, ?)",
                 (event_ts, '{"hostname": "h2.example.com"}', event_ts),
             )
 
-        result = build_renewal_digest(db_path)
+        result = build_renewal_digest(db)
         assert len(result) > 0
         assert any("h2.example.com" in d.renewed_hosts for d in result)
 
@@ -838,16 +830,16 @@ class TestAlertGroupConfigAPI:
 
 
 class TestPerCertMatchesBatchResolution:
-    def test_per_cert_matches_batch_resolution(self, db_path: Path):
+    def test_per_cert_matches_batch_resolution(self, db: Path):
         """Property test: resolve_group_recipients(cert) == resolve_all_group_recipients()[cert].
 
         Enforces that the per-cert path (now a thin wrapper over the batch path)
         cannot diverge from the batch resolver across all routing modes:
         tag-match (host + cert-level), manual-assignment, role-link, and no-match.
         """
-        host_repo = SqliteHostRepository(db_path)
-        group_repo = SqliteAlertGroupRepository(db_path)
-        role_repo = SqliteRoleRepository(db_path)
+        host_repo = SqliteHostRepository(db)
+        group_repo = SqliteAlertGroupRepository(db)
+        role_repo = SqliteRoleRepository(db)
 
         # --- alert groups with different match_tags ---
         group_repo.create("tag-group", ["tag@co.com"], ["team-web"])
@@ -860,14 +852,14 @@ class TestPerCertMatchesBatchResolution:
         # --- cert 1: matches a group by inherited host tag (team-web) ---
         host_repo.add("tag-host.example.com", 443, tags="team-web")
         cert_repo_tag = SqliteCertificateRepository(
-            db_path, hostname="tag-host.example.com", port=443
+            db, hostname="tag-host.example.com", port=443
         )
         cid_tag = _make_cert(cert_repo_tag, fingerprint="11" * 32)
 
         # --- cert 2: matches a group by cert-level tag (prod) ---
         host_repo.add("certtag-host.example.com", 443, tags="")
         cert_repo_certtag = SqliteCertificateRepository(
-            db_path, hostname="certtag-host.example.com", port=443
+            db, hostname="certtag-host.example.com", port=443
         )
         cid_certtag = _make_cert(cert_repo_certtag, fingerprint="22" * 32)
         cert_repo_certtag.set_tags(cid_certtag, "prod")
@@ -876,7 +868,7 @@ class TestPerCertMatchesBatchResolution:
         # --- cert 3: manually assigned to a group (no tag match) ---
         host_repo.add("manual-host.example.com", 443, tags="")
         cert_repo_manual = SqliteCertificateRepository(
-            db_path, hostname="manual-host.example.com", port=443
+            db, hostname="manual-host.example.com", port=443
         )
         cid_manual = _make_cert(cert_repo_manual, fingerprint="33" * 32)
         group_repo.assign_cert(gid_manual, cid_manual)
@@ -884,7 +876,7 @@ class TestPerCertMatchesBatchResolution:
         # --- cert 4: matches a role-link (scope_tag=epic → role-group) ---
         host_repo.add("role-host.example.com", 443, tags="epic")
         cert_repo_role = SqliteCertificateRepository(
-            db_path, hostname="role-host.example.com", port=443
+            db, hostname="role-host.example.com", port=443
         )
         cid_role = _make_cert(cert_repo_role, fingerprint="44" * 32)
         role_repo.add(Role(
@@ -897,14 +889,14 @@ class TestPerCertMatchesBatchResolution:
         # --- cert 5: matches nothing (empty list) ---
         host_repo.add("nomatch-host.example.com", 443, tags="orphan")
         cert_repo_none = SqliteCertificateRepository(
-            db_path, hostname="nomatch-host.example.com", port=443
+            db, hostname="nomatch-host.example.com", port=443
         )
         cid_none = _make_cert(cert_repo_none, fingerprint="55" * 32)
 
         # --- the property: per-cert == batch for every leaf cert ---
-        batch = resolve_all_group_recipients(db_path)
+        batch = resolve_all_group_recipients(db)
         for cert_id in (cid_tag, cid_certtag, cid_manual, cid_role, cid_none):
-            per_cert = resolve_group_recipients(db_path, cert_id)
+            per_cert = resolve_group_recipients(db, cert_id)
             assert per_cert == batch.get(cert_id, []), (
                 f"divergence for {cert_id}: "
                 f"per_cert={per_cert!r} batch={batch.get(cert_id, [])!r}"

@@ -25,13 +25,19 @@ from cert_watch.database.calendar import list_calendar
 
 # Certificate operations
 from cert_watch.database.cert_ops import (
-    _compute_renewal_diff,
+    _compute_renewal_diff as _compute_renewal_diff,
+)
+from cert_watch.database.cert_ops import (
     delete_certificate_cascade,
     distinct_tags,
     get_renewal_history,
     replace_scanned,
 )
-from cert_watch.database.connection import _connect, _iso, _parse_iso, _row_to_cert, get_write_lock
+from cert_watch.database.connection import _connect as _connect
+from cert_watch.database.connection import _iso as _iso
+from cert_watch.database.connection import _parse_iso as _parse_iso
+from cert_watch.database.connection import _row_to_cert as _row_to_cert
+from cert_watch.database.connection import get_write_lock
 
 # Dashboard
 from cert_watch.database.dashboard_detail import get_cert_detail as get_cert_detail
@@ -72,6 +78,9 @@ from cert_watch.database.dashboard_rows import (
     list_dashboard_rows as list_dashboard_rows,
 )
 from cert_watch.database.dashboard_stats import (
+    count_leaf_certs as count_leaf_certs,
+)
+from cert_watch.database.dashboard_stats import (
     dashboard_urgency_stats as dashboard_urgency_stats,
 )
 from cert_watch.database.dashboard_stats import (
@@ -99,14 +108,6 @@ from cert_watch.database.dashboard_unified import (
 # Drift + cert_history
 from cert_watch.database.drift import (
     DriftEvent,
-    _compute_drift_events,
-    _drift_summary,
-    _extract_key_algo,
-    _extract_sig_algo,
-    _grade_value,
-    _is_sha1_algo,
-    _parse_key_algo,
-    _tls_value,
     create_drift_alert,
     detect_drift,
     list_cert_history,
@@ -115,10 +116,36 @@ from cert_watch.database.drift import (
     purge_old_history,
     record_cert_history,
 )
+from cert_watch.database.drift import (
+    _compute_drift_events as _compute_drift_events,
+)
+from cert_watch.database.drift import (
+    _drift_summary as _drift_summary,
+)
+from cert_watch.database.drift import (
+    _extract_key_algo as _extract_key_algo,
+)
+from cert_watch.database.drift import (
+    _extract_sig_algo as _extract_sig_algo,
+)
+from cert_watch.database.drift import (
+    _grade_value as _grade_value,
+)
+from cert_watch.database.drift import (
+    _is_sha1_algo as _is_sha1_algo,
+)
+from cert_watch.database.drift import (
+    _parse_key_algo as _parse_key_algo,
+)
+from cert_watch.database.drift import (
+    _tls_value as _tls_value,
+)
 
 # Encryption
 from cert_watch.database.encryption import (
-    _ENCRYPTED_PREFIX,
+    _ENCRYPTED_PREFIX as _ENCRYPTED_PREFIX,
+)
+from cert_watch.database.encryption import (
     check_encrypted_values,
     derive_encryption_key,
     fernet_decrypt,
@@ -143,9 +170,15 @@ from cert_watch.database.kv_store import (
 
 # Pagination
 from cert_watch.database.pagination import (
-    _count_alerts_by_filter,
-    _total_alerts,
-    _total_scan_history,
+    _count_alerts_by_filter as _count_alerts_by_filter,
+)
+from cert_watch.database.pagination import (
+    _total_alerts as _total_alerts,
+)
+from cert_watch.database.pagination import (
+    _total_scan_history as _total_scan_history,
+)
+from cert_watch.database.pagination import (
     list_alerts_with_subject,
     list_scan_batches,
     list_scan_history,
@@ -177,12 +210,19 @@ from cert_watch.database.repo import (
 )
 
 # Schema / connection
-from cert_watch.database.schema import _BASE_INDEXES, _BASE_TABLES, ensure_base, init_schema
+from cert_watch.database.schema import _BASE_INDEXES as _BASE_INDEXES
+from cert_watch.database.schema import _BASE_TABLES as _BASE_TABLES
+from cert_watch.database.schema import ensure_base, init_schema
 
 # Session versions
 from cert_watch.database.session_versions import (
     bump_session_version,
     get_session_version,
+)
+
+# Team dashboard
+from cert_watch.database.team import (
+    team_dashboard_data as team_dashboard_data,
 )
 
 # Users & Roles (Plan 040)
@@ -197,13 +237,7 @@ __all__ = [
     # schema
     "init_schema",
     "ensure_base",
-    "_BASE_TABLES",
-    "_BASE_INDEXES",
     # connection
-    "_connect",
-    "_iso",
-    "_parse_iso",
-    "_row_to_cert",
     "get_write_lock",
     # repo
     "Alert",
@@ -223,7 +257,6 @@ __all__ = [
     "ApiKeyEntry",
     "SqliteApiKeyRepository",
     # encryption
-    "_ENCRYPTED_PREFIX",
     "derive_encryption_key",
     "fernet_decrypt",
     "fernet_encrypt",
@@ -234,17 +267,8 @@ __all__ = [
     "replace_scanned",
     "delete_certificate_cascade",
     "get_renewal_history",
-    "_compute_renewal_diff",
     # drift
     "DriftEvent",
-    "_compute_drift_events",
-    "_drift_summary",
-    "_extract_key_algo",
-    "_extract_sig_algo",
-    "_grade_value",
-    "_is_sha1_algo",
-    "_parse_key_algo",
-    "_tls_value",
     "detect_drift",
     "create_drift_alert",
     "record_cert_history",
@@ -253,19 +277,8 @@ __all__ = [
     "list_tls_version_trends",
     "list_grade_trends",
     # dashboard
-    "_build_dashboard_rows",
-    "_build_host_filter",
-    "_build_pending_entries",
-    "_build_unified_for_leaf_ids",
-    "_build_unified_from_dash",
-    "_clamp_page",
-    "_escape_like",
-    "_filter_unified",
-    "_load_unified_filtered",
-    "_matches_q",
-    "_reorder_by_candidates",
-    "_sort_unified",
     "count_dashboard_leaves",
+    "count_leaf_certs",
     "dashboard_urgency_stats",
     "get_cert_detail",
     "list_dashboard_grouped_page",
@@ -293,9 +306,6 @@ __all__ = [
     "SqliteRoleRepository",
     "SqliteUserRepository",
     # pagination
-    "_count_alerts_by_filter",
-    "_total_alerts",
-    "_total_scan_history",
     "list_alerts_with_subject",
     "list_scan_batches",
     "list_scan_history",
@@ -306,4 +316,6 @@ __all__ = [
     "group_entries_by_fingerprint",
     # calendar
     "list_calendar",
+    # team
+    "team_dashboard_data",
 ]

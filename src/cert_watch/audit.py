@@ -199,8 +199,10 @@ def resolve_source_ip(request: typing.Any) -> str | None:
         ip = _extract_client_ip(request)
         return ip if ip != "unknown" else None
     except Exception:
+        logger.debug("proxy-aware IP extraction failed", exc_info=True)
         try:
             client = getattr(request, "client", None)
             return client.host if client else None
         except Exception:
+            logger.debug("client IP fallback failed", exc_info=True)
             return None

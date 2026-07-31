@@ -11,10 +11,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger("cert_watch.compliance")
 
 
 @dataclass
@@ -311,7 +314,7 @@ def build_compliance_report(
                         result = _eval_posture(cert=parsed, chain_status=None)
                         grade_map[cid] = result.grade
             except Exception:
-                pass
+                logger.debug("posture evaluation failed for cert %s", cid, exc_info=True)
 
     grade_dist: dict[str, int] = {"A+": 0, "A": 0, "B": 0, "C": 0, "F": 0}
     all_grades: list[str] = []

@@ -91,10 +91,6 @@ def test_readyz(reload_app):
     assert "scheduler" in data["checks"]
 
 
-def _reload(reload_app):
-    return reload_app()
-
-
 def test_dashboard_filter_by_search(reload_app, tmp_path, leaf_pem_file, chain_pem_file):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

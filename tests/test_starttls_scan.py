@@ -10,18 +10,9 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.scan import ScanError, scan_host
 from cert_watch.scan_conn import STARTTLS_MODES, _scan_via_openssl
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "starttls.sqlite3"
-    init_schema(db)
-    return db
 
 
 def _no_dns(monkeypatch):
@@ -115,16 +106,16 @@ def test_starttls_failure_returns_error_not_wrapped_fallback(monkeypatch):
 # ---------- schema + repository round-trip ----------
 
 
-def test_hosts_table_has_starttls_column(db_path: Path):
+def test_hosts_table_has_starttls_column(db: Path):
     from cert_watch.database import _connect
 
-    with _connect(db_path) as conn:
+    with _connect(db) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)")}
     assert "starttls_mode" in cols
 
 
-def test_host_repo_round_trips_starttls_mode(db_path: Path):
-    repo = SqliteHostRepository(db_path)
+def test_host_repo_round_trips_starttls_mode(db: Path):
+    repo = SqliteHostRepository(db)
     repo.add("mail.example.com", 587, starttls_mode="smtp")
     repo.add("web.example.com", 443)  # default: implicit TLS
     by_host = {h.hostname: h.starttls_mode for h in repo.list_all()}
@@ -132,12 +123,12 @@ def test_host_repo_round_trips_starttls_mode(db_path: Path):
     assert by_host["web.example.com"] == ""
 
 
-def test_init_schema_idempotent_with_starttls(db_path: Path):
+def test_init_schema_idempotent_with_starttls(db: Path):
     # Second init must not error on the already-present column.
-    init_schema(db_path)
+    init_schema(db)
     from cert_watch.database import _connect
 
-    with _connect(db_path) as conn:
+    with _connect(db) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)")}
     assert "starttls_mode" in cols
 

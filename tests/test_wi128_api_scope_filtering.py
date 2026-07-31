@@ -10,17 +10,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
-from cert_watch.database import init_schema
 from cert_watch.database.connection import _connect
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> Path:
-    path = tmp_path / "wi128.sqlite3"
-    init_schema(path)
-    return path
 
 
 def _insert_host(conn, hostname, port=443, tags=""):

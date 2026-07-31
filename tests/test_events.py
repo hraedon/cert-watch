@@ -9,7 +9,6 @@ from unittest.mock import patch
 
 import pytest
 
-from cert_watch.database import init_schema
 from cert_watch.events import (
     ALL_EVENT_TYPES,
     Event,
@@ -24,13 +23,6 @@ from cert_watch.events import (
     reset_pool,
     save_event_config,
 )
-
-
-@pytest.fixture
-def db(tmp_path):
-    db_path = str(tmp_path / "test.db")
-    init_schema(db_path)
-    return db_path
 
 
 @pytest.fixture(autouse=True)

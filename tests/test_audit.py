@@ -14,8 +14,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from cert_watch.audit import (
     count_audit,
     list_audit,
@@ -33,19 +31,11 @@ from cert_watch.database import (
 )
 from cert_watch.database.connection import _connect
 
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    return db
-
-
 # ---------- Unit tests for record_audit ----------
 
-def test_record_audit_inserts_row(db_path: Path) -> None:
+def test_record_audit_inserts_row(db: Path) -> None:
     record_audit(
-        db_path,
+        db,
         actor="alice",
         action="host.add",
         target_type="host",
@@ -53,7 +43,7 @@ def test_record_audit_inserts_row(db_path: Path) -> None:
         detail={"hostname": "example.com", "port": 443},
         source_ip="10.0.0.1",
     )
-    rows = list_audit(db_path)
+    rows = list_audit(db)
     assert len(rows) == 1
     r = rows[0]
     assert r["actor"] == "alice"
@@ -65,60 +55,60 @@ def test_record_audit_inserts_row(db_path: Path) -> None:
     assert r["source_ip"] == "10.0.0.1"
 
 
-def test_record_audit_null_detail(db_path: Path) -> None:
+def test_record_audit_null_detail(db: Path) -> None:
     record_audit(
-        db_path, actor="bob", action="cert.delete",
+        db, actor="bob", action="cert.delete",
         target_type="certificate", target_id="c001",
     )
-    rows = list_audit(db_path)
+    rows = list_audit(db)
     assert rows[0]["detail"] is None
     assert rows[0]["source_ip"] is None
 
 
-def test_record_audit_failure_does_not_raise(db_path: Path) -> None:
+def test_record_audit_failure_does_not_raise(db: Path) -> None:
     """AC-5: Write failure logs WARNING but does not propagate."""
     with patch("cert_watch.audit._connect", side_effect=Exception("DB down")):
         record_audit(
-            db_path, actor="charlie", action="host.scan",
+            db, actor="charlie", action="host.scan",
             target_type="host", target_id="h002",
         )
-    assert count_audit(db_path) == 0
+    assert count_audit(db) == 0
 
 
-def test_list_audit_filters(db_path: Path) -> None:
+def test_list_audit_filters(db: Path) -> None:
     for i in range(5):
         record_audit(
-            db_path, actor=f"user-{i % 2}",
+            db, actor=f"user-{i % 2}",
             action="host.add", target_type="host", target_id=f"h{i}",
         )
     record_audit(
-        db_path, actor="user-0",
+        db, actor="user-0",
         action="cert.delete", target_type="certificate", target_id="c1",
     )
-    assert count_audit(db_path) == 6
+    assert count_audit(db) == 6
     # user-0: indices 0, 2, 4 + cert.delete = 4 rows
-    assert count_audit(db_path, actor="user-0") == 4
-    assert count_audit(db_path, target_type="certificate") == 1
-    filtered = list_audit(db_path, actor="user-1", limit=10)
+    assert count_audit(db, actor="user-0") == 4
+    assert count_audit(db, target_type="certificate") == 1
+    filtered = list_audit(db, actor="user-1", limit=10)
     assert len(filtered) == 2
 
 
-def test_list_audit_pagination(db_path: Path) -> None:
+def test_list_audit_pagination(db: Path) -> None:
     for i in range(12):
         record_audit(
-            db_path, actor="alice", action="host.add",
+            db, actor="alice", action="host.add",
             target_type="host", target_id=f"h{i}",
         )
-    page1 = list_audit(db_path, page=1, limit=5)
-    page2 = list_audit(db_path, page=2, limit=5)
+    page1 = list_audit(db, page=1, limit=5)
+    page2 = list_audit(db, page=2, limit=5)
     assert len(page1) == 5
     assert len(page2) == 5
     assert page1[0]["target_id"] != page2[0]["target_id"]
 
 
-def test_audit_row_survives_cascade_delete(db_path: Path) -> None:
+def test_audit_row_survives_cascade_delete(db: Path) -> None:
     """AC-2: Audit rows survive cascade deletes (no FK)."""
-    repo = SqliteCertificateRepository(db_path)
+    repo = SqliteCertificateRepository(db)
     cert = Certificate(
         subject="CN=test",
         issuer="CN=issuer",
@@ -131,20 +121,20 @@ def test_audit_row_survives_cascade_delete(db_path: Path) -> None:
     )
     cert_id = repo.add(cert)
     record_audit(
-        db_path, actor="alice", action="cert.delete",
+        db, actor="alice", action="cert.delete",
         target_type="certificate", target_id=cert_id,
     )
-    delete_certificate_cascade(db_path, cert_id)
-    rows = list_audit(db_path, target_type="certificate", target_id=cert_id)
+    delete_certificate_cascade(db, cert_id)
+    rows = list_audit(db, target_type="certificate", target_id=cert_id)
     assert len(rows) == 1
 
 
 # ---------- Retention (Plan 012 §4.3) ----------
 
-def _insert_audit_at(db_path: Path, *, days_ago: int, actor: str = "alice") -> None:
+def _insert_audit_at(db: Path, *, days_ago: int, actor: str = "alice") -> None:
     """Insert an audit row with a backdated timestamp."""
     ts = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
-    with _connect(db_path) as conn:
+    with _connect(db) as conn:
         conn.execute(
             "INSERT INTO audit_log"
             " (id, ts, actor, action, target_type, target_id, detail, source_ip)"
@@ -154,32 +144,32 @@ def _insert_audit_at(db_path: Path, *, days_ago: int, actor: str = "alice") -> N
         conn.commit()
 
 
-def test_purge_old_audit_deletes_old_retains_recent(db_path: Path) -> None:
-    _insert_audit_at(db_path, days_ago=200, actor="old")
-    _insert_audit_at(db_path, days_ago=10, actor="recent")
-    deleted = purge_old_audit(db_path, retention_days=90)
+def test_purge_old_audit_deletes_old_retains_recent(db: Path) -> None:
+    _insert_audit_at(db, days_ago=200, actor="old")
+    _insert_audit_at(db, days_ago=10, actor="recent")
+    deleted = purge_old_audit(db, retention_days=90)
     assert deleted == 1
-    remaining = list_audit(db_path)
+    remaining = list_audit(db)
     assert {r["actor"] for r in remaining} == {"recent"}
 
 
-def test_purge_old_audit_boundary(db_path: Path) -> None:
+def test_purge_old_audit_boundary(db: Path) -> None:
     # Just inside the window is kept; well outside is removed.
-    _insert_audit_at(db_path, days_ago=89, actor="inside")
-    _insert_audit_at(db_path, days_ago=91, actor="outside")
-    deleted = purge_old_audit(db_path, retention_days=90)
+    _insert_audit_at(db, days_ago=89, actor="inside")
+    _insert_audit_at(db, days_ago=91, actor="outside")
+    deleted = purge_old_audit(db, retention_days=90)
     assert deleted == 1
-    assert {r["actor"] for r in list_audit(db_path)} == {"inside"}
+    assert {r["actor"] for r in list_audit(db)} == {"inside"}
 
 
-def test_purge_old_audit_disabled_when_non_positive(db_path: Path) -> None:
-    _insert_audit_at(db_path, days_ago=999)
-    assert purge_old_audit(db_path, retention_days=0) == 0
-    assert purge_old_audit(db_path, retention_days=-5) == 0
-    assert count_audit(db_path) == 1
+def test_purge_old_audit_disabled_when_non_positive(db: Path) -> None:
+    _insert_audit_at(db, days_ago=999)
+    assert purge_old_audit(db, retention_days=0) == 0
+    assert purge_old_audit(db, retention_days=-5) == 0
+    assert count_audit(db) == 1
 
 
-def test_purge_old_audit_never_raises(db_path: Path) -> None:
+def test_purge_old_audit_never_raises(db: Path) -> None:
     # Missing table / bad path is swallowed (best-effort), returning 0.
     assert purge_old_audit("/nonexistent/dir/db.sqlite3", retention_days=90) == 0
 

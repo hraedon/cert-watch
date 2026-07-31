@@ -5,12 +5,8 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 
-def _reload(reload_app):
-    return reload_app()
-
-
 def test_get_api_policy_returns_default(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/policy")
     assert r.status_code == 200
@@ -23,7 +19,7 @@ def test_get_api_policy_returns_default(reload_app):
 
 
 def test_put_api_policy_saves_and_reloads(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/policy")
         original = r.json()
@@ -44,7 +40,7 @@ def test_put_api_policy_saves_and_reloads(reload_app):
 
 
 def test_get_api_policy_violations_empty(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/reports/policy-violations")
     assert r.status_code == 200
@@ -54,7 +50,7 @@ def test_get_api_policy_violations_empty(reload_app):
 
 
 def test_get_api_policy_violations_csv(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/reports/policy-violations?format=csv")
     assert r.status_code == 200
@@ -62,7 +58,7 @@ def test_get_api_policy_violations_csv(reload_app):
 
 
 def test_put_api_policy_invalid_json(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.put(
             "/api/policy",
@@ -73,7 +69,7 @@ def test_put_api_policy_invalid_json(reload_app):
 
 
 def test_put_api_policy_invalid_default_severity(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.put("/api/policy", json={
             "default_severity": "invalid",
@@ -84,7 +80,7 @@ def test_put_api_policy_invalid_default_severity(reload_app):
 
 
 def test_put_api_policy_invalid_rule_severity(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/api/policy")
         original = r.json()
@@ -98,7 +94,7 @@ def test_put_api_policy_invalid_rule_severity(reload_app):
 
 
 def test_put_api_policy_invalid_parameters(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.put("/api/policy", json={
             "default_severity": "warning",
@@ -130,7 +126,7 @@ def test_put_api_policy_invalid_parameters(reload_app):
 
 
 def test_settings_policy_page(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/settings?tab=policy")
     assert r.status_code == 200
@@ -138,7 +134,7 @@ def test_settings_policy_page(reload_app):
 
 
 def test_settings_policy_save(reload_app):
-    app_mod = _reload(reload_app)
+    app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/settings?tab=policy")
         assert r.status_code == 200

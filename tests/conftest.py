@@ -328,5 +328,14 @@ def reload_app(monkeypatch, tmp_path):
     return _build
 
 
+@pytest.fixture
+def db(tmp_path):
+    """Initialized SQLite database path for unit tests."""
+    from cert_watch.database.schema import init_schema
+    path = tmp_path / "test.db"
+    init_schema(path)
+    return path
+
+
 # Also export the private builder for tests that want a custom expiry.
 __all__ = ["GeneratedCert", "_make_cert"]

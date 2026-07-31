@@ -11,8 +11,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from cert_watch.alerts import (
     AlertConfig,
     find_orphan_certs,
@@ -25,17 +23,9 @@ from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
     SqliteRoleRepository,
-    init_schema,
 )
 from cert_watch.database.users_roles import SqliteUserRepository, User
 from cert_watch.digest import _admin_emails, send_orphan_notice, send_renewal_digest
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "orphan.sqlite3"
-    init_schema(db)
-    return db
 
 
 def _add_leaf(db: Path, hostname: str, *, port: int = 443, tags: str = "",
@@ -96,54 +86,54 @@ def test_resolve_empty_is_empty():
 # ---------- find_orphan_certs ----------
 
 
-def test_orphan_when_no_group_no_owner(db_path: Path):
-    cid = _add_leaf(db_path, "lonely.example.com")
-    orphans = find_orphan_certs(db_path)
+def test_orphan_when_no_group_no_owner(db: Path):
+    cid = _add_leaf(db, "lonely.example.com")
+    orphans = find_orphan_certs(db)
     assert [o["cert_id"] for o in orphans] == [cid]
     assert orphans[0]["hostname"] == "lonely.example.com"
 
 
-def test_not_orphan_with_owner(db_path: Path):
-    _add_leaf(db_path, "owned.example.com", owner_email="owner@co.com")
-    assert find_orphan_certs(db_path) == []
+def test_not_orphan_with_owner(db: Path):
+    _add_leaf(db, "owned.example.com", owner_email="owner@co.com")
+    assert find_orphan_certs(db) == []
 
 
-def test_not_orphan_with_matching_group(db_path: Path):
-    _add_leaf(db_path, "tagged.example.com", tags="prod")
-    SqliteAlertGroupRepository(db_path).create("prod-oncall", ["oncall@co.com"], ["prod"])
-    assert find_orphan_certs(db_path) == []
+def test_not_orphan_with_matching_group(db: Path):
+    _add_leaf(db, "tagged.example.com", tags="prod")
+    SqliteAlertGroupRepository(db).create("prod-oncall", ["oncall@co.com"], ["prod"])
+    assert find_orphan_certs(db) == []
 
 
-def test_not_orphan_when_routed_via_role_linked_group(db_path: Path):
+def test_not_orphan_when_routed_via_role_linked_group(db: Path):
     # No group match_tags include 'epic' and no owner — routing only happens via
     # the role→group link. find_orphan_certs must use the real resolver and see it.
-    _add_leaf(db_path, "epic.example.com", tags="epic")
-    gid = SqliteAlertGroupRepository(db_path).create("g", ["oncall@co.com"], ["unrelated"])
-    SqliteRoleRepository(db_path).add(
+    _add_leaf(db, "epic.example.com", tags="epic")
+    gid = SqliteAlertGroupRepository(db).create("g", ["oncall@co.com"], ["unrelated"])
+    SqliteRoleRepository(db).add(
         Role(name="epic-team", permission_tier="viewer", scope_tag="epic", alert_group_id=gid)
     )
-    assert find_orphan_certs(db_path) == []
+    assert find_orphan_certs(db) == []
 
 
-def test_orphans_sorted_by_host_then_subject(db_path: Path):
-    _add_leaf(db_path, "zeta.example.com")
-    _add_leaf(db_path, "alpha.example.com")
-    orphans = find_orphan_certs(db_path)
+def test_orphans_sorted_by_host_then_subject(db: Path):
+    _add_leaf(db, "zeta.example.com")
+    _add_leaf(db, "alpha.example.com")
+    orphans = find_orphan_certs(db)
     assert [o["hostname"] for o in orphans] == ["alpha.example.com", "zeta.example.com"]
 
 
 # ---------- _admin_emails ----------
 
 
-def test_admin_emails_only_admins(db_path: Path):
-    _make_admin(db_path, "boss@co.com", tier="admin")
-    _make_admin(db_path, "viewer@co.com", tier="viewer")
-    _make_admin(db_path, "op@co.com", tier="operator")
-    assert _admin_emails(db_path) == ["boss@co.com"]
+def test_admin_emails_only_admins(db: Path):
+    _make_admin(db, "boss@co.com", tier="admin")
+    _make_admin(db, "viewer@co.com", tier="viewer")
+    _make_admin(db, "op@co.com", tier="operator")
+    assert _admin_emails(db) == ["boss@co.com"]
 
 
-def test_admin_emails_empty_when_none(db_path: Path):
-    assert _admin_emails(db_path) == []
+def test_admin_emails_empty_when_none(db: Path):
+    assert _admin_emails(db) == []
 
 
 # ---------- send_orphan_notice ----------
@@ -164,29 +154,29 @@ def _cfg() -> AlertConfig:
     )
 
 
-def test_orphan_notice_none_when_no_orphans(db_path: Path):
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "owned.example.com", owner_email="owner@co.com")
-    assert send_orphan_notice(db_path, _cfg()) is None
+def test_orphan_notice_none_when_no_orphans(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "owned.example.com", owner_email="owner@co.com")
+    assert send_orphan_notice(db, _cfg()) is None
 
 
-def test_orphan_notice_none_when_no_admins(db_path: Path):
-    _add_leaf(db_path, "lonely.example.com")  # an orphan, but no admins
-    assert send_orphan_notice(db_path, _cfg()) is None
+def test_orphan_notice_none_when_no_admins(db: Path):
+    _add_leaf(db, "lonely.example.com")  # an orphan, but no admins
+    assert send_orphan_notice(db, _cfg()) is None
 
 
-def test_orphan_notice_none_when_config_not_alertconfig(db_path: Path):
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com")
-    assert send_orphan_notice(db_path, None) is None
+def test_orphan_notice_none_when_config_not_alertconfig(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")
+    assert send_orphan_notice(db, None) is None
 
 
-def test_orphan_notice_sends_to_admins_and_flags(db_path: Path):
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com", subject="CN=lonely")
+def test_orphan_notice_sends_to_admins_and_flags(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com", subject="CN=lonely")
     conn = _patch_smtp()
     with patch("cert_watch.alerts._open_smtp_connection", return_value=conn):
-        assert send_orphan_notice(db_path, _cfg()) is True
+        assert send_orphan_notice(db, _cfg()) is True
     conn.send_message.assert_called_once()
     sent = conn.send_message.call_args[0][0]
     assert sent["To"] == "boss@co.com"
@@ -196,28 +186,28 @@ def test_orphan_notice_sends_to_admins_and_flags(db_path: Path):
     assert "[orphan]" in body
 
 
-def test_orphan_notice_smtp_failure_returns_false(db_path: Path):
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com")
+def test_orphan_notice_smtp_failure_returns_false(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")
     with patch("cert_watch.alerts._open_smtp_connection", return_value=None):
-        assert send_orphan_notice(db_path, _cfg()) is False
+        assert send_orphan_notice(db, _cfg()) is False
 
 
 # ---------- integration: digest run triggers the orphan notice ----------
 
 
-def test_send_renewal_digest_invokes_orphan_notice(db_path: Path):
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com")  # orphan, no renewal activity
+def test_send_renewal_digest_invokes_orphan_notice(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")  # orphan, no renewal activity
     with patch("cert_watch.digest.send_orphan_notice") as spy:
-        send_renewal_digest(db_path, _cfg(), None, days=7)
+        send_renewal_digest(db, _cfg(), None, days=7)
         from cert_watch.digest import _flush_digest_pool
         _flush_digest_pool()
     spy.assert_called_once()
-    assert spy.call_args[0][0] == db_path
+    assert spy.call_args[0][0] == db
 
 
-def test_orphan_notice_offloaded_to_pool_not_blocking(db_path: Path):
+def test_orphan_notice_offloaded_to_pool_not_blocking(db: Path):
     """The orphan notice SMTP delivery must not block the scheduler thread.
 
     Same bug class as WI-134 (webhook path): if send_orphan_notice runs
@@ -226,27 +216,27 @@ def test_orphan_notice_offloaded_to_pool_not_blocking(db_path: Path):
     """
     from cert_watch.digest import _flush_digest_pool
 
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com")
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")
     submit_mock = MagicMock(wraps=lambda *a, **kw: None)
     with patch("cert_watch.digest._digest_pool.submit", new=submit_mock):
-        send_renewal_digest(db_path, _cfg(), None, days=7)
+        send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     assert submit_mock.called, "orphan notice must be submitted to the thread pool"
 
 
-def test_orphan_notice_pool_submit_fallback_inline(db_path: Path):
+def test_orphan_notice_pool_submit_fallback_inline(db: Path):
     """When the pool submit fails, orphan notice falls back to inline delivery."""
     from cert_watch.digest import _flush_digest_pool
 
-    _make_admin(db_path, "boss@co.com")
-    _add_leaf(db_path, "lonely.example.com")
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")
     conn = _patch_smtp()
     with patch("cert_watch.alerts._open_smtp_connection", return_value=conn), \
          patch(
              "cert_watch.digest._digest_pool.submit",
              side_effect=RuntimeError("pool closed"),
          ):
-        send_renewal_digest(db_path, _cfg(), None, days=7)
+        send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     conn.send_message.assert_called_once()

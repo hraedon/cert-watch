@@ -5,9 +5,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
-from cert_watch.database.schema import init_schema
 from cert_watch.renewal_analytics import (
     RenewalOverdueSignal,
     detect_renewal_overdue,
@@ -54,25 +51,18 @@ def _insert_history_row(
     conn.commit()
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    return db
-
-
 class TestDetectRenewalOverdue:
-    def test_no_history_returns_none(self, db_path: Path):
-        result = detect_renewal_overdue(db_path, "no-such-host.example.com")
+    def test_no_history_returns_none(self, db: Path):
+        result = detect_renewal_overdue(db, "no-such-host.example.com")
         assert result is None
 
-    def test_single_cert_returns_none(self, db_path: Path):
+    def test_single_cert_returns_none(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         not_before = now - timedelta(days=1)
         not_after = now + timedelta(days=89)
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "single.example.com",
@@ -83,10 +73,10 @@ class TestDetectRenewalOverdue:
                 not_before=_iso(not_before),
             )
 
-        result = detect_renewal_overdue(db_path, "single.example.com")
+        result = detect_renewal_overdue(db, "single.example.com")
         assert result is None
 
-    def test_past_expected_renewal_triggers_overdue(self, db_path: Path):
+    def test_past_expected_renewal_triggers_overdue(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -99,7 +89,7 @@ class TestDetectRenewalOverdue:
         not_after_b = scan_b + timedelta(days=90)
         not_after_c = scan_c + timedelta(days=90)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "overdue.example.com",
@@ -128,7 +118,7 @@ class TestDetectRenewalOverdue:
                 not_before=_iso(scan_c),
             )
 
-        result = detect_renewal_overdue(db_path, "overdue.example.com")
+        result = detect_renewal_overdue(db, "overdue.example.com")
         assert result is not None
         assert isinstance(result, RenewalOverdueSignal)
         assert result.hostname == "overdue.example.com"
@@ -138,12 +128,12 @@ class TestDetectRenewalOverdue:
         assert result.expected_renewal_at_days == 30.0
         assert result.days_remaining < 30
 
-    def test_high_confidence_with_5_plus_renewals(self, db_path: Path):
+    def test_high_confidence_with_5_plus_renewals(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for i in range(7):
                 scan_time = now - timedelta(days=425 - i * 60)
                 not_after = scan_time + timedelta(days=90)
@@ -157,17 +147,17 @@ class TestDetectRenewalOverdue:
                     not_before=_iso(scan_time),
                 )
 
-        result = detect_renewal_overdue(db_path, "high.example.com")
+        result = detect_renewal_overdue(db, "high.example.com")
         assert result is not None
         assert result.confidence == "high"
         assert result.cert_fingerprint == "fp-6"
 
-    def test_medium_confidence_with_3_to_4_renewals(self, db_path: Path):
+    def test_medium_confidence_with_3_to_4_renewals(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for i in range(5):
                 scan_time = now - timedelta(days=305 - i * 60)
                 not_after = scan_time + timedelta(days=90)
@@ -181,12 +171,12 @@ class TestDetectRenewalOverdue:
                     not_before=_iso(scan_time),
                 )
 
-        result = detect_renewal_overdue(db_path, "medium.example.com")
+        result = detect_renewal_overdue(db, "medium.example.com")
         assert result is not None
         assert result.confidence == "medium"
         assert result.cert_fingerprint == "fp-4"
 
-    def test_renewed_cert_returns_none(self, db_path: Path):
+    def test_renewed_cert_returns_none(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -197,7 +187,7 @@ class TestDetectRenewalOverdue:
         not_after_a = scan_a + timedelta(days=90)
         not_after_b = scan_b + timedelta(days=90)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "renewed.example.com",
@@ -217,10 +207,10 @@ class TestDetectRenewalOverdue:
                 not_before=_iso(scan_b),
             )
 
-        result = detect_renewal_overdue(db_path, "renewed.example.com")
+        result = detect_renewal_overdue(db, "renewed.example.com")
         assert result is None
 
-    def test_not_past_expected_renewal_returns_none(self, db_path: Path):
+    def test_not_past_expected_renewal_returns_none(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -231,7 +221,7 @@ class TestDetectRenewalOverdue:
         not_after_a = scan_a + timedelta(days=90)
         not_after_b = scan_b + timedelta(days=90)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "fresh.example.com",
@@ -251,17 +241,17 @@ class TestDetectRenewalOverdue:
                 not_before=_iso(scan_b),
             )
 
-        result = detect_renewal_overdue(db_path, "fresh.example.com")
+        result = detect_renewal_overdue(db, "fresh.example.com")
         assert result is None
 
 
 class TestSchedulerRenewalOverdue:
-    def test_run_scan_now_emits_renewal_overdue_event(self, db_path: Path):
+    def test_run_scan_now_emits_renewal_overdue_event(self, db: Path):
         import sqlite3
 
         from cert_watch.database import SqliteHostRepository
 
-        SqliteHostRepository(db_path).add("overdue.example.com", 443)
+        SqliteHostRepository(db).add("overdue.example.com", 443)
 
         now = datetime.now(UTC)
 
@@ -269,7 +259,7 @@ class TestSchedulerRenewalOverdue:
         scan_b = now - timedelta(days=125)
         scan_c = now - timedelta(days=65)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for scan_time, fp in [
                 (scan_a, "fp-A"),
                 (scan_b, "fp-B"),
@@ -304,7 +294,7 @@ class TestSchedulerRenewalOverdue:
         run_scan_now(
             scan_fn,
             alert_fn,
-            db_path=db_path,
+            db_path=db,
             host_provider=lambda: [("overdue.example.com", 443)],
             store_fn=store_fn,
         )
@@ -313,17 +303,17 @@ class TestSchedulerRenewalOverdue:
 
         from cert_watch.events import get_events
 
-        evts = get_events(db_path, event_type="renewal_overdue")
+        evts = get_events(db, event_type="renewal_overdue")
         assert len(evts) == 1
         payload = json.loads(evts[0]["payload"])
         assert payload["hostname"] == "overdue.example.com"
         assert payload["cert_fingerprint"] == "fp-C"
         assert payload["confidence"] == "low"
 
-    def test_run_scan_now_no_event_when_not_overdue(self, db_path: Path):
+    def test_run_scan_now_no_event_when_not_overdue(self, db: Path):
         from cert_watch.database import SqliteHostRepository
 
-        SqliteHostRepository(db_path).add("fresh.example.com", 443)
+        SqliteHostRepository(db).add("fresh.example.com", 443)
 
         now = datetime.now(UTC)
         scan_a = now - timedelta(days=80)
@@ -331,7 +321,7 @@ class TestSchedulerRenewalOverdue:
 
         import sqlite3
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for scan_time, fp in [(scan_a, "fp-A"), (scan_b, "fp-B")]:
                 _insert_history_row(
                     conn,
@@ -359,16 +349,16 @@ class TestSchedulerRenewalOverdue:
         run_scan_now(
             scan_fn,
             alert_fn,
-            db_path=db_path,
+            db_path=db,
             host_provider=lambda: [("fresh.example.com", 443)],
         )
 
         from cert_watch.events import get_events
 
-        evts = get_events(db_path, event_type="renewal_overdue")
+        evts = get_events(db, event_type="renewal_overdue")
         assert len(evts) == 0
 
-    def test_run_scan_no_db_path_skips_overdue(self):
+    def test_run_scan_no_db_skips_overdue(self):
         def scan_fn(hostname, port):
             from dataclasses import dataclass
 
@@ -389,7 +379,7 @@ class TestSchedulerRenewalOverdue:
         )
         assert result["scanned"] == 1
 
-    def test_check_renewal_overdue_failure_isolated(self, db_path: Path):
+    def test_check_renewal_overdue_failure_isolated(self, db: Path):
         from cert_watch.scheduler import _check_renewal_overdue
 
-        _check_renewal_overdue(db_path, [("invalid!", 443)])
+        _check_renewal_overdue(db, [("invalid!", 443)])

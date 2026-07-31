@@ -5,8 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
 from cert_watch.crypto_posture import (
     analyze_fleet_crypto,
     classify_cert_crypto,
@@ -157,14 +155,6 @@ def test_classify_unsupported_algorithm_returns_other(monkeypatch):
 
 
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    from cert_watch.database import init_schema
-    db = tmp_path / "crypto.sqlite3"
-    init_schema(db)
-    return db
-
-
 def _store_leaf(db: Path, raw_der: bytes, hostname: str, subject: str) -> None:
     """Store a leaf cert via the real repository (handles every column)."""
     from cert_watch.certificate_model import Certificate
@@ -183,14 +173,14 @@ def _store_leaf(db: Path, raw_der: bytes, hostname: str, subject: str) -> None:
     ))
 
 
-def test_fleet_aggregates_distribution(db_path: Path):
+def test_fleet_aggregates_distribution(db: Path):
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
-    _store_leaf(db_path, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "a", "CN=a")
-    _store_leaf(db_path, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "b", "CN=b")
-    _store_leaf(db_path, _mint(_ec(ec.SECP256R1()), sig_hash=hashes.SHA256()), "c", "CN=c")
+    _store_leaf(db, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "a", "CN=a")
+    _store_leaf(db, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "b", "CN=b")
+    _store_leaf(db, _mint(_ec(ec.SECP256R1()), sig_hash=hashes.SHA256()), "c", "CN=c")
 
-    p = analyze_fleet_crypto(db_path)
+    p = analyze_fleet_crypto(db)
     assert p.total == 3
     assert p.key_algorithms["RSA-2048"] == 2
     assert p.key_algorithms["EC-P-256"] == 1
@@ -199,33 +189,33 @@ def test_fleet_aggregates_distribution(db_path: Path):
     assert p.weak_count == 0
 
 
-def test_fleet_collects_weak_offenders(db_path: Path):
+def test_fleet_collects_weak_offenders(db: Path):
     from cryptography.hazmat.primitives import hashes
-    _store_leaf(db_path, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "ok", "CN=ok")
-    _store_leaf(db_path, _mint(_rsa(1024), sig_hash=hashes.SHA256()), "weak", "CN=weak")
-    _store_leaf(db_path, _sha1_cert_der(), "sha1", "CN=sha1")
+    _store_leaf(db, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "ok", "CN=ok")
+    _store_leaf(db, _mint(_rsa(1024), sig_hash=hashes.SHA256()), "weak", "CN=weak")
+    _store_leaf(db, _sha1_cert_der(), "sha1", "CN=sha1")
 
-    p = analyze_fleet_crypto(db_path)
+    p = analyze_fleet_crypto(db)
     assert p.weak_count == 2
     hosts = {c["hostname"] for c in p.weak_certs}
     assert hosts == {"weak", "sha1"}
 
 
-def test_fleet_empty_is_safe(db_path: Path):
-    p = analyze_fleet_crypto(db_path)
+def test_fleet_empty_is_safe(db: Path):
+    p = analyze_fleet_crypto(db)
     assert p.total == 0
     assert p.weak_count == 0
     assert "post-quantum" in p.pqc_note.lower()
 
 
-def test_to_dict_orders_by_count_desc(db_path: Path):
+def test_to_dict_orders_by_count_desc(db: Path):
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import ec
-    _store_leaf(db_path, _mint(_ec(ec.SECP256R1()), sig_hash=hashes.SHA256()), "c", "CN=c")
-    _store_leaf(db_path, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "a", "CN=a")
-    _store_leaf(db_path, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "b", "CN=b")
+    _store_leaf(db, _mint(_ec(ec.SECP256R1()), sig_hash=hashes.SHA256()), "c", "CN=c")
+    _store_leaf(db, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "a", "CN=a")
+    _store_leaf(db, _mint(_rsa(2048), sig_hash=hashes.SHA256()), "b", "CN=b")
 
-    d = crypto_posture_to_dict(analyze_fleet_crypto(db_path))
+    d = crypto_posture_to_dict(analyze_fleet_crypto(db))
     # RSA-2048 (2) ranks before EC-P-256 (1)
     assert d["key_algorithms"][0]["label"] == "RSA-2048"
     assert d["key_algorithms"][0]["count"] == 2

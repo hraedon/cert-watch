@@ -13,11 +13,6 @@ from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
 
-
-def _reload(reload_app):
-    return reload_app()
-
-
 # ---------- scan.py: ScannedEntry and ScanError ----------
 
 
@@ -308,7 +303,7 @@ def test_settings_save_auth(reload_app, tmp_path):
 
 
 def test_pivot_tls_monthly():
-    from cert_watch.routes.views import _pivot_tls_monthly
+    from cert_watch.routes.insights import _pivot_tls_monthly
 
     rows = [
         {"date": "2026-01-01", "protocol_version": "TLSv1.3", "count": 5},
@@ -326,7 +321,7 @@ def test_pivot_tls_monthly():
 
 
 def test_pivot_tls_monthly_empty():
-    from cert_watch.routes.views import _pivot_tls_monthly
+    from cert_watch.routes.insights import _pivot_tls_monthly
 
     result, max_total = _pivot_tls_monthly([])
     assert result == []
@@ -334,7 +329,7 @@ def test_pivot_tls_monthly_empty():
 
 
 def test_pivot_grade_monthly():
-    from cert_watch.routes.views import _pivot_grade_monthly
+    from cert_watch.routes.insights import _pivot_grade_monthly
 
     rows = [
         {"date": "2026-01-01", "posture_grade": "A", "count": 5},
@@ -353,7 +348,7 @@ def test_pivot_grade_monthly():
 
 
 def test_pivot_grade_monthly_empty():
-    from cert_watch.routes.views import _pivot_grade_monthly
+    from cert_watch.routes.insights import _pivot_grade_monthly
 
     result, max_total = _pivot_grade_monthly([])
     assert result == []

@@ -127,6 +127,7 @@ def _check_endpoint_reachable(
     except SSRFBlockedError:
         return False, "endpoint blocked by SSRF policy"
     except Exception:
+        logger.debug("revocation endpoint check failed for %s", url, exc_info=True)
         return False, ""
 
 
@@ -276,6 +277,7 @@ def check_private_crl_freshness(
             ))
             continue
         except Exception:
+            logger.debug("CRL fetch failed for %s", url, exc_info=True)
             findings.append(Finding(
                 check="private_crl", status="warn",
                 message=f"CRL endpoint {url} unreachable",

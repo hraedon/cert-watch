@@ -320,6 +320,7 @@ def _deliver_webhook(
         new_status = "delivered" if success else "failed"
         err = None if success else last_error
     except Exception as exc:
+        logger.warning("event webhook delivery failed: %s", exc)
         new_status = "failed"
         err = str(exc)[:500]
     with _connect(db_path) as conn:

@@ -5,9 +5,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
-
-from cert_watch.database.schema import init_schema
 from cert_watch.renewal_analytics import (
     _compute_trend,
     _is_acme_issuer,
@@ -49,13 +46,6 @@ def _insert_history_row(
         ),
     )
     conn.commit()
-
-
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    return db
 
 
 def _iso(dt: datetime) -> str:
@@ -103,8 +93,8 @@ class TestComputeTrend:
 
 
 class TestComputeHostAnalyticsEmpty:
-    def test_no_history(self, db_path: Path):
-        result = compute_host_analytics(db_path, "no-such-host.example.com")
+    def test_no_history(self, db: Path):
+        result = compute_host_analytics(db, "no-such-host.example.com")
         assert result.hostname == "no-such-host.example.com"
         assert result.observed_lifetimes == []
         assert result.lifetime_trend == "unknown"
@@ -116,13 +106,13 @@ class TestComputeHostAnalyticsEmpty:
 
 
 class TestComputeHostAnalyticsSingleCert:
-    def test_one_cert(self, db_path: Path):
+    def test_one_cert(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         not_before = now - timedelta(days=1)
         not_after = now + timedelta(days=89)
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "single.example.com",
@@ -133,7 +123,7 @@ class TestComputeHostAnalyticsSingleCert:
                 not_before=_iso(not_before),
             )
 
-        result = compute_host_analytics(db_path, "single.example.com")
+        result = compute_host_analytics(db, "single.example.com")
         assert result.cert_count == 1
         assert len(result.observed_lifetimes) == 1
         assert result.renewal_lead_times == []
@@ -144,7 +134,7 @@ class TestComputeHostAnalyticsSingleCert:
 
 
 class TestComputeHostAnalyticsAutomated:
-    def test_likely_automated(self, db_path: Path):
+    def test_likely_automated(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -155,7 +145,7 @@ class TestComputeHostAnalyticsAutomated:
         scan_c = base + timedelta(days=120)
         scan_d = base + timedelta(days=180)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "auto.example.com",
@@ -193,7 +183,7 @@ class TestComputeHostAnalyticsAutomated:
                 not_before=_iso(scan_d),
             )
 
-        result = compute_host_analytics(db_path, "auto.example.com")
+        result = compute_host_analytics(db, "auto.example.com")
         assert result.cert_count == 4
         assert result.automation_classification == "likely-automated"
         assert result.classification_evidence["has_acme_issuer"] is True
@@ -207,13 +197,13 @@ class TestComputeHostAnalyticsAutomated:
 
 
 class TestComputeHostAnalyticsManual:
-    def test_manual_long_lived(self, db_path: Path):
+    def test_manual_long_lived(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=800)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "manual.example.com",
@@ -233,13 +223,13 @@ class TestComputeHostAnalyticsManual:
                 not_before=_iso(base + timedelta(days=365)),
             )
 
-        result = compute_host_analytics(db_path, "manual.example.com")
+        result = compute_host_analytics(db, "manual.example.com")
         assert result.cert_count == 2
         assert result.automation_classification == "manual"
         assert result.classification_evidence["max_lifetime_days"] > 90
         assert result.classification_evidence["has_acme_issuer"] is False
 
-    def test_manual_late_renewal(self, db_path: Path):
+    def test_manual_late_renewal(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -248,7 +238,7 @@ class TestComputeHostAnalyticsManual:
         scan_a = base
         scan_b = base + timedelta(days=100)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "late.example.com",
@@ -268,20 +258,20 @@ class TestComputeHostAnalyticsManual:
                 not_before=_iso(scan_b),
             )
 
-        result = compute_host_analytics(db_path, "late.example.com")
+        result = compute_host_analytics(db, "late.example.com")
         assert result.automation_classification == "manual"
         assert result.classification_evidence["has_late_renewals"] is True
         assert any(lt <= 0 for lt in result.renewal_lead_times)
 
 
 class TestComputeHostAnalyticsMixed:
-    def test_mixed_issuer_switch(self, db_path: Path):
+    def test_mixed_issuer_switch(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=400)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "mixed.example.com",
@@ -301,7 +291,7 @@ class TestComputeHostAnalyticsMixed:
                 not_before=_iso(base + timedelta(days=300)),
             )
 
-        result = compute_host_analytics(db_path, "mixed.example.com")
+        result = compute_host_analytics(db, "mixed.example.com")
         assert result.cert_count == 2
         assert result.automation_classification == "manual"
         assert result.classification_evidence["has_acme_issuer"] is True
@@ -311,11 +301,11 @@ class TestComputeHostAnalyticsMixed:
 class TestComputeHostAnalyticsPortFiltering:
     """Regression (WI-124 #9): analytics must filter by (hostname, port)."""
 
-    def test_same_host_different_port_not_mixed(self, db_path: Path):
+    def test_same_host_different_port_not_mixed(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn, "dual.example.com", "fp-443", "Let's Encrypt R3",
                 _iso(now + timedelta(days=89)), _iso(now - timedelta(days=1)),
@@ -327,21 +317,21 @@ class TestComputeHostAnalyticsPortFiltering:
                 not_before=_iso(now - timedelta(days=30)), port=636,
             )
 
-        result_443 = compute_host_analytics(db_path, "dual.example.com", port=443)
-        result_636 = compute_host_analytics(db_path, "dual.example.com", port=636)
+        result_443 = compute_host_analytics(db, "dual.example.com", port=443)
+        result_636 = compute_host_analytics(db, "dual.example.com", port=636)
         assert result_443.cert_count == 1
         assert result_636.cert_count == 1
         assert result_443.observed_lifetimes != result_636.observed_lifetimes
 
 
 class TestComputeHostAnalyticsManyRenewals:
-    def test_many_renewals(self, db_path: Path):
+    def test_many_renewals(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=360)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for i in range(6):
                 scan_time = base + timedelta(days=i * 60)
                 _insert_history_row(
@@ -354,7 +344,7 @@ class TestComputeHostAnalyticsManyRenewals:
                     not_before=_iso(scan_time),
                 )
 
-        result = compute_host_analytics(db_path, "many.example.com")
+        result = compute_host_analytics(db, "many.example.com")
         assert result.cert_count == 6
         assert len(result.renewal_lead_times) == 5
         assert len(result.observed_lifetimes) == 6
@@ -364,13 +354,13 @@ class TestComputeHostAnalyticsManyRenewals:
 
 
 class TestComputeFleetAnalytics:
-    def test_fleet_multiple_hosts(self, db_path: Path):
+    def test_fleet_multiple_hosts(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=200)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "host1.example.com",
@@ -399,25 +389,25 @@ class TestComputeFleetAnalytics:
                 not_before=_iso(base),
             )
 
-        results = compute_fleet_analytics(db_path)
+        results = compute_fleet_analytics(db)
         hostnames = {r.hostname for r in results}
         assert "host1.example.com" in hostnames
         assert "host2.example.com" in hostnames
         assert len(results) == 2
 
-    def test_fleet_empty_db(self, db_path: Path):
-        results = compute_fleet_analytics(db_path)
+    def test_fleet_empty_db(self, db: Path):
+        results = compute_fleet_analytics(db)
         assert results == []
 
 
 class TestObservedLifetimesAndTrend:
-    def test_increasing_lifetimes(self, db_path: Path):
+    def test_increasing_lifetimes(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=400)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "trend.example.com",
@@ -437,13 +427,13 @@ class TestObservedLifetimesAndTrend:
                 not_before=_iso(base + timedelta(days=60)),
             )
 
-        result = compute_host_analytics(db_path, "trend.example.com")
+        result = compute_host_analytics(db, "trend.example.com")
         assert len(result.observed_lifetimes) == 2
         assert result.lifetime_trend in ("increasing", "decreasing", "stable", "unknown")
 
 
 class TestLeadTimes:
-    def test_lead_times_positive(self, db_path: Path):
+    def test_lead_times_positive(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
@@ -452,7 +442,7 @@ class TestLeadTimes:
         scan_a = base
         scan_b = base + timedelta(days=60)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             _insert_history_row(
                 conn,
                 "lead.example.com",
@@ -472,7 +462,7 @@ class TestLeadTimes:
                 not_before=_iso(scan_b),
             )
 
-        result = compute_host_analytics(db_path, "lead.example.com")
+        result = compute_host_analytics(db, "lead.example.com")
         assert len(result.renewal_lead_times) == 1
         assert result.renewal_lead_times[0] > 0
         assert result.median_lead_time is not None
@@ -480,13 +470,13 @@ class TestLeadTimes:
 
 
 class TestCadence:
-    def test_cadence_consistent(self, db_path: Path):
+    def test_cadence_consistent(self, db: Path):
         import sqlite3
 
         now = datetime.now(UTC)
         base = now - timedelta(days=240)
 
-        with sqlite3.connect(str(db_path)) as conn:
+        with sqlite3.connect(str(db)) as conn:
             for i in range(4):
                 scan_time = base + timedelta(days=i * 60)
                 _insert_history_row(
@@ -499,6 +489,6 @@ class TestCadence:
                     not_before=_iso(scan_time),
                 )
 
-        result = compute_host_analytics(db_path, "cadence.example.com")
+        result = compute_host_analytics(db, "cadence.example.com")
         assert result.median_cadence_days is not None
         assert result.median_cadence_days == 60.0

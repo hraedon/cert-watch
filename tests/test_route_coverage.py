@@ -10,10 +10,6 @@ from fastapi.testclient import TestClient
 from cert_watch.upload import store_uploaded, upload_certificate
 
 
-def _reload(reload_app):
-    return reload_app()
-
-
 def _insert_certificate(db, cert_id: str) -> None:
     """Insert a minimal certificates row so child tables satisfy FK."""
     from cert_watch.database.connection import _connect
@@ -53,7 +49,7 @@ def test_readyz_db_error(monkeypatch, reload_app):
     """Degraded readiness must be HTTP 503 — the status code is the probe
     contract (kubelet/blackbox judge on it, not on the body)."""
     app_mod = reload_app()
-    import cert_watch.routes.views as views_mod
+    import cert_watch.routes.health as views_mod
 
     orig = views_mod._connect
 

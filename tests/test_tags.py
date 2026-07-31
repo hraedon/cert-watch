@@ -6,7 +6,6 @@ import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import Certificate
@@ -45,12 +44,6 @@ def test_tags_match_is_case_insensitive():
 
 # ---------- repo ----------
 
-@pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    db = tmp_path / "test.sqlite3"
-    init_schema(db)
-    return db
-
 
 def _make_cert(repo: SqliteCertificateRepository) -> str:
     cert = Certificate(
@@ -66,17 +59,17 @@ def _make_cert(repo: SqliteCertificateRepository) -> str:
     return repo.add(cert)
 
 
-def test_cert_set_get_tags_normalizes(db_path: Path):
-    repo = SqliteCertificateRepository(db_path)
+def test_cert_set_get_tags_normalizes(db: Path):
+    repo = SqliteCertificateRepository(db)
     cert_id = _make_cert(repo)
     repo.set_tags(cert_id, " pci , web , pci ")
     assert repo.get_tags(cert_id) == "pci,web"
 
 
-def test_effective_tags_inherit_from_host(db_path: Path):
-    SqliteHostRepository(db_path).add("ex.com", 443, tags="team-web, prod")
+def test_effective_tags_inherit_from_host(db: Path):
+    SqliteHostRepository(db).add("ex.com", 443, tags="team-web, prod")
     cert_repo = SqliteCertificateRepository(
-        db_path, hostname="ex.com", port=443
+        db, hostname="ex.com", port=443
     )
     cert_id = _make_cert(cert_repo)
     cert_repo.set_tags(cert_id, "pci")
@@ -84,32 +77,32 @@ def test_effective_tags_inherit_from_host(db_path: Path):
     assert set(eff) == {"team-web", "prod", "pci"}
 
 
-def test_effective_tags_no_host(db_path: Path):
-    repo = SqliteCertificateRepository(db_path)
+def test_effective_tags_no_host(db: Path):
+    repo = SqliteCertificateRepository(db)
     cert_id = _make_cert(repo)
     repo.set_tags(cert_id, "team-infra")
     assert repo.effective_tags(cert_id) == ["team-infra"]
 
 
-def test_host_set_tags_returns_false_when_missing(db_path: Path):
-    repo = SqliteHostRepository(db_path)
+def test_host_set_tags_returns_false_when_missing(db: Path):
+    repo = SqliteHostRepository(db)
     assert repo.set_tags("no-such-host", "x") is False
     host_id = repo.add("h.example.com", 443)
     assert repo.set_tags(host_id, " a , a ,b ") is True
     assert repo.get(host_id).tags == "a,b"
 
 
-def test_distinct_tags_unions_hosts_and_certs(db_path: Path):
-    SqliteHostRepository(db_path).add("ex.com", 443, tags="prod, team-web")
-    repo = SqliteCertificateRepository(db_path)
+def test_distinct_tags_unions_hosts_and_certs(db: Path):
+    SqliteHostRepository(db).add("ex.com", 443, tags="prod, team-web")
+    repo = SqliteCertificateRepository(db)
     repo.set_tags(_make_cert(repo), "pci, prod")
-    assert distinct_tags(db_path) == ["pci", "prod", "team-web"]
+    assert distinct_tags(db) == ["pci", "prod", "team-web"]
 
 
 # ---------- migration ----------
 
-def test_migration_adds_cert_tags_column(db_path: Path):
-    with sqlite3.connect(str(db_path)) as conn:
+def test_migration_adds_cert_tags_column(db: Path):
+    with sqlite3.connect(str(db)) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)")}
     assert "tags" in cols
 

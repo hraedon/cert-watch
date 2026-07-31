@@ -688,7 +688,7 @@ class TestHealthDBCheck:
     def test_health_includes_db_check(self):
         import inspect
 
-        from cert_watch.routes.views import api_health
+        from cert_watch.routes.health import api_health
 
         source = inspect.getsource(api_health)
         assert "SELECT 1" in source, (

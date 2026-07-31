@@ -24,11 +24,8 @@ from cert_watch.config import (
     Settings,
 )
 from cert_watch.database import (
-    SqliteAlertRepository,
-    SqliteHostRepository,
     check_encrypted_values,
     derive_encryption_key,
-    get_write_lock,
     init_schema,
     kv_get,
 )
@@ -44,8 +41,8 @@ from cert_watch.middleware import (
     setup_redirect_middleware,
 )
 from cert_watch.routes import api as route_modules
-from cert_watch.scan import scan_host, store_scanned
-from cert_watch.scheduler import run_scan_now, start_scheduler, stop_scheduler
+from cert_watch.scheduler import start_scheduler, stop_scheduler
+from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.security import SecurityContext
 
 logger = logging.getLogger("cert_watch.app")
@@ -323,178 +320,24 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
             "  4) Ensure CERT_WATCH_DATA_DIR is writable so the admin can persist.\n"
             "Bare loopback binds (no proxy) are exempt and serve the /setup wizard."
         )
-    alert_cfg = s.build_alert_config()
-    webhook_cfg = s.build_webhook_config()
-
-    def _scan_all() -> dict[str, Any]:
-        host_repo = SqliteHostRepository(s.db_path)
-        all_hosts = host_repo.list_all()
-        hosts = [(h.hostname, h.port) for h in all_hosts]
-        starttls_by_host = {
-            (h.hostname, h.port): h.starttls_mode for h in all_hosts
-        }
-        # H1: Collect deferred webhook/event work to execute after the lock is
-        # released. Each store_fn call acquires the write lock only for the DB
-        # transaction; the post-commit PagerDuty/Alertmanager HTTP resolve runs
-        # outside it so a slow webhook response can't block request-handler
-        # writes (host updates, manual scans, uploads).
-        deferred_post_commit: list[dict[str, Any]] = []
-
-        def _store_with_lock(result: Any) -> str:
-            deferred: dict[str, Any] = {}
-            # Pre-compute posture evaluation (network I/O — CAA DNS,
-            # OCSP/CRL) before acquiring the write lock so slow targets
-            # don't block DB writes.
-            posture_eval = None
-            try:
-                from cert_watch.scan import _evaluate_posture
-                posture_eval = _evaluate_posture(
-                    s.db_path, result,
-                    check_revocation=s.check_revocation,
-                    allow_private=s.allow_private,
-                    allowed_subnets=s.allowed_subnets,
-                )
-            except Exception:
-                logger.warning("pre-lock posture eval failed", exc_info=True)
-            with get_write_lock():
-                leaf_id = store_scanned(
-                    result, s.db_path,
-                    drift_alerts=s.drift_alerts,
-                    check_revocation=s.check_revocation,
-                    allow_private=s.allow_private,
-                    allowed_subnets=s.allowed_subnets,
-                    webhook_config=webhook_cfg,
-                    _deferred=deferred,
-                    _posture_eval=posture_eval,
-                )
-            if leaf_id and deferred:
-                deferred_post_commit.append(deferred)
-            return leaf_id
-
-        result = run_scan_now(
-            scan_fn=lambda host, port: scan_host(
-                host, port, verify=s.tls_verify, timeout=s.scan_timeout,
-                retries=s.scan_retries, allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                dns_servers=s.dns_servers,
-                max_output_bytes=s.scan_max_output_bytes,
-                hsts_timeout=s.hsts_timeout,
-                starttls_mode=starttls_by_host.get((host, port), ""),
-            ),
-            alert_fn=lambda: {"sent": 0, "failed": 0},
-            db_path=s.db_path,
-            host_provider=lambda: hosts,
-            store_fn=_store_with_lock,
-            settings=s,
-        )
-        # H1: Execute deferred webhook/event resolves outside the write lock.
-        from cert_watch.scan import _execute_deferred_post_commit
-        for deferred in deferred_post_commit:
-            _execute_deferred_post_commit(deferred)
-        return result
-
-    import datetime as _dt_init
-    _weekly_digest_day: int = _dt_init.datetime.now(_dt_init.UTC).weekday()
-    # Track the ISO (year, week) the expiry digest last went out so it sends
-    # weekly rather than on every (daily) alert cycle. Seeded to the current week
-    # so a (re)start mid-week does not immediately re-send; it fires at the next
-    # week boundary.
-    _iso_init = _dt_init.datetime.now(_dt_init.UTC).isocalendar()
-    _expiry_digest_week: tuple[int, int] = (_iso_init[0], _iso_init[1])
-
-    def _max_group_cadence(
-        db_path: str | Path, *, default: int = 30
-    ) -> int:
-        from cert_watch.database import SqliteAlertGroupRepository
-
-        try:
-            groups = SqliteAlertGroupRepository(db_path).list_all()
-        except Exception:  # noqa: BLE001 — best-effort; schema may not be ready
-            return default
-        cadences = [g.digest_cadence_days for g in groups if g.digest_cadence_days > 0]
-        return max(cadences) if cadences else default
-
-    def _alerts() -> dict[str, Any]:
-        import datetime as _dt
-
-        from cert_watch.alerts import (
-            evaluate_all_certs,
-            evaluate_renewal_window,
-            process_pending,
-            send_expiry_digest,
-        )
-
-        nonlocal _expiry_digest_week
-        repo = SqliteAlertRepository(s.db_path)
-        if s.alert_digest_only:
-            # Even in digest mode, the final-countdown (<= URGENT_THRESHOLD_DAYS)
-            # per-certificate alerts still fire every cycle; the digest only
-            # replaces the routine heads-up thresholds.
-            evaluate_all_certs(s.db_path, repo, urgent_only=True)
-            evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
-            result = process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
-            # The summary digest is weekly, not daily.
-            iso = _dt.datetime.now(_dt.UTC).isocalendar()
-            this_week = (iso[0], iso[1])
-            if this_week != _expiry_digest_week:
-                _expiry_digest_week = this_week
-                delivered = send_expiry_digest(
-                    s.db_path, alert_cfg, webhook_config=webhook_cfg,
-                    cadence_days=_max_group_cadence(s.db_path),
-                )
-                result["sent"] = result.get("sent", 0) + (1 if delivered else 0)
-                result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
-            return result
-        evaluate_all_certs(s.db_path, repo)
-        evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
-        return process_pending(repo, alert_cfg, webhook_config=webhook_cfg)
-
-    def _weekly_digest() -> None:
-        from cert_watch.digest import send_renewal_digest
-
-        send_renewal_digest(
-            s.db_path, alert_cfg, webhook_cfg,
-            cadence_days=_max_group_cadence(s.db_path, default=7),
-        )
-
-    def _maybe_run_weekly_digest() -> dict[str, Any]:
-        import datetime as _dt
-
-        nonlocal _weekly_digest_day
-        today = _dt.datetime.now(_dt.UTC).weekday()
-        if today != _weekly_digest_day:
-            _weekly_digest_day = today
-            try:
-                _weekly_digest()
-            except Exception:
-                logger.exception("weekly renewal digest failed")
-        return {"sent": 0, "failed": 0}
-
-    def _maintenance() -> None:
-        """Daily housekeeping: trim audit log, cert history, scan history, alerts, and events."""
-        from cert_watch.audit import purge_old_audit
-        from cert_watch.database import purge_old_alerts, purge_old_history
-        from cert_watch.database.drift import purge_old_scan_history
-        from cert_watch.events import purge_old_events
-
-        purge_old_audit(s.db_path, s.audit_retention_days)
-        purge_old_history(s.db_path, s.history_retention_days)
-        purge_old_scan_history(s.db_path, s.history_retention_days)
-        purge_old_alerts(s.db_path, s.alert_retention_days)
-        purge_old_events(s.db_path, s.event_retention_days)
+    ctx = SchedulerContext(
+        settings=s,
+        alert_cfg=s.build_alert_config(),
+        webhook_cfg=s.build_webhook_config(),
+    )
 
     # Purge once at startup too — restarts (e.g. k8s rollouts) are frequent and
     # shouldn't have to wait for the next daily cycle to reclaim the audit log.
     try:
-        _maintenance()
+        ctx.maintenance()
     except Exception:
         logger.warning("startup maintenance purge failed — continuing", exc_info=True)
 
     start_scheduler(
-        scan_fn=_scan_all,
-        alert_fn=_alerts,
-        maintenance_fn=_maintenance,
-        digest_fn=_maybe_run_weekly_digest,
+        scan_fn=ctx.scan_all,
+        alert_fn=ctx.run_alerts,
+        maintenance_fn=ctx.maintenance,
+        digest_fn=ctx.maybe_run_weekly_digest,
         hour=s.sched_hour,
         minute=s.sched_min,
         db_path=s.db_path,

@@ -11,11 +11,6 @@ from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
 
-
-def _reload(reload_app):
-    return reload_app()
-
-
 # ---------- API certificates pagination ----------
 
 

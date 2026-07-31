@@ -8,6 +8,7 @@ from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_helpers import (
     _add_effective_tag_filter,
     _escape_like,
+    build_scope_tag_clause,
 )
 
 
@@ -161,3 +162,21 @@ def dashboard_urgency_stats(
         for key in result:
             result[key] += row[key] or 0
     return result
+
+
+def count_leaf_certs(
+    db_path: str | Path,
+    *,
+    scope_tags: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Count leaf certificates, optionally filtered by scope tags."""
+    if scope_tags:
+        scope_clause, scope_params = build_scope_tag_clause(scope_tags)
+        sql = f"SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 AND {scope_clause}"
+        params: list[Any] = scope_params
+    else:
+        sql = "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1"
+        params = []
+    with _connect(db_path) as conn:
+        row = conn.execute(sql, params).fetchone()
+    return row[0] if row else 0

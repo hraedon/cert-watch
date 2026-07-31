@@ -8,7 +8,6 @@ import logging
 import sqlite3
 import ssl
 import sys
-import typing
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -54,6 +53,7 @@ from cert_watch.scan_resolver import (  # noqa: F401
 __all__ = [
     "DEFAULT_SCAN_MAX_OUTPUT_BYTES",
     "DEFAULT_TIMEOUT",
+    "DeferredPostCommit",
     "HSTS_TIMEOUT",
     "STARTTLS_MODES",
     "ScanError",
@@ -65,6 +65,7 @@ __all__ = [
     "scan_host_async",
     "store_scanned",
     "store_scanned_async",
+    "store_scanned_to_repo",
 ]
 
 logger = logging.getLogger("cert_watch.scan")
@@ -92,6 +93,16 @@ class ScannedEntry:
     hsts: bool | None = None
     verify_requested: bool | None = None
     chain_incomplete: bool = False
+
+
+@dataclass
+class DeferredPostCommit:
+    repo_path: str | Path = ""
+    entry: ScannedEntry | None = None
+    replaced_cert_id: str | None = None
+    webhook_config: object | None = None
+    pending_for_resolve: list[Any] | None = None
+    pending_event_webhooks: list[tuple[Any, ...]] = field(default_factory=list)
 
 
 def _friendly_scan_error(exc: BaseException) -> str:
@@ -381,18 +392,18 @@ def _scan_host_via_openssl(
     )
 
 
-def _execute_deferred_post_commit(deferred: dict[str, Any]) -> None:
+def _execute_deferred_post_commit(deferred: DeferredPostCommit) -> None:
     """Execute deferred webhook resolve + event webhooks outside the write lock (H1).
 
     Shared by ``store_scanned_async`` and the scheduler's ``_scan_all`` so a
     slow PagerDuty/Alertmanager response doesn't block request-handler writes.
     """
-    repo_path = typing.cast("str | Path", deferred.get("repo_path"))
-    entry = deferred.get("entry")
-    replaced_cert_id = deferred.get("replaced_cert_id")
-    webhook_config = deferred.get("webhook_config")
-    pending_for_resolve = deferred.get("pending_for_resolve")
-    pending_event_webhooks = deferred.get("pending_event_webhooks")
+    repo_path = deferred.repo_path
+    entry = deferred.entry
+    replaced_cert_id = deferred.replaced_cert_id
+    webhook_config = deferred.webhook_config
+    pending_for_resolve = deferred.pending_for_resolve
+    pending_event_webhooks = deferred.pending_event_webhooks
     if entry is not None:
         try:
             _stage_webhook_resolve(
@@ -832,21 +843,28 @@ def _stage_events(
     return pending
 
 
+def store_scanned_to_repo(entry: ScannedEntry, repo: CertificateRepository) -> str:
+    """Persist leaf + chain via a CertificateRepository (legacy path)."""
+    leaf_id = repo.add(entry.leaf)
+    for chain_cert in entry.chain:
+        repo.add(chain_cert)
+    return leaf_id
+
+
 def store_scanned(
     entry: ScannedEntry,
-    repo_path_or_repo: str | Path | CertificateRepository,
+    db_path: str | Path,
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
     webhook_config: object | None = None,
-    _deferred: dict[str, Any] | None = None,
+    _deferred: DeferredPostCommit | None = None,
     _posture_eval: _PostureEval | None = None,
 ) -> str:
     """
-    Persist leaf + chain. Accepts either an existing CertificateRepository OR a path
-    (so callers can pass the db path directly and we wire up source/hostname/port).
+    Persist leaf + chain. Accepts a db path and wires up source/hostname/port.
     Removes any previous leaf + chain certs for the same (hostname, port) first to
     avoid accumulation on repeated scans. Also evaluates and stores TLS posture.
     See AC-07.
@@ -860,185 +878,180 @@ def store_scanned(
     or ``kind="alertmanager"``, sends resolve events for any open incidents
     on the replaced cert.
     """
-    if isinstance(repo_path_or_repo, str | Path):
-        repo_path = repo_path_or_repo
-        init_schema(repo_path)
-        if entry.chain_incomplete:
-            logger.warning(
-                "stored scan for %s:%s with incomplete chain (openssl degraded)",
-                entry.host, entry.port,
-            )
+    repo_path = db_path
+    init_schema(repo_path)
+    if entry.chain_incomplete:
+        logger.warning(
+            "stored scan for %s:%s with incomplete chain (openssl degraded)",
+            entry.host, entry.port,
+        )
 
-        def _stage(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
-            """Run a stage; on failure log with stage name and re-raise."""
-            try:
-                return fn(*args, **kwargs)
-            except Exception:
-                logger.warning(
-                    "store_scanned [%s] failed for %s:%s",
-                    name, entry.host, entry.port,
-                    exc_info=True,
-                )
-                raise
-
-        pending_for_resolve: list[Any] | None = None
-        old_leaf_id: str | None = None
-        previous_grade: str | None = None
-
+    def _stage(name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """Run a stage; on failure log with stage name and re-raise."""
         try:
-            pending_for_resolve, old_leaf_id = _stage(
-                "resolve_pending_alerts",
-                _stage_resolve_pending_alerts,
-                repo_path, entry, webhook_config,
+            return fn(*args, **kwargs)
+        except Exception:
+            logger.warning(
+                "store_scanned [%s] failed for %s:%s",
+                name, entry.host, entry.port,
+                exc_info=True,
+            )
+            raise
+
+    pending_for_resolve: list[Any] | None = None
+    old_leaf_id: str | None = None
+    previous_grade: str | None = None
+
+    try:
+        pending_for_resolve, old_leaf_id = _stage(
+            "resolve_pending_alerts",
+            _stage_resolve_pending_alerts,
+            repo_path, entry, webhook_config,
+        )
+    except Exception:
+        logger.warning(
+            "resolve_pending_alerts failed for %s:%s — "
+            "open incidents may not be auto-resolved",
+            entry.host, entry.port,
+            exc_info=True,
+        )
+
+    if old_leaf_id:
+        try:
+            previous_grade = _stage(
+                "previous_grade", _stage_previous_grade,
+                repo_path, old_leaf_id,
             )
         except Exception:
             logger.warning(
-                "resolve_pending_alerts failed for %s:%s — "
+                "previous_grade read failed for %s:%s — posture_changed "
+                "event will be skipped (no baseline to compare)",
+                entry.host, entry.port,
+                exc_info=True,
+            )
+
+    # Pre-load configurations that read kv_store so they do not issue inner
+    # commits while the scan transaction is active.
+    from cert_watch.events import EventStreamConfig, load_event_config
+    from cert_watch.policy import default_policy_set, load_policy_set
+    try:
+        event_config = load_event_config(repo_path)
+    except Exception:
+        logger.debug("load_event_config failed for %s:%s", entry.host, entry.port, exc_info=True)
+        event_config = EventStreamConfig()
+    try:
+        ruleset = load_policy_set(str(repo_path))
+    except Exception:
+        logger.debug("load_policy_set failed for %s:%s", entry.host, entry.port, exc_info=True)
+        ruleset = default_policy_set()
+
+    from cert_watch.database.connection import _connect
+    conn = _connect(repo_path)
+    leaf_id: str = ""
+    replaced_cert_id: str | None = None
+    posture_grade: str = ""
+    original_findings: list[dict[str, Any]] = []
+    stored_chain_status: str | None = None
+    pending_event_webhooks: list[tuple[Any, ...]] = []
+
+    try:
+        # WI-113: evaluate posture (network I/O — CAA DNS, OCSP/CRL)
+        # BEFORE BEGIN so the write lock isn't held during network calls.
+        # When _posture_eval is provided by the caller, use it directly
+        # (caller already computed it before acquiring the write lock).
+        # When _posture_eval is None (pre-lock eval failed or caller
+        # didn't provide one), do NOT fall back to _evaluate_posture()
+        # here — that would run network I/O inside the write lock,
+        # violating the AGENTS.md rule "Lock wraps DB mutations only,
+        # never network I/O." Instead, use a safe default that will be
+        # evaluated lazily on the cert detail page.
+        posture_eval = _posture_eval
+        conn.execute("BEGIN")
+        leaf_id, replaced_cert_id = _stage(
+            "replace", _stage_replace, repo_path, entry, conn,
+        )
+        if posture_eval is not None:
+            posture_grade, original_findings, stored_chain_status = _stage(
+                "posture", _stage_posture, repo_path, leaf_id, entry,
+                conn=conn,
+                eval_result=posture_eval,
+            )
+            posture_grade = _stage(
+                "policy", _stage_policy,
+                repo_path, leaf_id, entry,
+                posture_grade, original_findings, stored_chain_status,
+                conn=conn, ruleset=ruleset,
+            )
+        else:
+            posture_grade = ""
+        _stage(
+            "drift", _stage_drift,
+            repo_path, leaf_id, entry, posture_grade, drift_alerts,
+            conn=conn,
+        )
+        _stage(
+            "history", _stage_history,
+            repo_path, entry, posture_grade,
+            conn=conn,
+        )
+        pending_event_webhooks = _stage(
+            "events", _stage_events,
+            repo_path, leaf_id, entry,
+            replaced_cert_id, posture_grade, previous_grade,
+            conn=conn, event_config=event_config,
+        )
+        conn.commit()
+    except Exception:
+        # Re-raise database lock errors so the caller's retry logic
+        # can handle them (store_scanned_async retries on
+        # OperationalError("database is locked") — Issue 8).
+        if isinstance(sys.exc_info()[1], sqlite3.OperationalError):
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            raise
+        logger.warning(
+            "store_scanned transaction failed for %s:%s",
+            entry.host, entry.port, exc_info=True,
+        )
+        with contextlib.suppress(sqlite3.Error):
+            conn.rollback()
+        return ""
+
+    # Post-transaction HTTP: failures must not invalidate the scan.
+    # When _deferred is provided, stash the work for the caller to execute
+    # after releasing the write lock (avoids holding the lock during HTTP).
+    if _deferred is not None:
+        _deferred.repo_path = repo_path
+        _deferred.entry = entry
+        _deferred.replaced_cert_id = replaced_cert_id
+        _deferred.webhook_config = webhook_config
+        _deferred.pending_for_resolve = pending_for_resolve
+        _deferred.pending_event_webhooks = pending_event_webhooks
+    else:
+        try:
+            _stage(
+                "webhook_resolve",
+                _stage_webhook_resolve,
+                repo_path, entry, replaced_cert_id,
+                webhook_config, pending_for_resolve,
+            )
+        except Exception:
+            logger.warning(
+                "post-commit webhook resolve failed for %s:%s — "
                 "open incidents may not be auto-resolved",
                 entry.host, entry.port,
                 exc_info=True,
             )
 
-        if old_leaf_id:
+        # WI-114: fire deferred event webhooks only after COMMIT succeeded.
+        for evt, cfg, rid in (pending_event_webhooks or []):
             try:
-                previous_grade = _stage(
-                    "previous_grade", _stage_previous_grade,
-                    repo_path, old_leaf_id,
-                )
+                from cert_watch.events import _deliver_webhook, _get_pool
+                _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
             except Exception:
-                logger.warning(
-                    "previous_grade read failed for %s:%s — posture_changed "
-                    "event will be skipped (no baseline to compare)",
-                    entry.host, entry.port, exc_info=True,
-                )
+                logger.warning("deferred event webhook submit failed", exc_info=True)
 
-        # Pre-load configurations that read kv_store so they do not issue inner
-        # commits while the scan transaction is active.
-        from cert_watch.events import EventStreamConfig, load_event_config
-        from cert_watch.policy import default_policy_set, load_policy_set
-        try:
-            event_config = load_event_config(repo_path)
-        except Exception:
-            event_config = EventStreamConfig()
-        try:
-            ruleset = load_policy_set(str(repo_path))
-        except Exception:
-            ruleset = default_policy_set()
-
-        from cert_watch.database.connection import _connect
-        conn = _connect(repo_path)
-        leaf_id: str = ""
-        replaced_cert_id: str | None = None
-        posture_grade: str = ""
-        original_findings: list[dict[str, Any]] = []
-        stored_chain_status: str | None = None
-        pending_event_webhooks: list[tuple[Any, ...]] = []
-
-        try:
-            # WI-113: evaluate posture (network I/O — CAA DNS, OCSP/CRL)
-            # BEFORE BEGIN so the write lock isn't held during network calls.
-            # When _posture_eval is provided by the caller, use it directly
-            # (caller already computed it before acquiring the write lock).
-            # When _posture_eval is None (pre-lock eval failed or caller
-            # didn't provide one), do NOT fall back to _evaluate_posture()
-            # here — that would run network I/O inside the write lock,
-            # violating the AGENTS.md rule "Lock wraps DB mutations only,
-            # never network I/O." Instead, use a safe default that will be
-            # evaluated lazily on the cert detail page.
-            posture_eval = _posture_eval
-            conn.execute("BEGIN")
-            leaf_id, replaced_cert_id = _stage(
-                "replace", _stage_replace, repo_path, entry, conn,
-            )
-            if posture_eval is not None:
-                posture_grade, original_findings, stored_chain_status = _stage(
-                    "posture", _stage_posture, repo_path, leaf_id, entry,
-                    conn=conn,
-                    eval_result=posture_eval,
-                )
-                posture_grade = _stage(
-                    "policy", _stage_policy,
-                    repo_path, leaf_id, entry,
-                    posture_grade, original_findings, stored_chain_status,
-                    conn=conn, ruleset=ruleset,
-                )
-            else:
-                posture_grade = ""
-            _stage(
-                "drift", _stage_drift,
-                repo_path, leaf_id, entry, posture_grade, drift_alerts,
-                conn=conn,
-            )
-            _stage(
-                "history", _stage_history,
-                repo_path, entry, posture_grade,
-                conn=conn,
-            )
-            pending_event_webhooks = _stage(
-                "events", _stage_events,
-                repo_path, leaf_id, entry,
-                replaced_cert_id, posture_grade, previous_grade,
-                conn=conn, event_config=event_config,
-            )
-            conn.commit()
-        except Exception:
-            # Re-raise database lock errors so the caller's retry logic
-            # can handle them (store_scanned_async retries on
-            # OperationalError("database is locked") — Issue 8).
-            if isinstance(sys.exc_info()[1], sqlite3.OperationalError):
-                with contextlib.suppress(sqlite3.Error):
-                    conn.rollback()
-                raise
-            logger.warning(
-                "store_scanned transaction failed for %s:%s",
-                entry.host, entry.port, exc_info=True,
-            )
-            with contextlib.suppress(sqlite3.Error):
-                conn.rollback()
-            return ""
-
-        # Post-transaction HTTP: failures must not invalidate the scan.
-        # When _deferred is provided, stash the work for the caller to execute
-        # after releasing the write lock (avoids holding the lock during HTTP).
-        if _deferred is not None:
-            _deferred["repo_path"] = repo_path
-            _deferred["entry"] = entry
-            _deferred["replaced_cert_id"] = replaced_cert_id
-            _deferred["webhook_config"] = webhook_config
-            _deferred["pending_for_resolve"] = pending_for_resolve
-            _deferred["pending_event_webhooks"] = pending_event_webhooks
-        else:
-            try:
-                _stage(
-                    "webhook_resolve",
-                    _stage_webhook_resolve,
-                    repo_path, entry, replaced_cert_id,
-                    webhook_config, pending_for_resolve,
-                )
-            except Exception:
-                logger.warning(
-                    "post-commit webhook resolve failed for %s:%s — "
-                    "open incidents may not be auto-resolved",
-                    entry.host, entry.port,
-                    exc_info=True,
-                )
-
-            # WI-114: fire deferred event webhooks only after COMMIT succeeded.
-            for evt, cfg, rid in (pending_event_webhooks or []):
-                try:
-                    from cert_watch.events import _deliver_webhook, _get_pool
-                    _get_pool().submit(_deliver_webhook, evt, cfg, str(repo_path), rid)
-                except Exception:
-                    logger.warning("deferred event webhook submit failed", exc_info=True)
-
-        return leaf_id
-
-    repo = repo_path_or_repo
-    leaf_id = repo.add(entry.leaf)
-    for chain_cert in entry.chain:
-        repo.add(chain_cert)
     return leaf_id
-
 
 def _evaluate_and_store_posture(
     db_path: str | Path,
@@ -1125,7 +1138,7 @@ async def scan_host_async(
 
 async def store_scanned_async(
     entry: ScannedEntry,
-    repo_path_or_repo: str | Path | CertificateRepository,
+    db_path: str | Path,
     *,
     drift_alerts: bool = True,
     check_revocation: bool = False,
@@ -1147,26 +1160,25 @@ async def store_scanned_async(
     all other writes.
     """
     def _run() -> str:
-        deferred: dict[str, Any] = {}
+        deferred = DeferredPostCommit()
         # Compute posture evaluation (network I/O — CAA DNS, OCSP/CRL)
         # BEFORE acquiring the write lock so slow targets don't block
         # DB writes (AGENTS.md: "Lock wraps DB mutations only, never
         # network I/O").
         posture_eval = None
-        if isinstance(repo_path_or_repo, str | Path):
-            try:
-                posture_eval = _evaluate_posture(
-                    repo_path_or_repo,
-                    entry,
-                    check_revocation=check_revocation,
-                    allow_private=allow_private,
-                    allowed_subnets=allowed_subnets,
-                )
-            except Exception:
-                logger.warning(
-                    "pre-lock posture eval failed for %s:%s",
-                    entry.host, entry.port, exc_info=True,
-                )
+        try:
+            posture_eval = _evaluate_posture(
+                db_path,
+                entry,
+                check_revocation=check_revocation,
+                allow_private=allow_private,
+                allowed_subnets=allowed_subnets,
+            )
+        except Exception:
+            logger.warning(
+                "pre-lock posture eval failed for %s:%s",
+                entry.host, entry.port, exc_info=True,
+            )
         # Retry on database-locked errors. The write lock serializes
         # application-level writes, but SQLite can still raise
         # OperationalError("database is locked") when a concurrent
@@ -1179,7 +1191,7 @@ async def store_scanned_async(
                 with get_write_lock():
                     leaf_id = store_scanned(
                         entry,
-                        repo_path_or_repo,
+                        db_path,
                         drift_alerts=drift_alerts,
                         check_revocation=check_revocation,
                         allow_private=allow_private,
@@ -1199,7 +1211,7 @@ async def store_scanned_async(
                     continue
                 raise
         # Execute post-transaction HTTP outside the write lock.
-        if leaf_id and deferred:
+        if leaf_id:
             _execute_deferred_post_commit(deferred)
         return leaf_id
     return await asyncio.to_thread(_run)

@@ -19,6 +19,7 @@ from cert_watch.scan import (
     scan_host_async,
     store_scanned,
     store_scanned_async,
+    store_scanned_to_repo,
 )
 from cert_watch.scan_conn import (
     ScanOutputTooLargeError,
@@ -226,7 +227,7 @@ def test_store_scanned_with_repo(tmp_path, self_signed_leaf):
     repo = SqliteCertificateRepository(db, source="scanned")
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
-    leaf_id = store_scanned(entry, repo)
+    leaf_id = store_scanned_to_repo(entry, repo)
     assert leaf_id
 
 
@@ -1501,13 +1502,12 @@ def test_store_scanned_async(tmp_path, self_signed_leaf):
     db = tmp_path / "cw.sqlite3"
     from cert_watch.database.schema import init_schema
     init_schema(db)
-    repo = SqliteCertificateRepository(db, source="scanned")
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
 
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(store_scanned_async(entry, repo))
+        result = loop.run_until_complete(store_scanned_async(entry, db))
     finally:
         loop.close()
     assert result
@@ -1529,7 +1529,6 @@ def test_store_scanned_async_acquires_write_lock(tmp_path, self_signed_leaf):
 
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
-    repo = SqliteCertificateRepository(db, source="scanned")
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
 
@@ -1547,7 +1546,7 @@ def test_store_scanned_async_acquires_write_lock(tmp_path, self_signed_leaf):
     assert held.wait(timeout=5.0), "background thread failed to acquire lock"
 
     async def _store() -> str:
-        return await store_scanned_async(entry, repo, drift_alerts=False)
+        return await store_scanned_async(entry, db, drift_alerts=False)
 
     loop = asyncio.new_event_loop()
     try:
@@ -1638,7 +1637,7 @@ def test_store_scanned_with_repo_and_chain(tmp_path, self_signed_leaf, chain_tri
     leaf = parse_certificate(self_signed_leaf.der)
     chain_cert = parse_certificate(chain_triplet["intermediate"].der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[chain_cert])
-    leaf_id = store_scanned(entry, repo)
+    leaf_id = store_scanned_to_repo(entry, repo)
     assert leaf_id
 
 
