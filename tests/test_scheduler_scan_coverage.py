@@ -312,7 +312,11 @@ def test_run_scan_now_store_fn_exception(tmp_path):
         host_provider=lambda: hosts,
         store_fn=store_fn,
     )
-    assert result["scanned"] == 1
+    # A failed store is NOT a successful scan: the cert was never persisted.
+    # Regression (WI-142 sibling): scanned was incremented before store_fn ran,
+    # inflating the success count and hiding the failure.
+    assert result["scanned"] == 0
+    assert result["failures"] == 1
 
 
 def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
@@ -343,7 +347,7 @@ def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
         host_provider=lambda: hosts,
         store_fn=store_fn,
     )
-    assert result["scanned"] == 1
+    assert result["scanned"] == 0
 
     with _connect(db) as conn:
         rows = conn.execute(

@@ -326,6 +326,12 @@ def run_scan_now(
             try:
                 store_fn(result)
             except Exception as exc:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
+                # Persistence failed: the scan produced a result but nothing was
+                # stored, so it must not count as a successful scan (WI-142
+                # sibling — success was previously bookkept before the store
+                # completed, inflating `scanned` and hiding the failure).
+                scanned -= 1
+                failures += 1
                 logger.exception("store_fn failed for %s:%s", hostname, port)
                 if db_path is not None:
                     try:
