@@ -155,45 +155,40 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
 
 
 class TestMarginAnalysis:
-    def test_positive_margin(self):
-        margins = _compute_margins(lead_time=15.0, lifetime=365)
+    def test_short_lifetime_compliant_everywhere(self):
+        # A 30-day cert fits under every SC-081 cap.
+        margins = _compute_margins(lifetime=30)
         assert len(margins) == 3
-        ms_47 = margins[2]
-        assert ms_47["milestone"] == "47d"
-        assert ms_47["margin_days"] == 15.0
-        assert ms_47["margin_pct"] == round(15.0 / 47 * 100, 1)
-        assert ms_47["renew_late"] is False
+        assert [m["renew_late"] for m in margins] == [False, False, False]
+        assert margins[2]["margin_days"] == 47 - 30
+        assert margins[2]["margin_pct"] == round((47 - 30) / 47 * 100, 1)
 
-    def test_renew_late_when_lead_exceeds_cap(self):
-        margins = _compute_margins(lead_time=50.0, lifetime=365)
-        ms_47 = margins[2]
-        assert ms_47["margin_days"] == 50.0
-        assert ms_47["renew_late"] is True
-
-    def test_lead_fits_some_milestones_not_others(self):
-        margins = _compute_margins(lead_time=60.0, lifetime=365)
+    def test_lifetime_over_47d_only(self):
+        # A 90-day cert fits under 200d/100d but exceeds the 47d cap.
+        margins = _compute_margins(lifetime=90)
         assert margins[0]["renew_late"] is False
         assert margins[1]["renew_late"] is False
         assert margins[2]["renew_late"] is True
+        assert margins[2]["margin_days"] == 47 - 90  # negative => over cap
 
-    def test_no_lead_time_flagged_conservative(self):
-        margins = _compute_margins(lead_time=None, lifetime=365)
+    def test_long_lifetime_exceeds_all_caps(self):
+        # A 365-day cert is non-compliant at every milestone.
+        margins = _compute_margins(lifetime=365)
+        assert [m["renew_late"] for m in margins] == [True, True, True]
+        assert margins[2]["margin_days"] == 47 - 365
+
+    def test_margin_pct_calculation(self):
+        margins = _compute_margins(lifetime=90)
+        ms_100 = margins[1]
+        expected_pct = round((100 - 90) / 100 * 100, 1)
+        assert ms_100["margin_pct"] == expected_pct
+
+    def test_unknown_lifetime_flagged_conservative(self):
+        margins = _compute_margins(lifetime=None)
         for m in margins:
             assert m["margin_days"] is None
             assert m["margin_pct"] is None
             assert m["renew_late"] is True
-
-    def test_margin_pct_calculation(self):
-        margins = _compute_margins(lead_time=15.0, lifetime=365)
-        ms_100 = margins[1]
-        expected_pct = round(15.0 / 100 * 100, 1)
-        assert ms_100["margin_pct"] == expected_pct
-
-    def test_small_lead_time_safe_at_200d(self):
-        margins = _compute_margins(lead_time=15.0, lifetime=90)
-        ms_200 = margins[0]
-        assert ms_200["margin_days"] == 15.0
-        assert ms_200["renew_late"] is False
 
 
 class TestBuildReadinessReport:
@@ -299,7 +294,7 @@ class TestWorkloadForecast:
             classification="manual",
             current_lead_time=10.0,
             current_lifetime=365,
-            margins=_compute_margins(10.0, 365),
+            margins=_compute_margins(365),
         )
         from cert_watch.readiness import _compute_workload_forecast
         wf = _compute_workload_forecast([host])

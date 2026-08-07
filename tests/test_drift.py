@@ -158,6 +158,31 @@ class TestComputeDriftEvents:
         assert len(proto_events) == 1
         assert proto_events[0].severity == "high"
 
+    def test_tls1_bare_string_recognized(self):
+        """scan paths emit TLS 1.0 as bare "TLSv1" (posture.py:40); _tls_value
+        must treat it equal to "TLSv1.0", else drift fires a false downgrade."""
+        from cert_watch.database.drift import _tls_value
+        assert _tls_value("TLSv1") == 0
+        assert _tls_value("TLSv1") == _tls_value("TLSv1.0")
+
+    def test_same_tls_version_different_string_not_drift(self):
+        """"TLSv1.0" and "TLSv1" are the same version — must NOT emit a
+        high-severity downgrade drift (the false positive this fixes)."""
+        old = _old_row(protocol_version="TLSv1.0")
+        leaf = _make_leaf()
+        events = _compute_drift_events(old, leaf, new_protocol_version="TLSv1")
+        proto_events = [e for e in events if e.field == "protocol_version"]
+        assert proto_events == []
+
+    def test_bare_tlsv1_downgrade_from_12_still_high(self):
+        """A real downgrade to TLS 1.0 (bare "TLSv1") is still high severity."""
+        old = _old_row(protocol_version="TLSv1.2")
+        leaf = _make_leaf()
+        events = _compute_drift_events(old, leaf, new_protocol_version="TLSv1")
+        proto_events = [e for e in events if e.field == "protocol_version"]
+        assert len(proto_events) == 1
+        assert proto_events[0].severity == "high"
+
     def test_san_count_change_is_info(self):
         old = _old_row()
         leaf = _make_leaf(sans=["a.com", "b.com"])
