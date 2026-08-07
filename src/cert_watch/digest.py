@@ -7,14 +7,14 @@ import logging
 import sqlite3
 import statistics
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 from cert_watch.alerts import _validate_email
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.database.schema import init_schema
 
 if TYPE_CHECKING:
@@ -58,6 +58,7 @@ class RenewalDigest:
     shortened_count: int
     shortened_hosts: list[str]
     owner_email: str = ""
+    host_expiry: dict[str, str | None] = field(default_factory=dict)
 
 
 def _parse_event_payload(payload_raw: str) -> dict[str, Any]:
@@ -75,7 +76,6 @@ def _lifetime_trend_decreasing(entries: list[dict[str, Any]]) -> bool:
         not_after = entry.get("not_after")
         not_before = entry.get("not_before")
         if not_after and not_before:
-            from cert_watch.database.connection import _parse_iso
             try:
                 na = _parse_iso(not_after)
                 nb = _parse_iso(not_before)
@@ -161,6 +161,12 @@ def build_renewal_digest(
         if _lifetime_trend_decreasing(entries):
             shortened_hosts.add(hostname)
 
+    # Latest known cert expiry per host (most recent scan wins). cert_history is
+    # ordered scanned_at DESC, so the first row is the newest observation.
+    latest_expiry: dict[str, str | None] = {}
+    for hostname, entries in host_entries.items():
+        latest_expiry[hostname] = entries[0]["not_after"] if entries else None
+
     by_owner: dict[str, RenewalDigest] = {}
 
     def _ensure_owner(email: str) -> RenewalDigest:
@@ -198,10 +204,27 @@ def build_renewal_digest(
         if hostname not in d.shortened_hosts:
             d.shortened_hosts.append(hostname)
 
+    for d in by_owner.values():
+        d.host_expiry = {
+            h: latest_expiry.get(h)
+            for h in (*d.renewed_hosts, *d.overdue_hosts, *d.shortened_hosts)
+        }
+
     return list(by_owner.values())
 
 
+def _fmt_expiry(not_after: str | None) -> str:
+    """Render a cert's not_after as ' (expires YYYY-MM-DD)' or '' if unknown."""
+    if not not_after:
+        return ""
+    try:
+        return f" (expires {_parse_iso(not_after).strftime('%Y-%m-%d')})"
+    except (ValueError, TypeError):
+        return ""
+
+
 def _build_digest_message(digest: RenewalDigest) -> str:
+    expiry = digest.host_expiry
     lines = [
         f"[cert-watch] Renewal Digest — last {digest.days} days",
         "",
@@ -209,17 +232,17 @@ def _build_digest_message(digest: RenewalDigest) -> str:
     ]
     if digest.renewed_hosts:
         for h in digest.renewed_hosts:
-            lines.append(f"  - {h}")
+            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
     lines.append("")
     lines.append(f"Overdue: {digest.overdue_count}")
     if digest.overdue_hosts:
         for h in digest.overdue_hosts:
-            lines.append(f"  - {h}")
+            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
     if digest.shortened_hosts:
         lines.append("")
         lines.append(f"Lifetimes shortened: {digest.shortened_count}")
         for h in digest.shortened_hosts:
-            lines.append(f"  - {h}")
+            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
     return "\n".join(lines)
 
 
@@ -448,6 +471,7 @@ def send_renewal_digest(
             overdue_hosts=sorted({h for d in digests for h in d.overdue_hosts}),
             shortened_count=sum(d.shortened_count for d in digests),
             shortened_hosts=sorted({h for d in digests for h in d.shortened_hosts}),
+            host_expiry={h: e for d in digests for h, e in d.host_expiry.items()},
         )
         global_body = _build_digest_message(global_digest)
         global_subject = (
