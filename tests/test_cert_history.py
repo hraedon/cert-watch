@@ -410,3 +410,49 @@ def test_api_grade_trends_endpoint(tmp_path, reload_app):
     data = resp.json()
     assert "trends" in data
     assert data["days"] == 1
+
+
+def test_delete_cascade_preserves_other_hosts_history(tmp_path):
+    """Deleting a cert must not erase cert_history for OTHER hosts sharing the
+    same fingerprint (wildcard / load-balanced / shared corporate certs).
+
+    Regression: the cascade deleted cert_history by fingerprint alone, nuking
+    the renewal analytics (lead time, cadence, automation classification) of
+    every other host deploying the same cert.
+    """
+    from cert_watch.database.cert_ops import delete_certificate_cascade
+    from tests._helpers import seed_certificate
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    now = datetime.now(UTC)
+    shared_fp = "deadbeef" * 8
+    leaf = Certificate(
+        subject="CN=shared.example.com",
+        issuer="CN=Test CA",
+        not_before=now - timedelta(days=30),
+        not_after=now + timedelta(days=60),
+        san_dns_names=["shared.example.com"],
+        fingerprint_sha256=shared_fp,
+        raw_der=b"\x00",
+    )
+    # Same cert observed on two different host:port pairs.
+    record_cert_history(db, "host-a.example.com", 443, leaf, scanned_at=now.isoformat())
+    record_cert_history(db, "host-b.example.com", 443, leaf, scanned_at=now.isoformat())
+    # The certificate row we'll delete belongs to host-a only.
+    seed_certificate(
+        db, leaf, cert_id="cert-a", hostname="host-a.example.com", port=443,
+        source="scanned", chain_valid=True,
+    )
+
+    delete_certificate_cascade(db, "cert-a")
+
+    with _connect(db) as conn:
+        a_count = conn.execute(
+            "SELECT COUNT(*) FROM cert_history WHERE hostname = 'host-a.example.com'"
+        ).fetchone()[0]
+        b_count = conn.execute(
+            "SELECT COUNT(*) FROM cert_history WHERE hostname = 'host-b.example.com'"
+        ).fetchone()[0]
+    assert a_count == 0, "deleted host's history for this cert should be removed"
+    assert b_count == 1, "other host's history must be preserved"

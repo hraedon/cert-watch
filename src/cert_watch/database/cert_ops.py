@@ -246,11 +246,29 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})", all_ids
         )
-        conn.execute(
-            f"DELETE FROM cert_history WHERE fingerprint_sha256 IN "
-            f"(SELECT fingerprint_sha256 FROM certificates WHERE id IN ({placeholders}))",
-            all_ids,
-        )
+        # Scope cert_history cleanup to the deleted cert's host:port + fingerprint.
+        # Deleting by fingerprint alone erased other hosts' history when the same
+        # cert (wildcard / load-balanced / shared corporate cert) is deployed
+        # across multiple host:port pairs — silently destroying their renewal
+        # analytics (lead time, cadence, automation classification).
+        leaf_row = conn.execute(
+            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        fps = [
+            r["fingerprint_sha256"]
+            for r in conn.execute(
+                f"SELECT DISTINCT fingerprint_sha256 FROM certificates "
+                f"WHERE id IN ({placeholders})",
+                all_ids,
+            ).fetchall()
+        ]
+        if leaf_row is not None and fps:
+            fp_placeholders = ",".join("?" * len(fps))
+            conn.execute(
+                f"DELETE FROM cert_history WHERE hostname = ? AND port = ? "
+                f"AND fingerprint_sha256 IN ({fp_placeholders})",
+                (leaf_row["hostname"], leaf_row["port"], *fps),
+            )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({placeholders})", all_ids
         )
