@@ -256,7 +256,10 @@ def decode_session(
     #   6 parts: username:version:ts:nonce:groups:roles  (BC-145)
     #   7 parts: username:version:ts:nonce:groups:roles:email  (Plan 040)
     #   3 and 5 parts are rejected as malformed/legacy.
-    if len(parts) == 7:
+    # groups/roles are base64url (no colons), so only the trailing email field
+    # can introduce extra colons (a rare but valid quoted-local-part). Treat the
+    # email as the remainder so such a token still decodes instead of looping.
+    if len(parts) >= 7:
         username = parts[0]
         try:
             version = int(parts[1])
@@ -266,7 +269,7 @@ def decode_session(
         nonce = parts[3]
         groups = _decode_list(parts[4])
         roles = _decode_list(parts[5])
-        email = parts[6]
+        email = ":".join(parts[6:])
         return SessionInfo(
             username=username,
             version=version,

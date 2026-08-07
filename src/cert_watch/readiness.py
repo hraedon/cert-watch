@@ -84,18 +84,24 @@ def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str
     return result
 
 
-def _compute_margins(
-    lead_time: float | None,
-    lifetime: int | None,
-) -> list[dict[str, Any]]:
+def _compute_margins(lifetime: int | None) -> list[dict[str, Any]]:
+    """SC-081 caps certificate VALIDITY (lifetime), not renewal lead time.
+
+    A cert is non-compliant at a milestone when its lifetime exceeds the cap;
+    the margin is how much validity sits under the cap (positive, compliant) or
+    over it (negative, non-compliant). Renewal lead time is reported separately
+    on the host and is not a SC-081 factor.
+    """
     margins: list[dict[str, Any]] = []
     for ms in SC081_MILESTONES:
         max_days = ms["max_days"]
-        if lead_time is not None:
-            margin_days = lead_time
-            margin_pct = round(lead_time / max_days * 100, 1) if max_days else 0.0
-            renew_late = lead_time > max_days
+        if lifetime is not None:
+            margin_days = max_days - lifetime
+            margin_pct = round(margin_days / max_days * 100, 1) if max_days else 0.0
+            renew_late = lifetime > max_days
         else:
+            # No observed lifetime (single scan, no not_before): can't confirm
+            # compliance — flag conservatively for operator review.
             margin_days = None
             margin_pct = None
             renew_late = True
@@ -124,7 +130,7 @@ def _compute_host_readiness(
         classification=analytics.automation_classification,
         current_lead_time=lead_time,
         current_lifetime=current_lifetime,
-        margins=_compute_margins(lead_time, current_lifetime) if not is_private else [],
+        margins=_compute_margins(current_lifetime) if not is_private else [],
         chain_status=chain_status,
     )
 

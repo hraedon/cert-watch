@@ -118,6 +118,65 @@ class TestBuildRenewalDigest:
         assert result[0].renewed_hosts == ["host-multi.example.com"]
 
 
+class TestDigestExpiry:
+    """The digest body shows each host's current cert expiry (not_after)."""
+
+    def test_message_includes_expiry_per_host(self, empty_db):
+        from cert_watch.certificate_model import Certificate
+        from cert_watch.database import record_cert_history
+        from cert_watch.digest import _build_digest_message
+
+        db = empty_db
+        _add_host(db, "host-renewed.example.com")
+        _add_host(db, "host-overdue.example.com")
+
+        def _seed(hostname: str, not_after: datetime, fp: str) -> None:
+            record_cert_history(
+                db, hostname, 443,
+                Certificate(
+                    subject=f"CN={hostname}",
+                    issuer="CN=CA",
+                    not_before=datetime(2026, 1, 1, tzinfo=UTC),
+                    not_after=not_after,
+                    san_dns_names=[hostname],
+                    fingerprint_sha256=fp,
+                    raw_der=b"",
+                ),
+                scanned_at=datetime.now(UTC).isoformat(),
+            )
+
+        _seed("host-renewed.example.com", datetime(2026, 12, 31, tzinfo=UTC), "fp1")
+        _seed("host-overdue.example.com", datetime(2026, 8, 20, tzinfo=UTC), "fp2")
+
+        _emit_renewal(db, "host-renewed.example.com")
+        _emit_overdue(db, "host-overdue.example.com")
+
+        result = build_renewal_digest(db, days=7)
+        assert len(result) == 1
+        digest = result[0]
+        assert digest.host_expiry.get("host-renewed.example.com") is not None
+        assert digest.host_expiry.get("host-overdue.example.com") is not None
+
+        msg = _build_digest_message(digest)
+        assert "expires 2026-12-31" in msg  # renewed host
+        assert "expires 2026-08-20" in msg  # overdue host
+
+    def test_message_without_history_omits_expiry(self, empty_db):
+        from cert_watch.digest import _build_digest_message
+
+        db = empty_db
+        _add_host(db, "host-nohistory.example.com")
+        _emit_renewal(db, "host-nohistory.example.com")
+
+        result = build_renewal_digest(db, days=7)
+        assert len(result) == 1
+        digest = result[0]
+        assert digest.host_expiry.get("host-nohistory.example.com") is None
+
+        msg = _build_digest_message(digest)
+        assert "expires" not in msg
+
+
 class TestSendRenewalDigest:
     def test_no_configs_returns_false(self, empty_db):
         result = send_renewal_digest(empty_db, None, None, days=7)

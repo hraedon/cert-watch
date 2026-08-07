@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -150,6 +151,10 @@ _rate_locks: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(
 _rate_caches: list[dict[str, list[float]]] = [{} for _ in range(_RATE_SHARDS)]
 _RATE_CACHE_TTL = 10.0  # seconds before cache entry is considered stale
 _RATE_STALE_TTL = 600.0  # evict rows stale for 10 minutes
+# Guards the DB-backed rate_limits table against unbounded growth: cleanup is
+# throttled to once per _RATE_CACHE_TTL (not on every request), so the DELETE
+# query doesn't become part of the hot per-request path.
+_last_rate_cleanup = 0.0
 
 
 def _rate_shard(key: str) -> int:
@@ -278,6 +283,8 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
     now = datetime.now(UTC).timestamp()
     cutoff = now - window_seconds
 
+    global _last_rate_cleanup
+
     shard = _rate_shard(key)
     lock = _rate_locks[shard]
     cache = _rate_caches[shard]
@@ -299,31 +306,61 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                         init_schema(_rate_db_path)
                         _rate_db_initialized = True
             with _connect(_rate_db_path) as conn:
-                # Periodic cleanup of stale entries
-                cache_ts = cache.get(key)
-                if cache_ts is not None and now - min(cache_ts, default=now) < _RATE_CACHE_TTL:
-                    # Use cached timestamps (still valid within cache TTL)
-                    ts = [t for t in cache_ts if t >= cutoff]
-                else:
-                    ts = _load_timestamps(conn, key, cutoff)
+                # Periodic cleanup of stale entries (rows are keyed by client
+                # IP and never otherwise evicted — without this, the table
+                # grows without bound under rotating IPs / spoofed XFF).
+                if _last_rate_cleanup + _RATE_CACHE_TTL < now:
+                    _cleanup_stale(conn)
+                    conn.commit()
+                    _last_rate_cleanup = now
 
-                # Evict stale in-memory cache entries periodically
+                # Evict stale in-memory cache entries periodically. The cache now
+                # only mirrors state for get_rate_remaining() and the in-memory
+                # fallback path — the allow/deny decision always reads SQLite.
                 if len(cache) > max(16, 256 // _RATE_SHARDS):
                     stale = [k for k, v in cache.items() if not v or max(v) < cutoff]
                     for k in stale:
                         del cache[k]
 
-                if len(ts) >= max_requests:
+                # Serialize the read-modify-write across workers/processes so
+                # concurrent increments on the same key can't be lost, and always
+                # read the authoritative count from SQLite. Two correctness bugs
+                # this closes:
+                #  1. The per-process cache was served for up to _RATE_CACHE_TTL
+                #     without consulting SQLite, so under `uvicorn --workers N`
+                #     each worker counted independently → N×max_requests.
+                #  2. A deferred (default) transaction only locks at first write,
+                #     letting two workers read the same count and the later write
+                #     drop the earlier's append. BEGIN IMMEDIATE acquires the
+                #     write lock up front; busy_timeout makes contending workers
+                #     wait rather than collide.
+                try:
+                    # If a prior cleanup commit failed mid-transaction, the
+                    # cached connection could still hold an open txn; clear it
+                    # before acquiring the write lock so BEGIN IMMEDIATE can't
+                    # fail with "cannot start a transaction within a transaction"
+                    # (which would degrade this thread to fail-open in-memory).
+                    if conn.in_transaction:
+                        conn.rollback()
+                    conn.execute("BEGIN IMMEDIATE")
+                    ts = _load_timestamps(conn, key, cutoff)
+                    if len(ts) >= max_requests:
+                        cache[key] = ts
+                        _save_timestamps(conn, key, ts)
+                        conn.commit()
+                        return False
+
+                    ts.append(now)
                     cache[key] = ts
                     _save_timestamps(conn, key, ts)
                     conn.commit()
-                    return False
-
-                ts.append(now)
-                cache[key] = ts
-                _save_timestamps(conn, key, ts)
-                conn.commit()
-                return True
+                    return True
+                except sqlite3.Error:
+                    # Roll back so the cached connection is left clean (an open
+                    # txn here would make the next BEGIN IMMEDIATE fail).
+                    with contextlib.suppress(sqlite3.Error):
+                        conn.rollback()
+                    raise
         except (sqlite3.Error, OSError):
             # WARNING, not DEBUG (BC-078): a silent DB-error fallback degrades
             # rate limiting to per-process counters without anyone noticing.

@@ -787,6 +787,42 @@ def test_scrypt_hash_invalid_format():
     assert verify_scrypt_hash("pw", "scrypt$bad$args") is False
 
 
+def test_scrypt_hash_oversized_cost_params_rejected():
+    """Regression (exploration sweep): a crafted hash with a pathological
+    n/r/p (e.g. n=2**24) used to trigger a multi-GB scrypt allocation on every
+    login (a login DoS) and let an OOM/MemoryError escape authenticate. The
+    verify layer must bound cost params and never raise on a bad hash."""
+    from cert_watch.auth.local_admin import _scrypt_hash as make
+
+    # Build a valid-format hash whose cost params exceed the authorized cap.
+    good = make("pw", n=2**14, r=8, p=1)
+    parts = good.split("$")
+    parts[1] = "16777216"  # 2**24 — multi-GB allocation if trusted
+    oversized = "$".join(parts)
+    # Must fail cleanly (no exception, no allocation blowup), not crash.
+    assert verify_scrypt_hash("pw", oversized) is False
+    assert verify_scrypt_hash("wrong", oversized) is False
+
+    # A hash with r/p over the cap is likewise rejected, not trusted.
+    parts2 = good.split("$")
+    parts2[2] = "256"
+    assert verify_scrypt_hash("pw", "$".join(parts2)) is False
+
+
+def test_scrypt_long_password_round_trips():
+    """A >1024-char password must hash and verify consistently. Regression: the
+    password cap was applied only at verify (verify_scrypt_hash truncated to
+    1024) but not at set-time (_scrypt_hash hashed the full password), so any
+    password over 1024 chars could be set but never used to log in — a silent
+    permanent lockout, including the break-glass admin."""
+    from cert_watch.auth.local_admin import _scrypt_hash as make
+
+    long_pw = "a" * 2000
+    h = make(long_pw, n=2**4, r=1, p=1)
+    assert verify_scrypt_hash(long_pw, h) is True
+    assert verify_scrypt_hash("wrong", h) is False
+
+
 def test_scrypt_hash_custom_params():
     pw = "custom-nrp"
     h = _scrypt_hash(pw, n=2**4, r=1, p=1)

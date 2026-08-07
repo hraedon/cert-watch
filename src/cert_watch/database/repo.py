@@ -541,11 +541,13 @@ class SqliteTrustAnchorRepository:
             conn.commit()
         return anchor_id
 
-    def list_all(self) -> list[Certificate]:
-        from cert_watch.database.connection import _row_to_cert
-        with _connect(self.db_path) as conn:
-            rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
-        return [_row_to_cert(r) for r in rows]
+    def list_all(self) -> list[TrustAnchorEntry]:
+        """List all trust anchors. Delegates to :meth:`list_entries`; the
+        previous implementation called ``_row_to_cert`` against the
+        ``trust_anchors`` table (which lacks certificate columns) and would
+        crash — it was also never called anywhere. Kept for interface parity
+        with the other repositories."""
+        return self.list_entries()
 
     def list_entries(
         self, *, conn: sqlite3.Connection | None = None

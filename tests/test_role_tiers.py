@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cert_watch.auth.local_admin import _scrypt_hash
 from cert_watch.auth.rbac import (
     AuthContext,
     Permission,
@@ -193,15 +194,46 @@ class TestUserRoleAssociation:
 
 
 class TestRoleSettingsForm:
-    def test_create_role_with_tier_and_scope(self, reload_app):
-        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+    @staticmethod
+    def _inject_admin_session(client, monkeypatch):
+        # Mint an authenticated admin session (WI-141 fix: the old
+        # CERT_WATCH_AUTH_PROVIDER="local" was a no-op, so these routes ran
+        # open). Local-admin auth is enabled by CERT_WATCH_LOCAL_ADMIN_USER +
+        # hash with AUTH_PROVIDER unset; _COOKIE_SECURE is patched because it
+        # is an import-time module constant the env var can't change.
+        import cert_watch.middleware as mw
+        import cert_watch.routes.auth as auth_routes
+
+        monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+        monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
+
+        from starlette.requests import Request as StRequest
+
+        from cert_watch.auth import SESSION_COOKIE, create_session
+        from cert_watch.middleware import _request_security
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [],
+            "app": client.app,
+            "session": {},
+        }
+        req = StRequest(scope)
+        security = _request_security(req)
+        token = create_session("admin", security, version=0)
+        client.cookies.set(SESSION_COOKIE, token)
+        return client
+
+    def test_create_role_with_tier_and_scope(self, reload_app, monkeypatch):
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("a_great_password", n=2**4),
+        )
         with TestClient(app_mod.app) as client:
-            # Bootstrap an admin session
-            client.post("/settings/users", data={
-                "username": "admin", "password": "a_great_password",
-                "email": "admin@example.com", "role_id": "",
-            }, follow_redirects=False)
-            client.post("/login", data={"username": "admin", "password": "a_great_password"})
+            self._inject_admin_session(client, monkeypatch)
             r = client.post(
                 "/settings/roles",
                 data={
@@ -216,14 +248,13 @@ class TestRoleSettingsForm:
         assert r.status_code == 303
         assert "saved=1" in r.headers["location"]
 
-    def test_edit_role_updates_scope_tag(self, reload_app):
-        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+    def test_edit_role_updates_scope_tag(self, reload_app, monkeypatch):
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("a_great_password", n=2**4),
+        )
         with TestClient(app_mod.app) as client:
-            client.post("/settings/users", data={
-                "username": "admin", "password": "a_great_password",
-                "email": "admin@example.com", "role_id": "",
-            }, follow_redirects=False)
-            client.post("/login", data={"username": "admin", "password": "a_great_password"})
+            self._inject_admin_session(client, monkeypatch)
             # First create role to fetch its id from DB
             client.post(
                 "/settings/roles",

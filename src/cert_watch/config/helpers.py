@@ -57,15 +57,52 @@ def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> s
     generated = secrets.token_hex(32)
     try:
         data_dir.mkdir(parents=True, exist_ok=True)
-        secret_file.write_text(generated + "\n")
-        secret_file.chmod(0o600)
-        logger.info("generated and persisted %s to %s", filename, secret_file)
+        return _persist_or_adopt_secret(secret_file, generated)
     except OSError:
         logger.warning(
             "could not persist %s to %s; using ephemeral key (sessions will not survive restart)",
             filename, secret_file,
         )
     return generated
+
+
+def _persist_or_adopt_secret(secret_file: Path, generated: str) -> str:
+    """Atomically persist *generated* at 0o600, or adopt a value a concurrent
+    process already wrote.
+
+    Uses O_CREAT|O_EXCL so the file is born with restrictive mode (no
+    write-then-chmod world-readable window) and two concurrent starts don't
+    each generate a different key. If a concurrent process won the race,
+    adopt whatever it persisted. An *empty* file (a concurrent process that
+    crashed between create and write) is unlinked and retried, so the secret
+    self-heals instead of returning ephemeral forever (matching the old
+    write_text-overwrite behavior). Bounded to a few iterations.
+    """
+    for _ in range(3):
+        try:
+            fd = os.open(
+                str(secret_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600
+            )
+        except FileExistsError:
+            persisted = secret_file.read_text().strip()
+            if persisted:
+                logger.info(
+                    "adopted %s concurrently persisted by another process",
+                    secret_file.name,
+                )
+                return persisted
+            # Empty file from a concurrent crash mid-write — clear it and retry
+            # so we don't return an ephemeral key every restart (which would
+            # diverge sessions across workers).
+            os.unlink(secret_file)
+            continue
+        try:
+            os.write(fd, (generated + "\n").encode())
+        finally:
+            os.close(fd)
+        logger.info("generated and persisted %s to %s", secret_file.name, secret_file)
+        return generated
+    raise OSError(f"could not establish secret at {secret_file} after retries")
 
 
 def _parse_role_map(raw: str) -> dict[str, dict[str, Any]]:

@@ -55,6 +55,22 @@ def test_import_hosts_csv_bad_port(reload_app):
     assert "error" in r.headers["location"]
 
 
+def test_import_hosts_csv_row_shorter_than_header(reload_app):
+    """Regression (WI-141 sweep find): DictReader fills absent cells with
+    None, so a row shorter than the header used to crash on .strip() and
+    return a 500 instead of importing (or rejecting) the row gracefully."""
+    app_mod = reload_app()
+
+    csv_content = "hostname,port,tags,notes\npartial.example.com\n"
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content, "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+
+
 def test_import_hosts_empty_csv(reload_app):
     app_mod = reload_app()
 

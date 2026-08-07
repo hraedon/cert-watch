@@ -5,7 +5,7 @@ Plan 024 Slice 3 — rate-limit, CSRF, CSP nonce, trusted-proxy, metrics gate.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -68,6 +68,50 @@ def test_rate_limit_db_path(monkeypatch, tmp_path):
     mw._rate_db_initialized = False
 
 
+def test_rate_limit_stale_rows_purged(monkeypatch, tmp_path):
+    """Regression (exploration sweep): the rate_limits table grew without bound —
+    the _cleanup_stale DELETE was defined but never invoked from the DB path. The
+    periodic cleanup must remove rows not updated within _RATE_STALE_TTL."""
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+    import json
+
+    import cert_watch.middleware as mw
+    from cert_watch.database.connection import _connect
+
+    db_path = tmp_path / "rate.sqlite3"
+    mw._init_rate_db(db_path)
+    mw._rate_db_initialized = False
+    mw._clear_rate_caches()
+
+    # Ensure the rate_limits table exists (normally created by init_schema on
+    # first check_rate_limit) so we can seed a stale row directly.
+    from cert_watch.database.schema import init_schema
+    init_schema(db_path)
+
+    # Seed a stale row directly (updated_at far in the past).
+    stale_iso = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO rate_limits (key, timestamps, updated_at)"
+            " VALUES (?, ?, ?)",
+            ("stale:key", json.dumps([0.0]), stale_iso),
+        )
+        conn.commit()
+
+    # Force cleanup to run (bypass the throttle).
+    mw._last_rate_cleanup = 0.0
+    assert mw.check_rate_limit("fresh:key", 2, 60) is True
+
+    with _connect(db_path) as conn:
+        keys = [r[0] for r in conn.execute("SELECT key FROM rate_limits")]
+    assert "stale:key" not in keys
+
+    mw._clear_rate_caches()
+    mw._rate_db_path = None
+    mw._rate_db_initialized = False
+
+
 def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
     """Test fallback to in-memory when DB errors."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
@@ -111,7 +155,8 @@ def test_rate_limit_db_error_logs_error_with_marker(monkeypatch, tmp_path):
 
 
 def test_rate_limit_cache_hit(monkeypatch, tmp_path):
-    """Test that cache is used within TTL."""
+    """Within a single process the allow/deny decision is correct whether or not
+    the in-memory cache mirror is consulted (the decision always reads SQLite)."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import cert_watch.middleware as mw
@@ -120,10 +165,58 @@ def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     mw._init_rate_db(db_path)
     mw._rate_db_initialized = False
     mw._clear_rate_caches()
-    # First request populates cache
+    # First request populates cache + DB row
     assert mw.check_rate_limit("test:cache", 5, 60) is True
-    # Second request should use cache
+    # Second request is still under the limit
     assert mw.check_rate_limit("test:cache", 5, 60) is True
+    mw._clear_rate_caches()
+    mw._rate_db_path = None
+    mw._rate_db_initialized = False
+
+
+def test_rate_limit_reads_db_not_stale_cache(monkeypatch, tmp_path):
+    """The allow/deny decision must read the authoritative count from SQLite.
+
+    Regression: the per-process cache was served for up to _RATE_CACHE_TTL
+    without consulting SQLite, so writes from another worker/instance were
+    invisible — granting N×max_requests under ``uvicorn --workers N``.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from cert_watch.database.connection import _connect
+    from cert_watch.database.schema import init_schema
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+    import cert_watch.middleware as mw
+
+    db_path = tmp_path / "rate.sqlite3"
+    mw._init_rate_db(db_path)
+    mw._rate_db_initialized = False
+    mw._clear_rate_caches()
+    init_schema(db_path)
+
+    key = "cross:worker"
+    # First request from "this" worker: seeds the cache + DB with 1 timestamp.
+    assert mw.check_rate_limit(key, 2, 60) is True
+
+    # Another worker records a second hit directly in SQLite, bringing the real
+    # count to the limit (2). The in-memory cache on this worker still holds 1.
+    now = datetime.now(UTC).timestamp()
+    now_iso = datetime.now(UTC).isoformat()
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO rate_limits (key, timestamps, updated_at)"
+            " VALUES (?, ?, ?)",
+            (key, json.dumps([now, now]), now_iso),
+        )
+        conn.commit()
+
+    # Old code: served the stale 1-entry cache → True (over the limit, undetected).
+    # Fixed code: reads SQLite fresh → count is 2 → denied.
+    assert mw.check_rate_limit(key, 2, 60) is False
+
     mw._clear_rate_caches()
     mw._rate_db_path = None
     mw._rate_db_initialized = False

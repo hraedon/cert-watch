@@ -51,7 +51,7 @@ def ldap_server() -> Iterator[str]:
         **os.environ,
         "CERT_WATCH_DATA_DIR": "/tmp/cw-ldap-e2e",
         "CERT_WATCH_PORT": str(port),
-        "CERT_WATCH_AUTH_PROVIDER": "ldap",
+        "AUTH_PROVIDER": "ldap",
         "CERT_WATCH_LDAP_URL": os.environ.get(
             "LDAP_URL", "ldap://ad.example.com"
         ),
