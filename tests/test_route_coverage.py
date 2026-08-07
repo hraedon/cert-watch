@@ -1219,6 +1219,27 @@ def test_add_trust_anchor_invalid_cert(reload_app, tmp_path, leaf_pem_file):
     assert "error" in r.headers["location"]
 
 
+def test_trust_anchor_list_all_returns_entries(tmp_path, chain_pem_file):
+    """SqliteTrustAnchorRepository.list_all() returns the stored anchors.
+
+    Regression: list_all() called _row_to_cert against the trust_anchors table
+    (which lacks certificate columns) and crashed; it now delegates to
+    list_entries()."""
+    from cert_watch.database import SqliteTrustAnchorRepository, init_schema
+    from cert_watch.upload import upload_certificate
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    entry = upload_certificate(chain_pem_file)
+    root_cert = entry.chain[-1] if entry.chain else entry.leaf
+    repo = SqliteTrustAnchorRepository(db)
+    repo.add(root_cert)
+
+    entries = repo.list_all()
+    assert len(entries) == 1
+    assert entries[0].fingerprint_sha256 == root_cert.fingerprint_sha256
+
+
 def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

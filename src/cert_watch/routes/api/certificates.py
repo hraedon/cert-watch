@@ -36,6 +36,11 @@ def api_list_certificates(
 ) -> JSONResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    # Clamp limit to [1,200] BEFORE querying so the SQL LIMIT is bounded — a
+    # raw client-supplied limit would otherwise materialize the entire
+    # inventory into memory (BC-047 style inventory-in-RAM regression).
+    limit = min(max(limit, 1), 200)
+    page = max(page, 1)
     rows, total = list_dashboard_page(
         db,
         page=page, per_page=limit,

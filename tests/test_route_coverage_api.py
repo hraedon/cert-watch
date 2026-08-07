@@ -41,13 +41,37 @@ def test_api_certificates_pagination(tmp_path, reload_app):
     assert data["pagination"]["pages"] == 3
 
 
-def test_api_certificates_limit_clamped(reload_app):
+def test_api_certificates_limit_clamped(reload_app, tmp_path):
     app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteCertificateRepository, init_schema
+
+    init_schema(db)
+    now = datetime.now(UTC)
+    # Seed more than the 200-row cap to prove the SQL LIMIT is clamped before
+    # querying (regression: the raw client limit used to run as the SQL LIMIT,
+    # materializing the whole inventory into memory, then only the reported
+    # pagination metadata was clamped).
+    for i in range(205):
+        SqliteCertificateRepository(db, source="uploaded").add(
+            Certificate(
+                subject=f"cap{i}.example.com",
+                issuer="Test CA",
+                not_before=now - timedelta(days=1),
+                not_after=now + timedelta(days=365),
+            )
+        )
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates?limit=500")
+        r = client.get("/api/certificates?limit=50000")
     assert r.status_code == 200
     data = r.json()
     assert data["pagination"]["limit"] == 200
+    assert len(data["certificates"]) == 200
+    assert data["pagination"]["total"] == 205
+    assert data["pagination"]["pages"] == 2
 
 
 # ---------- API certificate history ----------

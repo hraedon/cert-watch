@@ -262,11 +262,13 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
                 url=f"/?error={quote(f'CSV import limited to {MAX_CSV_ROWS} rows')}",
                 status_code=303,
             )
-        hostname = row.get("hostname", "").strip()
+        # DictReader fills absent cells (rows shorter than the header) with
+        # None, so a bare .strip() would raise AttributeError on malformed CSV.
+        hostname = (row.get("hostname") or "").strip()
         if not hostname:
             errors.append(f"row {i}: missing hostname")
             continue
-        port_str = row.get("port", "443").strip()
+        port_str = (row.get("port") or "443").strip()
         try:
             port = int(port_str)
         except ValueError:
@@ -275,7 +277,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         if not (1 <= port <= 65535):
             errors.append(f"row {i}: port out of range")
             continue
-        threshold_str = row.get("threshold_days", "").strip()
+        threshold_str = (row.get("threshold_days") or "").strip()
         threshold = None
         if threshold_str:
             try:
@@ -292,9 +294,9 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         if ssrf_err:
             errors.append(f"row {i}: {ssrf_err}")
             continue
-        row_tags = row.get("tags", "").strip()
-        row_notes = row.get("notes", "").strip()
-        interval_str = row.get("scan_interval_hours", "").strip()
+        row_tags = (row.get("tags") or "").strip()
+        row_notes = (row.get("notes") or "").strip()
+        interval_str = (row.get("scan_interval_hours") or "").strip()
         interval_hours = None
         if interval_str:
             try:
@@ -302,7 +304,7 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid scan_interval_hours '{interval_str}'")
                 continue
-        row_starttls = row.get("starttls_mode", "").strip().lower()
+        row_starttls = (row.get("starttls_mode") or "").strip().lower()
         if row_starttls and row_starttls not in STARTTLS_MODES:
             errors.append(f"row {i}: unsupported starttls_mode '{row_starttls}'")
             continue
