@@ -161,7 +161,12 @@
   function trapFocus(e) {
     if (e.key !== 'Tab') return;
     var drawer = e.currentTarget;
-    var items = drawer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])');
+    // Only VISIBLE focusables: hidden tab panes would otherwise supply a
+    // phantom first/last element and the trap would leak at the real edges.
+    var items = Array.prototype.filter.call(
+      drawer.querySelectorAll('a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'),
+      function (el) { return el.offsetParent !== null || el.getClientRects().length > 0; }
+    );
     if (!items.length) return;
     var first = items[0], last = items[items.length - 1];
     if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
