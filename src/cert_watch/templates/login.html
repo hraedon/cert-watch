@@ -10,64 +10,52 @@
       document.documentElement.setAttribute('data-theme', t);
     } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
   </script>
+  <link rel="stylesheet" href="/static/css/legacy.css">
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 </head>
 <body>
-  <div class="cw-app">
-    <div class="cw-page cw-login-center">
-      <div class="cw-panel cw-form-panel">
-        <div class="cw-login-intro">
-          <div class="cw-mark cw-login-mark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
-          </div>
-          <h2 class="cw-login-title" data-testid="login-heading">Sign in to cert-watch</h2>
+  <div class="cw-auth-center">
+    <div class="cw-panel cw-auth-panel">
+      <div class="cw-auth-intro">
+        <div class="cw-auth-mark">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
         </div>
+        <h1 data-testid="login-heading">Sign in to cert-watch</h1>
+      </div>
 
+      <div class="cw-form">
         {% if error %}
-          <div class="cw-login-error">
-            {{ error }}
-          </div>
+          <div class="cw-inline-flash t-crit">{{ error }}</div>
         {% endif %}
 
-        {% if supports_form_login %}
-          <form method="post" action="/login">
+        {% if supports_form_login or local_admin_configured %}
+          <form method="post" action="/login" class="cw-form">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <div class="cw-field cw-mb-12">
+            <div class="cw-field">
               <label class="cw-label" for="login-username">Username</label>
               <input class="cw-input" type="text" id="login-username" name="username" required autofocus placeholder="username" data-testid="login-username">
             </div>
-            <div class="cw-field cw-mb-16">
+            <div class="cw-field">
               <label class="cw-label" for="login-password">Password</label>
               <input class="cw-input" type="password" id="login-password" name="password" required placeholder="password" data-testid="login-password">
             </div>
-            <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="login-submit-btn">Sign in</button>
-          </form>
-        {% elif local_admin_configured %}
-          <form method="post" action="/login">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <div class="cw-field cw-mb-12">
-              <label class="cw-label" for="login-username-2">Username</label>
-              <input class="cw-input" type="text" id="login-username-2" name="username" required autofocus placeholder="username" data-testid="login-username-2">
+            <div class="cw-form-foot">
+              <button type="submit" class="cw-btn primary" data-testid="login-submit-btn">Sign in</button>
             </div>
-            <div class="cw-field cw-mb-16">
-              <label class="cw-label" for="login-password-2">Password</label>
-              <input class="cw-input" type="password" id="login-password-2" name="password" required placeholder="password" data-testid="login-password-2">
-            </div>
-            <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="login-submit-btn-2">Sign in</button>
           </form>
         {% endif %}
 
         {% if provider == "oauth" or provider == "entra" or provider == "azure" or provider == "oidc" %}
-          <div class="cw-login-oauth-wrap">
-            <a href="/auth/login" class="cw-btn primary cw-btn--expand cw-no-decoration">
-              Sign in with {{ provider_label }}
-            </a>
+          <div>
+            <a href="/auth/login" class="cw-btn primary">Sign in with {{ provider_label }}</a>
           </div>
         {% endif %}
 
         {% if not supports_form_login and not local_admin_configured and provider not in ("oauth", "entra", "azure", "oidc") %}
-          <div class="cw-login-noauth">
+          <div class="cw-inline-flash">
             No authentication provider configured.
           </div>
         {% endif %}

@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — activity{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+{% import "macros/ui.html" as ui %}
+
+{% block content %}
+<div class="cw-wrap">
+  {# ---- Page header (per-tab subtitle + actions) ---- #}
+  {% if tab == 'alerts' %}
+    {% set head_sub = 'Expiry & scan notifications sent via email and webhook.' %}
+    {% set head_testid = 'alerts-heading' %}
+  {% elif tab == 'scans' %}
+    {% set head_sub = 'TLS handshakes performed on tracked hosts, scheduled and on-demand.' %}
+    {% set head_testid = 'scans-heading' %}
+  {% else %}
+    {% set head_sub = 'Append-only record of state-changing actions. No edit or delete path.' %}
+    {% set head_testid = 'audit-heading' %}
+  {% endif %}
+  {% call ui.page_head('Activity', head_sub, testid=head_testid) %}
+    {% if tab == 'alerts' %}
+      {% if is_admin %}
+      <a href="/settings/alert-groups" class="cw-btn ghost">{{ icons.svg_icon('cog', 13) }}Alert settings</a>
+      {% endif %}
+      {% if may_write %}
+      <form method="post" action="/alerts/mark-all-read" class="cw-inline">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cw-btn ghost" data-action="mark-all-read">{{ icons.svg_icon('check', 13) }}Mark all read</button>
+      </form>
+      <form method="post" action="/alerts/flush" class="cw-inline">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cw-btn ghost" data-action="flush-queue">{{ icons.svg_icon('send', 13) }}Flush queue</button>
+      </form>
+      {% endif %}
+    {% elif tab == 'scans' %}
+      {% if may_write %}
+      <form method="post" action="/hosts/all/scan" class="cw-inline">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="cw-btn primary" data-testid="scan-all-btn">{{ icons.svg_icon('refresh', 14) }}Run scan now</button>
+      </form>
+      {% endif %}
+    {% endif %}
+  {% endcall %}
+
+  {# ---- Tabs ---- #}
+  <nav class="cw-tabs" aria-label="Activity sections">
+    <a href="/alerts" class="cw-tab{% if tab == 'alerts' %} active{% endif %}"{% if tab == 'alerts' %} aria-current="page"{% endif %}>
+      Alerts{% if tab == 'alerts' and alert_counts.unread %} <span class="cnt">{{ alert_counts.unread }}</span>{% endif %}
+    </a>
+    <a href="/scan-history" class="cw-tab{% if tab == 'scans' %} active{% endif %}"{% if tab == 'scans' %} aria-current="page"{% endif %}>Scan history</a>
+    <a href="/audit" class="cw-tab{% if tab == 'audit' %} active{% endif %}"{% if tab == 'audit' %} aria-current="page"{% endif %}>Audit log</a>
+  </nav>
+
+  {% if tab == 'alerts' %}
+  {# ================= ALERTS ================= #}
+  {# WI-104: default to [] so membership/boolean tests below don't raise if a
+     route ever omits the key. Works under both the lenient default Undefined
+     and StrictUndefined. #}
+  {% set alert_channels = alert_channels|default([]) %}
+
+  {% if saved %}
+  <div class="cw-note t-ok">{{ icons.svg_icon('check-circle', 14) }}{{ saved }}</div>
+  {% endif %}
+
+  <div class="cw-filterbar">
+    <div class="cw-seg" role="group" aria-label="Filter alerts">
+      <a href="/alerts?filter_type=all" class="{% if filter_type == 'all' %}on{% endif %}">All <span class="cnt">{{ alert_counts.all }}</span></a>
+      <a href="/alerts?filter_type=unread" class="{% if filter_type == 'unread' %}on{% endif %}">Unread <span class="cnt">{{ alert_counts.unread }}</span></a>
+      <a href="/alerts?filter_type=critical" class="{% if filter_type == 'critical' %}on{% endif %}">Critical <span class="cnt">{{ alert_counts.critical }}</span></a>
+      <a href="/alerts?filter_type=warning" class="{% if filter_type == 'warning' %}on{% endif %}">Warnings <span class="cnt">{{ alert_counts.warning }}</span></a>
+    </div>
+  </div>
+
+  <div class="cw-panel">
+    {% if alerts %}
+      {% for a in alerts %}
+        {% set sev_tone = 't-crit' if a.alert_type in ('expired', 'scan_failure') else 't-warn' if a.alert_type in ('expiry_warning', 'drift') else 't-muted' %}
+        {% set type_labels = {'expired': 'Expired', 'scan_failure': 'Scan failure', 'expiry_warning': 'Expiry warning', 'drift': 'Drift', 'mis_issuance': 'CT mis-issuance'} %}
+        <div class="cw-panel-body" data-alert-id="{{ a.id }}">
+          <div class="cw-chiprow">
+            {{ ui.status(label=type_labels.get(a.alert_type, a.alert_type | humanize_label), tone=sev_tone) }}
+            <span class="cw-id">{{ a.subject or "(deleted)" }}</span>
+            {% if not a.read %}<span class="cw-badge-new">NEW</span>{% endif %}
+            {% if a.group_name %}
+            <span class="cw-chip" title="Routed to alert group {{ a.group_name }}">{{ icons.svg_icon('users', 11, 1.6) }}{{ a.group_name }}</span>
+            {% endif %}
+            <span class="cw-spacer"></span>
+            {% if not a.read %}
+            <button type="button" class="cw-btn ghost sm" data-mark-read="{{ a.id }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('check', 11) }}Mark read</button>
+            {% endif %}
+          </div>
+          <div class="cw-sub">{{ a.message }}</div>
+          <div class="cw-chiprow cw-metarow" data-testid="alert-channels">
+            {% set st_tone = 't-ok' if a.status == 'sent' else 't-warn' if a.status == 'pending' else 't-crit' %}
+            {{ ui.status(label=a.status, tone=st_tone) }}
+            {% if 'email' in alert_channels %}
+            <span class="cw-chip">{{ icons.svg_icon('bell', 10) }}Email</span>
+            {% endif %}
+            {% if 'webhook' in alert_channels %}
+            <span class="cw-chip">{{ icons.svg_icon('link', 10) }}Webhook</span>
+            {% endif %}
+            {% if not alert_channels %}
+            <span class="cw-chip t-muted" title="Configure delivery channels in Settings → Alerts">{{ icons.svg_icon('alert', 10) }}No channels configured</span>
+            {% endif %}
+            <span class="cw-spacer"></span>
+            <span class="cw-sub mono tnum">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</span>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      {{ ui.empty("You're all caught up", 'No alerts match this filter.', icon='check-circle', tone='t-ok') }}
+    {% endif %}
+  </div>
+
+  {{ ui.pager(page, total_pages, '/alerts?filter_type=' ~ filter_type) }}
+
+  {% elif tab == 'scans' %}
+  {# ================= SCAN HISTORY ================= #}
+  {% if batches and page == 1 %}
+  {{ ui.section('Scan batches', sub='Last scan ' ~ (batches[0].scanned_at[:16] | replace('T', ' ') if batches[0].scanned_at else '—') ~ ' · ' ~ batches[0].result) }}
+  {% endif %}
+
+  <div class="cw-panel">
+    {% if batches %}
+    <div class="cw-table-clip">
+      <table class="cw-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Trigger</th>
+            <th>Result</th>
+            <th class="num">Hosts</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in batches %}
+          {% set result_tone = 't-ok' if b.result == 'success' else 't-warn' if b.result == 'partial' else 't-crit' %}
+          <tr data-expand="batch-{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="batch-{{ loop.index }}">
+            <td class="mono tnum">{{ b.scanned_at[:16] | replace('T', ' ') if b.scanned_at else '—' }}</td>
+            <td><span class="cw-chip">{{ icons.svg_icon('refresh', 11, 1.6) }}{{ b.trigger }}</span></td>
+            <td>{{ ui.status(label=b.result, tone=result_tone) }}</td>
+            <td class="num">
+              {{ b.successes }}/{{ b.total }}
+              {% if b.failures > 0 %}<span class="cw-chip t-crit">{{ b.failures }} failed</span>{% endif %}
+            </td>
+            <td class="num"><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span></td>
+          </tr>
+          <tr class="cw-subrow cw-hidden" id="batch-{{ loop.index }}">
+            <td colspan="5">
+              {% for h in b.hosts %}
+              <div class="row">
+                <span class="cw-id">{{ h.hostname }}:{{ h.port }}</span>
+                {% if h.status == 'failure' %}
+                  {{ ui.status(label='failed', tone='t-crit') }}
+                  {% if h.error_message %}<span class="cw-chip t-crit">{{ h.error_message }}</span>{% endif %}
+                {% elif h.status == 'success' %}
+                  {{ ui.status(label='ok', tone='t-ok') }}
+                {% else %}
+                  {{ ui.status(label=h.status, tone='t-warn') }}
+                {% endif %}
+              </div>
+              {% endfor %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      {{ ui.empty('No scans recorded yet', 'Scan history will appear here after the first scan.', icon='clock', tone='t-accent') }}
+    {% endif %}
+  </div>
+
+  {{ ui.pager(page, total_pages, '/scan-history?', sep='') }}
+
+  {% else %}
+  {# ================= AUDIT LOG ================= #}
+  <form method="get" action="/audit" class="cw-filterbar">
+    <select name="target_type" class="cw-select" aria-label="Target type">
+      <option value="">All target types</option>
+      <option value="host" {% if filter_target_type == 'host' %}selected{% endif %}>Host</option>
+      <option value="certificate" {% if filter_target_type == 'certificate' %}selected{% endif %}>Certificate</option>
+      <option value="trust_anchor" {% if filter_target_type == 'trust_anchor' %}selected{% endif %}>Trust anchor</option>
+      <option value="owner" {% if filter_target_type == 'owner' %}selected{% endif %}>Owner</option>
+    </select>
+    <div class="cw-search">
+      {{ icons.svg_icon('search', 15) }}
+      <input class="cw-input" type="text" name="actor" value="{{ filter_actor }}" placeholder="Filter by actor…" aria-label="Actor">
+    </div>
+    <button type="submit" class="cw-btn" data-testid="audit-filter-btn">Filter</button>
+    {% if filter_target_type or filter_actor %}
+    <a href="/audit" class="cw-btn ghost">Clear</a>
+    {% endif %}
+  </form>
+
+  <div class="cw-panel">
+    {% if rows %}
+    <div class="cw-table-clip">
+      <table class="cw-table">
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Actor</th>
+            <th>Action</th>
+            <th>Target</th>
+            <th>Detail</th>
+            <th>Source IP</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td class="mono tnum">{{ r.ts[:19] | replace('T', ' ') if r.ts else '—' }}</td>
+            <td class="mono">{{ r.actor or 'anonymous' }}</td>
+            <td>{{ r.action }}</td>
+            <td>{{ r.target_type or '' }}{% if r.target_id %} <span class="cw-chip inset mono">{{ r.target_id[:8] }}{% if r.target_id | length > 8 %}…{% endif %}</span>{% endif %}</td>
+            <td class="cw-muted">{{ r.detail or '' }}</td>
+            <td class="mono cw-muted">{{ r.source_ip or '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      {{ ui.empty('No audit events recorded', 'Audit entries will appear here when state-changing actions are performed.', icon='search') }}
+    {% endif %}
+  </div>
+
+  {{ ui.pager(page, total_pages, '/audit?' ~ ('target_type=' ~ filter_target_type if filter_target_type else '') ~ ('&actor=' ~ (filter_actor | urlencode) if filter_actor else '')) }}
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if tab == 'alerts' %}
+<script src="/static/js/activity.js" nonce="{{ request.state.csp_nonce }}"></script>
+{% endif %}
+{% endblock %}

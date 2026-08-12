@@ -503,6 +503,16 @@ tr[data-expand] { cursor: pointer; }
 .cw-note-form { display: inline-flex; gap: 4px; margin-left: 6px; }
 .cw-note-form .cw-input { width: 200px; padding: 3px 8px; font-size: 12px; }
 
+/* calendar view rows */
+.cw-cal-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--border); }
+.cw-cal-row:first-child { border-top: none; }
+.cw-cal-row.quiet { padding: 5px 0; }
+.cw-cal-date { min-width: 136px; font-size: var(--fs-sm); }
+.cw-cal-now {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  color: var(--accent); text-transform: uppercase; letter-spacing: .04em;
+}
+
 /* ---------- PAGINATION ---------- */
 .cw-pager { display: flex; align-items: center; gap: var(--sp-4); margin: var(--sp-4) 0; font-size: var(--fs-base); color: var(--text-2); }
 
@@ -691,12 +701,15 @@ details.cw-editor > .cw-editor-body { margin-top: var(--sp-3); display: flex; fl
 }
 .spin { animation: cw-spin .8s linear infinite; }
 
-/* ---------- CHARTS (shared shapes; geometry via SVG attrs) ---------- */
-.cw-chart { display: block; width: 100%; }
+/* ---------- CHARTS (shared shapes; geometry via SVG attrs) ----------
+   Fixed rendered height; width follows the viewBox aspect and shrinks
+   to fit narrow panels. Centered so sparse months don't hug the left. */
+.cw-chart { display: block; height: 190px; max-width: 100%; margin: 0 auto; }
 .cw-chart text {
   font-family: var(--font-mono); font-size: 10px; fill: var(--text-3);
 }
 .cw-chart .grid { stroke: var(--border); stroke-width: 1; }
+.cw-chart rect.seg { fill: var(--tone, var(--text-3)); }
 .cw-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: var(--fs-xs); color: var(--text-2); }
 .cw-legend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; background: var(--tone, var(--text-3)); }
 
@@ -735,3 +748,9 @@ details.cw-editor > .cw-editor-body { margin-top: var(--sp-3); display: flex; fl
 /* ---------- DETAIL LAYOUT ---------- */
 .cw-cols { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
 .cw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+/* Vertical page stack: the standard rhythm between page-level blocks. */
+.cw-vstack { display: flex; flex-direction: column; gap: var(--sp-3); }
+.cw-vstack > .cw-panel + .cw-panel { margin-top: 0; }
+.cw-invgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--sp-3); }
+.cw-gradecount { min-width: 32px; text-align: right; color: var(--text-2); }
+.cw-cal-row svg.cw-bar { flex: 1; }

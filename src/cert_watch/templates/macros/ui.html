@@ -82,6 +82,48 @@
 {% endif %}
 {% endmacro %}
 
+{# Monthly stacked-bar chart, server-rendered SVG. Geometry lives in
+   attributes (no inline styles); colors via tone classes; per-segment
+   native <title> tooltips; count labels above columns.
+   rows: list of dicts with a label key; series: list of
+   (value_key, series_label, tone_class) drawn bottom-up in that order. #}
+{% macro stack_chart(rows, series, label_key, max_total, aria_label) %}
+{% set W = 56 %}{% set BAR = 34 %}{% set PLOT = 150 %}{% set TOP = 16 %}{% set GAP = 2 %}
+<svg class="cw-chart" viewBox="0 0 {{ rows | length * W }} {{ TOP + PLOT + 22 }}" role="img" aria-label="{{ aria_label }}">
+  <line class="grid" x1="0" y1="{{ TOP + PLOT }}" x2="{{ rows | length * W }}" y2="{{ TOP + PLOT }}"/>
+  {% for r in rows %}
+    {% set x = loop.index0 * W + (W - BAR) // 2 %}
+    {% set cx = loop.index0 * W + W // 2 %}
+    {% set tns = namespace(total=0) %}
+    {% for key, _l, _t in series %}{% set tns.total = tns.total + (r.get(key, 0) or 0) %}{% endfor %}
+    {% set total = tns.total %}
+    {% set ns = namespace(y=TOP + PLOT) %}
+    {% for key, s_label, tone in series %}
+      {% set v = r.get(key, 0) or 0 %}
+      {% if v > 0 and max_total > 0 %}
+        {% set h = [((v / max_total) * PLOT) | round | int, 2] | max %}
+        {% set ns.y = ns.y - h %}
+        <rect class="seg {{ tone }}" x="{{ x }}" y="{{ ns.y }}" width="{{ BAR }}" height="{{ h }}" rx="{{ 2 if loop.last else 0 }}">
+          <title>{{ r[label_key] }} — {{ s_label }}: {{ v }}</title>
+        </rect>
+        {% set ns.y = ns.y - GAP %}
+      {% endif %}
+    {% endfor %}
+    {% if total > 0 %}<text x="{{ cx }}" y="{{ ns.y - 3 }}" text-anchor="middle">{{ total }}</text>{% endif %}
+    <text x="{{ cx }}" y="{{ TOP + PLOT + 15 }}" text-anchor="middle">{{ r[label_key] }}</text>
+  {% endfor %}
+</svg>
+{% endmacro %}
+
+{# Chart legend from the same series spec. #}
+{% macro chart_legend(series) %}
+<div class="cw-legend">
+  {% for key, s_label, tone in series %}
+    <span><span class="swatch {{ tone }}"></span>{{ s_label }}</span>
+  {% endfor %}
+</div>
+{% endmacro %}
+
 {# Posture grade chip. #}
 {% macro grade(letter, large=false) -%}
 {%- set g = letter | default('', true) -%}

@@ -131,7 +131,7 @@ def test_alerts_view_empty(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/alerts")
     assert r.status_code == 200
-    assert "No alerts recorded" in r.text
+    assert "all caught up" in r.text
 
 
 def test_alerts_view_lists_existing(tmp_path, reload_app):

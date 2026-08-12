@@ -128,9 +128,41 @@
       <button type="submit" name="view" value="issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}">By issuer</button>
       <button type="submit" name="view" value="owner" class="{% if pivot_view == 'owner' %}on{% endif %}">By owner</button>
       <button type="submit" name="view" value="renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}">By method</button>
+      <button type="submit" name="view" value="calendar" class="{% if pivot_view == 'calendar' %}on{% endif %}">{{ icons.svg_icon('calendar', 13) }}Calendar</button>
     </div>
   </form>
 
+  {% if calendar_data is not none %}
+  {# ---- Expiry calendar view ---- #}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>{{ icons.svg_icon('calendar', 15) }} Expiry calendar</h2>
+      <div class="cw-chiprow">
+        {% if calendar_storms %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}{{ calendar_storms }} renewal storm{{ 's' if calendar_storms != 1 }}</span>{% endif %}
+        <span class="cw-hint">weekly buckets · a storm is 3+ expiries in one week</span>
+      </div>
+    </div>
+    <div class="cw-panel-body">
+      {% for b in calendar_data %}
+        {% set empty_week = b.count == 0 %}
+        <div class="cw-cal-row{% if empty_week %} quiet{% endif %}">
+          <div class="cw-cal-date">
+            <span class="mono {{ 'cw-muted' if empty_week }}">{{ b.bucket_start }}</span>
+            {% if b.bucket_start == current_week_start %}<div class="cw-cal-now">this week</div>{% endif %}
+          </div>
+          {% if not empty_week %}
+          <div class="cw-chiprow">
+            {% if b.count >= 3 %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
+            <span class="cw-chip {{ b.tone }}">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
+          </div>
+          {% endif %}
+        </div>
+      {% else %}
+        {{ ui.empty('No upcoming expirations', 'All tracked certificates are well within their validity window.', icon='check-circle', tone='t-ok') }}
+      {% endfor %}
+    </div>
+  </div>
+  {% else %}
   {# ---- Table ---- #}
   <div class="cw-panel">
     <div class="cw-table-clip">
@@ -281,6 +313,7 @@
   </div>
 
   {{ ui.pager(page, total_pages, '/?' ~ ('q=' ~ (filter_q | urlencode) if filter_q else '') ~ ('&urgency=' ~ filter_urgency if filter_urgency else '') ~ ('&source=' ~ filter_source if filter_source else '') ~ ('&sort_by=' ~ sort_by ~ '&sort_order=' ~ sort_order if sort_by != 'days' else '')) }}
+  {% endif %}
 </div>
 
 {# ---- Add-certificates drawer ---- #}

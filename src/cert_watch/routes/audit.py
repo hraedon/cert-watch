@@ -40,13 +40,14 @@ def audit_page(
     )
     return templates.TemplateResponse(
         request=request,
-        name="audit.html",
+        name="activity.html",
         context={
             "rows": rows,
             "version": __version__,
             "commit": __commit__,
             **get_auth_context(request),
-            "active_page": "audit",
+            "active_page": "activity",
+            "tab": "audit",
             "filter_target_type": target_type,
             "filter_actor": actor,
             "page": page,

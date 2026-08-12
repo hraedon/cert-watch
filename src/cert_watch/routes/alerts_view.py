@@ -87,14 +87,15 @@ def alerts_view(
 
     return templates.TemplateResponse(
         request=request,
-        name="alerts.html",
+        name="activity.html",
         context={
             "alerts": rows,
             "alert_channels": alert_channels,
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
-            "active_page": "alerts",
+            "active_page": "activity",
+            "tab": "alerts",
             "page": page,
             "total_pages": total_pages,
             "has_prev": page > 1,
