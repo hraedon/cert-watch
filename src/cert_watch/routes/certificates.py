@@ -22,6 +22,7 @@ from cert_watch.database import (
     _connect,
     _row_to_cert,
     delete_certificate_cascade,
+    distinct_tags,
     get_renewal_history,
     get_write_lock,
 )
@@ -81,11 +82,39 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             slack_configured = (
                 getattr(settings, "webhook_kind", "") == "slack" if settings else False
             )
+            # Pending host: same detail template, degraded (cert is None).
+            rm = host.renewal_method or ""
+            rm_label = {"acme": "ACME", "cert-manager": "cert-manager", "manual": "Manual"}.get(
+                rm, rm.capitalize() if rm else ""
+            )
+            rm_indicator = (
+                "auto-renews"
+                if rm in ("acme", "cert-manager")
+                else ("requires manual action" if rm == "manual" else "")
+            )
             return templates.TemplateResponse(
                 request=request,
-                name="host_detail.html",
+                name="certificate_detail.html",
                 context={
-                    "host": host,
+                    "cert": None,
+                    "cert_id": cert_id,
+                    "subject_cn": f"{host.hostname}:{host.port}",
+                    "host_id": host.id,
+                    "hostname": host.hostname,
+                    "port": host.port,
+                    "host_info": {
+                        "owner_name": host.owner_name or None,
+                        "owner_email": host.owner_email or None,
+                        "owner_slack": host.owner_slack or None,
+                        "renewal_method": host.renewal_method or "",
+                        "runbook_url": host.runbook_url or None,
+                        "notes": host.notes or "",
+                        "tags": host.tags or "",
+                        "threshold_days": host.threshold_days,
+                    },
+                    "renewal_method_label": rm_label,
+                    "renewal_method_indicator": rm_indicator,
+                    "all_tags": distinct_tags(db),
                     "scan_status": scan_row["status"] if scan_row else None,
                     "scan_error": scan_row["error_message"] if scan_row else None,
                     "scan_at": scan_row["scanned_at"] if scan_row else None,
@@ -358,8 +387,6 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     slack_configured = (
         getattr(settings, "webhook_kind", "") == "slack" if settings else False
     )
-
-    from cert_watch.database import distinct_tags
 
     return templates.TemplateResponse(
         request=request,
