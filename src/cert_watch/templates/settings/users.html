@@ -1,0 +1,118 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Local users</h2>
+    <span class="cw-hint">password accounts for deployments without LDAP / OAuth</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-note t-warn">
+      {{ icons.svg_icon('alert', 14) }}
+      <div>
+        A local user's role takes effect only when the role map references it:
+        add the username to the role's <b>IdP mapping → Users</b> list (Roles
+        section). With no role map configured at all, every authenticated user
+        has full access.
+      </div>
+    </div>
+  </div>
+  <div class="cw-panel-body">
+    <details class="cw-editor">
+      <summary class="cw-btn primary">{{ icons.svg_icon('plus', 14) }}Add user</summary>
+      <div class="cw-editor-body">
+        <form method="post" action="/settings/users" class="cw-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <div class="cw-form-grid">
+            <div class="cw-field">
+              <label class="cw-label" for="user_username">Username</label>
+              <input class="cw-input" type="text" id="user_username" name="username" placeholder="jsmith" required>
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="user_email">Email</label>
+              <input class="cw-input" type="email" id="user_email" name="email" placeholder="jsmith@example.com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="user_password">Password</label>
+              <input class="cw-input" type="password" id="user_password" name="password" placeholder="Min 8 characters" required>
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="user_role">Role</label>
+              <select class="cw-select" id="user_role" name="role_id">
+                <option value="">(none)</option>
+                {% for r in roles %}
+                <option value="{{ r.id }}">{{ r.name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          </div>
+          <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Add user</button></div>
+        </form>
+      </div>
+    </details>
+  </div>
+  {% if users %}
+  <div class="cw-table-clip">
+  <table class="cw-table">
+    <thead><tr><th>Username</th><th>Email</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td class="cw-id">{{ u.username }}</td>
+        <td class="mono">{{ u.email or '—' }}</td>
+        <td>
+          {% set ns = namespace(found='') %}
+          {% for r in roles %}{% if r.id == u.role_id %}{% set ns.found = r.name %}{% endif %}{% endfor %}
+          {% if ns.found %}<span class="cw-chip">{{ ns.found }}</span>{% else %}<span class="cw-muted">—</span>{% endif %}
+        </td>
+        <td>
+          <div class="cw-chiprow">
+            <details class="cw-editor">
+              <summary class="cw-btn ghost sm">Edit</summary>
+              <div class="cw-editor-body">
+                <form method="post" action="/settings/users/{{ u.id }}" class="cw-form">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <div class="cw-form-grid">
+                    <div class="cw-field">
+                      <label class="cw-label" for="edit_username_{{ u.id }}">Username</label>
+                      <input class="cw-input" type="text" id="edit_username_{{ u.id }}" name="username" value="{{ u.username }}" required>
+                    </div>
+                    <div class="cw-field">
+                      <label class="cw-label" for="edit_email_{{ u.id }}">Email</label>
+                      <input class="cw-input" type="email" id="edit_email_{{ u.id }}" name="email" value="{{ u.email }}">
+                    </div>
+                    <div class="cw-field">
+                      <label class="cw-label" for="edit_role_{{ u.id }}">Role</label>
+                      <select class="cw-select" id="edit_role_{{ u.id }}" name="role_id">
+                        <option value="">(none)</option>
+                        {% for r in roles %}
+                        <option value="{{ r.id }}" {% if r.id == u.role_id %}selected{% endif %}>{{ r.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                    <div class="cw-field">
+                      <label class="cw-label" for="edit_password_{{ u.id }}">New password</label>
+                      <input class="cw-input" type="password" id="edit_password_{{ u.id }}" name="password" placeholder="Leave blank to keep current">
+                    </div>
+                  </div>
+                  <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save changes</button></div>
+                </form>
+              </div>
+            </details>
+            {# The one destructive action that shipped without a confirmation. #}
+            <form method="post" action="/settings/users/{{ u.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete user {{ u.username }}?">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="cw-btn danger sm">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No local users yet', 'Create one above to grant password access.', icon='user') }}
+  {% endif %}
+</div>
+{% endblock %}

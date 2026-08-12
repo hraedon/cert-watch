@@ -294,9 +294,9 @@ def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
         str(db), "cert-b", "h2.example.com", 443, "B", [], protocol_version="TLSv1.2"
     )
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/posture")
     assert r.status_code == 200
-    assert "Fleet posture" in r.text
+    assert "Fleet grade" in r.text
 
 
 # ---------- dashboard ungrouped view with data ----------
@@ -463,7 +463,7 @@ def test_insights_view(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights")
     assert r.status_code == 200
-    assert "Insights" in r.text
+    assert "Expiry calendar" in r.text  # 301 -> /?view=calendar
 
 
 def test_insights_view_tls_tab(tmp_path, reload_app):
@@ -475,7 +475,7 @@ def test_insights_view_tls_tab(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights?tab=trends")
     assert r.status_code == 200
-    assert "TLS" in r.text
+    assert "TLS versions across the fleet" in r.text  # 301 -> /posture
 
 
 # ---------- caa-check ----------
@@ -695,7 +695,7 @@ def test_host_detail_failure_pill(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{host_id}")
     assert r.status_code == 200
-    assert "cw-pill critical" in r.text
+    assert "Scan failed" in r.text
     assert "Scan failed" in r.text
     # The old hard-coded neutral pill must not appear.
     assert ">Pending<" not in r.text
@@ -727,7 +727,7 @@ def test_certificate_detail_with_trust_anchor(reload_app, tmp_path, chain_pem_fi
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "cw-chip-public" in r.text or "Chain status" in r.text
+    assert "private root" in r.text or "Verified to trusted root" in r.text
 
 
 def _stored_cert_id(db, hostname, port=443):
@@ -1201,7 +1201,7 @@ def test_add_trust_anchor_accepts_chain_pem(reload_app, tmp_path, chain_pem_file
     assert r.status_code == 303
     assert "error" not in r.headers["location"]
     with TestClient(app_mod.app) as client:
-        dash = client.get("/")
+        dash = client.get("/settings/trust-anchors")
     assert "Test Root CA" in dash.text               # the root was stored…
     assert "chain-leaf.example.com" not in dash.text  # …not the leaf
 
@@ -1232,7 +1232,7 @@ def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/trust-anchors/{anchor_id}/delete", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    assert r.headers["location"] == "/settings/trust-anchors?saved=1"
 
 
 def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_file):
@@ -1253,11 +1253,11 @@ def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_fil
     SqliteTrustAnchorRepository(db).add(root_cert)
     store_uploaded(entry, db)
     with TestClient(app_mod.app) as client:
-        for url in ("/", "/?q=chain-leaf", "/?view=expiry"):
+        for url in ("/", "/?q=chain-leaf", "/?view=expiry", "/?view=calendar"):
             r = client.get(url)
             assert r.status_code == 200, f"{url} -> {r.status_code}"
-        r = client.get("/")
-    assert "Trust anchors" in r.text  # anchor panel renders alongside the rows
+        r = client.get("/settings/trust-anchors")
+    assert "Trust anchors" in r.text  # the anchor now renders on its settings section
 
 
 def test_dashboard_shows_trust_anchor_upload_form_with_zero_anchors(reload_app, tmp_path):
@@ -1267,7 +1267,7 @@ def test_dashboard_shows_trust_anchor_upload_form_with_zero_anchors(reload_app, 
     """
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/settings/trust-anchors")
     assert r.status_code == 200
     assert 'action="/trust-anchors"' in r.text
     assert 'data-testid="trust-anchor-upload-btn"' in r.text
@@ -1289,7 +1289,7 @@ def test_trust_anchor_upload_via_ui_creates_anchor(reload_app, tmp_path, chain_t
     assert r.status_code == 303
     assert "error" not in r.headers["location"]
     with TestClient(app_mod.app) as client:
-        dash = client.get("/")
+        dash = client.get("/settings/trust-anchors")
     assert "Trust anchors" in dash.text
     # The delete button only renders inside the anchors loop — its presence
     # proves the uploaded anchor row is displayed.

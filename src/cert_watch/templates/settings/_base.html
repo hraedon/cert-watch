@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — settings{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+{% import "macros/ui.html" as ui %}
+{% from "macros/settings_nav.html" import settings_nav %}
+
+{# Shared chrome for every settings section: page head, grouped side nav,
+   success feedback. Errors ride the base.html flash bar. Sections fill
+   {% block section %}. #}
+
+{% block content %}
+<div class="cw-wrap">
+  {{ ui.page_head('Settings', 'Instance configuration — access, alerting, and monitoring policy.', testid='settings-heading') }}
+  <div class="cw-sidegrid">
+    {{ settings_nav(tab) }}
+    <div class="cw-vstack">
+      {% if saved %}
+        <div class="cw-inline-flash t-ok" data-testid="settings-saved">Saved.</div>
+      {% endif %}
+      {% if password_changed %}
+        <div class="cw-inline-flash t-ok">Password changed.</div>
+      {% endif %}
+      {% block section %}{% endblock %}
+    </div>
+  </div>
+</div>
+{% endblock %}

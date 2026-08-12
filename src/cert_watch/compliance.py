@@ -212,18 +212,16 @@ def _load_compliance_rows(
         """
         params: list[Any] = []
         if scope_tag:
-            # Tags are stored as comma-separated strings.  The pattern
-            # ,{tag}, inside ,{column}, reliably matches exact tags
-            # regardless of position (first, last, middle, or only).
-            # Escape LIKE wildcards in the tag value so a user-supplied
-            # scope_tag of "%" can't match every row, and use cw_casefold
-            # for Unicode case-insensitive matching.
-            escaped = scope_tag.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            sql += (
-                " AND cw_casefold(',' || c.tags || ',')"
-                " LIKE cw_casefold(?) ESCAPE '\\'"
+            # Match EFFECTIVE tags (cert ∪ host) like every other scope path
+            # — filtering c.tags alone silently omitted certificates that
+            # inherit the tag from their host (plan 055 finding C9).
+            from cert_watch.database.dashboard_helpers import (
+                _add_effective_tag_filter,
             )
-            params.append(f"%,{escaped},%")
+
+            sql, params = _add_effective_tag_filter(
+                sql, params, [scope_tag], col_cert="c.tags", col_host="h.tags"
+            )
         rows = conn.execute(sql, params).fetchall()
 
     result: list[dict[str, Any]] = []

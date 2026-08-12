@@ -717,7 +717,7 @@ details.cw-editor > .cw-editor-body { margin-top: var(--sp-3); display: flex; fl
 /* ---------- PRINT (reports print from the page; no per-template CSS) ---------- */
 @media print {
   .cw-topbar, .cw-health, .cw-flash, .cw-page-actions, .cw-filterbar,
-  .cw-tabs, .cw-rowact, .cw-pager, .cw-sidenav { display: none !important; }
+  .cw-tabs, .cw-rowact, .cw-pager, .cw-sidenav, .cw-crumbs { display: none !important; }
   .cw-app { height: auto; }
   .cw-page { overflow: visible; }
   body { background: #fff; color: #111; }

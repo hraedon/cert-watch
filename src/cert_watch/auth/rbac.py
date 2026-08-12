@@ -217,7 +217,9 @@ class AuthContext:
         order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
         return any(order.get(t, 0) >= 1 for t in self.tag_tiers.values())
 
-    def may_write_tags(self, resource_tags: set[str] | frozenset[str] | tuple[str, ...] | list[str]) -> bool:
+    def may_write_tags(
+        self, resource_tags: set[str] | frozenset[str] | tuple[str, ...] | list[str]
+    ) -> bool:
         """Per-resource write check (Plan 053, decision D2).
 
         True when the global tier already grants writes, or when ANY of the

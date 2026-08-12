@@ -739,14 +739,18 @@ async def add_trust_anchor(
             tmp.close()
             Path(tmp.name).unlink(missing_ok=True)
             return RedirectResponse(
-                url=f"/?error={quote('file too large (max 10 MB)')}", status_code=303
+                url=f"/settings/trust-anchors?error={quote('file too large (max 10 MB)')}",
+                status_code=303,
             )
         tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
         entry = upload_certificate(tmp_path)
         if isinstance(entry, ParseError):
-            return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
+            return RedirectResponse(
+                url=f"/settings/trust-anchors?error={quote(entry.error_message)}",
+                status_code=303,
+            )
         # Pick the CA cert to anchor on. A chain PEM (leaf+intermediate+root)
         # has a non-CA leaf, so entry.leaf would be rejected; prefer the self-
         # signed root (typically last), else the first CA cert in the bundle.
@@ -760,7 +764,8 @@ async def add_trust_anchor(
         ca_err = validate_is_ca_certificate(anchor_cert.raw_der)
         if ca_err:
             return RedirectResponse(
-                url=f"/?error={quote('Invalid trust anchor: ' + ca_err)}", status_code=303
+                url=f"/settings/trust-anchors?error={quote('Invalid trust anchor: ' + ca_err)}",
+                status_code=303,
             )
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)
@@ -778,7 +783,7 @@ async def add_trust_anchor(
         logger.info("uploaded trust anchor: %s", anchor_cert.subject)
     finally:
         tmp_path.unlink(missing_ok=True)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
@@ -799,4 +804,4 @@ async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectR
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted trust anchor %s", anchor_id)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)

@@ -1,15 +1,20 @@
-{# Vertical settings navigation. `active` is the current section key:
-   auth | smtp | alerts | alert-groups | events | policy | roles | users | api-keys #}
+{# Grouped settings navigation. `active` is the section slug:
+   auth | roles | users | api-keys | tags | channels | alert-groups |
+   events | policy | trust-anchors #}
 {% macro settings_nav(active) %}
-<nav class="cw-settings-nav" aria-label="Settings sections">
-  <a href="/settings?tab=auth" class="{% if active == 'auth' %}active{% endif %}">Authentication</a>
-  <a href="/settings?tab=smtp" class="{% if active == 'smtp' %}active{% endif %}">SMTP</a>
-  <a href="/settings?tab=alerts" class="{% if active == 'alerts' %}active{% endif %}">Alerts</a>
-  <a href="/settings/alert-groups" class="{% if active == 'alert-groups' %}active{% endif %}">Alert groups</a>
-  <a href="/settings/events" class="{% if active == 'events' %}active{% endif %}">Events</a>
-  <a href="/settings?tab=policy" class="{% if active == 'policy' %}active{% endif %}">Policy</a>
+<nav class="cw-sidenav" aria-label="Settings sections">
+  <div class="grp">Access</div>
+  <a href="/settings/auth" class="{% if active == 'auth' %}active{% endif %}">Authentication</a>
   <a href="/settings/roles" class="{% if active == 'roles' %}active{% endif %}">Roles</a>
   <a href="/settings/users" class="{% if active == 'users' %}active{% endif %}">Users</a>
-  <a href="/settings?tab=api-keys" class="{% if active == 'api-keys' %}active{% endif %}" data-testid="settings-api-keys-link">API keys</a>
+  <a href="/settings/api-keys" class="{% if active == 'api-keys' %}active{% endif %}" data-testid="settings-api-keys-link">API keys</a>
+  <a href="/settings/tags" class="{% if active == 'tags' %}active{% endif %}" data-testid="settings-tags-link">Tags</a>
+  <div class="grp">Alerting</div>
+  <a href="/settings/channels" class="{% if active == 'channels' %}active{% endif %}">Channels</a>
+  <a href="/settings/alert-groups" class="{% if active == 'alert-groups' %}active{% endif %}">Alert groups</a>
+  <a href="/settings/events" class="{% if active == 'events' %}active{% endif %}">Event streaming</a>
+  <div class="grp">Monitoring</div>
+  <a href="/settings/policy" class="{% if active == 'policy' %}active{% endif %}">Policy</a>
+  <a href="/settings/trust-anchors" class="{% if active == 'trust-anchors' %}active{% endif %}" data-testid="settings-trust-anchors-link">Trust anchors</a>
 </nav>
 {% endmacro %}

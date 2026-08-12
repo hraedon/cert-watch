@@ -48,7 +48,9 @@
       Alerts{% if tab == 'alerts' and alert_counts.unread %} <span class="cnt">{{ alert_counts.unread }}</span>{% endif %}
     </a>
     <a href="/scan-history" class="cw-tab{% if tab == 'scans' %} active{% endif %}"{% if tab == 'scans' %} aria-current="page"{% endif %}>Scan history</a>
+    {% if is_admin %}
     <a href="/audit" class="cw-tab{% if tab == 'audit' %} active{% endif %}"{% if tab == 'audit' %} aria-current="page"{% endif %}>Audit log</a>
+    {% endif %}
   </nav>
 
   {% if tab == 'alerts' %}

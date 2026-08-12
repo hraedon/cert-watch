@@ -17,7 +17,7 @@ from cert_watch.database import (
 )
 from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
-from cert_watch.routes.settings.render import _settings_context
+from cert_watch.routes.settings.render import _render_settings
 
 templates = get_templates()
 
@@ -41,6 +41,36 @@ def _normalize_alert_group_id(value: str) -> str | None:
     return value or None
 
 
+def _parse_tag_tiers(raw: str, scope_tag: str) -> tuple[dict[str, str], str | None]:
+    """Parse per-tag tier overrides (Plan 053 P3): ``tag=tier, tag=tier``.
+
+    Only tags inside the role's scope may carry an override, and the tier
+    must be a valid permission tier. Returns (mapping, error).
+    """
+    from cert_watch.tags import parse_tags
+
+    raw = (raw or "").strip()
+    if not raw:
+        return {}, None
+    scope = {t.casefold(): t for t in parse_tags(scope_tag)}
+    result: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            return {}, f"per-tag tier '{part}' must look like tag=tier"
+        tag, _, tier = part.partition("=")
+        tag = tag.strip()
+        tier = tier.strip().lower()
+        if tier not in PERMISSION_TIERS:
+            return {}, f"unknown tier '{tier}' for tag '{tag}'"
+        if tag.casefold() not in scope:
+            return {}, f"tag '{tag}' is not in this role's scope tags"
+        result[scope[tag.casefold()]] = tier
+    return result, None
+
+
 # ---------- Role management ----------
 
 
@@ -49,16 +79,7 @@ def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
     redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
-    db = _db_path(request)
-    roles = SqliteRoleRepository(db).list_all()
-    ctx = _settings_context(request, tab="roles")
-    ctx["roles"] = roles
-    ctx["users"] = []
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=ctx,
-    )
+    return _render_settings(request, "roles")
 
 
 @router.post("/settings/roles")
@@ -80,6 +101,11 @@ async def create_role(request: Request) -> RedirectResponse:
     alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
     if not name:
         return RedirectResponse(url="/settings?tab=roles&error=role+name+required", status_code=303)
+    tag_tiers, tt_err = _parse_tag_tiers(str(form.get("tag_tiers") or ""), scope_tag)
+    if tt_err:
+        from urllib.parse import quote as _q
+
+        return RedirectResponse(url=f"/settings?tab=roles&error={_q(tt_err)}", status_code=303)
 
     role = Role(
         name=name, email=email, description=description,
@@ -87,7 +113,10 @@ async def create_role(request: Request) -> RedirectResponse:
         alert_group_id=alert_group_id,
     )
     with get_write_lock():
-        SqliteRoleRepository(_db_path(request)).add(role)
+        repo = SqliteRoleRepository(_db_path(request))
+        role_id = repo.add(role)
+        if tag_tiers:
+            repo.set_tag_tiers(role_id, tag_tiers)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
@@ -116,8 +145,14 @@ async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
     role.permission_tier = _normalize_permission_tier(str(form.get("permission_tier") or ""))
     role.scope_tag = _normalize_scope_tag(str(form.get("scope_tag") or ""))
     role.alert_group_id = _normalize_alert_group_id(str(form.get("alert_group_id") or ""))
+    tag_tiers, tt_err = _parse_tag_tiers(str(form.get("tag_tiers") or ""), role.scope_tag)
+    if tt_err:
+        from urllib.parse import quote as _q
+
+        return RedirectResponse(url=f"/settings?tab=roles&error={_q(tt_err)}", status_code=303)
     with get_write_lock():
         repo.update(role)
+        repo.set_tag_tiers(role_id, tag_tiers)
     # Invalidate active sessions for all users with this role — a permission
     # tier or scope change must take effect immediately, not at TTL expiry.
     db = _db_path(request)
@@ -154,17 +189,7 @@ def users_page(request: Request) -> HTMLResponse | RedirectResponse:
     redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
-    db = _db_path(request)
-    users = SqliteUserRepository(db).list_all()
-    roles = SqliteRoleRepository(db).list_all()
-    ctx = _settings_context(request, tab="users")
-    ctx["users"] = users
-    ctx["roles"] = roles
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=ctx,
-    )
+    return _render_settings(request, "users")
 
 
 @router.post("/settings/users")

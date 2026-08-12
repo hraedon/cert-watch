@@ -154,6 +154,34 @@ class TestComplianceAggregation:
         assert report.scope_description == "Tag: prod"
         assert report.total_certs == 3
 
+    def test_scope_tag_matches_host_inherited_tags(self, tmp_path):
+        """Regression (plan 055 / C9): a scoped report must include certs
+        whose tag is inherited from the HOST, matching every other scope
+        path's effective-tags (cert ∪ host) semantics."""
+        from cert_watch.database import SqliteHostRepository
+
+        db = tmp_path / "test.sqlite3"
+        _seed_fleet(str(db))
+        base = build_compliance_report(str(db), scope_tag="hostonly", signing_key="k")
+        assert base.total_certs == 0
+        # Tag one seeded host (not its cert) and re-run the scoped report.
+        repo = SqliteHostRepository(str(db))
+        import sqlite3 as _sql
+
+        with _sql.connect(db) as conn:
+            conn.execute(
+                "INSERT INTO hosts (id, hostname, port, tags, owner_name,"
+                " owner_email, owner_slack, renewal_status, renewal_method,"
+                " runbook_url, notes, expected_issuers, starttls_mode, added_at)"
+                " SELECT 'h-c9', c.hostname, c.port, 'hostonly', '', '', '',"
+                " 'pending', '', '', '', '', '', datetime('now')"
+                " FROM certificates c WHERE c.is_leaf = 1 LIMIT 1"
+            )
+            conn.commit()
+        assert repo is not None
+        report = build_compliance_report(str(db), scope_tag="hostonly", signing_key="k")
+        assert report.total_certs == 1
+
     def test_scope_tag_like_wildcard_escape(self, tmp_path):
         """Regression (WI-124 #1): LIKE wildcards in scope_tag must be escaped.
 

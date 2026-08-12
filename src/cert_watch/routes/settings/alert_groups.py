@@ -107,7 +107,9 @@ def alert_groups_page(request: Request) -> HTMLResponse | RedirectResponse:
     ctx = _settings_context(request, tab=_TAB)
     ctx["alert_groups"] = groups
     ctx["alert_group_match_counts"] = match_counts
-    return templates.TemplateResponse(request=request, name="settings.html", context=ctx)
+    return templates.TemplateResponse(
+        request=request, name="settings/alert_groups.html", context=ctx
+    )
 
 
 @router.get("/settings/alert-groups/preview", response_class=HTMLResponse, response_model=None)
@@ -134,7 +136,9 @@ def alert_groups_preview(request: Request) -> HTMLResponse | RedirectResponse:
     ctx["preview_match_tags"] = ", ".join(preview_tags)
     ctx["preview_count"] = count
     ctx["preview_sample"] = sample
-    return templates.TemplateResponse(request=request, name="settings.html", context=ctx)
+    return templates.TemplateResponse(
+        request=request, name="settings/alert_groups.html", context=ctx
+    )
 
 
 def _match_preview(

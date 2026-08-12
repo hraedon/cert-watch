@@ -1,0 +1,62 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Tags</h2>
+    <span class="cw-hint">every tag in use, and everything that depends on it</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-note">
+      {{ icons.svg_icon('tag', 14) }}
+      <div>
+        Tags do three jobs at once: they <b>group</b> the estate (filters,
+        pivots), they <b>scope team access</b> (role scope tags and per-tag
+        tiers), and they <b>route alerts</b> (alert-group match tags). Tags
+        are edited on host and certificate detail pages; renaming one there
+        silently changes access and routing — check its dependents here first.
+      </div>
+    </div>
+  </div>
+  {% if tag_registry %}
+  <div class="cw-table-clip">
+  <table class="cw-table" data-testid="tag-registry-table">
+    <thead>
+      <tr>
+        <th>Tag</th>
+        <th class="num">Hosts</th>
+        <th class="num">Certificates</th>
+        <th>Access (roles scoping this tag)</th>
+        <th>Alert routing (groups matching it)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in tag_registry %}
+      <tr>
+        <td><a class="cw-chip" href="/?q={{ row.tag | urlencode }}" title="Filter the inventory by {{ row.tag }}">{{ row.tag }}</a></td>
+        <td class="num">{{ row.hosts }}</td>
+        <td class="num">{{ row.certs }}</td>
+        <td>
+          {% if row.roles %}
+          <div class="cw-chiprow">
+            {% for rr in row.roles %}<span class="cw-chip {{ 't-accent' if rr.tier in ('operator', 'admin') else '' }}">{{ rr.name }} · {{ rr.tier }}</span>{% endfor %}
+          </div>
+          {% else %}<span class="cw-muted">—</span>{% endif %}
+        </td>
+        <td>
+          {% if row.groups %}
+          <div class="cw-chiprow">
+            {% for g in row.groups %}<span class="cw-chip">{{ g }}</span>{% endfor %}
+          </div>
+          {% else %}<span class="cw-muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No tags in use', 'Tag hosts and certificates from their detail pages; scope roles and alert groups to those tags.', icon='tag') }}
+  {% endif %}
+</div>
+{% endblock %}
