@@ -810,7 +810,10 @@ def _write_denied(request: Request, username: str) -> bool:
     role_map = getattr(settings, "role_map", {}) if settings else {}
     if role_map:
         auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-        return auth_ctx is None or not auth_ctx.may_write()
+        # Plan 053: a user whose only write grants are per-tag tiers passes
+        # this gate; the per-resource decision happens at the scope seam
+        # (routes/_scoped.py:scope_write_denied via may_write_tags).
+        return auth_ctx is None or not auth_ctx.may_write_any()
     return not _may_write(request, username)
 
 

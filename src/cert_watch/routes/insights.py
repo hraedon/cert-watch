@@ -192,7 +192,7 @@ def compliance_report_view(
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
-            "active_page": "insights",
+            "active_page": "posture",
             "report": report_to_dict(report),
             "tag": tag,
         },
@@ -211,7 +211,7 @@ def readiness_report_view(request: Request) -> HTMLResponse:
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
-            "active_page": "insights",
+            "active_page": "posture",
             "report": readiness_report_to_dict(report),
         },
     )

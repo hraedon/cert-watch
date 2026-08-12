@@ -159,6 +159,10 @@ class AuthContext:
     tier: str = ""
     scope_tag: str = ""
     email: str = ""
+    # Per-tag permission tiers (Plan 053 / WI-064): {tag: tier}. A scoped
+    # role contributes its tier *for its tags* here instead of raising the
+    # global tier — so "operator for prod, viewer for edge" is expressible.
+    tag_tiers: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_roles(cls, username: str, roles: list[str]) -> AuthContext:
@@ -174,6 +178,7 @@ class AuthContext:
         roles: list[str] | None = None,
         scope_tag: str = "",
         email: str = "",
+        tag_tiers: dict[str, str] | None = None,
     ) -> AuthContext:
         """Build a context from the explicit permission tier (WI-050)."""
         tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
@@ -184,6 +189,7 @@ class AuthContext:
             tier=tier,
             scope_tag=scope_tag,
             email=email,
+            tag_tiers=dict(tag_tiers or {}),
         )
 
     @classmethod
@@ -202,6 +208,31 @@ class AuthContext:
     def may_write(self) -> bool:
         return Permission.CERT_WRITE in self.permissions
 
+    def may_write_any(self) -> bool:
+        """True if the user can write *somewhere* — globally, or on at
+        least one tag (Plan 053). Gate-level check; the per-resource
+        decision is :meth:`may_write_tags` at the scope seam."""
+        if self.may_write():
+            return True
+        order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
+        return any(order.get(t, 0) >= 1 for t in self.tag_tiers.values())
+
+    def may_write_tags(self, resource_tags: set[str] | frozenset[str] | tuple[str, ...] | list[str]) -> bool:
+        """Per-resource write check (Plan 053, decision D2).
+
+        True when the global tier already grants writes, or when ANY of the
+        resource's effective tags carries a per-tag tier >= operator
+        (max-over-intersecting-tags — aligns write capability with the
+        union-based visibility model).
+        """
+        if self.may_write():
+            return True
+        order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
+        return any(
+            order.get(self.tag_tiers.get(t, ROLE_VIEWER), 0) >= 1
+            for t in resource_tags
+        )
+
     @property
     def is_admin(self) -> bool:
         return Permission.SETTINGS_ADMIN in self.permissions
@@ -215,39 +246,52 @@ class AuthContext:
 def _role_tiers_from_map(
     role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None,
-) -> dict[str, tuple[str, str]]:
-    """Return {role_name: (permission_tier, scope_tag)} for mapped role names.
+) -> dict[str, tuple[str, str, dict[str, str]]]:
+    """Return {role_name: (permission_tier, scope_tag, tag_tier_overrides)}.
 
     Falls back to the legacy name-based tier when no Role row exists, so
-    configurations that pre-date WI-050 keep working.
+    configurations that pre-date WI-050 keep working. The third element is
+    the role's per-tag tier overrides from ``role_tag_tiers`` (Plan 053);
+    an empty dict means every scope tag inherits ``permission_tier``.
     """
-    result: dict[str, tuple[str, str]] = {}
-    db_roles: dict[str, tuple[str, str]] = {}
+    result: dict[str, tuple[str, str, dict[str, str]]] = {}
+    db_roles: dict[str, tuple[str, str, dict[str, str]]] = {}
     if role_repo is not None:
         try:
+            overrides = role_repo.all_tag_tiers()
             for role in role_repo.list_all():
-                db_roles[role.name] = (role.permission_tier, role.scope_tag)
+                db_roles[role.name] = (
+                    role.permission_tier,
+                    role.scope_tag,
+                    overrides.get(role.id, {}),
+                )
         except (OSError, sqlite3.Error):
             pass
     for role_name in role_map:
         if role_name in db_roles:
             result[role_name] = db_roles[role_name]
         elif role_name in ROLE_PERMISSIONS:
-            result[role_name] = (role_name, "")
+            result[role_name] = (role_name, "", {})
     return result
 
 
 def _resolve_tier_and_scope(
     resolved_role_names: list[str],
-    role_tiers: dict[str, tuple[str, str]],
-) -> tuple[str, str]:
-    """Pick the effective tier and union scope tags from resolved roles.
+    role_tiers: dict[str, tuple[str, str, dict[str, str]]],
+) -> tuple[str, str, dict[str, str]]:
+    """Pick the effective tier, union scope tags, and per-tag tiers.
 
     Tier decoupling (WI-061): a role with a non-empty ``scope_tag`` is
-    *scoped* — it contributes its tags to visibility and alert routing only,
-    NEVER to the effective permission tier.  The effective tier is the
-    highest tier among the user's UNSCOPED (global) roles.  A user holding
-    ONLY scoped roles defaults to ``viewer`` (least privilege).
+    *scoped* — it contributes its tags to visibility and alert routing,
+    NEVER to the effective GLOBAL permission tier.  The effective tier is
+    the highest tier among the user's UNSCOPED (global) roles.  A user
+    holding ONLY scoped roles defaults to ``viewer`` (least privilege).
+
+    Per-tag tiers (Plan 053 / WI-064): a scoped role's tier now applies
+    *within its tags*. For each of the role's scope tags, the tag's tier is
+    the role's ``role_tag_tiers`` override for that tag if present, else the
+    role's default ``permission_tier``. Across roles, each tag takes the
+    max tier any role grants it.
 
     Scope tags from ALL roles (scoped + unscoped) are unioned into the
     effective scope.  An empty scope string means full visibility (no
@@ -258,14 +302,26 @@ def _resolve_tier_and_scope(
     order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
     chosen_tier = ROLE_VIEWER
     scope_tags: set[str] = set()
+    tag_tiers: dict[str, str] = {}
     for name in resolved_role_names:
-        tier, scope = role_tiers.get(name, (ROLE_VIEWER, ""))
+        tier, scope, overrides = role_tiers.get(name, (ROLE_VIEWER, "", {}))
+        role_scope_tags = parse_tags(scope)
         # Union ALL roles' tags (scoped + unscoped) for visibility/alerts.
-        scope_tags.update(parse_tags(scope))
+        scope_tags.update(role_scope_tags)
+        if scope:
+            # Scoped role: its tier applies per-tag, never globally. Every
+            # scope tag gets an explicit entry (viewer included) so the UI
+            # can show the full per-tag picture.
+            for tag in role_scope_tags:
+                tag_tier = overrides.get(tag, tier)
+                if tag not in tag_tiers or order.get(tag_tier, 0) > order.get(
+                    tag_tiers[tag], 0
+                ):
+                    tag_tiers[tag] = tag_tier
         # Only unscoped roles (empty scope_tag) contribute to the tier.
-        if not scope and order.get(tier, 0) > order.get(chosen_tier, 0):
+        elif order.get(tier, 0) > order.get(chosen_tier, 0):
             chosen_tier = tier
-    return chosen_tier, format_tags(scope_tags)
+    return chosen_tier, format_tags(scope_tags), tag_tiers
 
 
 def build_auth_context(
@@ -288,10 +344,11 @@ def build_auth_context(
 
     resolved = resolve_roles(user_groups, user_roles, role_map, username=username)
     role_tiers = _role_tiers_from_map(role_map, role_repo)
-    tier, scope = _resolve_tier_and_scope(resolved, role_tiers)
+    tier, scope, tag_tiers = _resolve_tier_and_scope(resolved, role_tiers)
     return AuthContext.from_tier(
         username=username,
         tier=tier,
         roles=resolved,
         scope_tag=scope,
+        tag_tiers=tag_tiers,
     )

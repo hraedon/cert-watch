@@ -26,20 +26,20 @@ class TestResolveTierAndScope:
     def test_unscoped_admin_plus_scoped_role(self):
         """(a) unscoped admin + scoped role → tier=admin, scope=the scoped tags."""
         role_tiers = {
-            "admin": ("admin", ""),
-            "epic-team": ("operator", "epic"),
+            "admin": ("admin", "", {}),
+            "epic-team": ("operator", "epic", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["admin", "epic-team"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["admin", "epic-team"], role_tiers)
         assert tier == "admin"
         assert scope == "epic"
 
     def test_two_scoped_roles_no_unscoped(self):
         """(b) two scoped roles, no unscoped → tier=viewer, scope=union."""
         role_tiers = {
-            "epic-team": ("admin", "epic"),
-            "infra-team": ("operator", "infra, monitoring"),
+            "epic-team": ("admin", "epic", {}),
+            "infra-team": ("operator", "infra, monitoring", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["epic-team", "infra-team"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["epic-team", "infra-team"], role_tiers)
         assert tier == "viewer"
         # parse_tags/format_tags normalize and de-dupe (case-insensitively);
         # order is first-seen, not sorted, so compare as a set.
@@ -48,9 +48,9 @@ class TestResolveTierAndScope:
     def test_unscoped_operator_only(self):
         """(c) unscoped operator only → tier=operator, scope empty (full visibility)."""
         role_tiers = {
-            "ops": ("operator", ""),
+            "ops": ("operator", "", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["ops"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["ops"], role_tiers)
         assert tier == "operator"
         assert scope == ""
 
@@ -61,34 +61,34 @@ class TestResolveTierAndScope:
         visibility does NOT elevate a viewer to operator.
         """
         role_tiers = {
-            "viewer": ("viewer", ""),
-            "epic-team": ("operator", "epic"),
+            "viewer": ("viewer", "", {}),
+            "epic-team": ("operator", "epic", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["viewer", "epic-team"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["viewer", "epic-team"], role_tiers)
         assert tier == "viewer"
         assert scope == "epic"
 
     def test_multi_tag_scope_parsed_correctly(self):
         """A single role with comma-separated scope tags is parsed into individual tags."""
         role_tiers = {
-            "team": ("viewer", "epic, infra, monitoring"),
+            "team": ("viewer", "epic, infra, monitoring", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["team"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["team"], role_tiers)
         assert tier == "viewer"
         assert set(scope.split(",")) == {"epic", "infra", "monitoring"}
 
     def test_empty_role_list_defaults_to_viewer(self):
-        tier, scope = _resolve_tier_and_scope([], {})
+        tier, scope, _tag_tiers = _resolve_tier_and_scope([], {})
         assert tier == "viewer"
         assert scope == ""
 
     def test_unscoped_admin_overrides_scoped_admin(self):
         """An unscoped admin role sets tier=admin even if a scoped admin also exists."""
         role_tiers = {
-            "global-admin": ("admin", ""),
-            "scoped-admin": ("admin", "restricted"),
+            "global-admin": ("admin", "", {}),
+            "scoped-admin": ("admin", "restricted", {}),
         }
-        tier, scope = _resolve_tier_and_scope(["global-admin", "scoped-admin"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(["global-admin", "scoped-admin"], role_tiers)
         assert tier == "admin"
         assert scope == "restricted"
 

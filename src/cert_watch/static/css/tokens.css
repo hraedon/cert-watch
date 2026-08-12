@@ -429,6 +429,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 /* ---------- FILTER BAR (the one filter paradigm) ----------
    search + segments + spacer + secondary controls.              */
 .cw-filterbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: var(--sp-4) 0 var(--sp-3); }
+.cw-filterbar .cw-select { width: auto; }
 .cw-search { position: relative; flex: 0 0 auto; }
 .cw-search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; width: 14px; height: 14px; }
 .cw-search input { padding-left: 33px; width: 260px; }

@@ -28,16 +28,8 @@ _STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTAL
 
 # Max inline styles tolerated per template. ONLY GOES DOWN.
 INLINE_STYLE_BUDGET: dict[str, int] = {
-    "alerts.html": 3,
-    "base.html": 5,
-    "certificate_detail.html": 9,
-    "compliance.html": 1,
-    "dashboard.html": 15,
-    "host_detail.html": 2,
-    "insights.html": 28,
-    "readiness.html": 0,
+    "compliance.html": 0,
     "settings.html": 2,
-    "setup.html": 2,
     "team_dashboard.html": 1,
 }
 
