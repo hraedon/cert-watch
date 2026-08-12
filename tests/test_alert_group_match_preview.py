@@ -247,7 +247,7 @@ def test_preview_endpoint_shows_count_and_sample(reload_app, tmp_path):
     body = r.text
     assert 'data-testid="ag-preview-result"' in body
     assert "tagged.example.com" in body  # sample hostname rendered
-    assert "<strong>1</strong>" in body  # count rendered (singular)
+    assert "<b>1</b>" in body  # count rendered (singular)
 
 
 def test_preview_endpoint_no_matches_message(reload_app, tmp_path):

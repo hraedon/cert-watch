@@ -8,6 +8,8 @@ bookmarks and post-save redirects keep working; the old ``smtp`` and
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -46,7 +48,7 @@ def settings_page(
     return RedirectResponse(url=url, status_code=303)
 
 
-def _section_route(section: str):
+def _section_route(section: str) -> Any:
     def handler(
         request: Request,
         saved: str | None = None,

@@ -94,9 +94,9 @@ def dashboard(
                 calendar_storms += 1
 
     per_page = 25
+    page_entries: list[dict[str, Any]] = []
     if calendar_data is not None:
         total = sum(b.get("count", 0) for b in calendar_data)
-        page_entries = []
         total_pages = 1
         # Same stats source as the inventory table, so the strip doesn't
         # change numbers when the user switches to the calendar view.
@@ -104,7 +104,6 @@ def dashboard(
     elif pivot_groups:
         # Pivot view: compute stats from SQL (no full inventory load)
         total = sum(g["count"] for g in pivot_groups)
-        page_entries: list[dict[str, Any]] = []
         total_pages = 1
         # Urgency distribution via targeted SQL (julianday-safe and tag-scoped to
         # match the grouped rows above; see pivot_urgency_stats for the rationale).

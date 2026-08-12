@@ -1085,10 +1085,12 @@ def test_settings_page_renders(reload_app, tmp_path):
 def test_settings_page_tabs(reload_app, tmp_path):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        for tab in ("auth", "smtp", "alerts"):
+        # Legacy ?tab= URLs 303 to the per-section pages (smtp + alerts
+        # merged into channels).
+        for tab, section in (("auth", "auth"), ("smtp", "channels"), ("alerts", "channels")):
             r = client.get(f"/settings?tab={tab}")
             assert r.status_code == 200
-            assert f"tab-{tab}" in r.text
+            assert str(r.url).endswith(f"/settings/{section}")
 
 
 def test_settings_save_smtp(reload_app, tmp_path):

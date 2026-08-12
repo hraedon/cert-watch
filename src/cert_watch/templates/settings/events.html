@@ -1,0 +1,74 @@
+{% extends "settings/_base.html" %}
+
+{# The events GET route builds its own context (event config, not the shared
+   settings config) and does not pass `tab`; pin the nav highlight here. It
+   also drops the ?saved=1 / ?error= params its POST redirects set — recover
+   them so save/validation feedback isn't silently swallowed. #}
+{% set tab = tab | default('events') %}
+{% set saved = saved | default(request.query_params.get('saved'), true) %}
+{% set error = error | default(request.query_params.get('error'), true) %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2 data-testid="events-heading">Event streaming</h2>
+    <span class="cw-hint">real-time webhook delivery of scan / cert / alert events</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/events" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+      <div class="cw-kv-label">Enabled event types</div>
+      <div class="cw-form-grid">
+        {% for et in all_event_types %}
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="{{ et }}"
+                 {% if et in config.enabled_event_types %}checked{% endif %}
+                 data-testid="event-type-{{ et }}">
+          <span class="mono">{{ et }}</span>
+        </label>
+        {% endfor %}
+      </div>
+
+      <div class="cw-divider"></div>
+      <div class="cw-kv-label">Webhook sink</div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_url">Webhook URL</label>
+        <input class="cw-input mono" type="url" id="webhook_url" name="webhook_url"
+               value="{{ config.webhook_url or '' }}"
+               placeholder="https://hooks.example.com/cert-watch"
+               data-testid="events-webhook-url">
+      </div>
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="webhook_kind">Adapter kind</label>
+          <select class="cw-select" id="webhook_kind" name="webhook_kind"
+                  data-testid="events-webhook-kind">
+            {% for value, label in webhook_kind_options %}
+            <option value="{{ value }}" {% if config.webhook_kind == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="rate_limit_per_second">Rate limit (events/sec)</label>
+          <input class="cw-input" type="number" id="rate_limit_per_second"
+                 name="rate_limit_per_second" value="{{ config.rate_limit_per_second }}"
+                 min="1" max="1000" data-testid="events-rate-limit">
+        </div>
+      </div>
+      <div class="cw-field" id="pagerduty-key-field">
+        <label class="cw-label" for="pagerduty_routing_key">PagerDuty routing key</label>
+        <input class="cw-input" type="password" id="pagerduty_routing_key" name="pagerduty_routing_key"
+               value="" autocomplete="new-password"
+               placeholder="{% if pagerduty_routing_key_set %}•••••••• (set; leave blank to keep){% else %}Events API v2 integration routing key{% endif %}"
+               data-testid="events-pagerduty-routing-key">
+        <div class="cw-hint">Required when webhook kind is PagerDuty.{% if pagerduty_routing_key_set %} Leave blank to keep the current key.{% endif %}</div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary" data-testid="events-save-btn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -75,11 +75,13 @@ def _parse_tag_tiers(raw: str, scope_tag: str) -> tuple[dict[str, str], str | No
 
 
 @router.get("/settings/roles", response_class=HTMLResponse, response_model=None)
-def roles_page(request: Request) -> HTMLResponse | RedirectResponse:
+def roles_page(
+    request: Request, saved: str | None = None, error: str | None = None
+) -> HTMLResponse | RedirectResponse:
     redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
-    return _render_settings(request, "roles")
+    return _render_settings(request, "roles", saved=saved, error=error)
 
 
 @router.post("/settings/roles")
@@ -185,11 +187,13 @@ async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
 
 
 @router.get("/settings/users", response_class=HTMLResponse, response_model=None)
-def users_page(request: Request) -> HTMLResponse | RedirectResponse:
+def users_page(
+    request: Request, saved: str | None = None, error: str | None = None
+) -> HTMLResponse | RedirectResponse:
     redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
-    return _render_settings(request, "users")
+    return _render_settings(request, "users", saved=saved, error=error)
 
 
 @router.post("/settings/users")

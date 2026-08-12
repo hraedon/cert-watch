@@ -1,0 +1,103 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2 data-testid="api-keys-heading">API keys</h2>
+    <span class="cw-hint">bearer tokens for machine-to-machine access (CI, cron, monitoring)</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-note">
+      {{ icons.svg_icon('key', 14) }}
+      <div>
+        Send as <span class="mono">Authorization: Bearer &lt;token&gt;</span> to
+        <span class="mono">/api/*</span>. Tokens are stored only as hashes —
+        each is shown exactly once, at creation.
+      </div>
+    </div>
+    <div class="cw-note t-warn">
+      {{ icons.svg_icon('alert', 14) }}
+      <div>
+        API keys are not tag-scoped: any key sees the whole fleet. Scope-limited
+        keys are tracked as follow-up work.
+      </div>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="cw-panel-body">
+    <div class="cw-inline-flash t-crit" data-testid="api-keys-error">{{ error }}</div>
+  </div>
+  {% endif %}
+
+  {% if new_token %}
+  <div class="cw-panel-body">
+    <div class="cw-note t-accent" data-testid="api-key-new">
+      {{ icons.svg_icon('key', 14) }}
+      <div>
+        <b>New key “{{ new_name }}” created.</b>
+        Copy it now — this is the only time the token is shown. It is stored only as a hash.
+      </div>
+    </div>
+    <input class="cw-input mono" type="text" readonly value="{{ new_token }}"
+           data-testid="api-key-token" aria-label="New API key token">
+  </div>
+  {% endif %}
+
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/api-keys" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="api_key_name">Name</label>
+          <input class="cw-input" type="text" id="api_key_name" name="name" required
+                 placeholder="ci-pipeline" data-testid="api-key-name-input">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="api_key_scope">Scope</label>
+          <select class="cw-select" id="api_key_scope" name="scope" data-testid="api-key-scope-select">
+            <option value="read">read — GET only</option>
+            <option value="write">write — create / update</option>
+            <option value="admin">admin — full, incl. settings</option>
+          </select>
+        </div>
+      </div>
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary" data-testid="api-key-create-btn">
+          {{ icons.svg_icon('plus', 14) }}Create key
+        </button>
+      </div>
+    </form>
+  </div>
+
+  {% if api_keys %}
+  <div class="cw-table-clip">
+  <table class="cw-table" data-testid="api-keys-table">
+    <thead>
+      <tr><th>Name</th><th>Scope</th><th>Created</th><th>Last used</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for k in api_keys %}
+      <tr data-testid="api-key-row">
+        <td><span class="cw-id">{{ k.name }}</span></td>
+        <td><span class="cw-chip {{ 't-accent' if k.scope in ('write', 'admin') else '' }}">{{ k.scope }}</span></td>
+        <td class="mono">{{ k.created_at.strftime('%Y-%m-%d') }}</td>
+        <td class="mono">
+          {% if k.last_used_at %}{{ k.last_used_at.strftime('%Y-%m-%d %H:%M') }}{% else %}—{% endif %}
+        </td>
+        <td>
+          <form method="post" action="/settings/api-keys/{{ k.id }}/revoke" class="cw-inline">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="cw-btn danger sm" data-testid="api-key-revoke-btn">Revoke</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No API keys yet', 'Create one above to enable programmatic access.', icon='key', testid='api-keys-empty') }}
+  {% endif %}
+</div>
+{% endblock %}

@@ -27,10 +27,10 @@ _SCRIPT_BLOCK = re.compile(r"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DO
 _STYLE_BLOCK = re.compile(r"<style\b[^>]*>.*?</style>", re.IGNORECASE | re.DOTALL)
 
 # Max inline styles tolerated per template. ONLY GOES DOWN.
+# (settings.html and team_dashboard.html were deleted in the ui-v2 redesign;
+# every remaining template is at zero.)
 INLINE_STYLE_BUDGET: dict[str, int] = {
     "compliance.html": 0,
-    "settings.html": 2,
-    "team_dashboard.html": 1,
 }
 
 

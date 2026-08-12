@@ -676,15 +676,16 @@ def _build_csp(nonce: str) -> str:
     attributes have been fully converted to ``data-*`` + delegated
     ``addEventListener`` (BC-075).
 
-    ``style-src`` keeps ``'unsafe-inline'``: the UI binds dynamic CSS custom
-    properties via inline ``style=`` attributes, which nonces can't cover.
+    ``style-src`` is ``'self'`` only: the 2026-08 redesign removed every
+    inline ``style=`` attribute (dynamic values live in SVG geometry
+    attributes and tone classes), enforced by tests/test_no_inline_styles.py.
 
     ``report-uri`` is appended when ``CERT_WATCH_CSP_REPORT_URI`` is set.
     """
     policy = (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "object-src 'none'; "
@@ -749,8 +750,8 @@ async def security_headers_middleware(
     The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
     (``request.state.csp_nonce``) and consumed here by ``_build_csp(nonce)``: the
     emitted ``script-src`` is ``'self' 'nonce-{nonce}'`` with no ``'unsafe-inline'``
-    (BC-075 flip done). ``style-src`` intentionally retains ``'unsafe-inline'`` for
-    dynamic inline ``style=`` custom properties.
+    (BC-075 flip done) and ``style-src`` is ``'self'`` with no ``'unsafe-inline'``
+    (2026-08 redesign: zero inline style attributes remain).
 
     M7: wraps ``call_next`` in try/except so security headers are applied even
     when the handler raises (Starlette's ``ServerErrorMiddleware`` returns a 500

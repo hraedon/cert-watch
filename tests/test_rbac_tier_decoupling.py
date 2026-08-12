@@ -88,7 +88,9 @@ class TestResolveTierAndScope:
             "global-admin": ("admin", "", {}),
             "scoped-admin": ("admin", "restricted", {}),
         }
-        tier, scope, _tag_tiers = _resolve_tier_and_scope(["global-admin", "scoped-admin"], role_tiers)
+        tier, scope, _tag_tiers = _resolve_tier_and_scope(
+            ["global-admin", "scoped-admin"], role_tiers
+        )
         assert tier == "admin"
         assert scope == "restricted"
 
