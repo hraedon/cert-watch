@@ -230,6 +230,10 @@ def check_private_crl_freshness(
 
     from cryptography import x509
     from cryptography.exceptions import UnsupportedAlgorithm
+    from cryptography.hazmat.primitives.asymmetric.mlkem import (
+        MLKEM768PublicKey,
+        MLKEM1024PublicKey,
+    )
     from cryptography.hazmat.primitives.asymmetric.x448 import X448PublicKey
     from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 
@@ -334,9 +338,12 @@ def check_private_crl_freshness(
             try:
                 issuer_cert = x509.load_der_x509_certificate(issuer_der)
                 issuer_key = issuer_cert.public_key()
-                if isinstance(issuer_key, (X25519PublicKey, X448PublicKey)):
-                    # Key-agreement keys can't produce signatures, so there is
-                    # nothing to verify against — skip rather than error.
+                if isinstance(
+                    issuer_key,
+                    (X25519PublicKey, X448PublicKey, MLKEM768PublicKey, MLKEM1024PublicKey),
+                ):
+                    # Key-agreement/KEM keys can't produce signatures, so there
+                    # is nothing to verify against — skip rather than error.
                     logger.debug(
                         "CRL issuer key for %s is key-agreement type; "
                         "skipping signature check", url,
