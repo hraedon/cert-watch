@@ -44,13 +44,13 @@ def delete_pem_path(tmp_path: Path) -> Path:
 def _open_slide(page: Page) -> None:
     """Open the Add-host slide-over panel."""
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
 
 
 def _switch_tab(page: Page, tab: str) -> None:
     """Switch to a tab in the slide-over."""
     page.get_by_test_id(f"tab-{tab}-btn").click()
-    page.locator(f"#tab-{tab}").wait_for()
+    page.locator(f'[data-tab-pane="{tab}"]:not(.cw-hidden)').wait_for()
 
 
 def test_upload_then_delete_removes_cert(

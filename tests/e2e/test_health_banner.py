@@ -10,7 +10,7 @@ def test_health_banner_shows_on_dashboard(page: Page, cert_watch_server: str) ->
     expect(page.locator("h1")).to_have_text("Certificates")
 
     # Banner should be visible after the JS fetch completes
-    banner = page.locator("#cw-health-banner")
+    banner = page.locator("#cw-health")
     expect(banner).to_be_visible()
 
     # Should contain pipeline-health text (scheduler is running, no failed
@@ -20,4 +20,4 @@ def test_health_banner_shows_on_dashboard(page: Page, cert_watch_server: str) ->
     expect(text).to_have_text("Monitoring pipeline healthy")
 
     # Should have the ok tone class
-    expect(banner).to_have_class("cw-health-banner cw-health-ok")
+    expect(banner).to_have_class("cw-health")  # ok state carries no tone class

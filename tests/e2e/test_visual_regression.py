@@ -70,15 +70,15 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             proc.kill()
 
 # Regions that legitimately vary between runs/builds.
-_MASKS = ["[data-testid=auth-user]", ".cw-ver", "#cw-health-banner"]
+_MASKS = ["[data-testid=auth-user]", ".cw-ver", "#cw-health"]
 
 # Empty-state pages with stable layout (no certs/dates seeded).
 _VISUAL_PAGES = {
     "dashboard": ("/", "dashboard-heading"),
     "alerts": ("/alerts", "alerts-heading"),
-    "insights": ("/insights", "insights-heading"),
+    "posture": ("/posture", "insights-heading"),
     "audit": ("/audit", "audit-heading"),
-    "settings": ("/settings", "settings-heading"),
+    "settings": ("/settings/auth", "settings-heading"),
     "api-keys": ("/settings/api-keys", "api-keys-heading"),
     "login": ("/login", None),
 }
@@ -111,7 +111,7 @@ def test_page_visual(
 # masked alongside the standard volatile chrome.
 # ---------------------------------------------------------------------------
 
-_POPULATED_MASKS = [*_MASKS, "td.cw-td-minw-150"]
+_POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(4)"]  # Expires column (dates + relative strings)
 
 
 @pytest.fixture(scope="module")

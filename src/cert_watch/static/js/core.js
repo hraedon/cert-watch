@@ -189,8 +189,30 @@
       if (btn) btn.setAttribute('aria-expanded', 'false');
     });
   }
+  // WAI-ARIA menu keyboard pattern: arrows/Home/End rove focus, Escape
+  // closes and restores focus to the trigger.
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') closeAllMenus(null);
+    if (e.key === 'Escape') {
+      var open = document.querySelector('.cw-menu:not(.cw-hidden)');
+      closeAllMenus(null);
+      if (open) {
+        var trigger = document.querySelector('[data-menu="' + open.id + '"]');
+        if (trigger) trigger.focus();
+      }
+      return;
+    }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].indexOf(e.key) === -1) return;
+    var menu = e.target.closest('.cw-menu:not(.cw-hidden)');
+    if (!menu) return;
+    var items = Array.prototype.slice.call(menu.querySelectorAll('.cw-menu-item'));
+    if (!items.length) return;
+    var idx = items.indexOf(document.activeElement);
+    e.preventDefault();
+    var next = e.key === 'Home' ? 0
+      : e.key === 'End' ? items.length - 1
+      : e.key === 'ArrowDown' ? (idx + 1) % items.length
+      : (idx - 1 + items.length) % items.length;
+    items[next].focus();
   });
 
   /* ---------- tabsets (drawer intake tabs) ---------- */

@@ -78,13 +78,13 @@ def pfx_path(tmp_path: Path) -> Path:
 def _open_slide(page: Page) -> None:
     """Open the Add-host slide-over panel."""
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
 
 
 def _switch_tab(page: Page, tab: str) -> None:
     """Switch to a tab in the slide-over (scan, upload, bulk)."""
     page.get_by_test_id(f"tab-{tab}-btn").click()
-    page.locator(f"#tab-{tab}").wait_for()
+    page.locator(f'[data-tab-pane="{tab}"]:not(.cw-hidden)').wait_for()
 
 
 def test_upload_pem_appears_on_dashboard(
@@ -121,7 +121,7 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     _open_slide(page)
     # Scan host tab is active by default
     page.get_by_test_id("scan-hostname-input").fill(hostname)
-    page.locator("#tab-scan input[name='port']").fill("443")
+    page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
     page.get_by_test_id("scan-submit-btn").click()
     # The scan will fail (host doesn't exist) — the dashboard should still load
     # without 500. The host is stored even though no cert is captured.
