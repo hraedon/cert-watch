@@ -15,7 +15,6 @@ from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
     SqliteAlertRepository,
-    SqliteTrustAnchorRepository,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -34,7 +33,6 @@ from cert_watch.middleware import (
     require_write,
     require_write_form,
 )
-from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 
@@ -109,31 +107,12 @@ def dashboard(
             db, q=q, source=source, scope_tags=scope_tags
         )
 
-    anchors = SqliteTrustAnchorRepository(db).list_entries()
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
 
     display_entries = [] if pivot_groups else page_entries
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
     posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
-
-    # Fleet posture grade (worst-weighted across scanned certs)
-    fleet_grade = None
-    with _connect(db) as conn:
-        grade_rows = conn.execute(
-            "SELECT grade, COUNT(*) as cnt FROM scan_posture GROUP BY grade"
-        ).fetchall()
-    if grade_rows:
-        grade_order = GRADE_WORST_ORDER
-        counts = {}
-        worst = 0
-        for r in grade_rows:
-            g = r["grade"]
-            counts[g] = r["cnt"]
-            worst = max(worst, grade_order.get(g, 0))
-        _GRADE_BY_ORDINAL = {v: k for k, v in grade_order.items()}
-        fleet_g = _GRADE_BY_ORDINAL.get(worst, "F")
-        fleet_grade = {"grade": fleet_g, "counts": counts, "worst": worst}
 
     return templates.TemplateResponse(
         request=request,
@@ -144,7 +123,6 @@ def dashboard(
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
             "pivot_view": view if pivot_groups else "",
-            "trust_anchors": anchors,
             "version": __version__, "commit": __commit__,
             "error": error,
             "warning": warning,
@@ -162,7 +140,6 @@ def dashboard(
             "has_next": page < total_pages,
             "grouped": grouped,
             "posture_grades": posture_grades,
-            "fleet_grade": fleet_grade,
             **csrf_ctx,
         },
     )

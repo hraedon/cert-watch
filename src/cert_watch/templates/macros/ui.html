@@ -1,0 +1,91 @@
+{# Shared UI components for the v2 design system.
+   Grammar: tone is a modifier (.t-ok/.t-warn/.t-crit/.t-expired/
+   .t-accent/.t-muted); components decide how to render it.       #}
+{% from "macros/icons.html" import svg_icon %}
+
+{# Map an urgency bucket to its tone class. #}
+{% macro tone_for(urgency) -%}
+  {%- if urgency == 'expired' -%}t-expired
+  {%- elif urgency == 'critical' -%}t-crit
+  {%- elif urgency == 'warning' -%}t-warn
+  {%- elif urgency == 'healthy' -%}t-ok
+  {%- else -%}t-muted
+  {%- endif -%}
+{%- endmacro %}
+
+{# Status: dot + label. status(urgency) or status(label=..., tone=...) #}
+{% macro status(urgency=none, label=none, tone=none, testid=none) -%}
+<span class="cw-status {{ tone if tone else tone_for(urgency) }}"{% if testid %} data-testid="{{ testid }}"{% endif %}>
+  <span class="dot" aria-hidden="true"></span>{{ label if label is not none else (urgency | urgency_label) }}
+</span>
+{%- endmacro %}
+
+{# One stat cell. Value tone applies only when non-zero (zero is not
+   an alarm). Pass href to make the cell a filter link.            #}
+{% macro stat(label, value, sub='', tone='', icon=none, href=none, active=false, testid=none) %}
+{% set tag = 'a' if href else 'div' %}
+<{{ tag }}{% if href %} href="{{ href }}"{% endif %} class="cw-stat{% if active %} active{% endif %}"{% if testid %} data-testid="{{ testid }}"{% endif %}>
+  <span class="cw-stat-label">{% if icon %}{{ svg_icon(icon, size=13) }}{% endif %}{{ label }}</span>
+  <div class="cw-stat-val{% if tone and value and value != 0 %} {{ tone }}{% endif %}">{{ value }}</div>
+  {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
+</{{ tag }}>
+{% endmacro %}
+
+{# Page header: title + optional sub; actions via caller body. #}
+{% macro page_head(title, sub='', testid=none) %}
+<div class="cw-page-head">
+  <div>
+    <h1{% if testid %} data-testid="{{ testid }}"{% endif %}>{{ title }}</h1>
+    {% if sub %}<div class="cw-page-head-sub">{{ sub }}</div>{% endif %}
+  </div>
+  {% if caller is defined %}<div class="cw-page-actions">{{ caller() }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{# In-page section header. #}
+{% macro section(title, sub='') %}
+<div class="cw-section">
+  <div>
+    <h2>{{ title }}</h2>
+    {% if sub %}<div class="cw-sub">{{ sub }}</div>{% endif %}
+  </div>
+  {% if caller is defined %}<div class="cw-page-actions">{{ caller() }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{# The one empty state. #}
+{% macro empty(title, sub='', icon='search', tone='', testid=none) %}
+<div class="cw-empty"{% if testid %} data-testid="{{ testid }}"{% endif %}>
+  <div class="cw-empty-icon {{ tone }}">{{ svg_icon(icon, size=20) }}</div>
+  <div class="cw-empty-title">{{ title }}</div>
+  {% if sub %}<div class="cw-empty-sub">{{ sub }}</div>{% endif %}
+  {% if caller is defined %}<div class="cw-empty-act">{{ caller() }}</div>{% endif %}
+</div>
+{% endmacro %}
+
+{# Progress/expiry bar as SVG — width in an attribute, not style=. #}
+{% macro bar(pct, tone='t-accent', thick=false) -%}
+<svg class="cw-bar {{ tone }}{% if thick %} thick{% endif %}" role="img" aria-label="{{ pct }}%" preserveAspectRatio="none">
+  <rect class="track" width="100%" height="100%"/>
+  <rect class="fill" width="{{ [0, [pct, 100] | min] | max }}%" height="100%"/>
+</svg>
+{%- endmacro %}
+
+{# Pagination. base_url must already carry its other query params. #}
+{% macro pager(page, total_pages, base_url, sep='&') %}
+{% if total_pages > 1 %}
+<nav class="cw-pager" aria-label="Pagination">
+  {% if page > 1 %}<a class="cw-btn sm" href="{{ base_url }}{{ sep }}page={{ page - 1 }}">&larr; Previous</a>{% endif %}
+  <span class="cw-muted tnum">Page {{ page }} of {{ total_pages }}</span>
+  {% if page < total_pages %}<a class="cw-btn sm" href="{{ base_url }}{{ sep }}page={{ page + 1 }}">Next &rarr;</a>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}
+
+{# Posture grade chip. #}
+{% macro grade(letter, large=false) -%}
+{%- set g = letter | default('', true) -%}
+{%- if g -%}
+<span class="cw-grade{% if large %} lg{% endif %} {{ 't-ok' if g in ('A+', 'A') else 't-warn' if g == 'B' else 't-crit' if g in ('C', 'D', 'F') else 't-muted' }}" title="Posture grade {{ g }}">{{ g }}</span>
+{%- endif -%}
+{%- endmacro %}

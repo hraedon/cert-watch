@@ -1,93 +1,121 @@
 {% extends "base.html" %}
-{% block title %}cert-watch — dashboard{% endblock %}
+{% block title %}cert-watch — certificates{% endblock %}
 
 {% import "macros/icons.html" as icons %}
-{% import "macros/urgency.html" as urgency_macros %}
-
-{% macro stat_card(tone, icon, label, value, sub, href=None, active=False, disabled=False) %}
-  {% if href and not disabled %}
-    <a class="cw-stat cw-stat-link{% if active %} cw-stat-active{% endif %}" href="{{ href }}">
-  {% else %}
-    <div class="cw-stat{% if disabled %} cw-stat-disabled{% endif %}"{% if disabled %} aria-disabled="true"{% endif %}>
-  {% endif %}
-    {% if tone == 'default' %}
-      <div class="cw-stat-rail cw-stat-rail-accent"></div>
-    {% elif tone == 'attention' %}
-      <div class="cw-stat-rail cw-stat-rail-crit"></div>
-    {% elif tone == 'warning' %}
-      <div class="cw-stat-rail cw-stat-rail-warn"></div>
-    {% elif tone == 'ok' %}
-      <div class="cw-stat-rail cw-stat-rail-ok"></div>
-    {% endif %}
-    <div class="cw-stat-top {% if tone == 'default' %}cw-stat-top-accent{% elif tone == 'attention' %}cw-stat-top-crit{% elif tone == 'warning' %}cw-stat-top-warn{% elif tone == 'ok' %}cw-stat-top-ok{% endif %}">
-      {{ icons.svg_icon(icon, 15, 1.8) }}
-      <span class="cw-stat-label cw-stat-label-color">{{ label }}</span>
-    </div>
-    <div class="cw-stat-val {% if tone == 'default' %}cw-stat-val-default{% elif tone == 'attention' %}cw-stat-val-crit{% elif tone == 'warning' %}cw-stat-val-warn{% elif tone == 'ok' %}cw-stat-val-ok{% endif %}">{{ value }}</div>
-    {% if sub %}<div class="cw-stat-sub">{{ sub }}</div>{% endif %}
-  {% if href and not disabled %}
-    </a>
-  {% else %}
-    </div>
-  {% endif %}
-{% endmacro %}
+{% import "macros/ui.html" as ui %}
 
 {% macro sort_link(column, label) %}
   {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
-  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="cw-sort-link">{{ label }}</a>
-  {% if sort_by == column %}<span class="cw-sort-arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
+  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="sort">{{ label }}</a>
+  {% if sort_by == column %}<span class="arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
 {% endmacro %}
 
-{% macro filter_link(urgency='') %}{% if urgency %}/?urgency={{ urgency }}{% else %}/?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if pivot_view %}&view={{ pivot_view }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
+{% macro filter_link(urgency='') %}{% if urgency %}/?urgency={{ urgency }}{% else %}/?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
+
+{# ---- Shared row cells (used by grouped and plain rows alike) ---- #}
+{% macro tags_cell(e) %}
+  {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
+  {% if _tags %}
+    <div class="cw-chiprow">
+      {% for t in _tags %}<a class="cw-chip" href="/?q={{ t | urlencode }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
+    </div>
+  {% else %}<span class="cw-muted">—</span>{% endif %}
+{% endmacro %}
+
+{% macro chain_chip(e) %}
+  {% if e.chain_status == 'public' %}
+    <span class="cw-chip t-muted">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
+  {% elif e.chain_status == 'private' %}
+    <span class="cw-chip t-accent">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
+  {% elif e.chain_status == 'incomplete' %}
+    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+  {% elif e.chain_status == 'invalid' %}
+    <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
+  {% elif e.chain_status == 'self-signed' %}
+    <span class="cw-chip t-muted">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
+  {% elif e.chain_valid == true %}
+    <span class="cw-chip t-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
+  {% elif e.chain_valid == false %}
+    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
+  {% endif %}
+{% endmacro %}
+
+{% macro source_cell(e, grouped=false) %}
+  <div class="cw-chiprow">
+    {% if grouped or e.source == 'scanned' %}
+      <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
+    {% elif e.source == 'uploaded' %}
+      <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
+    {% else %}
+      <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
+    {% endif %}
+    {% if grouped or e.source == 'scanned' %}{{ chain_chip(e) }}{% endif %}
+  </div>
+{% endmacro %}
+
+{% macro expires_cell(e, urg) %}
+  <div class="mono tnum">{{ e.not_after[:10] if e.not_after else '—' }}</div>
+  {% if e.days_remaining is not none %}
+    <div class="cw-sub {{ ui.tone_for(urg) if urg in ('expired', 'critical') else '' }}">{{ e.days_remaining | relative_short }}</div>
+    {% set bar_pct = 100 if e.days_remaining < 0 else [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
+    <div class="cw-expiry-track" title="{{ e.days_remaining }} days of a 90-day horizon">{{ ui.bar(bar_pct, ui.tone_for(urg)) }}</div>
+  {% endif %}
+{% endmacro %}
+
+{% macro meta_chips(e, show_owner=true) %}
+  {% if e.renewal_method and (e.kind == 'grouped' or e.source == 'scanned') %}
+    {% set is_manual = e.renewal_method in ('manual', '') %}
+    <span class="cw-chip {% if is_manual %}t-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
+  {% endif %}
+  {% if show_owner and e.owner_name %}
+    <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
+  {% endif %}
+  {% if e.host_id %}
+    <span class="cw-chip t-muted cw-note-chip{% if not e.notes %} cw-hidden{% endif %}" title="{{ e.notes or '' }}" data-host-id="{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+    {% if may_write %}
+      <button type="button" class="cw-iconbtn sm" title="Edit note" data-edit-note="{{ e.host_id }}" data-note="{{ e.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
+    {% endif %}
+  {% endif %}
+{% endmacro %}
+
+{% macro grade_cell(e) %}
+  {% set pg = posture_grades.get(e.id) if posture_grades else None %}
+  {% if pg %}{{ ui.grade(pg) }}{% else %}<span class="cw-muted">—</span>{% endif %}
+{% endmacro %}
 
 {% block content %}
-{# ---- Compute stats (SQL aggregation; pivot_stats is always populated by the route) ---- #}
-{% set ns = namespace(
-    expired=pivot_stats.expired,
-    critical=pivot_stats.critical,
-    warning=pivot_stats.warning,
-    healthy=pivot_stats.healthy,
-    total=total_entries
-) %}
-
-<div class="cw-page-wrap">
-  {# ---- Page header ---- #}
-  <div class="cw-page-head">
-    <div>
-      <h1 data-testid="dashboard-heading">Certificates</h1>
-      <div class="cw-page-head-sub">All tracked certificates from scanned hosts and uploaded files.</div>
-    </div>
-    <div class="cw-flex cw-items-center cw-gap-10">
-      {% if fleet_grade %}
-      <div title="Fleet TLS posture — worst-weighted across scanned hosts" style="display:flex;align-items:center;gap:10px;padding:7px 12px;border-radius:10px;border:1px solid var(--border);background:var(--panel)">
-        <span class="cw-grade lg" style="color:{% if fleet_grade.grade in ('A+', 'A') %}var(--ok){% elif fleet_grade.grade == 'B' %}var(--accent){% elif fleet_grade.grade == 'C' %}var(--warn){% else %}var(--crit){% endif %}">{{ fleet_grade.grade }}</span>
-        <div>
-          <div class="cw-fz-11-5 cw-fw-500 cw-text-text-2">Fleet posture</div>
-          <div class="mono cw-fz-11 cw-text-text-3 cw-mt-2 cw-flex cw-gap-7">
-            {% for g, cnt in fleet_grade.counts.items() %}
-              <span style="color:{% if g in ('F', 'C') %}var(--text-2){% else %}var(--text-3){% endif %}">{{ g }}·{{ cnt }}</span>
-            {% endfor %}
-          </div>
-        </div>
-      </div>
-      {% endif %}
-      <div class="cw-acct" id="reports-menu-wrap">
-        <button class="cw-btn" id="reports-btn">{{ icons.svg_icon('download', 14) }}Reports{{ icons.svg_icon('chevron-down', 13) }}</button>
+<div class="cw-wrap">
+  {% call ui.page_head('Certificates', 'All tracked certificates from scanned hosts and uploaded files.', testid='dashboard-heading') %}
+    <div class="cw-menuwrap">
+      <button class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">{{ icons.svg_icon('download', 14) }}Export{{ icons.svg_icon('chevron-down', 13) }}</button>
+      <div class="cw-menu cw-hidden" id="export-menu" role="menu" aria-label="Export data">
+        <div class="cw-menu-label">Point-in-time snapshot · UTC</div>
+        <a class="cw-menu-item" role="menuitem" href="/api/reports/inventory.csv">{{ icons.svg_icon('shield', 14) }}Certificate inventory (CSV)</a>
+        <a class="cw-menu-item" role="menuitem" href="/api/export/certificates.json">{{ icons.svg_icon('shield', 14) }}Certificate inventory (JSON)</a>
+        <a class="cw-menu-item" role="menuitem" href="/api/export/hosts.csv">{{ icons.svg_icon('server', 14) }}Hosts — owners · renewal · tags (CSV)</a>
       </div>
     </div>
+    {% if may_write %}
+    <button class="cw-btn primary" id="add-host-trigger" data-drawer-open="add-drawer" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+    {% endif %}
+  {% endcall %}
+
+  {# ---- Stat strip: the cells ARE the urgency filter ---- #}
+  <div class="cw-stats">
+    {{ ui.stat('Tracked', total_entries, 'certificates', icon='shield',
+                href=filter_link('') if not pivot_view else none, active=not filter_urgency and not pivot_view) }}
+    {{ ui.stat('Expired', pivot_stats.expired, 'needs attention' if pivot_stats.expired else 'none', tone='t-expired', icon='alert',
+                href=filter_link('expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
+    {{ ui.stat('Critical', pivot_stats.critical, '< 7 days' if pivot_stats.critical else 'none', tone='t-crit', icon='alert',
+                href=filter_link('critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
+    {{ ui.stat('Warning', pivot_stats.warning, '7–29 days' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
+                href=filter_link('warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
+    {{ ui.stat('Healthy', pivot_stats.healthy, 'no action needed' if pivot_stats.healthy else 'none', tone='t-ok', icon='check-circle',
+                href=filter_link('healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
   </div>
 
-  {# ---- Stat cards ---- #}
-  <div class="cw-stats cw-stats-5 cw-mb-18">
-    {{ stat_card('default', 'shield', 'Tracked certificates', ns.expired + ns.critical + ns.warning + ns.healthy, '', href=filter_link(''), active=not filter_urgency, disabled=pivot_view) }}
-    {{ stat_card('attention' if ns.expired else 'neutral', 'alert', 'Expired', ns.expired, 'needs attention' if ns.expired else 'none', href=filter_link('expired'), active=filter_urgency == 'expired', disabled=pivot_view) }}
-    {{ stat_card('attention' if ns.critical else 'neutral', 'alert', 'Critical', ns.critical, '< 7 days' if ns.critical else 'none', href=filter_link('critical'), active=filter_urgency == 'critical', disabled=pivot_view) }}
-    {{ stat_card('warning' if ns.warning else 'neutral', 'clock', 'Warning', ns.warning, '7\u201329 days' if ns.warning else 'none', href=filter_link('warning'), active=filter_urgency == 'warning', disabled=pivot_view) }}
-    {{ stat_card('ok' if ns.healthy else 'neutral', 'check-circle', 'Healthy', ns.healthy, 'no action needed' if ns.healthy else 'none', href=filter_link('healthy'), active=filter_urgency == 'healthy', disabled=pivot_view) }}
-  </div>
-
-  {# ---- Toolbar ---- #}
-  <form method="get" action="/" class="cw-toolbar cw-mb-14">
+  {# ---- Filter bar ---- #}
+  <form method="get" action="/" class="cw-filterbar">
     <div class="cw-search">
       {{ icons.svg_icon('search', 15) }}
       <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host, tag…" list="dash-all-tags" data-testid="dashboard-search">
@@ -95,49 +123,37 @@
         {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
       </datalist>
     </div>
-    <div class="cw-seg cw-seg-sm">
+    <div class="cw-seg" role="group" aria-label="Group certificates">
       <button type="submit" name="view" value="" class="{% if not pivot_view %}on{% endif %}">All</button>
       <button type="submit" name="view" value="issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}">By issuer</button>
       <button type="submit" name="view" value="owner" class="{% if pivot_view == 'owner' %}on{% endif %}">By owner</button>
       <button type="submit" name="view" value="renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}">By method</button>
     </div>
-    <div class="cw-spacer"></div>
   </form>
 
   {# ---- Table ---- #}
-  <div class="cw-panel cw-table-wrap">
+  <div class="cw-panel">
+    <div class="cw-table-clip">
     {% if pivot_groups %}
-    <table class="cw-table cw-table-pivot">
+    <table class="cw-table">
       <thead>
         <tr>
           <th>{{ pivot_view | capitalize }}{{ ' / Method' if pivot_view == 'renewal_method' else '' }}</th>
-          <th>Certs</th>
+          <th class="num">Certs</th>
           <th>Worst status</th>
-          <th>Earliest expiry</th>
+          <th class="num">Earliest expiry</th>
         </tr>
       </thead>
       <tbody>
         {% for g in pivot_groups %}
-        <tr class="cw-row-link" data-action="toggle-pivot-group" data-group="{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-{{ loop.index }}">
-          <td class="cw-fw-600">{{ g.key }}</td>
-          <td>{{ g.count }}</td>
-          <td>
-            {{ urgency_macros.urgency_pill(g.worst_urgency) }}
-          </td>
-          <td>
-            {% if g.earliest_expiry is not none %}
-              <span class="mono cw-fz-12-5">{{ g.earliest_expiry }} days</span>
-            {% else %}
-              —
-            {% endif %}
-          </td>
+        <tr data-expand="pivot-detail-{{ loop.index }}" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-{{ loop.index }}">
+          <td><span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span> <span class="cw-id">{{ g.key }}</span></td>
+          <td class="num">{{ g.count }}</td>
+          <td>{{ ui.status(g.worst_urgency) }}</td>
+          <td class="num">{% if g.earliest_expiry is not none %}{{ g.earliest_expiry }} days{% else %}—{% endif %}</td>
         </tr>
-        <tr class="cw-pivot-detail" id="pivot-detail-{{ loop.index }}" data-pivot="{{ pivot_view }}" data-group-key="{{ g.key }}">
-          <td colspan="4" class="cw-pivot-detail-cell">
-            <div class="cw-pivot-loading" id="pivot-loading-{{ loop.index }}">
-              Click to load {{ g.count }} certificate{{ 's' if g.count != 1 else '' }}...
-            </div>
-          </td>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-{{ loop.index }}" data-pivot="{{ pivot_view }}" data-group-key="{{ g.key }}">
+          <td colspan="4">Click to load {{ g.count }} certificate{{ 's' if g.count != 1 else '' }}…</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -146,250 +162,101 @@
     <table class="cw-table">
       <thead>
         <tr>
-          <th class="sortable cw-th-pt-14">{{ sort_link('name', 'Certificate (CN)') }}</th>
+          <th>{{ sort_link('name', 'Certificate (CN)') }}</th>
           <th>Tags</th>
           <th>Source</th>
-          <th class="sortable">{{ sort_link('expiry', 'Expires') }}</th>
-          <th class="cw-w-120">Status</th>
-          <th class="cw-w-96"></th>
+          <th>{{ sort_link('expiry', 'Expires') }}</th>
+          <th>Status</th>
+          <th>Grade</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         {% for e in entries %}
           {% if e.kind == 'grouped' %}
-          {# ---- Grouped entry (multiple hosts, same fingerprint) ---- #}
           {% set urg = e.urgency %}
-          <tr class="cw-row-link cw-group-header" data-group="{{ e.group_id }}" data-action="toggle-group" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}">
-            <td class="cw-td-mw-360">
-              <div class="cw-cert-chips">
-                <span class="cw-group-chevron" id="chevron-{{ e.group_id }}">{{ icons.svg_icon('chevron-down', 14) }}</span>
-                <span class="cw-host">{{ e.name or '—' }}</span>
-                <span class="cw-chip cw-chip-hosts">{{ e.host_count }} host{{ 's' if e.host_count != 1 else '' }}</span>
-              </div>
-              <div class="cw-metarow cw-mt-7">
-                {% if e.renewal_method %}
-                  {% set is_manual = e.renewal_method in ('manual', '') %}
-                  <span class="cw-chip {% if is_manual %}tone-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
-                {% endif %}
-                {% if e.owner_name %}
-                  <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
-                {% else %}
-                  <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
-                {% endif %}
-              </div>
-            </td>
+          <tr data-expand="group-hosts-{{ e.group_id }}" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}">
             <td>
-              {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
-              {% if _tags %}
-              <div class="cw-flex cw-gap-8 cw-wrap">
-                {% for t in _tags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
+              <div class="cw-chiprow">
+                <span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span>
+                <span class="cw-id">{{ e.name or '—' }}</span>
+                <span class="cw-chip t-accent">{{ e.host_count }} host{{ 's' if e.host_count != 1 else '' }}</span>
               </div>
-              {% else %}<span class="cw-muted">—</span>{% endif %}
+              <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
             </td>
+            <td>{{ tags_cell(e) }}</td>
+            <td>{{ source_cell(e, grouped=true) }}</td>
+            <td>{{ expires_cell(e, urg) }}</td>
+            <td>{{ ui.status(urg) }}</td>
+            <td>{{ grade_cell(e) }}</td>
             <td>
-              <div class="cw-table-chip-col">
-                <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
-                {% if e.chain_status == 'public' %}
-                  <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
-                {% elif e.chain_status == 'private' %}
-                  <span class="cw-chip tone-accent">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
-                {% elif e.chain_status == 'incomplete' %}
-                  <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-                {% elif e.chain_status == 'invalid' %}
-                  <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
-                {% elif e.chain_status == 'self-signed' %}
-                  <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
-                {% elif e.chain_valid == true %}
-                  <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
-                {% elif e.chain_valid == false %}
-                  <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-                {% endif %}
-              </div>
-            </td>
-            <td class="cw-td-minw-150">
-              <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
-              {% if e.days_remaining is not none %}
-                {% set _c = urg | urgency_tone %}
-                {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
-                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
-              {% endif %}
-              {% if e.days_remaining is not none %}
-                {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
-                <div class="cw-expiry-bar-wrap">
-                  <div class="cw-bar" title="{{ e.days_remaining }} days">
-                    <i class="cw-urgency-bar" style="--tone:{{ _c }};--tone-opacity:{{ _o }};width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %}"></i>
-                  </div>
-                </div>
-              {% endif %}
-            </td>
-            <td>
-              <div class="cw-flex cw-items-center cw-gap-6">
-                {{ urgency_macros.urgency_pill(urg) }}
-                {% set pg = posture_grades.get(e.id) if posture_grades else None %}
-                {% if pg %}
-                <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
-                {% endif %}
-              </div>
-            </td>
-            <td data-action="stop-propagation">
               <div class="cw-rowact">
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-w-30 cw-no-decoration">
-                  {{ icons.svg_icon('chevron-right', 14) }}
-                </a>
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
               </div>
             </td>
           </tr>
-          {# ---- Expandable host rows ---- #}
-          <tr class="cw-group-hosts" id="group-hosts-{{ e.group_id }}">
-            <td colspan="6" class="cw-group-hosts-cell">
+          <tr class="cw-subrow cw-hidden" id="group-hosts-{{ e.group_id }}">
+            <td colspan="7">
               {% for h in e.hosts %}
-              <div class="cw-host-row">
-                <div class="cw-host-row-info">
-                  <a href="/certificates/{{ h.id }}" class="cw-host cw-no-decoration">{{ h.host }}</a>
-                  {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
-                  {{ urgency_macros.urgency_pill(h_urg) }}
-                  {% if h.scan_status == 'failure' %}
-                    <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
-                  {% elif h.last_scanned_at %}
-                    <span class="cw-text-text-3 cw-fz-11-5">scanned {{ h.last_scanned_at[:16] | replace('T', ' ') }}</span>
+              <div class="row">
+                <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
+                {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
+                {{ ui.status(h_urg) }}
+                {% if h.scan_status == 'failure' %}
+                  <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
+                {% elif h.last_scanned_at %}
+                  <span class="cw-sub">scanned {{ h.last_scanned_at[:16] | replace('T', ' ') }}</span>
+                {% endif %}
+                {% if h.owner_name %}<span class="cw-chip">{{ h.owner_name }}</span>{% endif %}
+                {% if h.host_id %}
+                  <span class="cw-chip t-muted cw-note-chip{% if not h.notes %} cw-hidden{% endif %}" title="{{ h.notes or '' }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
+                  {% if may_write %}
+                    <button type="button" class="cw-iconbtn sm" title="Edit note" data-edit-note="{{ h.host_id }}" data-note="{{ h.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
                   {% endif %}
-                  {% if h.owner_name %}
-                    <span class="cw-chip cw-chip-owner">{{ h.owner_name }}</span>
-                  {% endif %}
-                  {% if h.notes %}
-                    <span class="cw-chip cw-chip-muted cw-note-chip" title="{{ h.notes }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
-                  {% endif %}
-                  {% if may_write and h.host_id %}
-                    <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ h.host_id }}" data-note="{{ h.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
-                  {% endif %}
-                </div>
-                <div class="cw-host-row-actions">
-                  {% if may_write and h.host_id %}
-                    <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
-                      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                      <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30">
-                        {{ icons.svg_icon('refresh', 14) }}
-                      </button>
-                    </form>
-                  {% endif %}
-                </div>
+                {% endif %}
+                <span class="cw-spacer"></span>
+                {% if may_write and h.host_id %}
+                  <form method="post" action="/hosts/{{ h.host_id }}/scan" class="cw-inline">
+                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                    <button type="submit" title="Scan now" class="cw-iconbtn sm">{{ icons.svg_icon('refresh', 14) }}</button>
+                  </form>
+                {% endif %}
               </div>
               {% endfor %}
             </td>
           </tr>
           {% else %}
-          {# ---- Normal (non-grouped) entry ---- #}
           {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
-          <tr class="cw-row-link" data-action="open-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
-            <td class="cw-td-mw-360">
-              <div class="cw-cert-chips">
-                <span class="cw-host">{{ e.name or (e.host if e.host else '—') }}</span>
-              </div>
-              <div class="cw-metarow cw-mt-7">
-                {% if e.renewal_method and e.source == 'scanned' %}
-                  {% set is_manual = e.renewal_method in ('manual', '') %}
-                  <span class="cw-chip {% if is_manual %}tone-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
-                {% endif %}
-                {% if e.owner_name %}
-                  <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
-                {% elif e.source == 'scanned' %}
-                  <span class="cw-chip" style="color:var(--text-3)">{{ icons.svg_icon('user', 11, 1.6) }}unassigned</span>
-                {% endif %}
-                {% if e.notes %}
-                  <span class="cw-chip cw-chip-muted cw-note-chip" title="{{ e.notes }}" data-host-id="{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
-                {% endif %}
-                {% if may_write and e.host_id %}
-                  <button type="button" class="cw-iconbtn cw-w-30" title="Edit note" data-action="edit-note" data-host-id="{{ e.host_id }}" data-note="{{ e.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
-                {% endif %}
-              </div>
+          <tr class="cw-row-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
+            <td>
+              <div class="cw-chiprow"><span class="cw-id">{{ e.name or (e.host if e.host else '—') }}</span></div>
+              <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
               {% if e.san_dns_names %}
-                <div class="cw-san-list cw-mt-7">
-                  {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
-                  {% set _cn = e.name or e.host or '' %}
-                  {% set _deduped = san_list | reject('==', _cn) | list %}
-                  {% for san in (_deduped[:2] if _deduped else []) %}
-                    <span class="cw-chip san">{{ san }}</span>
-                  {% endfor %}
-                  {% if _deduped and _deduped | length > 2 %}
-                    <span class="cw-chip more">+{{ _deduped | length - 2 }} more</span>
-                  {% endif %}
+                {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
+                {% set _cn = e.name or e.host or '' %}
+                {% set _deduped = san_list | reject('==', _cn) | list %}
+                {% if _deduped %}
+                <div class="cw-chiprow cw-metarow">
+                  {% for san in _deduped[:2] %}<span class="cw-chip inset">{{ san }}</span>{% endfor %}
+                  {% if _deduped | length > 2 %}<span class="cw-chip t-muted">+{{ _deduped | length - 2 }} more</span>{% endif %}
                 </div>
+                {% endif %}
               {% endif %}
             </td>
+            <td>{{ tags_cell(e) }}</td>
+            <td>{{ source_cell(e) }}</td>
+            <td>{{ expires_cell(e, urg) }}</td>
+            <td>{{ ui.status(urg) }}</td>
+            <td>{{ grade_cell(e) }}</td>
             <td>
-              {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
-              {% if _tags %}
-              <div class="cw-flex cw-gap-8 cw-wrap">
-                {% for t in _tags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
-              </div>
-              {% else %}<span class="cw-muted">—</span>{% endif %}
-            </td>
-            <td>
-              <div class="cw-table-chip-col">
-                {% if e.source == 'scanned' %}
-                  <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
-                {% elif e.source == 'uploaded' %}
-                  <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
-                {% else %}
-                  <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
-                {% endif %}
-                {% if e.source == 'scanned' %}
-                  {% if e.chain_status == 'public' %}
-                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('link', 11, 1.7) }}public chain</span>
-                  {% elif e.chain_status == 'private' %}
-                    <span class="cw-chip tone-accent">{{ icons.svg_icon('shield', 11, 1.7) }}private root</span>
-                  {% elif e.chain_status == 'incomplete' %}
-                    <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-                  {% elif e.chain_status == 'invalid' %}
-                    <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
-                  {% elif e.chain_status == 'self-signed' %}
-                    <span class="cw-chip" style="color:var(--text-3);border-color:var(--border)">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
-                  {% elif e.chain_valid == true %}
-                    <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('link', 11, 1.6) }}full chain</span>
-                  {% elif e.chain_valid == false %}
-                    <span class="cw-chip cw-chip-incomplete">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
-                  {% endif %}
-                {% endif %}
-              </div>
-            </td>
-            <td class="cw-td-minw-150">
-              <div class="mono cw-cert-cell cw-fz-12-5">{{ e.not_after[:10] if e.not_after else '—' }}</div>
-              {% if e.days_remaining is not none %}
-                {% set _c = urg | urgency_tone %}
-                {% set _o = '0.5' if e.days_remaining < 0 else '1' %}
-                <div class="cw-sub cw-mb-6 cw-tone-text" style="--tone:{{ _c }}">{{ e.days_remaining | relative_short if e.days_remaining is not none else '' }}</div>
-              {% endif %}
-              {% if e.days_remaining is not none %}
-                {% set bar_pct = [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
-                <div class="cw-expiry-bar-wrap">
-                  <div class="cw-bar" title="{{ e.days_remaining }} days">
-                    <i class="cw-urgency-bar" style="--tone:{{ _c }};--tone-opacity:{{ _o }};width:{% if e.days_remaining < 0 %}100%{% else %}{{ bar_pct }}%{% endif %}"></i>
-                  </div>
-                </div>
-              {% endif %}
-            </td>
-            <td>
-              <div class="cw-flex cw-items-center cw-gap-6">
-                {{ urgency_macros.urgency_pill(urg) }}
-                {% set pg = posture_grades.get(e.id) if posture_grades else None %}
-                {% if pg %}
-                <span class="cw-grade" style="color:{% if pg in ('A+', 'A') %}var(--ok){% elif pg == 'B' %}var(--accent){% elif pg == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ pg }}">{{ pg }}</span>
-                {% endif %}
-              </div>
-            </td>
-            <td data-action="stop-propagation">
               <div class="cw-rowact">
                 {% if may_write and e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
                     <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" title="Scan now" class="cw-iconbtn cw-w-30" data-testid="scan-now-btn">
-                      {{ icons.svg_icon('refresh', 14) }}
-                    </button>
+                    <button type="submit" title="Scan now" class="cw-iconbtn sm" data-testid="scan-now-btn">{{ icons.svg_icon('refresh', 14) }}</button>
                   </form>
                 {% endif %}
-                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn cw-w-30 cw-no-decoration">
-                  {{ icons.svg_icon('chevron-right', 14) }}
-                </a>
+                <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
               </div>
             </td>
           </tr>
@@ -398,123 +265,51 @@
       </tbody>
     </table>
     {% endif %}
+    </div>
 
     {% if not entries and not pivot_groups %}
       {% if filter_q or filter_urgency or filter_source %}
-      {# Filtered-empty: the estate has certs, this filter just matches none. #}
-      <div class="cw-empty">
-        <div class="cw-empty-icon">{{ icons.svg_icon('search', 20) }}</div>
-        <div class="cw-empty-title">No matching certificates</div>
-        <div class="cw-empty-sub">Try a different search or filter.</div>
-      </div>
+        {{ ui.empty('No matching certificates', 'Try a different search or filter.') }}
       {% else %}
-      {# Fresh install: nothing tracked at all — onboard, don't "no results". #}
-      <div class="cw-empty" data-testid="empty-onboarding">
-        <div class="cw-empty-icon">{{ icons.svg_icon('plus', 20) }}</div>
-        <div class="cw-empty-title">No certificates yet</div>
-        <div class="cw-empty-sub">Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.</div>
-        <div class="cw-mt-4">
-          <button type="button" class="cw-btn primary" data-action="open-slide" data-testid="empty-add-btn">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</button>
-        </div>
-      </div>
+        {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.', icon='plus', tone='t-accent', testid='empty-onboarding') %}
+          {% if may_write %}
+          <button type="button" class="cw-btn primary" data-drawer-open="add-drawer" data-testid="empty-add-btn">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</button>
+          {% endif %}
+        {% endcall %}
       {% endif %}
     {% endif %}
   </div>
 
-  {# ---- Pagination ---- #}
-  {% if total_pages > 1 %}
-    <div class="cw-pagination">
-      {% if has_prev %}
-        <a href="/?page={{ page - 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">&laquo; Prev</a>
-      {% endif %}
-      <span class="cw-muted">Page {{ page }} of {{ total_pages }} ({{ total_entries }} entr{{ 'y' if total_entries == 1 else 'ies' }})</span>
-      {% if has_next %}
-        <a href="/?page={{ page + 1 }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}" class="cw-btn sm">Next &raquo;</a>
-      {% endif %}
-    </div>
-  {% endif %}
-
-  {# ---- Trust anchors (private root CAs for chain validation) ---- #}
-  {% if may_write or trust_anchors %}
-    <div class="cw-mt-24">
-      <div class="cw-trust-anchors-header">
-        {{ icons.svg_icon('link', 16) }}
-        <span class="cw-fz-14 cw-fw-600">Trust anchors</span>
-      </div>
-      <div class="cw-fz-12 cw-text-text-3 cw-mt-4">
-        Private root CAs uploaded here validate your internal certs' chains
-        (private-CA certs grade complete instead of B/incomplete).
-      </div>
-      {% if may_write %}
-      <form method="post" action="/trust-anchors" enctype="multipart/form-data" class="cw-form-stack cw-mt-12">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <div class="cw-field">
-          <label class="cw-label" for="anchor-file">Root CA certificate</label>
-          <input class="cw-input" type="file" name="file" id="anchor-file" accept=".pem,.crt,.cer,.der" required data-testid="trust-anchor-file-input">
-          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-4">PEM · DER · CER · CRT — a single CA/root certificate.</div>
-        </div>
-        <div class="cw-form-footer">
-          <button type="submit" class="cw-btn primary" data-testid="trust-anchor-upload-btn">{{ icons.svg_icon('upload', 14) }}Add trust anchor</button>
-        </div>
-      </form>
-      {% endif %}
-      {% if trust_anchors %}
-      <div class="cw-panel cw-table-wrap cw-mt-12">
-        <table class="cw-table">
-          <thead>
-            <tr><th>Subject</th><th>Added</th><th class="cw-w-100"></th></tr>
-          </thead>
-          <tbody>
-            {% for a in trust_anchors %}
-              <tr>
-                <td class="mono cw-fz-12-5">{{ a.subject }}</td>
-                <td class="cw-fz-12-5 cw-text-text-2">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
-                <td>
-                  {% if may_write %}
-                  <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor?">
-                    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                    <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ icons.svg_icon('trash', 13) }}Delete</button>
-                  </form>
-                  {% endif %}
-                </td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% endif %}
-    </div>
-  {% endif %}
+  {{ ui.pager(page, total_pages, '/?' ~ ('q=' ~ (filter_q | urlencode) if filter_q else '') ~ ('&urgency=' ~ filter_urgency if filter_urgency else '') ~ ('&source=' ~ filter_source if filter_source else '') ~ ('&sort_by=' ~ sort_by ~ '&sort_order=' ~ sort_order if sort_by != 'days' else '')) }}
 </div>
 
-{# ---- Add-host slide-over (WI-068: dialog role, aria-modal, focus management) ---- #}
-<div class="cw-slide-bg" id="slide-bg" data-action="close-slide" role="presentation"></div>
-<div class="cw-slide" id="slide-panel" role="dialog" aria-modal="true" aria-labelledby="slide-heading">
-  <div class="cw-slide-head">
+{# ---- Add-certificates drawer ---- #}
+<div class="cw-drawer-bg" id="add-drawer-bg" data-drawer-close="add-drawer" role="presentation"></div>
+<div class="cw-drawer" id="add-drawer" role="dialog" aria-modal="true" aria-labelledby="add-drawer-heading" data-tabset>
+  <div class="cw-drawer-head">
     <div>
-      <div class="cw-fz-15 cw-fw-600" id="slide-heading">Add certificates</div>
-      <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Scan a host, upload a file, or import in bulk.</div>
+      <h2 class="cw-drawer-title" id="add-drawer-heading">Add certificates</h2>
+      <div class="cw-sub">Scan a host, upload a file, or import in bulk.</div>
     </div>
-    <button class="cw-iconbtn" data-action="close-slide" aria-label="Close add host panel">{{ icons.svg_icon('x', 16) }}</button>
+    <button class="cw-iconbtn" data-drawer-close="add-drawer" aria-label="Close">{{ icons.svg_icon('x', 16) }}</button>
   </div>
-  <div class="cw-p-slide-top">
-    <div class="cw-seg cw-w-full cw-grid-3eq" id="add-tabs" role="tablist" aria-label="Add certificates method">
-      <button type="button" class="on" data-tab="scan" data-action="switch-tab" data-testid="tab-scan-btn" role="tab" aria-selected="true">{{ icons.svg_icon('server', 13) }}Scan host</button>
-      <button type="button" data-tab="upload" data-action="switch-tab" data-testid="tab-upload-btn" role="tab" aria-selected="false">{{ icons.svg_icon('file', 13) }}Upload file</button>
-      <button type="button" data-tab="bulk" data-action="switch-tab" data-testid="tab-bulk-btn" role="tab" aria-selected="false">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
+  <div class="cw-drawer-tabs">
+    <div class="cw-seg" role="tablist" aria-label="Add certificates method">
+      <button type="button" class="on" data-tab-target="scan" data-testid="tab-scan-btn" role="tab" aria-selected="true">{{ icons.svg_icon('server', 13) }}Scan host</button>
+      <button type="button" data-tab-target="upload" data-testid="tab-upload-btn" role="tab" aria-selected="false">{{ icons.svg_icon('file', 13) }}Upload file</button>
+      <button type="button" data-tab-target="bulk" data-testid="tab-bulk-btn" role="tab" aria-selected="false">{{ icons.svg_icon('upload', 13) }}Bulk import</button>
     </div>
   </div>
-  <div class="cw-p-slide-body">
+  <div class="cw-drawer-body">
     {% if may_write %}
-    {# Scan host tab #}
-    <div id="tab-scan" class="tab-body" role="tabpanel" aria-labelledby="tab-scan-btn">
-      <form method="post" action="/hosts" class="cw-form-stack">
+    <div data-tab-pane="scan" role="tabpanel">
+      <form method="post" action="/hosts" class="cw-form">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="cw-field">
           <label class="cw-label">Hostname</label>
           <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com" data-testid="scan-hostname-input">
         </div>
-        <div class="cw-grid-2eq">
+        <div class="cw-form-grid">
           <div class="cw-field">
             <label class="cw-label">Port</label>
             <input class="cw-input mono" type="number" name="port" value="443" min="1" max="65535">
@@ -526,7 +321,7 @@
         </div>
         <div class="cw-field">
           <label class="cw-label" for="scan-starttls">TLS mode</label>
-          <select class="cw-input" name="starttls_mode" id="scan-starttls" data-testid="scan-starttls-select">
+          <select class="cw-select" name="starttls_mode" id="scan-starttls" data-testid="scan-starttls-select">
             <option value="">Implicit TLS (default)</option>
             <option value="smtp">STARTTLS — SMTP (587)</option>
             <option value="imap">STARTTLS — IMAP (143)</option>
@@ -536,359 +331,59 @@
             <option value="mysql">STARTTLS — MySQL (3306)</option>
           </select>
         </div>
-        <label class="cw-checkbox-label">
+        <label class="cw-check">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
         </label>
-        <div class="cw-flex-1"></div>
-        <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="scan-submit-btn">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary" data-testid="scan-submit-btn">{{ icons.svg_icon('refresh', 14) }}Add &amp; scan</button>
         </div>
       </form>
     </div>
-    {# Upload file tab #}
-    <div id="tab-upload" class="tab-body cw-hidden" role="tabpanel" aria-labelledby="tab-upload-btn">
-      <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form-stack">
+    <div data-tab-pane="upload" role="tabpanel" class="cw-hidden">
+      <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <div class="cw-drop" data-action="click-target" data-target="file-input">
+        <label class="cw-drop" for="file-input">
           <div class="cw-drop-icon">{{ icons.svg_icon('upload', 18) }}</div>
-          <div class="cw-fz-13-5 cw-fw-600">Drop a certificate, or <span class="cw-link">browse</span></div>
-          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
+          <div><b>Drop a certificate, or <span class="cw-link">browse</span></b></div>
+          <div class="cw-sub">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
           <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden" data-testid="upload-file-input">
-        </div>
+        </label>
         <div class="cw-field">
-          <label class="cw-label">Password <span class="cw-text-text-3">(PKCS#12 only, optional)</span></label>
+          <label class="cw-label">Password <span class="cw-muted">(PKCS#12 only, optional)</span></label>
           <input class="cw-input" type="password" name="password" placeholder="optional">
         </div>
-        <div class="cw-flex-1"></div>
-        <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="upload-submit-btn">{{ icons.svg_icon('upload', 14) }}Upload</button>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary" data-testid="upload-submit-btn">{{ icons.svg_icon('upload', 14) }}Upload</button>
         </div>
       </form>
     </div>
-    {# Bulk import tab #}
-    <div id="tab-bulk" class="tab-body cw-hidden" role="tabpanel" aria-labelledby="tab-bulk-btn">
-      <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form-stack">
+    <div data-tab-pane="bulk" role="tabpanel" class="cw-hidden">
+      <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <div class="cw-drop" data-action="click-target" data-target="csv-input">
+        <label class="cw-drop" for="csv-input">
           <div class="cw-drop-icon">{{ icons.svg_icon('file', 18) }}</div>
-          <div class="cw-fz-13-5 cw-fw-600">Drop a CSV, or <span class="cw-link">browse</span></div>
-          <div class="cw-fz-11-5 cw-text-text-3 cw-mt-6">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
+          <div><b>Drop a CSV, or <span class="cw-link">browse</span></b></div>
+          <div class="cw-sub">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
           <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
+        </label>
+        <div class="cw-note">
+          <code class="mono">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
         </div>
-        <div class="cw-example-block">
-          <div class="cw-flex cw-items-center cw-gap-6 cw-mb-6 cw-text-text">{{ icons.svg_icon('file', 13) }}<b class="cw-fw-600">Example</b></div>
-          <code class="mono cw-fz-11-5 cw-text-text-3">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
-        </div>
-        <div class="cw-flex-1"></div>
-        <div class="cw-form-footer">
-          <button type="button" class="cw-btn cw-btn--expand" data-action="close-slide">Cancel</button>
-          <button type="submit" class="cw-btn primary cw-btn--expand">{{ icons.svg_icon('plus', 14) }}Import</button>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary">{{ icons.svg_icon('plus', 14) }}Import</button>
         </div>
       </form>
     </div>
     {% else %}
-    <div class="cw-empty" data-testid="readonly-notice">
-      <p>Read-only access — contact an administrator to make changes.</p>
-    </div>
+    {% call ui.empty('Read-only access', 'Contact an administrator to make changes.', icon='shield', testid='readonly-notice') %}{% endcall %}
     {% endif %}
   </div>
 </div>
 {% endblock %}
 
-{% block topbar_actions %}
-  {% if may_write %}
-  <button class="cw-btn primary" id="add-host-trigger" data-action="open-slide" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
-  {% endif %}
-{% endblock %}
-
 {% block scripts %}
-<script nonce="{{ request.state.csp_nonce }}">
-function openSlide() {
-  document.getElementById('slide-bg').classList.add('on');
-  var panel = document.getElementById('slide-panel');
-  panel.classList.add('on');
-  var firstInput = panel.querySelector('input:not([type="hidden"]), button:not([data-action="close-slide"])');
-  if (firstInput) firstInput.focus();
-}
-function closeSlide() {
-  document.getElementById('slide-bg').classList.remove('on');
-  document.getElementById('slide-panel').classList.remove('on');
-  var trigger = document.getElementById('add-host-trigger');
-  if (trigger) trigger.focus();
-}
-function switchTab(tab) {
-  document.querySelectorAll('.tab-body').forEach(function(b) { b.style.display = 'none'; });
-  document.getElementById('tab-' + tab).style.display = 'flex';
-  document.querySelectorAll('#add-tabs button').forEach(function(b) {
-    b.classList.remove('on');
-    b.setAttribute('aria-selected', 'false');
-  });
-  var activeBtn = document.querySelector('#add-tabs button[data-tab="' + tab + '"]');
-  activeBtn.classList.add('on');
-  activeBtn.setAttribute('aria-selected', 'true');
-  activeBtn.focus();
-}
-/* WI-068: arrow-key tab switching on the Add-certificates tablist (WAI-ARIA). */
-(function() {
-  var tl = document.getElementById('add-tabs');
-  if (!tl) return;
-  var tabs = Array.prototype.slice.call(tl.querySelectorAll('[role="tab"]'));
-  tl.addEventListener('keydown', function(e) {
-    if (!tabs.length) return;
-    var cur = tl.querySelector(':focus');
-    var idx = cur ? tabs.indexOf(cur) : 0;
-    if (idx < 0) return;
-    if (e.key === 'ArrowRight') { e.preventDefault(); switchTab(tabs[idx + 1 >= tabs.length ? 0 : idx + 1].getAttribute('data-tab')); }
-    else if (e.key === 'ArrowLeft') { e.preventDefault(); switchTab(tabs[idx - 1 < 0 ? tabs.length - 1 : idx - 1].getAttribute('data-tab')); }
-    else if (e.key === 'Home') { e.preventDefault(); switchTab(tabs[0].getAttribute('data-tab')); }
-    else if (e.key === 'End') { e.preventDefault(); switchTab(tabs[tabs.length - 1].getAttribute('data-tab')); }
-  });
-})();
-
-function toggleGroup(groupId) {
-  var row = document.getElementById('group-hosts-' + groupId);
-  var chevron = document.getElementById('chevron-' + groupId);
-  var trigger = document.querySelector('[data-group="' + groupId + '"][data-action="toggle-group"]');
-  if (row) {
-    var open = row.classList.toggle('cw-open');
-    if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (chevron) chevron.classList.toggle('cw-group-chevron-open', open);
-  }
-}
-var _VALID_URGENCIES = { expired:1, critical:1, warning:1, healthy:1, gray:1 };
-
-/* Reports dropdown menu (WI-068: ARIA menu roles, Escape to close) */
-(function() {
-  var wrap = document.getElementById('reports-menu-wrap');
-  var btn = document.getElementById('reports-btn');
-  if (!wrap || !btn) return;
-  var menu = document.createElement('div');
-  menu.className = 'cw-menu';
-  menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', 'Download reports');
-  menu.style.display = 'none';
-  menu.style.right = '0';
-  menu.style.left = 'auto';
-  menu.style.width = '286px';
-  menu.innerHTML = '<div class="cw-menu-label">Download a report</div>'
-    + '<div role="none" style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
-    + '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>'
-    + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Certificate inventory</div><div style="font-size:11px;color:var(--text-3)">all tracked certs + status</div></div>'
-    + '<div style="display:flex;gap:5px"><a href="/api/reports/inventory.csv" role="menuitem" tabindex="-1" aria-label="Download certificate inventory as CSV" class="cw-btn sm" style="padding:3px 8px">CSV</a><a href="/api/export/certificates.json" role="menuitem" tabindex="-1" aria-label="Download certificate inventory as JSON" class="cw-btn sm" style="padding:3px 8px">JSON</a></div></div>'
-    + '<div role="none" style="padding:7px 10px;display:flex;align-items:center;gap:10px">'
-    + '<svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>'
-    + '<div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:500">Hosts</div><div style="font-size:11px;color:var(--text-3)">owners · renewal · tags</div></div>'
-    + '<div style="display:flex;gap:5px"><a href="/api/export/hosts.csv" role="menuitem" tabindex="-1" aria-label="Download hosts list as CSV" class="cw-btn sm" style="padding:3px 8px">CSV</a></div></div>'
-    + '<div class="cw-divider" style="margin:4px 0"></div>'
-    + '<div style="padding:6px 10px 8px;font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:6px">'
-    + '<svg aria-hidden="true" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>'
-    + 'Point-in-time snapshot · UTC</div>';
-  wrap.appendChild(menu);
-  btn.setAttribute('aria-haspopup', 'true');
-  btn.setAttribute('aria-expanded', 'false');
-  var items = menu.querySelectorAll('[role="menuitem"]');
-  function focusItem(idx) {
-    items.forEach(function(it, i) { it.setAttribute('tabindex', i === idx ? '0' : '-1'); });
-    items[idx].focus();
-  }
-  function toggleMenu(open) {
-    menu.style.display = open ? 'block' : 'none';
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    if (open) {
-      /* Enter menu: first item focusable + focused (roving tabindex). */
-      focusItem(0);
-    } else {
-      items.forEach(function(it) { it.setAttribute('tabindex', '-1'); });
-    }
-  }
-  btn.addEventListener('click', function(e) {
-    e.stopPropagation();
-    toggleMenu(menu.style.display === 'none');
-  });
-  /* Arrow-key navigation per WAI-ARIA menu pattern. */
-  menu.addEventListener('keydown', function(e) {
-    var cur = menu.querySelector(':focus');
-    if (!cur) return;
-    var idx = Array.prototype.indexOf.call(items, cur);
-    if (idx < 0) return;
-    if (e.key === 'ArrowDown') { e.preventDefault(); focusItem(idx + 1 >= items.length ? 0 : idx + 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); focusItem(idx - 1 < 0 ? items.length - 1 : idx - 1); }
-    else if (e.key === 'Home') { e.preventDefault(); focusItem(0); }
-    else if (e.key === 'End') { e.preventDefault(); focusItem(items.length - 1); }
-    else if (e.key === 'Tab') { e.preventDefault(); toggleMenu(false); btn.focus(); }
-  });
-  document.addEventListener('mousedown', function(e) {
-    if (!wrap.contains(e.target)) toggleMenu(false);
-  });
-  document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && menu.style.display !== 'none') {
-      toggleMenu(false);
-      btn.focus();
-    }
-  });
-})();
-
-function togglePivotGroup(idx) {
-  var row = document.getElementById('pivot-detail-' + idx);
-  if (!row) return;
-  var trigger = document.querySelector('[data-group="' + idx + '"][data-action="toggle-pivot-group"]');
-
-  var loadingEl = document.getElementById('pivot-loading-' + idx);
-  if (loadingEl && !row.classList.contains('cw-loaded')) {
-    // First expand: fetch entries via AJAX (BC-048 lazy loading)
-    row.classList.add('cw-open');
-    if (trigger) trigger.setAttribute('aria-expanded', 'true');
-    var pivot = row.getAttribute('data-pivot');
-    var groupKey = row.getAttribute('data-group-key');
-    var detailCell = loadingEl.parentElement;
-    loadingEl.textContent = 'Loading...';
-
-    fetch('/api/pivot/' + encodeURIComponent(pivot) + '/' + encodeURIComponent(groupKey))
-      .then(function(res) { return res.json(); })
-      .then(function(data) {
-        var html = '';
-        (data.entries || []).forEach(function(e) {
-          var urgencyClass = _VALID_URGENCIES[e.urgency] ? e.urgency : 'gray';
-          var urgencyLabel = e.urgency_label || 'Unknown';
-          var daysHtml = e.days_remaining != null
-            ? '<span class="cw-text-text-3 cw-fz-11-5">' + escHtml(e.days_remaining) + ' days</span>'
-            : '';
-          var name = escHtml(e.name || e.host || '\u2014');
-          var link = e.id ? '<a href="/certificates/' + escHtml(e.id) + '" class="cw-host cw-no-decoration">' + name + '</a>' : name;
-          html += '<div class="cw-host-row">'
-            + '<div class="cw-host-row-info">'
-            + link
-            + ' <span class="cw-pill ' + urgencyClass + '"><span class="dot" aria-hidden="true"></span>' + escHtml(urgencyLabel) + '</span>'
-            + daysHtml
-            + '</div></div>';
-        });
-        detailCell.innerHTML = html;
-        row.classList.add('cw-loaded');
-      })
-      .catch(function(err) {
-        loadingEl.textContent = 'Failed to load: ' + err.message;
-      });
-    return;
-  }
-
-  // Subsequent toggles: just show/hide
-  var open = row.classList.toggle('cw-open');
-  if (trigger) trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-}
-function capChips(containerSelector, maxChips) {
-  document.querySelectorAll(containerSelector).forEach(function(el) {
-    var chips = el.querySelectorAll('.cw-chip:not(.cw-san-list .cw-chip)');
-    var sanContainer = el.querySelector('.cw-san-list');
-    if (sanContainer) {
-      var sanChips = sanContainer.querySelectorAll('.cw-chip');
-      var statusChips = chips.length;
-      var sanBudget = Math.max(0, maxChips - statusChips);
-      if (sanChips.length > sanBudget) {
-        for (var i = sanBudget; i < sanChips.length; i++) {
-          sanChips[i].style.display = 'none';
-        }
-        if (sanChips.length > sanBudget) {
-          var more = document.createElement('span');
-          more.className = 'cw-chip cw-chip-muted';
-          more.textContent = '+' + (sanChips.length - sanBudget) + ' more';
-          sanContainer.appendChild(more);
-        }
-      }
-    }
-  });
-}
-document.addEventListener('DOMContentLoaded', function() {
-  capChips('.cw-cert-chips', 4);
-});
-
-/* BC-021: inline note editing */
-document.addEventListener('click', function(e) {
-  var btn = e.target.closest('[data-action="edit-note"]');
-  if (!btn) return;
-  var hostId = btn.getAttribute('data-host-id');
-  var csrf = btn.getAttribute('data-csrf');
-  var existingNote = btn.getAttribute('data-note') || '';
-  var row = btn.closest('tr');
-  var existing = row ? row.querySelector('.cw-note-inline-form[data-host-id="' + hostId + '"]') : null;
-  if (existing) {
-    existing.remove();
-    return;
-  }
-  var form = document.createElement('form');
-  form.className = 'cw-inline cw-note-inline-form';
-  form.setAttribute('data-host-id', hostId);
-  form.style.cssText = 'margin-left:6px;';
-  form.innerHTML = '<input type="hidden" name="_csrf_token" value="' + escHtml(csrf) + '">' +
-    '<input type="text" name="notes" class="cw-input" style="width:200px;padding:3px 8px;font-size:12px;" placeholder="Add note…" value="' + escHtml(existingNote) + '">' +
-    '<button type="submit" class="cw-btn sm" style="margin-left:4px;">Save</button>';
-  btn.parentNode.insertBefore(form, btn.nextSibling);
-  form.querySelector('input[name="notes"]').focus();
-  form.addEventListener('submit', function(ev) {
-    ev.preventDefault();
-    var note = form.querySelector('input[name="notes"]').value;
-    fetch('/api/hosts/' + hostId + '/notes', {
-      method: 'PATCH',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-CSRF-Token': csrf,
-      },
-      body: JSON.stringify({notes: note}),
-    }).then(function(r) {
-      if (!r.ok) throw new Error('Failed to save note');
-      return r.json();
-    }).then(function() {
-      form.remove();
-      // WI-105: scope the chip lookup to the clicked button's row so two certs
-      // sharing a host_id each update their own chip (duplicate DOM ids removed;
-      // chips are selected by .cw-note-chip[data-host-id] within btn's row).
-      var row = btn.closest('tr');
-      var chip = row ? row.querySelector('.cw-note-chip[data-host-id="' + hostId + '"]') : null;
-      if (note.trim()) {
-        if (!chip) {
-          chip = document.createElement('span');
-          chip.className = 'cw-chip cw-chip-muted cw-note-chip';
-          chip.setAttribute('data-host-id', hostId);
-          chip.innerHTML = '{{ icons.svg_icon("file", 11, 1.6) | safe | replace("\n", "") }}note';
-          btn.parentNode.insertBefore(chip, btn);
-        }
-        chip.setAttribute('title', note);
-        chip.style.display = '';
-      } else if (chip) {
-        chip.style.display = 'none';
-      }
-    }).catch(function(err) {
-      alert('Error saving note: ' + err.message);
-    });
-  });
- });
-
-/* WI-068: Escape key to close slide-over; focus trap within dialog */
-document.addEventListener('keydown', function(e) {
-  var panel = document.getElementById('slide-panel');
-  if (!panel || !panel.classList.contains('on')) return;
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    closeSlide();
-    return;
-  }
-  if (e.key === 'Tab') {
-    var focusable = Array.prototype.filter.call(
-      panel.querySelectorAll('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled])'),
-      function(el) { return el.offsetParent !== null || el.getClientRects().length > 0; }
-    );
-    if (focusable.length === 0) return;
-    var first = focusable[0];
-    var last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && document.activeElement === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  }
-});
- </script>
- {% endblock %}
+<script src="/static/js/dashboard.js" nonce="{{ request.state.csp_nonce }}"></script>
+{% endblock %}

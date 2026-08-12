@@ -10,6 +10,7 @@
       document.documentElement.setAttribute('data-theme', t);
     } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
   </script>
+  <link rel="stylesheet" href="/static/css/legacy.css">
   <link rel="stylesheet" href="/static/css/tokens.css">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   {% block head %}{% endblock %}
@@ -19,269 +20,71 @@
     <header class="cw-topbar">
       <a href="/" class="cw-wordmark">
         <div class="cw-mark">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
           </svg>
         </div>
         <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
         <span class="cw-ver">v{{ version }}{% if commit %} <span class="cw-muted">({{ commit }})</span>{% endif %}</span>
       </a>
-      <nav class="cw-nav">
-        <a href="/" data-testid="nav-dashboard" {% if active_page == 'dashboard' %}class="active"{% endif %}>Dashboard</a>
-        <a href="/alerts" data-testid="nav-alerts" {% if active_page == 'alerts' %}class="active"{% endif %}>Alerts</a>
-        <a href="/scan-history" data-testid="nav-scans" {% if active_page == 'scans' %}class="active"{% endif %}>Scan history</a>
-        <a href="/insights" data-testid="nav-insights" {% if active_page == 'insights' %}class="active"{% endif %}>Insights</a>
-        {% if auth_user %}
-        <a href="/team" data-testid="nav-team" {% if active_page == 'team' %}class="active"{% endif %}>Team</a>
-        {% endif %}
-        <a href="/audit" data-testid="nav-audit" {% if active_page == 'audit' %}class="active"{% endif %}>Audit log</a>
+      <nav class="cw-nav" aria-label="Primary">
+        <a href="/" data-testid="nav-dashboard" {% if active_page == 'dashboard' %}class="active" aria-current="page"{% endif %}>Certificates</a>
+        <a href="/posture" data-testid="nav-posture" {% if active_page == 'posture' %}class="active" aria-current="page"{% endif %}>Posture</a>
+        <a href="/activity" data-testid="nav-alerts" {% if active_page == 'activity' %}class="active" aria-current="page"{% endif %}>Activity</a>
         {% if is_admin %}
-        <a href="/settings" data-testid="nav-settings" {% if active_page == 'settings' %}class="active"{% endif %}>Settings</a>
+        <a href="/settings" data-testid="nav-settings" {% if active_page == 'settings' %}class="active" aria-current="page"{% endif %}>Settings</a>
         {% endif %}
       </nav>
       <div class="cw-spacer"></div>
       {% block topbar_right %}{% endblock %}
+      {% if scope_tag %}
+      <span class="cw-scope" data-testid="scope-indicator" title="Your view is limited to resources tagged: {{ scope_tag }}">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h18"/><path d="M6 12h12"/><path d="M10 19h4"/></svg>
+        scope: {{ scope_tag }}
+      </span>
+      {% endif %}
       {% if auth_user %}
-        <div class="cw-user-info" data-testid="user-info">
+        <div class="cw-user" data-testid="user-info">
           <span data-testid="auth-user">{{ auth_user }}</span>
-          <form method="post" action="/auth/logout" style="display:inline">
+          <form method="post" action="/auth/logout" class="cw-inline">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
             <button type="submit" class="cw-btn ghost sm" data-testid="logout-btn">Logout</button>
           </form>
         </div>
       {% endif %}
-      <button class="cw-iconbtn" id="theme-toggle" title="Toggle theme">
-        <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
-        <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      <button class="cw-iconbtn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-dark" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+        <svg id="theme-icon-light" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
       </button>
       {% block topbar_actions %}{% endblock %}
     </header>
     <div class="cw-page">
       {% if error %}
-        <div class="cw-flash-error">
-          {{ error }}
+        <div class="cw-flash t-crit" id="cw-flash-error">
+          <span>{{ error }}</span>
+          <button class="x" data-dismiss="cw-flash-error" title="Dismiss" aria-label="Dismiss">&times;</button>
         </div>
       {% endif %}
       {% if warning %}
-        <div class="cw-flash-warn">
-          {{ warning }}
+        <div class="cw-flash t-warn" id="cw-flash-warn">
+          <span>{{ warning }}</span>
+          <button class="x" data-dismiss="cw-flash-warn" title="Dismiss" aria-label="Dismiss">&times;</button>
         </div>
       {% endif %}
-      <div id="cw-health-banner" class="cw-health-banner" style="display:none">
-        <div class="cw-health-inner">
-          <span class="cw-health-dot"></span>
-          <span id="cw-health-text">Loading…</span>
-        </div>
-        <button class="cw-health-dismiss" id="cw-health-dismiss" title="Dismiss">×</button>
+      <div id="cw-health" class="cw-health cw-hidden">
+        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
+        <button class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
       </div>
       {% if local_admin_autogenerated and is_admin %}
-      <div id="cw-autogenerated-banner" class="cw-alert cw-alert--warning" style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between; gap: 1rem;">
-        <span>Local admin password is auto-generated. <a href="/settings?tab=auth" style="color: inherit; text-decoration: underline;">Rotate it now</a>.</span>
-        <button class="cw-health-dismiss" data-action="dismiss-autogenerated" title="Dismiss" style="flex-shrink: 0;">×</button>
+      <div id="cw-autogen-banner" class="cw-flash t-warn">
+        <span>Local admin password is auto-generated. <a class="cw-link" href="/settings/auth">Rotate it now</a>.</span>
+        <button class="x" data-dismiss="cw-autogen-banner" data-action="dismiss-autogenerated" title="Dismiss" aria-label="Dismiss">&times;</button>
       </div>
       {% endif %}
       {% block content %}{% endblock %}
     </div>
   </div>
+  <script src="/static/js/core.js" nonce="{{ request.state.csp_nonce }}"></script>
   {% block scripts %}{% endblock %}
-  <script nonce="{{ request.state.csp_nonce }}">
-    (function() {
-      var btn = document.getElementById('theme-toggle');
-      if (!btn) return;
-      function updateIcons() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var d = document.getElementById('theme-icon-dark');
-        var l = document.getElementById('theme-icon-light');
-        if (d) d.style.display = dark ? 'none' : 'block';
-        if (l) l.style.display = dark ? 'block' : 'none';
-      }
-      updateIcons();
-      btn.addEventListener('click', function() {
-        var dark = document.documentElement.getAttribute('data-theme') === 'dark';
-        var next = dark ? 'light' : 'dark';
-        document.documentElement.setAttribute('data-theme', next);
-        localStorage.setItem('cw-theme', next);
-        updateIcons();
-      });
-    })();
-  </script>
-  {# Health banner — fetches /api/health every 30s #}
-  <script nonce="{{ request.state.csp_nonce }}">
-    /* WI-080: Single global escHtml — used by all page scripts. */
-    function escHtml(s) {
-      var d = document.createElement('div');
-      d.appendChild(document.createTextNode(s == null ? '' : String(s)));
-      return d.innerHTML;
-    }
-  </script>
-  <script nonce="{{ request.state.csp_nonce }}">
-    (function() {
-      var BANNER = document.getElementById('cw-health-banner');
-      var TEXT = document.getElementById('cw-health-text');
-      if (!BANNER || !TEXT) return;
-
-      function dismissHealth() {
-        BANNER.style.display = 'none';
-        try { sessionStorage.setItem('cw-health-dismissed', '1'); } catch(e) {}
-      }
-      // BC-075 reference pattern: bind via addEventListener, not an inline
-      // onclick= attribute (which a nonce-based CSP cannot whitelist).
-      var DISMISS = document.getElementById('cw-health-dismiss');
-      if (DISMISS) DISMISS.addEventListener('click', dismissHealth);
-
-      function render(data) {
-        var cls = 'cw-health-' + (data.overall || 'ok');
-        BANNER.className = 'cw-health-banner ' + cls;
-
-        var parts = [];
-        if (!data.scheduler_running) {
-          parts.push('Scheduler is <b>not running</b>');
-        }
-        if (data.last_scan_status === 'failure' || data.last_scan_status === 'partial') {
-          var when = '';
-          if (data.last_scan_at) {
-            try {
-              var d = new Date(data.last_scan_at);
-              if (!isNaN(d.getTime())) {
-                when = ' at ' + d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-              }
-            } catch(e) { when = ''; }
-          }
-          var verb = data.last_scan_status === 'partial' ? 'partially <b>failed</b>' : '<b>failed</b>';
-          parts.push('Last scan ' + verb + when);
-        }
-        if (data.failed_alerts_24h > 0) {
-          parts.push(escHtml(data.failed_alerts_24h) + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
-        }
-        if (data.overall === 'ok') {
-          // This banner reports the *monitoring pipeline* (scheduler, scans,
-          // alert delivery) — not certificate health. Name the subject so a
-          // green banner above an estate full of expiring certs can't be
-          // misread as "all certificates are fine".
-          parts = ['Monitoring pipeline healthy'];
-        }
-
-        TEXT.innerHTML = parts.join(' · ') || 'System status unknown';
-        BANNER.style.display = '';
-      }
-
-      // WI-069: pause polling when the tab is hidden and back off on
-      // consecutive failures (double the delay up to 5 min, reset on
-      // success). Operators leave the dashboard open in a background tab
-      // all day; a fixed 30s interval wastes requests and hammers a
-      // failing backend instead of backing off.
-      var BASE_DELAY = 30000, MAX_DELAY = 300000, pollFailures = 0, pollTimer = null;
-
-      function schedulePoll(delay) {
-        clearTimeout(pollTimer);
-        pollTimer = setTimeout(poll, delay);
-      }
-
-      function poll() {
-        if (document.hidden) return; // visibilitychange resumes polling
-        try {
-          if (sessionStorage.getItem('cw-health-dismissed') === '1') {
-            BANNER.style.display = 'none';
-            schedulePoll(BASE_DELAY);
-            return;
-          }
-        } catch(e) {}
-        fetch('/api/health')
-          .then(function(r) { if (!r.ok) throw new Error('status ' + r.status); return r.json(); })
-          .then(function(data) { pollFailures = 0; render(data); schedulePoll(BASE_DELAY); })
-          .catch(function(e) {
-            pollFailures++;
-            BANNER.className = 'cw-health-banner cw-health-critical';
-            TEXT.textContent = 'Health check unavailable';
-            BANNER.style.display = '';
-            schedulePoll(Math.min(BASE_DELAY * Math.pow(2, pollFailures), MAX_DELAY));
-          });
-      }
-
-      document.addEventListener('visibilitychange', function() {
-        if (!document.hidden) poll(); // refresh immediately on return
-      });
-
-      poll();
-    })();
-  </script>
-  {# BC-075: Global delegation for data-action handlers — replaces inline on*= attributes #}
-  <script nonce="{{ request.state.csp_nonce }}">
-    document.addEventListener('click', function(e) {
-      var el = e.target.closest('[data-action]');
-      if (!el) return;
-      var action = el.getAttribute('data-action');
-      if (action === 'toggle-pivot-group') {
-        if (typeof togglePivotGroup === 'function') togglePivotGroup(el.getAttribute('data-group'));
-      } else if (action === 'toggle-group') {
-        if (typeof toggleGroup === 'function') toggleGroup(el.getAttribute('data-group'));
-      } else if (action === 'open-link') {
-        var href = el.getAttribute('data-href');
-        if (href && (href.charAt(0) === '/' || /^https?:\/\//.test(href))) {
-          window.location = href;
-        }
-      } else if (action === 'open-slide') {
-        if (typeof openSlide === 'function') openSlide();
-      } else if (action === 'close-slide') {
-        if (typeof closeSlide === 'function') closeSlide();
-      } else if (action === 'switch-tab') {
-        if (typeof switchTab === 'function') switchTab(el.getAttribute('data-tab'));
-      } else if (action === 'click-target') {
-        var target = document.getElementById(el.getAttribute('data-target'));
-        if (target) target.click();
-      } else if (action === 'stop-propagation') {
-        e.stopPropagation();
-      } else if (action === 'toggle-notes') {
-        if (typeof toggleNotes === 'function') toggleNotes();
-      } else if (action === 'save-notes') {
-        if (typeof saveNotes === 'function') saveNotes();
-      } else if (action === 'toggle-owner') {
-        if (typeof toggleOwner === 'function') toggleOwner();
-      } else if (action === 'save-owner') {
-        if (typeof saveOwner === 'function') saveOwner();
-      } else if (action === 'test-ldap') {
-        if (typeof testLdap === 'function') testLdap(el);
-      } else if (action === 'test-smtp') {
-        if (typeof testSmtp === 'function') testSmtp(el);
-      } else if (action === 'dismiss-autogenerated') {
-        var banner = document.getElementById('cw-autogenerated-banner');
-        if (banner) banner.style.display = 'none';
-      } else if (action === 'check-revocation') {
-        if (typeof checkRevocation === 'function') checkRevocation(el);
-      } else if (action === 'toggle-host-notes') {
-        if (typeof toggleHostNotes === 'function') toggleHostNotes();
-      } else if (action === 'save-host-notes') {
-        if (typeof saveHostNotes === 'function') saveHostNotes();
-      } else if (action === 'print') {
-        window.print();
-      }
-    });
-    document.addEventListener('change', function(e) {
-      var el = e.target.closest('[data-action]');
-      if (!el) return;
-      if (el.getAttribute('data-action') === 'toggle-provider') {
-        if (typeof toggleProvider === 'function') toggleProvider();
-      }
-    });
-    /* WI-080: Single global confirm-form handler. */
-    document.addEventListener('submit', function(e) {
-      var form = e.target;
-      if (form.classList.contains('confirm-form')) {
-        var msg = form.getAttribute('data-confirm') || 'Are you sure?';
-        if (!confirm(msg)) {
-          e.preventDefault();
-        }
-      }
-    });
-    /* WI-068: Keyboard activation for data-action elements (Enter/Space).
-       Only fires for elements with tabindex (keyboard-reachable). */
-    document.addEventListener('keydown', function(e) {
-      if (e.key !== 'Enter' && e.key !== ' ') return;
-      var el = e.target.closest('[data-action]');
-      if (!el || !el.hasAttribute('tabindex')) return;
-      e.preventDefault();
-      el.click();
-    });
-  </script>
 </body>
 </html>
