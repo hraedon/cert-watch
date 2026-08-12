@@ -109,7 +109,7 @@ def test_escape_closes_slide_over(page: Page, cert_watch_server: str) -> None:
     page.locator(".cw-drawer.on").wait_for()
     # Escape should close (the .on class is removed; panel slides off-screen)
     page.keyboard.press("Escape")
-    page.locator("#slide-panel.on").wait_for(state="hidden", timeout=3000)
+    page.locator("#add-drawer.on").wait_for(state="hidden", timeout=3000)
     # Focus should return to the trigger button
     expect(page.get_by_test_id("add-host-btn")).to_be_focused()
 
@@ -122,17 +122,17 @@ def test_focus_trapped_in_slide_over(page: Page, cert_watch_server: str) -> None
     """Tab cycles within the open dialog (focus trap), not escaping to the page."""
     page.goto(cert_watch_server)
     page.get_by_test_id("add-host-btn").click()
-    panel = page.locator("#slide-panel")
+    panel = page.locator("#add-drawer")
     panel.wait_for(state="visible")
     # Tab several times — focus should stay inside the panel
     for _ in range(15):
         page.keyboard.press("Tab")
         in_panel = page.evaluate(
             "document.activeElement"
-            " ? document.activeElement.closest('#slide-panel') !== null"
+            " ? document.activeElement.closest('#add-drawer') !== null"
             " : false"
         )
-        assert in_panel, "Focus escaped the slide-over dialog (trap broken)"
+        assert in_panel, "Focus escaped the drawer dialog (trap broken)"
 
 
 # ---------------------------------------------------------------------------

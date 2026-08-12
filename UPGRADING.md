@@ -89,6 +89,35 @@ There is no full-fidelity data export/import tool. Two options:
   This re-establishes the host inventory; historical scan/cert/audit history is
   not carried across by this path.
 
+## UI redesign (plan 055)
+
+The web UI was rebuilt around four domains — **Certificates**, **Posture**,
+**Activity**, **Settings**. Old URLs redirect permanently, so bookmarks keep
+working:
+
+| Old | New |
+|---|---|
+| `/insights` (calendar) | `/?view=calendar` |
+| `/insights?tab=trends`, `/crypto` | `/posture` |
+| `/alerts`, `/scan-history`, `/audit` | unchanged (tabs of Activity) |
+| `/team` | `/` (the tag-scope model replaces the email-keyed team view) |
+| `/settings?tab=X` | `/settings/{section}` (`smtp`+`alerts` merged into `channels`) |
+| Trust anchors (dashboard) | `/settings/trust-anchors` |
+
+Behavior changes to note:
+
+- **The audit log is now admin-only** (it exposes actor IPs and fleet-wide
+  actions). Grant `settings:admin` to users who need it.
+- **Per-tag permission tiers** (migration `0029`, plan 053): a scoped role's
+  tier now applies *within its scope tags* — a role with tier `operator` and
+  scope `prod` grants writes on `prod`-tagged resources. Existing scoped
+  roles were tier-inert before; if you created scoped operator/admin roles
+  in the past, they now grant in-scope writes. Set the role's tier back to
+  `viewer` (or use per-tag overrides) if that isn't intended. Unscoped-role
+  behavior and the global tier are unchanged.
+- The CSP tightened (`style-src 'self'`); custom reverse-proxy CSP overrides
+  may need updating.
+
 ## Notes
 
 - Breaking changes between minor releases (e.g. the CT-monitoring removal and the

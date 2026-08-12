@@ -21,12 +21,12 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
 - **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
-- **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
+- **Posture page** — fleet grade, TLS-version and grade trends, crypto inventory; the expiry calendar is a dashboard view
 - **Bulk import** — CSV upload for adding many hosts at once
 - **Prometheus metrics** — `/metrics` endpoint for monitoring integration (optionally bearer-token gated)
 - **Renewal tracking** — links renewed certificates to their predecessors
 - **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
-- **Audit log** — append-only record of mutations and logins, with configurable retention
+- **Audit log** — append-only record of mutations and logins (admin-only view), with configurable retention
 - **Compliance report** — one-click, point-in-time posture report for SOC 2 / ISO 27001 / PCI-DSS auditors (print-to-PDF HTML + signed JSON/CSV), with a `cert-watch verify-report` tamper-evidence check
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
@@ -564,7 +564,7 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `GET` | `/alerts` | Alerts view |
 | `GET` | `/scan-history` | Per-scan history |
 | `GET` | `/insights` | Expiration calendar + TLS/grade trends |
-| `GET` | `/audit` | Audit log |
+| `GET` | `/audit` | Audit log (admin) |
 | `GET` | `/reports/compliance` | Compliance report (print-to-PDF; `?tag=` to scope) |
 | `GET` | `/settings` | Settings (admin) |
 | `GET` | `/setup` | First-run setup wizard |

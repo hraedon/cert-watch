@@ -132,7 +132,7 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     # grouped into collapsible batches (collapsed by default); expand them to reveal
     # the per-host rows before asserting.
     page.goto(f"{cert_watch_server}/scan-history")
-    for toggle in page.locator("button[data-action='toggle-batch']").all():
+    for toggle in page.locator("tr[data-expand^='batch-']").all():
         toggle.click()
     expect(page.get_by_text("nonexistent.invalid:443", exact=True).first).to_be_visible()
-    expect(page.get_by_role("table").get_by_text("failure").first).to_be_visible()
+    expect(page.locator(".cw-subrow .cw-chip.t-crit").first).to_be_visible()
