@@ -141,7 +141,7 @@ def test_certificate_detail_revocation_button(reload_app, tmp_path, leaf_pem_fil
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
     assert "Check revocation" in r.text
-    assert "data-action=\"check-revocation\"" in r.text
+    assert 'id="check-revocation"' in r.text
 
 
 def test_certificate_detail_ecdsa_key(reload_app, tmp_path):
@@ -343,8 +343,8 @@ def test_pivot_grade_monthly():
     assert result[0]["month"] == "2026-01"
     assert result[0]["grade_a"] == 7  # A + A+
     assert result[0]["grade_b"] == 3
-    assert result[1]["grade_f"] == 1
-    assert result[1]["grade_c"] == 4
+    # C and worse share one series since plan 055 (CVD-safe chart encoding)
+    assert result[1]["grade_c"] == 5
 
 
 def test_pivot_grade_monthly_empty():

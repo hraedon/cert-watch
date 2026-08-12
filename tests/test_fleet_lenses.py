@@ -112,7 +112,7 @@ def test_fleet_dashboard_view_param(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=issuer")
     assert r.status_code == 200
-    assert "cw-table-pivot" in r.text
+    assert 'data-expand="pivot-detail-' in r.text
     assert "By issuer" in r.text
     assert "TestCA" in r.text
 

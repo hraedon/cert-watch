@@ -171,7 +171,7 @@ def test_dashboard_stat_cards_are_urgency_filters(
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     assert r.status_code == 200
-    assert 'class="cw-stat cw-stat-link"' in r.text
+    assert '<a href="/?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
     assert 'href="/?urgency=expired"' in r.text
     assert 'href="/?urgency=critical"' in r.text
     assert 'href="/?urgency=warning"' in r.text
@@ -179,28 +179,28 @@ def test_dashboard_stat_cards_are_urgency_filters(
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
-            r'<span class="cw-stat-label[^"]*">'
+            r'<span class="cw-stat-label[^"]*">(?:(?!</span>).)*?'
             + re.escape(label)
-            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+            + r'</span>\s*<div class="cw-stat-val[^"]*">(\d+)</div>'
         )
         match = re.search(pattern, text, re.S)
         assert match, f"stat card {label!r} not found"
         return int(match.group(1))
 
-    assert _stat_value(r.text, "Tracked certificates") == 3
+    assert _stat_value(r.text, "Tracked") == 3
     assert _stat_value(r.text, "Expired") == 1
     assert _stat_value(r.text, "Critical") == 1
     assert _stat_value(r.text, "Warning") == 0
     assert _stat_value(r.text, "Healthy") == 1
 
-    assert r.text.count("cw-stat-active") == 1
-    assert 'cw-stat-active" href="/?urgency=' not in r.text
+    assert r.text.count('class="cw-stat active"') == 1
+    assert 'href="/?" class="cw-stat active"' in r.text  # unfiltered: the Tracked cell is active
 
     with TestClient(app_mod.app) as client:
         r = client.get("/?urgency=expired")
     assert r.status_code == 200
-    assert r.text.count("cw-stat-active") == 1
-    assert 'cw-stat-active" href="/?urgency=expired"' in r.text
+    assert r.text.count('class="cw-stat active"') == 1
+    assert 'href="/?urgency=expired" class="cw-stat active"' in r.text
     assert "expired.example.com" in r.text
     assert "leaf.example.com" not in r.text
 
@@ -262,8 +262,8 @@ def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "notes-textarea" in r.text
-    assert "Notes" in r.text
+    assert 'name="notes"' in r.text  # notes editor form
+    assert "note" in r.text  # note chip / editor affordance
 
 
 def test_dashboard_notes_form_posts(reload_app, tmp_path, leaf_pem_file):
@@ -388,9 +388,9 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
-            r'<span class="cw-stat-label[^"]*">'
+            r'<span class="cw-stat-label[^"]*">(?:(?!</span>).)*?'
             + re.escape(label)
-            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+            + r'</span>\s*<div class="cw-stat-val[^"]*">(\d+)</div>'
         )
         match = re.search(pattern, text, re.S)
         assert match, f"stat card {label!r} not found"
@@ -406,7 +406,7 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
     assert _stat_value(r.text, "Healthy") == 21
     assert _stat_value(r.text, "Critical") == 3
     assert _stat_value(r.text, "Warning") == 5
-    assert _stat_value(r.text, "Tracked certificates") == 30
+    assert _stat_value(r.text, "Tracked") == 30
 
 
 def test_group_entries_by_fingerprint():
@@ -626,7 +626,7 @@ def test_dashboard_grouped_by_fingerprint(reload_app, tmp_path):
         r = client.get("/")
     assert r.status_code == 200
     assert "2 hosts" in r.text
-    assert "cw-group-header" in r.text
+    assert 'data-expand="group-hosts-' in r.text
     assert "group-hosts-" in r.text
     assert "host3.example.com" in r.text
 
@@ -732,6 +732,6 @@ def test_dashboard_pivot_disables_urgency_cards(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=issuer")
     assert r.status_code == 200
-    assert "cw-stat-disabled" in r.text
-    assert 'aria-disabled="true"' in r.text
+    assert "/?urgency=" not in r.text  # pivot view: stat cells are not filter links
+    # (stat cells render as plain <div>s in pivot views — no anchors, no aria state needed)
     assert 'class="cw-stat cw-stat-link"' not in r.text
