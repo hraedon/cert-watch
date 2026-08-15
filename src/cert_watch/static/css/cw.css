@@ -48,10 +48,30 @@
 /* ---------- RECONCILIATION OVERRIDES ----------
    Each preserves v2's shipped rendering where the vendored patina
    base differs. Each is an OPEN family question recorded in patina
-   Plan 005 WI-3 notes — resolve there, then delete here.  */
+   Plan 005 WI-3 notes — resolve there, then delete here.
+
+   Patina states three link/focus rules; each needs its own answer:
+     a { color; text-decoration }      -> reverted below (0,0,1), so any
+                                          component class outranks it.
+     a:hover { text-decoration }       -> see the :hover restatement below.
+     :focus-visible { outline; outline-offset; border-radius } -> all three
+                                          are restated below; overriding only
+                                          the first two left patina's 3px
+                                          radius rounding focused elements.
+   NOTE: `text-decoration: revert` is the wrong tool for the a:hover half.
+   revert rolls the property back past the WHOLE author origin, so
+   `a:hover { text-decoration: revert }` discards the components' own
+   `text-decoration: none` and underlines them anyway. patina's a:hover is
+   (0,1,1); the component rules that clear underlines are class-only (0,1,0)
+   and lose to it. Restating them at (0,1,0)+:hover = (0,2,0) is what
+   actually wins. `.cw-link:hover` is also (0,2,0) and still underlines.
+   A NEW link component styled with a class-only selector must be added to
+   the list below until patina's bare a:hover rule goes away.  */
 body { line-height: normal; }                    /* v2 shipped without 1.5 */
 a { color: revert; text-decoration: revert; }    /* links are opt-in .cw-link */
-:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.cw-wordmark:hover, .cw-btn:hover, .cw-tab:hover,
+.cw-menu-item:hover, .cw-stat:hover { text-decoration: none; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: revert; }
 
 /* ---------- BASE HELPERS (cert-watch's own) ---------- */
 a.cw-link, .cw-link { color: var(--accent); cursor: pointer; text-decoration: none; }

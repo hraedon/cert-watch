@@ -139,7 +139,7 @@ def test_urgency_label():
 def test_urgency_tone():
     from cert_watch.filters import urgency_tone
 
-    assert urgency_tone("expired") == "var(--expired)"
+    assert urgency_tone("expired") == "var(--cw-expired)"
     assert urgency_tone("critical") == "var(--crit)"
     assert urgency_tone("warning") == "var(--warn)"
     assert urgency_tone("healthy") == "var(--ok)"
