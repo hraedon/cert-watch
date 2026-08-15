@@ -1,6 +1,7 @@
 {
   "version": 2,
   "allows": 0,
+  "undefined_classes": [],
   "color_literals": [
     {
       "fp": "9b5d15c9f3d3693d",
