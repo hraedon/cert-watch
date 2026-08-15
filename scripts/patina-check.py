@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 301b1815a73cb7149bcf44b5ac8be387f9ba4d756eda1e6813d529d3120f42bb rev:d078059
+# patina:sha256 dab5b461ad26df663634f7534da6d383d096c2d2cca5d5d68e1e26ac4adc5857 rev:21ab0c3
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -737,32 +737,35 @@ def facet_report(decl):
         spec = decl["conformance"].get(name, {})
         state = spec.get("state", "undeclared")
         mark = {
-            "enforced": "OK",
-            "advisory": "~",
-            "attested": "OK",
-            "reviewed": "OK",
-            "deferred": "--",
+            "enforced": "ok ",
+            "advisory": " ~ ",
+            "attested": "ok ",
+            "reviewed": "ok ",
+            "deferred": " - ",
             "not-applicable": "n/a",
-        }.get(state, "?")
-        detail = ""
+        }.get(state, " ? ")
+        if state == "reviewed" and spec.get("_stale"):
+            mark = " ! "
+        lines.append(
+            f"  {mark} {FACETS[name]['label']:<14} {state:<15} "
+            f"[{STATE_MECHANISM.get(state, '?')}]"
+        )
+        # Details go on their own lines, in full. Truncating them mid-word to
+        # fit a column defeats the point: the reason IS the artifact.
         if state == "reviewed":
-            detail = f"through {spec.get('reviewed_through', '?')[:12]}"
-            if spec.get("_stale"):
-                mark, detail = "!", detail + f"; {spec['_stale']}"
-        elif state in ("deferred", "not-applicable"):
-            detail = str(spec.get("why", ""))[:58]
-            if spec.get("until"):
-                detail += f" | until: {str(spec['until'])[:44]}"
+            through = str(spec.get("reviewed_through", "?"))[:12]
+            extra = f" -- {spec['_stale']}" if spec.get("_stale") else ""
+            lines.append(f"        reviewed through {through}{extra}")
+        if spec.get("why"):
+            lines.append(f"        why:   {spec['why']}")
+        if spec.get("until"):
+            lines.append(f"        until: {spec['until']}")
         # A claim is rarely all-or-nothing: cert-watch's content model IS
         # reviewed and has five enumerated open violations. Without somewhere to
         # say so the only honest options were to overclaim or to declare the
         # whole facet deferred, which would erase the review that happened.
         if spec.get("note"):
-            detail = (detail + "  " if detail else "") + f"({str(spec['note'])[:70]})"
-        lines.append(
-            f"  {FACETS[name]['label']:<14} {state:<15} {mark:<4} "
-            f"[{STATE_MECHANISM.get(state, '?')}] {detail}"
-        )
+            lines.append(f"        note:  {spec['note']}")
     return lines
 
 
