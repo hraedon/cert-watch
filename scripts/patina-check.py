@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 db7aab7ffaf068d603b2c9edda8ebdd2bb136c3bfcf07c99bb5343ae0ff3b9a9 rev:99a7808
+# patina:sha256 2f620c6f678487099cc2bb345127e5793eefd7b8fe79c4fa90dea7cfc094c0ea rev:9040738
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -37,12 +37,16 @@ What check 1 does and does not prove:
 
   Without --upstream, the block hash is compared against a stamp stored in the
   same file. That proves INTEGRITY (nothing mangled the block after vendoring)
-  and nothing else: anyone who edits a token value can recompute the stamp, and
-  a consumer pinned to an old patina rev looks identical to a current one. To
-  check actual DRIFT against patina, pass --upstream <patina-checkout>; the
-  gate then re-derives the block from that checkout's tokens.css + the accent
-  named in the vendored header and compares. Wire --upstream in CI if you want
-  drift detection rather than corruption detection.
+  and nothing else: anyone who edits a token value can recompute the stamp. To
+  check actual DRIFT, pass --upstream <patina-checkout> (a git checkout).
+
+  --upstream keeps two conditions apart, because conflating them makes a
+  vendored standard behave like a coupled one:
+    DRIFT (fails)  the block does not match patina AT THE REV IT IS STAMPED
+                   WITH -- edited and re-stamped, or that history is gone.
+    UPGRADE (note) patina has advanced past that rev. Adopting it is a
+                   deliberate consumer change with a reviewable diff. A newer
+                   upstream is never a conformance failure.
 
 Usage:
   check_patina.py <static-dir> [--tokens css/tokens.css] [--theme theme.js]
@@ -57,6 +61,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -235,9 +240,37 @@ def check_tokens_block(gate: Gate, tokens_path: Path, upstream: Path | None):
     return contract, tail_src
 
 
+def _git(upstream: Path, *args):
+    """-> stdout, or None if git failed. Read-only queries only."""
+    proc = subprocess.run(
+        ["git", "-C", str(upstream), *args], capture_output=True, text=True
+    )
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _derive(tokens_text: str, accent_text: str) -> str:
+    """The bytes sync.sh places between the delimiters, reproduced exactly."""
+    return tokens_text + "\n" + accent_text
+
+
 def check_upstream(gate: Gate, vendored_text: str, block: str, rev: str, upstream: Path):
-    """Re-derive the block from a patina checkout and compare. This is the only
-    check in the file that compares consumer bytes to patina bytes."""
+    """Compare the vendored block against patina AT THE REVISION IT CLAIMS, and
+    report a newer upstream separately.
+
+    These are two different conditions and conflating them is what makes a
+    vendored standard behave like a coupled one:
+
+      1. the block does not match the rev it is stamped with  -- DRIFT, fail.
+         Someone edited the vendored copy and re-stamped it, or the history it
+         names was rewritten underneath it.
+      2. patina has moved on since that rev                   -- an available
+         upgrade, not a defect. Adopting it is a deliberate consumer change
+         with a reviewable diff, which is the entire point of vendoring.
+
+    An earlier version of this function compared against the upstream working
+    tree, so condition 2 was reported as condition 1 and a single commit to
+    patina turned every consumer in the estate red.
+    """
     am = ACCENT_RE.search(vendored_text)
     if not am:
         gate.fail(
@@ -246,25 +279,56 @@ def check_upstream(gate: Gate, vendored_text: str, block: str, rev: str, upstrea
         )
         return
     accent = am.group("accent")
-    up_tokens = upstream / "tokens.css"
-    up_accent = upstream / "accents" / f"{accent}.css"
-    for p in (up_tokens, up_accent):
-        if not p.is_file():
-            gate.fail(f"upstream checkout incomplete: {p} not found")
-            return
-    derived = (
-        up_tokens.read_text(encoding="utf-8")
-        + "\n"
-        + up_accent.read_text(encoding="utf-8")
-    )
-    if sha256_text(derived) == sha256_text(block):
-        gate.ok(f"tokens block matches upstream patina (accent {accent}, rev {rev})")
-    else:
+    tokens_rel, accent_rel = "tokens.css", f"accents/{accent}.css"
+
+    if _git(upstream, "rev-parse", "--git-dir") is None:
         gate.fail(
-            f"tokens block DRIFTED from upstream patina (accent {accent}): the "
-            f"vendored copy is stamped {rev} but its bytes do not match the "
-            f"checkout at {upstream}. Either the consumer is stale (re-sync) "
-            "or the block was edited and re-stamped."
+            f"--upstream {upstream} is not a git checkout. The stamped revision "
+            "is what makes 'stale' distinguishable from 'edited'; without "
+            "history the comparison cannot tell them apart, so it is refused "
+            "rather than guessed."
+        )
+        return
+    if _git(upstream, "cat-file", "-e", f"{rev}^{{commit}}") is None:
+        gate.fail(
+            f"the vendored copy is stamped patina {rev}, which does not exist "
+            f"in {upstream} -- fetch it, or the branch it came from was "
+            "rebased/squashed and that revision is gone. Re-sync from a "
+            "revision that exists, so the stamp names something checkable."
+        )
+        return
+
+    pinned_tokens = _git(upstream, "show", f"{rev}:{tokens_rel}")
+    pinned_accent = _git(upstream, "show", f"{rev}:{accent_rel}")
+    if pinned_tokens is None or pinned_accent is None:
+        gate.fail(
+            f"patina {rev} does not contain {tokens_rel} and {accent_rel} -- "
+            "the stamp names a revision that predates this accent, or the "
+            "checkout is not patina"
+        )
+        return
+
+    if sha256_text(_derive(pinned_tokens, pinned_accent)) != sha256_text(block):
+        gate.fail(
+            f"tokens block DRIFTED from patina {rev} (accent {accent}): the "
+            "vendored bytes do not match what patina held at the revision this "
+            "copy claims. It was edited and re-stamped -- edit patina and "
+            "re-sync instead."
+        )
+        return
+    gate.ok(f"tokens block matches patina at its stamped rev {rev} (accent {accent})")
+
+    # Condition 2, reported and never failed.
+    head = (_git(upstream, "rev-parse", "--short", "HEAD") or "").strip()
+    head_tokens = _git(upstream, "show", f"HEAD:{tokens_rel}")
+    head_accent = _git(upstream, "show", f"HEAD:{accent_rel}")
+    if head_tokens is None or head_accent is None or not head:
+        return
+    if sha256_text(_derive(head_tokens, head_accent)) != sha256_text(block):
+        gate.note(
+            f"patina has advanced since {rev} (upstream HEAD {head}) -- an "
+            "upgrade is available. Adopting it is a deliberate re-sync with a "
+            "reviewable diff, not a conformance failure."
         )
 
 
