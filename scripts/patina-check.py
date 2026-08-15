@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 2f620c6f678487099cc2bb345127e5793eefd7b8fe79c4fa90dea7cfc094c0ea rev:9040738
+# patina:sha256 301b1815a73cb7149bcf44b5ac8be387f9ba4d756eda1e6813d529d3120f42bb rev:d078059
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -193,6 +193,14 @@ def split_vendored(text: str):
     tail = tail[1:] if tail.startswith("\n") else tail
     tail_offset = text[: e.end()].count("\n") + 1
     return b.group("rev"), b.group("hash"), block, tail, tail_offset
+
+
+def stamped_rev(tokens_path: Path):
+    """The patina revision a vendored file claims, or None."""
+    if not tokens_path.is_file():
+        return None
+    m = BEGIN_RE.search(tokens_path.read_text(encoding="utf-8"))
+    return m.group("rev") if m else None
 
 
 def check_tokens_block(gate: Gate, tokens_path: Path, upstream: Path | None):
@@ -533,6 +541,231 @@ def check_ratchet(gate: Gate, sources, ratchet_file: Path, update: bool):
         )
 
 
+# --- the adoption declaration (patina.toml) --------------------------------
+#
+# Conformance is a set of independent claims, not a ladder. A scalar level
+# cannot express "this tier does not apply to this tool", which is a different
+# fact from "this tool stopped here" -- and numbering the tiers implies that a
+# higher number is better, which people and agents optimise toward whatever the
+# prose says.
+#
+# patina fixes which MECHANISMS are legal for each facet; the consumer picks
+# among them. A tool cannot claim `enforced` for something no script decides,
+# because then machine proof, human review and author attestation become
+# visually interchangeable in the output, which is the whole value of typing
+# them separately.
+
+FACETS = {
+    "vendor": {
+        "label": "vendor",
+        "legal": {"enforced"},
+        "about": "the vendored patina block is intact and matches its stamp",
+    },
+    "contract": {
+        "label": "contract",
+        "legal": {"enforced", "deferred"},
+        "about": "token references resolve, no contract shadowing, prefix rule",
+    },
+    "content_model": {
+        "label": "content model",
+        "legal": {"reviewed", "attested", "advisory", "deferred", "not-applicable"},
+        "about": "each concept has one reachable editing surface (UI-INVENTORY)",
+    },
+    "structure": {
+        "label": "structure",
+        "legal": {"reviewed", "deferred", "not-applicable"},
+        "about": "surface briefs exist; no unjustified known failure modes",
+    },
+}
+
+# `deferred` needs a trigger, not just an excuse: "deferred pending a second
+# editing surface" is a decision, "deferred, not worth it" is a graveyard.
+STATE_REQUIRES = {
+    "enforced": (),
+    "advisory": (),
+    "attested": (),
+    "reviewed": ("reviewed_through",),
+    "deferred": ("why", "until"),
+    "not-applicable": ("why",),
+}
+
+STATE_MECHANISM = {
+    "enforced": "machine",
+    "advisory": "machine, non-blocking",
+    "attested": "author claim",
+    "reviewed": "human",
+    "deferred": "--",
+    "not-applicable": "--",
+}
+
+MIN_REASON = 12
+
+
+def load_declaration(gate: Gate, path: Path):
+    import tomllib
+
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        gate.fail(f"declaration {path} is unreadable: {exc}")
+        return None
+
+    decl = data.get("patina")
+    if not isinstance(decl, dict):
+        gate.fail(f"{path.name}: missing a [patina] table")
+        return None
+
+    conformance = data.get("conformance", {})
+    if not isinstance(conformance, dict) or not conformance:
+        gate.fail(
+            f"{path.name}: missing [conformance.<facet>] tables. Declaring "
+            "nothing is not the same as claiming nothing -- state each facet."
+        )
+        return None
+
+    for name, spec in conformance.items():
+        if name not in FACETS:
+            gate.fail(
+                f"{path.name}: unknown conformance facet '{name}' "
+                f"(known: {', '.join(sorted(FACETS))})"
+            )
+            continue
+        if not isinstance(spec, dict) or "state" not in spec:
+            gate.fail(f"{path.name}: [conformance.{name}] has no state")
+            continue
+        state = spec["state"]
+        if state not in STATE_REQUIRES:
+            gate.fail(
+                f"{path.name}: [conformance.{name}] unknown state '{state}' "
+                f"(known: {', '.join(sorted(STATE_REQUIRES))})"
+            )
+            continue
+        if state not in FACETS[name]["legal"]:
+            gate.fail(
+                f"{path.name}: [conformance.{name}] cannot be '{state}' -- "
+                f"legal here: {', '.join(sorted(FACETS[name]['legal']))}. "
+                f"({FACETS[name]['label']} is decided by "
+                f"{'a script' if 'enforced' in FACETS[name]['legal'] else 'a human'}.)"
+            )
+            continue
+        for field in STATE_REQUIRES[state]:
+            value = str(spec.get(field, "")).strip()
+            if field in ("why", "until") and len(value) < MIN_REASON:
+                gate.fail(
+                    f"{path.name}: [conformance.{name}] is '{state}' and needs a "
+                    f"substantive `{field}`. An unexplained exemption is just a "
+                    "disabled check."
+                )
+            elif not value:
+                gate.fail(
+                    f"{path.name}: [conformance.{name}] is '{state}' and needs "
+                    f"`{field}`"
+                )
+
+    missing = sorted(set(FACETS) - set(conformance))
+    if missing:
+        gate.fail(
+            f"{path.name}: no claim made for {', '.join(missing)}. Silence is "
+            "the condition this file exists to remove -- use 'deferred' or "
+            "'not-applicable' with a reason."
+        )
+    return {"patina": decl, "conformance": conformance, "path": path}
+
+
+def check_declared_version(gate: Gate, decl, rev: str, upstream: Path | None):
+    """The consumer declares which patina release it tracks; the stamp records
+    which revision it actually vendored. They must agree."""
+    declared = str(decl["patina"].get("version", "")).strip()
+    if not declared:
+        gate.fail(f"{decl['path'].name}: [patina] has no version")
+        return
+    if upstream is None:
+        gate.note(f"declares patina {declared} (unverified; pass --upstream)")
+        return
+    vendored = _git(upstream, "show", f"{rev}:VERSION")
+    if vendored is None:
+        gate.note(
+            f"declares patina {declared}; the vendored rev {rev} predates "
+            "VERSION, so the claim cannot be checked"
+        )
+        return
+    vendored = vendored.strip()
+    if vendored != declared:
+        gate.fail(
+            f"declares patina {declared} but the vendored revision {rev} is "
+            f"patina {vendored}. Re-sync, or correct the declaration."
+        )
+    else:
+        gate.ok(f"declared version {declared} matches the vendored revision")
+
+
+def check_review_freshness(gate: Gate, decl):
+    """A `reviewed` claim names the commit it was reviewed through, so the tool
+    can say whether anything happened afterwards. A timeless boolean stays green
+    forever while the pages change underneath it.
+
+    Scoping this to UI-relevant paths is the obvious refinement and is
+    deliberately not done yet -- storing the revision is already the hard part.
+    """
+    repo = decl["path"].resolve().parent
+    for name, spec in sorted(decl["conformance"].items()):
+        if spec.get("state") != "reviewed":
+            continue
+        through = str(spec.get("reviewed_through", "")).strip()
+        if _git(repo, "rev-parse", "--git-dir") is None:
+            gate.note(f"{name}: reviewed through {through} (not a git checkout)")
+            continue
+        if _git(repo, "cat-file", "-e", f"{through}^{{commit}}") is None:
+            gate.fail(
+                f"[conformance.{name}] is reviewed through {through}, which is "
+                "not a commit in this repository"
+            )
+            continue
+        head = (_git(repo, "rev-parse", "HEAD") or "").strip()
+        full = (_git(repo, "rev-parse", through) or "").strip()
+        if head and full and head != full:
+            n = (_git(repo, "rev-list", "--count", f"{full}..HEAD") or "?").strip()
+            spec["_stale"] = f"{n} commit(s) since review"
+
+
+def facet_report(decl):
+    """One line per facet, states typed, mechanism visible, and deliberately no
+    rollup score: 3/4 would be read as worse than 4/4 and we would have
+    reinvented the ladder with more syntax."""
+    lines = ["", "conformance (declared):"]
+    for name in FACETS:
+        spec = decl["conformance"].get(name, {})
+        state = spec.get("state", "undeclared")
+        mark = {
+            "enforced": "OK",
+            "advisory": "~",
+            "attested": "OK",
+            "reviewed": "OK",
+            "deferred": "--",
+            "not-applicable": "n/a",
+        }.get(state, "?")
+        detail = ""
+        if state == "reviewed":
+            detail = f"through {spec.get('reviewed_through', '?')[:12]}"
+            if spec.get("_stale"):
+                mark, detail = "!", detail + f"; {spec['_stale']}"
+        elif state in ("deferred", "not-applicable"):
+            detail = str(spec.get("why", ""))[:58]
+            if spec.get("until"):
+                detail += f" | until: {str(spec['until'])[:44]}"
+        # A claim is rarely all-or-nothing: cert-watch's content model IS
+        # reviewed and has five enumerated open violations. Without somewhere to
+        # say so the only honest options were to overclaim or to declare the
+        # whole facet deferred, which would erase the review that happened.
+        if spec.get("note"):
+            detail = (detail + "  " if detail else "") + f"({str(spec['note'])[:70]})"
+        lines.append(
+            f"  {FACETS[name]['label']:<14} {state:<15} {mark:<4} "
+            f"[{STATE_MECHANISM.get(state, '?')}] {detail}"
+        )
+    return lines
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("static_dir", type=Path)
@@ -560,6 +793,13 @@ def main():
         help="path to a patina checkout; re-derives the vendored block from it "
         "and reports real drift instead of mere integrity",
     )
+    ap.add_argument(
+        "--declaration",
+        type=Path,
+        default=None,
+        help="path to the consumer's patina.toml adoption declaration; the "
+        "conformance facets it claims are validated and reported",
+    )
     ap.add_argument("--ratchet-file", type=Path, default=None)
     ap.add_argument("--update-ratchet", action="store_true")
     ap.add_argument(
@@ -584,6 +824,12 @@ def main():
     ratchet_file = args.ratchet_file or static_dir / "patina-ratchet.json"
 
     gate = Gate()
+    decl = None
+    if args.declaration is not None:
+        if not args.declaration.is_file():
+            print(f"error: no declaration at {args.declaration}", file=sys.stderr)
+            return 2
+        decl = load_declaration(gate, args.declaration)
     check_self(gate)
     if args.ratchet_file is None:
         gate.note(
@@ -591,17 +837,35 @@ def main():
             "static root -- pass --ratchet-file to keep it out of the webroot"
         )
     contract, tail_src = check_tokens_block(gate, tokens_path, args.upstream)
+    if decl is not None:
+        rev = stamped_rev(tokens_path)
+        if rev:
+            check_declared_version(gate, decl, rev, args.upstream)
+        check_review_freshness(gate, decl)
     if not args.no_theme:
         check_theme(gate, static_dir / args.theme)
     sources = tool_css_sources(static_dir, tokens_path, args.extra)
     if tail_src is not None:
         sources.append(tail_src)
-    if contract:
+
+    contract_state = "enforced"
+    if decl is not None:
+        contract_state = decl["conformance"].get("contract", {}).get("state", "enforced")
+    if contract_state == "deferred":
+        gate.note(
+            "contract checks skipped: declared deferred. The declaration names "
+            "why and what would reverse it -- this is a visible choice, not a "
+            "silent gap."
+        )
+    elif contract:
         check_contract(gate, contract, sources, args.prefix)
     check_ratchet(gate, sources, ratchet_file, args.update_ratchet)
 
     for line in gate.notes + gate.failures:
         print(line)
+    if decl is not None:
+        for line in facet_report(decl):
+            print(line)
     if gate.failures:
         print(f"\ncheck_patina: {len(gate.failures)} failure(s)")
         if args.report:

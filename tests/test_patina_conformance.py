@@ -38,6 +38,10 @@ def _run(*extra):
             # clean today (CSP is style-src 'self'); scanning them keeps it so.
             "--extra",
             str(ROOT / "src" / "cert_watch" / "templates"),
+            # What cert-watch claims, and by what mechanism. Validated here so
+            # the declaration cannot drift from reality unnoticed.
+            "--declaration",
+            str(ROOT / "patina.toml"),
             "--ratchet-file",
             str(ROOT / "tests" / "patina-ratchet.json"),
             *extra,
