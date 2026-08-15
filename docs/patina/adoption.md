@@ -1,4 +1,4 @@
-<!-- VENDORED FROM patina 0.5.0 (4340207) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
+<!-- VENDORED FROM patina 0.5.0 (499047c) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
 # Adopting patina — the conformance declaration
 
 A consumer commits a `patina.toml` at its repo root saying which parts of
@@ -135,17 +135,24 @@ the part that matters.
 
 ## Rendering contexts patina does not define
 
-A consumer may re-map contract tokens **inside an at-rule** — `@media print`,
-`@media (forced-colors: active)` — with a stated reason on the line:
+**Contract tokens may have context-specific mappings in explicitly declared
+rendering contexts.** One reason covers the block:
 
 ```css
+/* patina-allow-context:
+   print needs paper-specific surface and contrast values; patina has no
+   canonical print context. */
 @media print {
-  :root {
-    --bg: #fff;    /* patina-allow: paper substrate is not the document's to choose */
-    --text: #000;  /* patina-allow: browsers omit backgrounds when printing */
-  }
+  :root { --bg: #fff; --text: #000; /* … */ }
 }
 ```
+
+The marker is deliberately its own — `patina-allow-context:`, not the colour
+ratchet's `patina-allow:`. They assert different things: "this literal is fine
+here" versus "this whole block is a context the contract was never written
+for". And the reason is block-scoped, because a context re-map is naturally a
+dozen declarations and thirteen copies of one justification is compliance
+theatre.
 
 The no-shadowing rule exists to stop **drift** — one tool's `--panel` quietly
 differing from another's. A print re-map creates no drift on any surface patina
@@ -162,10 +169,26 @@ tokens at all — which destroys the thing the contract actually cares about, an
 is precisely the "cheapest path to green points away from the goal" failure this
 family keeps legislating against.
 
-**The better fix is upstream and is not built:** patina should ship `@media
-print` values as a third context, because paper is a family concern rather than
-one tool's. The exemption is the honest interim — it makes the deviation legal,
-visible, and reasoned, rather than making a conformant tool declare failure.
+**What patina owes here, precisely.** Not a canonical print palette — *a model
+able to express additional rendering contexts without calling them contract
+violations*. Those are different debts, and taking the first one now would
+repeat in a new layer the exact mistake the archetype tier already made:
+cert-watch established light and dark, dossier establishes print, so patina
+rushes to define *the* family print theme before knowing whether a provenance
+tool's audit-handoff requirements are representative of anything.
+
+dossier has established that **print is a legitimate context**. It has not
+established that every consumer should share one print treatment. So the
+mapping stays local until a second consumer independently demonstrates enough
+commonality to extract — the same evidence-flow rule as archetype promotion.
+Recurrence across consumers triggers review, not extraction.
+
+One consequence worth stating: **when a gate systematically rewards
+circumvention, the gate is wrong.** Before this exemption the mechanically
+cheapest way to conform was to re-plumb dossier's components onto `--ds-*`
+aliases so they stopped referencing contract tokens at all — greener checker,
+weaker design system. A rule with that incentive is not a strict rule; it is a
+broken one.
 
 ## Attestation
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 b646ec8010c7226376cc2866f8184124a381e07f683fa8dd25691fe66e756b18 rev:4340207
+# patina:sha256 c38c65521cec24e9c9f4c66a750453d7ec3e91d07e3694bc08f6eb53ffae0f24 rev:499047c
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -93,6 +93,13 @@ INLINE_STYLE_RE = re.compile(r"""\bstyle\s*=\s*["']([^"']*)["']""", re.IGNORECAS
 # is just a disabled check. The reason must be substantive (>= 4 chars).
 ALLOW_RE = re.compile(r"patina-allow:\s*(?P<reason>\S.{3,})")
 ALLOW_MARK = "patina-allow"
+
+# A rendering context patina does not define gets its OWN marker, not the
+# colour-literal one. They mean different things -- "this literal is fine here"
+# versus "this whole block is a context the contract was never written for" --
+# and one reason covers the block rather than each of a dozen declarations.
+CONTEXT_RE = re.compile(r"patina-allow-context:\s*(?P<reason>\S.{3,})")
+CONTEXT_MARK = "patina-allow-context"
 
 RATCHET_VERSION = 2
 
@@ -491,8 +498,13 @@ def at_rule_interiors(text: str):
     return spans
 
 
-def _in_at_rule(pos: int, spans) -> bool:
-    return any(a < pos < b for a, b in spans)
+def _enclosing_at_rule(pos: int, spans):
+    """The innermost at-rule block containing pos, or None."""
+    best = None
+    for a, b in spans:
+        if a < pos < b and (best is None or a > best[0]):
+            best = (a, b)
+    return best
 
 
 def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
@@ -501,11 +513,14 @@ def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
         text = strip_comments_keep_lines(src.text)
         spans = at_rule_interiors(text)
         allowed_lines = {
-            i for i, line in enumerate(src.text.splitlines()) if ALLOW_RE.search(line)
+            i
+            for i, line in enumerate(src.text.splitlines())
+            if CONTEXT_RE.search(line) or ALLOW_RE.search(line)
         }
         for m in TOKEN_DEF_RE.finditer(text):
             name = m.group(1)
-            if name in contract and _in_at_rule(m.start(), spans):
+            span = _enclosing_at_rule(m.start(), spans) if name in contract else None
+            if span is not None:
                 # A contract token re-mapped inside an at-rule is a RENDERING
                 # CONTEXT, not drift. patina defines two contexts, both screen;
                 # paper is a third and patina ships no values for it. dossier
@@ -513,16 +528,26 @@ def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
                 # the substrate colour is not the document's to choose -- so
                 # with no exemption there was NO legal way to print legibly and
                 # conform. Requires a stated reason, like every other hatch.
+                # The reason may sit on the line OR anywhere inside the
+                # enclosing at-rule block. A context re-map is naturally a
+                # block of a dozen declarations; demanding a comment per line
+                # would be the ceremony this family keeps legislating against,
+                # and the block is the real unit of the deviation anyway.
                 line_no = text[: m.start()].count("\n")
-                if line_no in allowed_lines:
+                first_line = text[: span[0]].count("\n")
+                last_line = text[: span[1]].count("\n")
+                if line_no in allowed_lines or any(
+                    ln in allowed_lines for ln in range(first_line, last_line + 1)
+                ):
                     scoped_ok += 1
                     continue
                 gate.fail(
                     f"{src.label}:{line_no + 1}: re-maps contract token {name} "
-                    "inside an at-rule with no reason. A rendering context "
-                    "patina does not define (print, forced-colors) is a "
-                    "legitimate case -- mark the line "
-                    "`/* patina-allow: <why this context needs it> */`."
+                    "inside an at-rule with no stated reason. A rendering "
+                    "context patina does not define (print, forced-colors) is "
+                    "legitimate -- put one reason anywhere in the block:\n"
+                    "         /* patina-allow-context: <why this context needs "
+                    "its own mapping> */"
                 )
                 continue
             defined.setdefault(name, src.label)
@@ -670,6 +695,10 @@ def scan_colour_literals(gate: Gate, sources):
         raw_lines = src.text.splitlines()
         exempt = set()
         for i, line in enumerate(raw_lines):
+            # `patina-allow-context:` CONTAINS `patina-allow`, so strip the
+            # context marker before judging this line, or every legitimate
+            # context reason is reported as an allow without a reason.
+            line = CONTEXT_RE.sub("", line)
             if ALLOW_MARK not in line:
                 continue
             if ALLOW_RE.search(line):
@@ -997,6 +1026,16 @@ def check_review_freshness(gate: Gate, decl):
             spec["_stale"] = f"{n} commit(s) since review"
 
 
+def _field(label, value):
+    """A declared reason, indented under its facet. Multi-line evidence is
+    common -- dossier's enumeration runs to sixty lines -- and it must stay
+    readable rather than being truncated: the reason is the artifact."""
+    body = str(value).strip().splitlines() or [""]
+    out = [f"        {label}: {body[0]}"]
+    out.extend(f"          {ln}" for ln in body[1:])
+    return out
+
+
 def facet_report(decl):
     """One line per facet, states typed, mechanism visible, and deliberately no
     rollup score: 3/4 would be read as worse than 4/4 and we would have
@@ -1026,17 +1065,17 @@ def facet_report(decl):
             extra = f" -- {spec['_stale']}" if spec.get("_stale") else ""
             lines.append(f"        reviewed through {through}{extra}")
         if spec.get("evidence"):
-            lines.append(f"        evidence: {spec['evidence']}")
+            lines.extend(_field("evidence", spec["evidence"]))
         if spec.get("why"):
-            lines.append(f"        why:   {spec['why']}")
+            lines.extend(_field("why", spec["why"]))
         if spec.get("until"):
-            lines.append(f"        until: {spec['until']}")
+            lines.extend(_field("until", spec["until"]))
         # A claim is rarely all-or-nothing: cert-watch's content model IS
         # reviewed and has five enumerated open violations. Without somewhere to
         # say so the only honest options were to overclaim or to declare the
         # whole facet deferred, which would erase the review that happened.
         if spec.get("note"):
-            lines.append(f"        note:  {spec['note']}")
+            lines.extend(_field("note", spec["note"]))
     return lines
 
 
