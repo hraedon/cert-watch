@@ -1,7 +1,7 @@
 /* VENDORED FROM patina -- do not edit here. Edit patina and re-run sync.sh. */
 /* accent: cert-watch */
 
-/* patina:begin cb8a984 sha256:9ff6a69d64eb38807cf4b43ae80dc4bd967e26731b8450ba5f4beb7f3fe06410 */
+/* patina:begin 27dc285 sha256:db002d628089a293961a93c697bdd600cca22bb4fa0311bee73b2565a179ba06 */
 /* ============================================================
    patina — shared design tokens for the instrument-panel tool family
    ------------------------------------------------------------
@@ -73,10 +73,16 @@
   --btn-strong-bg: #ece8e1;
   --btn-strong-text: #181612;
 
-  --ok: #34d399;      --ok-soft: rgba(52, 211, 153, 0.14);
-  --warn: #fbbf24;    --warn-soft: rgba(251, 191, 36, 0.15);
-  --crit: #f87171;    --crit-soft: rgba(248, 113, 113, 0.15);
-  --info: #7cc0e8;    --info-soft: rgba(124, 192, 232, 0.14);
+  /* Status quad "warm & quiet" — chosen 2026-08-14 (plan 004): sage, antique
+     gold, terracotta, steel. Every value passes 4.5:1 on --bg AND --panel and
+     all 6 pairs clear >=8 dE under protan/deutan/tritan simulation (the
+     previous quad — Tailwind emerald/amber/red-400 — failed: light ok 2.9:1,
+     deutan collapse of ok/warn/crit). Change only with plan-004-grade
+     validation; scripts/check_contrast.py gates the floors in CI. */
+  --ok: #7fd091;      --ok-soft: rgba(127, 208, 145, 0.14);
+  --warn: #ce9d44;    --warn-soft: rgba(206, 157, 68, 0.15);
+  --crit: #cc6050;    --crit-soft: rgba(204, 96, 80, 0.15);
+  --info: #60aeda;    --info-soft: rgba(96, 174, 218, 0.14);
 
   --shadow: 0 1px 2px rgba(0,0,0,.45), 0 8px 28px rgba(0,0,0,.3);
   --row-hover: rgba(255, 238, 214, 0.03);
@@ -127,10 +133,14 @@
   --btn-strong-bg: #221f18;
   --btn-strong-text: #f3f0e9;
 
-  --ok: #15a34a;      --ok-soft: rgba(21, 163, 74, 0.10);
-  --warn: #c2740a;    --warn-soft: rgba(194, 116, 10, 0.11);
-  --crit: #dc3030;    --crit-soft: rgba(220, 48, 48, 0.10);
-  --info: #1f6f9e;    --info-soft: rgba(31, 111, 158, 0.10);
+  /* Status quad "warm & quiet", light: deep inks on warm paper. The crimson
+     crit (h~8) and golden-ochre warn are physics, not taste: warm-red + amber
+     is not CVD-separable at 4.5:1 on this paper (plan 004, "what the physics
+     forced"). */
+  --ok: #004e19;      --ok-soft: rgba(0, 78, 25, 0.10);
+  --warn: #836101;    --warn-soft: rgba(131, 97, 1, 0.11);
+  --crit: #b64461;    --crit-soft: rgba(182, 68, 97, 0.10);
+  --info: #25729e;    --info-soft: rgba(37, 114, 158, 0.10);
 
   --shadow: 0 1px 2px rgba(60,48,20,.07), 0 6px 22px rgba(60,48,20,.08);
   --row-hover: rgba(120,90,30,0.04);
