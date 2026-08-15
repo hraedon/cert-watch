@@ -1,4 +1,4 @@
-<!-- VENDORED FROM patina 0.5.0 (e7024c1) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
+<!-- VENDORED FROM patina 0.5.0 (4340207) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
 # The patina token contract
 
 This is the canonical list of design tokens every family tool shares, the rules

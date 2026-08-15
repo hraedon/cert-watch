@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 53498140795f60ba81ca12b7739f6515244d1e217d27744e45ec83b40e2fac57 rev:e7024c1
+# patina:sha256 b646ec8010c7226376cc2866f8184124a381e07f683fa8dd25691fe66e756b18 rev:4340207
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -79,7 +79,11 @@ END_RE = re.compile(r"^/\* patina:end \*/$", re.M)
 ACCENT_RE = re.compile(r"^/\* accent: (?P<accent>[A-Za-z0-9._-]+) \*/$", re.M)
 THEME_STAMP_RE = re.compile(r"^// patina:sha256 (?P<hash>[0-9a-f]{64})")
 SELF_STAMP_RE = re.compile(r"^# patina:sha256 (?P<hash>[0-9a-f]{64}) rev:(?P<rev>\S+)$")
-TOKEN_DEF_RE = re.compile(r"(--[A-Za-z0-9_-]+)\s*:")
+# The `--` must start an identifier, or `.ds-btn--primary:hover` reads as a
+# declaration of `--primary` -- and `.ds-btn--crit:hover` as shadowing a status
+# colour, the most serious violation the contract has, on a line that declares
+# nothing. BEM is mainstream; every consumer using it would hit this.
+TOKEN_DEF_RE = re.compile(r"(?<![A-Za-z0-9_-])(--[A-Za-z0-9_-]+)\s*:")
 TOKEN_REF_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)")
 COLOR_RE = re.compile(r"(#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(|\boklch\()")
 STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.DOTALL | re.IGNORECASE)
@@ -470,14 +474,66 @@ def tool_css_sources(static_dir: Path, tokens_path: Path, extra_dirs=()):
     return sources
 
 
+def at_rule_interiors(text: str):
+    """Char ranges inside @-rule blocks (@media print, @supports, ...)."""
+    spans, stack = [], []
+    prev = 0
+    for m in re.finditer(r"[{}]", text):
+        i = m.start()
+        if text[i] == "{":
+            prelude = text[prev:i].strip()
+            stack.append((prelude.startswith("@"), i))
+        elif stack:
+            is_at, start = stack.pop()
+            if is_at:
+                spans.append((start, i))
+        prev = i + 1
+    return spans
+
+
+def _in_at_rule(pos: int, spans) -> bool:
+    return any(a < pos < b for a, b in spans)
+
+
 def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
-    defined, referenced = {}, {}
+    defined, referenced, scoped_ok = {}, {}, 0
     for src in sources:
         text = strip_comments_keep_lines(src.text)
-        for name in TOKEN_DEF_RE.findall(text):
+        spans = at_rule_interiors(text)
+        allowed_lines = {
+            i for i, line in enumerate(src.text.splitlines()) if ALLOW_RE.search(line)
+        }
+        for m in TOKEN_DEF_RE.finditer(text):
+            name = m.group(1)
+            if name in contract and _in_at_rule(m.start(), spans):
+                # A contract token re-mapped inside an at-rule is a RENDERING
+                # CONTEXT, not drift. patina defines two contexts, both screen;
+                # paper is a third and patina ships no values for it. dossier
+                # prints its provenance records as a deliverable, and on paper
+                # the substrate colour is not the document's to choose -- so
+                # with no exemption there was NO legal way to print legibly and
+                # conform. Requires a stated reason, like every other hatch.
+                line_no = text[: m.start()].count("\n")
+                if line_no in allowed_lines:
+                    scoped_ok += 1
+                    continue
+                gate.fail(
+                    f"{src.label}:{line_no + 1}: re-maps contract token {name} "
+                    "inside an at-rule with no reason. A rendering context "
+                    "patina does not define (print, forced-colors) is a "
+                    "legitimate case -- mark the line "
+                    "`/* patina-allow: <why this context needs it> */`."
+                )
+                continue
             defined.setdefault(name, src.label)
         for name in TOKEN_REF_RE.findall(text):
             referenced.setdefault(name, src.label)
+
+    if scoped_ok:
+        gate.note(
+            f"{scoped_ok} contract token(s) re-mapped inside at-rules with a "
+            "stated reason -- a rendering context patina does not define"
+        )
 
     for name, label in sorted(defined.items()):
         if name in contract:
@@ -529,11 +585,23 @@ def collect_class_usage(static_dir: Path, extra_dirs, prefix: str):
 
 
 def collect_defined_classes(sources):
+    """Every class name that has a rule, including inside at-rules.
+
+    The first version split on braces and took alternate chunks. A nested
+    at-rule puts two `{` in a row, inverting the parity, so every selector
+    inside `@media`/`@supports` was invisible -- and inside those blocks the
+    parity flip meant DECLARATION text was scanned as selectors, which can mint
+    definitions that do not exist. It under-reported responsive and print-only
+    rules as dead and over-reported elsewhere. Taking the text immediately
+    before each `{` is parity-free; an at-rule prelude is skipped by its `@`.
+    """
     defined = set()
     for src in sources:
         text = strip_comments_keep_lines(src.text)
-        # Only selector text, never declaration values (.5rem is not a class).
-        for chunk in re.split(r"[{}]", text)[::2]:
+        for m in re.finditer(r"([^{}]*)\{", text):
+            chunk = m.group(1).strip()
+            if chunk.startswith("@"):
+                continue
             defined.update(CLASS_DEF_RE.findall(chunk))
     return defined
 
@@ -759,7 +827,11 @@ FACETS = {
     },
     "structure": {
         "label": "structure",
-        "legal": {"reviewed", "deferred", "not-applicable"},
+        # `attested` belongs here for the same reason it belongs on
+        # content_model: `reviewed` means a human decided, which an
+        # agent-written change cannot claim. Omitting it sent dossier's
+        # completed archetype audit into a `note` on a `deferred` facet.
+        "legal": {"attested", "reviewed", "deferred", "not-applicable"},
         "about": "surface briefs exist; no unjustified known failure modes",
     },
 }

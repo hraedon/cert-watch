@@ -1,4 +1,4 @@
-<!-- VENDORED FROM patina 0.5.0 (e7024c1) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
+<!-- VENDORED FROM patina 0.5.0 (4340207) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
 # patina page archetypes (structure tier 2)
 
 `patterns.md` covers component shapes. This document covers whole pages — how

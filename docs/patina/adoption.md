@@ -1,4 +1,4 @@
-<!-- VENDORED FROM patina 0.5.0 (e7024c1) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
+<!-- VENDORED FROM patina 0.5.0 (4340207) -- patina-owned. Do not edit, reformat or lint this file; edit patina and re-run sync.sh. -->
 # Adopting patina — the conformance declaration
 
 A consumer commits a `patina.toml` at its repo root saying which parts of
@@ -90,9 +90,16 @@ destroys the information that justified separating them.
 
 **patina fixes which states are legal per facet.** A tool cannot declare
 `structure = "enforced"`, because no script decides whether a page expresses an
-operator's mental model. Allowing the claim would make machine proof, human
+operator's mental model. Allowing that claim would make machine proof, human
 review and author attestation interchangeable in the output — and the point of
 typing them separately is that they are not.
+
+It *can* declare `structure = "attested"`. That was added on 2026-08-15, after
+dossier completed a full archetype audit, came out clean, and had nowhere to
+record it: `reviewed` means a human decided, and the facet offered no state an
+agent-written audit could honestly claim. The same argument that put `attested`
+on `content_model` applies here, and omitting it from the facet where an agent
+audit is most often the *only* available evidence was simply inconsistent.
 
 Machine-decidability is not importance. "Every `var()` resolves" is trivial to
 automate and comparatively unimportant; "this screen matches how the operator
@@ -125,6 +132,40 @@ commits have landed since*, and *never reviewed*. Scoping staleness to
 UI-relevant paths — templates, styles, the routes that render them — is the
 obvious refinement and is deliberately not built yet; storing the revision is
 the part that matters.
+
+## Rendering contexts patina does not define
+
+A consumer may re-map contract tokens **inside an at-rule** — `@media print`,
+`@media (forced-colors: active)` — with a stated reason on the line:
+
+```css
+@media print {
+  :root {
+    --bg: #fff;    /* patina-allow: paper substrate is not the document's to choose */
+    --text: #000;  /* patina-allow: browsers omit backgrounds when printing */
+  }
+}
+```
+
+The no-shadowing rule exists to stop **drift** — one tool's `--panel` quietly
+differing from another's. A print re-map creates no drift on any surface patina
+defines, because patina defines exactly two rendering contexts and both are
+screen (`:root[data-theme="dark"|"light"]`). Paper is a third, and `tokens.css`
+ships no values for it.
+
+Before this exemption there was **no legal way to print legibly and conform**.
+dossier is a provenance instrument whose printed record is a deliverable, and a
+dark-theme record printed with the screen tokens is pale text on unprinted
+white; the only conforming alternatives were to stop printing, or to re-plumb
+~120 rules onto `--ds-*` aliases so its components stopped referencing contract
+tokens at all — which destroys the thing the contract actually cares about, and
+is precisely the "cheapest path to green points away from the goal" failure this
+family keeps legislating against.
+
+**The better fix is upstream and is not built:** patina should ship `@media
+print` values as a third context, because paper is a family concern rather than
+one tool's. The exemption is the honest interim — it makes the deviation legal,
+visible, and reasoned, rather than making a conformant tool declare failure.
 
 ## Attestation
 
