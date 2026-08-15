@@ -60,9 +60,12 @@ branch `redesign/ui-v2` @ 9d364ef, 2026-08-14.
 - **V1 — Two near-identical notes textareas on one page (the motivating case).**
   `certificate_detail.html:229` (`hosts.notes`) and `:413` (`certificates.notes`)
   are both 10,000-char free-text controls on the same detail page.
-  **Decision pending owner adjudication (plan 008 WI-3):** merge into one
-  field, or keep both with enforced scope labels and host-notes removed from
-  the cert page. Not decided here; record the outcome in this file.
+  **DECIDED 2026-08-14 (owner, patina plan 008 WI-3): merge to ONE
+  host-scoped notes field.** `certificates.notes` migrates (concat) into
+  `hosts.notes`, column and its endpoints dropped; single "Notes" panel on
+  the detail page, scoped "operational notes for this host"; placeholder
+  stops soliciting owner/runbook. Implementation pending — until it lands,
+  no new writes to `certificates.notes`.
 - **V2 — `hosts.notes` has two control types and four live UI surfaces.**
   Cert-detail textarea (`POST /hosts/{id}/notes`) vs. three dashboard
   single-line inline editors (`dashboard.html:76→217,265` and `:246`, via
