@@ -33,6 +33,11 @@ def _run(*extra):
             "--prefix",
             "cw",
             "--no-theme",
+            # Templates are outside static/, so <style> blocks and style="..."
+            # attributes there would otherwise never reach the gate. They are
+            # clean today (CSP is style-src 'self'); scanning them keeps it so.
+            "--extra",
+            str(ROOT / "src" / "cert_watch" / "templates"),
             "--ratchet-file",
             str(ROOT / "tests" / "patina-ratchet.json"),
             *extra,
