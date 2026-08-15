@@ -1,0 +1,660 @@
+/* ============================================================
+   cert-watch component layer (cw-) — design system v2
+   ------------------------------------------------------------
+   Tokens live in css/tokens.css, VENDORED FROM patina (do not
+   edit there; edit patina and re-run sync.sh). This file owns
+   everything cert-watch: components, cw-local tokens, and the
+   v2 grammar.
+
+   Voice: a warm-charcoal instrument panel with a bronze seal
+   accent. IBM Plex Mono carries every identity (hostname, CN,
+   serial, date, number); the sans face carries prose and chrome.
+
+   Grammar rules (enforced by review, so written down here):
+   1. TONE IS A MODIFIER. `.t-ok/.t-warn/.t-crit/.t-expired/
+      .t-accent/.t-muted` set `--cw-tone`; components decide how to
+      render it. No per-component color variants.
+   2. STATUS COLORS ARE FOR STATUS. Chrome stays neutral; the
+      bronze accent marks links/focus/active only; a count of
+      zero renders neutral, never red.
+   3. COMPONENTS CARRY THEIR OWN SPACING. Templates compose
+      components; there is no margin/padding utility layer.
+   4. DYNAMIC VALUES GO IN SVG ATTRIBUTES (bar widths, chart
+      geometry), never in style="" — the CSP has no
+      'unsafe-inline' for styles once legacy.css is gone.
+   5. ONE OF EACH: one segmented control, one toggle, one chip,
+      one table recipe, one empty state, one disclosure
+      (native <details>), one drawer, one filter bar.
+   Theme via data-theme="dark|light" on <html>.
+   ============================================================ */
+
+/* ---------- CW-LOCAL TOKENS (tool-owned; --cw- prefix per the
+   patina token contract) ---------- */
+:root,
+:root[data-theme="dark"] {
+  --cw-accent-fg: #0e0d0b;
+  --cw-expired: #fb6f92;
+  --cw-backdrop: rgba(4, 3, 2, .55);
+  --cw-pad-panel: 15px 18px;
+  --cw-pad-page: 22px 26px;
+  --cw-topbar-h: 58px;
+}
+:root[data-theme="light"] {
+  --cw-accent-fg: #ffffff;
+  --cw-expired: #c41d6f;
+  --cw-backdrop: rgba(40, 32, 16, .35);
+}
+
+/* ---------- RECONCILIATION OVERRIDES ----------
+   Each preserves v2's shipped rendering where the vendored patina
+   base differs. Each is an OPEN family question recorded in patina
+   Plan 005 WI-3 notes — resolve there, then delete here.  */
+body { line-height: normal; }                    /* v2 shipped without 1.5 */
+a { color: revert; text-decoration: revert; }    /* links are opt-in .cw-link */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* ---------- BASE HELPERS (cert-watch's own) ---------- */
+a.cw-link, .cw-link { color: var(--accent); cursor: pointer; text-decoration: none; }
+.cw-link:hover { text-decoration: underline; }
+.cw-muted { color: var(--text-3); }
+.cw-sub { font-size: var(--fs-sm); color: var(--text-3); margin-top: 3px; }
+.cw-divider { height: 1px; background: var(--border); border: none; margin: var(--space-4) 0; }
+.cw-hidden { display: none !important; }
+form.cw-inline { display: inline; }
+
+/* ---------- TONE SYSTEM ----------
+   A tone class sets --cw-tone (+ --cw-tone-soft) and text color.
+   Components below consume --cw-tone for dots, fills, borders.   */
+.t-ok      { --cw-tone: var(--ok);      --cw-tone-soft: color-mix(in srgb, var(--ok) 13%, transparent);      color: var(--ok); }
+.t-warn    { --cw-tone: var(--warn);    --cw-tone-soft: color-mix(in srgb, var(--warn) 14%, transparent);    color: var(--warn); }
+.t-crit    { --cw-tone: var(--crit);    --cw-tone-soft: color-mix(in srgb, var(--crit) 14%, transparent);    color: var(--crit); }
+.t-expired { --cw-tone: var(--cw-expired); --cw-tone-soft: color-mix(in srgb, var(--cw-expired) 14%, transparent); color: var(--cw-expired); }
+.t-accent  { --cw-tone: var(--accent);  --cw-tone-soft: var(--accent-soft);                                  color: var(--accent); }
+.t-muted   { --cw-tone: var(--text-3);  --cw-tone-soft: transparent;                                          color: var(--text-3); }
+.t-neutral { --cw-tone: var(--text-2);  --cw-tone-soft: transparent;                                          color: var(--text-2); }
+
+/* ---------- APP FRAME ---------- */
+.cw-app { display: flex; flex-direction: column; height: 100vh; }
+.cw-page { flex: 1; overflow: auto; min-height: 0; }
+.cw-wrap { padding: var(--cw-pad-page); max-width: 1480px; margin: 0 auto; }
+.cw-wrap--narrow { max-width: 1080px; margin: 0; }
+
+/* ---------- TOP BAR ---------- */
+.cw-topbar {
+  display: flex; align-items: center; gap: 18px;
+  padding: 0 26px; height: var(--cw-topbar-h); flex: 0 0 auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.cw-wordmark { display: flex; align-items: center; gap: 10px; text-decoration: none; color: inherit; }
+.cw-mark {
+  width: 28px; height: 28px; border-radius: 7px; flex: 0 0 auto;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent); background: var(--inset); border: 1px solid var(--border-2);
+}
+.cw-name { font-family: var(--font-mono); font-size: 14.5px; font-weight: 600; letter-spacing: -.2px; }
+.cw-ver {
+  font-family: var(--font-mono); font-size: 10.5px; color: var(--text-3);
+  border: 1px solid var(--border-2); border-radius: 5px; padding: 1px 5px;
+}
+.cw-nav { display: flex; gap: 2px; margin-left: 8px; }
+.cw-nav a {
+  font-size: var(--fs-base); font-weight: 500; color: var(--text-2);
+  padding: 7px 12px; border-radius: 7px; text-decoration: none;
+  transition: background .12s, color .12s;
+}
+.cw-nav a:hover { background: var(--panel-2); color: var(--text); }
+.cw-nav a.active { color: var(--text); background: var(--panel-3); }
+.cw-spacer { flex: 1 1 auto; }
+.cw-user { display: flex; align-items: center; gap: 10px; font-size: var(--fs-base); color: var(--text-2); }
+
+/* Scope indicator: renders when the viewer's fleet is tag-scoped.
+   Bronze-bordered so it reads as chrome, not status.            */
+.cw-scope {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono); font-size: var(--fs-xs);
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 6px;
+  padding: 3px 8px; white-space: nowrap;
+}
+.cw-scope svg { width: 11px; height: 11px; }
+
+/* ---------- PAGE HEADER / SECTIONS ---------- */
+.cw-page-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: var(--space-4); margin-bottom: 18px;
+}
+.cw-page-head h1 { margin: 0; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.4px; }
+.cw-page-head-sub { font-size: var(--fs-base); color: var(--text-3); margin-top: 4px; }
+.cw-page-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+
+.cw-crumbs { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--text-3); margin-bottom: 16px; }
+.cw-crumbs a { color: var(--text-3); text-decoration: none; }
+.cw-crumbs a:hover { color: var(--text-2); }
+
+/* In-page section header (replaces three per-template versions). */
+.cw-section { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--space-4); margin: var(--space-6) 0 var(--space-3); }
+.cw-section h2 { margin: 0; font-size: var(--fs-md); font-weight: 600; letter-spacing: -.2px; }
+.cw-section .cw-sub { margin-top: 2px; }
+
+/* ---------- PANEL ---------- */
+.cw-panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); }
+.cw-panel + .cw-panel { margin-top: var(--space-3); }
+.cw-panel-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: 13px 18px; border-bottom: 1px solid var(--border);
+}
+.cw-panel-head h2, .cw-panel-head h3 { margin: 0; font-size: var(--fs-base); font-weight: 600; }
+.cw-panel-body { padding: var(--cw-pad-panel); }
+.cw-panel-body + .cw-panel-body { border-top: 1px solid var(--border); }
+/* A tinted note panel (chain status, PQ note, callouts). */
+.cw-note {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 10px 13px; border-radius: var(--radius);
+  font-size: var(--fs-sm); line-height: 1.5;
+  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-2));
+}
+.cw-note svg { flex: 0 0 auto; margin-top: 1px; }
+
+/* ---------- STAT STRIP ----------
+   One bordered instrument strip, hairline dividers. Cells may be
+   plain divs or links (linked cells are the canonical filter).  */
+.cw-stats {
+  display: grid; grid-auto-flow: column; grid-auto-columns: 1fr;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); overflow: hidden;
+}
+.cw-stat {
+  display: block; padding: 13px 18px 12px; border-left: 1px solid var(--border);
+  text-decoration: none; color: inherit; position: relative;
+}
+.cw-stat:first-child { border-left: none; }
+a.cw-stat:hover { background: var(--panel-2); }
+.cw-stat.active { box-shadow: inset 0 0 0 2px var(--accent); }
+.cw-stat-label {
+  display: flex; align-items: center; gap: 7px;
+  font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+  color: var(--text-3); text-transform: uppercase; letter-spacing: .07em;
+}
+.cw-stat-label svg { width: 13px; height: 13px; opacity: .85; }
+.cw-stat-val {
+  font-family: var(--font-mono); font-size: 24px; font-weight: 600;
+  letter-spacing: -.5px; margin-top: 7px; line-height: 1;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
+/* Tone applies to the value only when the count is non-zero:
+   templates put .t-* on the value span only when val > 0.       */
+.cw-stat-val.t-ok, .cw-stat-val.t-warn, .cw-stat-val.t-crit, .cw-stat-val.t-expired { color: var(--cw-tone); }
+.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
+
+/* ---------- STATUS (dot + colored text) ---------- */
+.cw-status {
+  display: inline-flex; align-items: center; gap: 7px; white-space: nowrap;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .01em; line-height: 1.4;
+  color: var(--cw-tone, var(--text-2));
+}
+.cw-status .dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto; background: var(--cw-tone, var(--text-3)); }
+
+/* ---------- CHIP (one system; tones via .t-*) ---------- */
+.cw-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 450;
+  padding: 1.5px 7px; border-radius: 4px; white-space: nowrap;
+  border: 1px solid var(--border); color: var(--text-2); background: transparent;
+}
+.cw-chip svg { width: 11px; height: 11px; }
+.cw-chip.t-ok, .cw-chip.t-warn, .cw-chip.t-crit, .cw-chip.t-expired, .cw-chip.t-accent {
+  color: var(--cw-tone);
+  border-color: color-mix(in srgb, var(--cw-tone) 32%, transparent);
+  background: var(--cw-tone-soft);
+}
+.cw-chip.t-muted { color: var(--text-3); }
+.cw-chip.inset { background: var(--inset); }        /* SANs, values */
+a.cw-chip { text-decoration: none; cursor: pointer; }
+a.cw-chip:hover { border-color: var(--border-2); color: var(--text); }
+.cw-chiprow { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+
+/* ---------- POSTURE GRADE ---------- */
+.cw-grade {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 21px; height: 19px; padding: 0 5px; border-radius: var(--radius-sm);
+  border: 1.5px solid currentColor; background: transparent;
+  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; line-height: 1;
+}
+.cw-grade.lg { min-width: 38px; height: 34px; font-size: var(--fs-lg); border-radius: 9px; }
+
+/* ---------- BARS / METERS (SVG-based) ----------
+   Markup: <svg class="cw-bar t-warn" ...><rect class="track"/><rect class="fill" width="63%"/></svg>
+   Width lives in the SVG attribute — no inline style needed.    */
+svg.cw-bar { display: block; width: 100%; height: 5px; border-radius: 3px; overflow: hidden; }
+svg.cw-bar .track { fill: var(--inset); width: 100%; height: 100%; }
+svg.cw-bar .fill { fill: var(--cw-tone, var(--accent)); height: 100%; }
+svg.cw-bar.thick { height: 8px; border-radius: 5px; }
+svg.cw-bar .mark { fill: var(--text); opacity: .6; }
+.cw-expiry-track { width: 130px; margin-top: 5px; }
+
+/* ---------- BUTTONS ---------- */
+.cw-btn {
+  font-family: var(--font-sans); font-size: 13px; font-weight: 500;
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  padding: 8px 13px; border-radius: var(--radius); border: 1px solid var(--border-2);
+  background: var(--panel-2); color: var(--text); transition: all .12s;
+  white-space: nowrap; text-decoration: none;
+}
+.cw-btn:hover { background: var(--panel-3); border-color: var(--text-3); }
+.cw-btn.primary { background: var(--btn-strong-bg); border-color: transparent; color: var(--btn-strong-text); }
+.cw-btn.primary:hover { filter: brightness(0.92); }
+:root[data-theme="dark"] .cw-btn.primary:hover { filter: brightness(1.1); }
+.cw-btn.ghost { background: transparent; border-color: transparent; color: var(--text-2); padding: 6px 9px; }
+.cw-btn.ghost:hover { background: var(--panel-2); color: var(--text); }
+.cw-btn.sm { padding: 5px 10px; font-size: 12px; }
+.cw-btn.danger {
+  background: color-mix(in srgb, var(--crit) 14%, transparent);
+  border-color: color-mix(in srgb, var(--crit) 30%, transparent);
+  color: var(--crit);
+}
+.cw-btn.danger:hover { background: color-mix(in srgb, var(--crit) 22%, transparent); }
+.cw-btn[disabled], .cw-btn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+
+.cw-iconbtn {
+  width: 34px; height: 34px; border-radius: var(--radius); border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text-2); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; transition: all .12s;
+}
+.cw-iconbtn:hover { color: var(--text); border-color: var(--border-2); }
+.cw-iconbtn.sm { width: 28px; height: 28px; }
+
+/* ---------- FORMS ---------- */
+.cw-field { display: flex; flex-direction: column; gap: 6px; }
+.cw-label { font-size: 11.5px; font-weight: 500; color: var(--text-2); letter-spacing: .02em; }
+.cw-input, .cw-select, .cw-textarea {
+  font-family: var(--font-sans); font-size: 13px; color: var(--text); width: 100%;
+  background: var(--inset); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 11px; outline: none; transition: border-color .12s, box-shadow .12s;
+}
+.cw-input::placeholder, .cw-textarea::placeholder { color: var(--text-3); }
+.cw-input:focus, .cw-select:focus, .cw-textarea:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.cw-input.mono, .cw-textarea.mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
+.cw-textarea { min-height: 110px; resize: vertical; line-height: 1.6; }
+.cw-hint { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.5; }
+.cw-form { display: flex; flex-direction: column; gap: var(--space-4); }
+.cw-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+.cw-form-grid .wide { grid-column: 1 / -1; }
+.cw-form-foot {
+  display: flex; align-items: center; gap: 10px;
+  padding-top: var(--space-4); border-top: 1px solid var(--border);
+}
+.cw-check {
+  display: flex; align-items: center; gap: 9px;
+  font-size: 13px; color: var(--text-2); cursor: pointer;
+}
+
+/* ONE toggle switch. */
+.cw-toggle { position: relative; display: inline-flex; width: 40px; height: 22px; cursor: pointer; flex: 0 0 auto; }
+.cw-toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+.cw-toggle .track { position: absolute; inset: 0; background: var(--border-2); border-radius: 11px; transition: background .2s; }
+.cw-toggle .track::after {
+  content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+  border-radius: 50%; background: #fff; transition: transform .2s;
+}
+.cw-toggle input:checked + .track { background: var(--accent); }
+.cw-toggle input:checked + .track::after { transform: translateX(18px); }
+.cw-toggle input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Env-var override badge (settings). */
+.cw-envbadge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line); border-radius: 5px; padding: 1px 6px;
+}
+
+/* ---------- SEGMENTED CONTROL (the only one) ----------
+   Children may be <button> (form submit) or <a> (GET filter).
+   Active = .on. Optional count badge = .cnt.                    */
+.cw-seg {
+  display: inline-flex; background: var(--inset); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 3px; gap: 2px;
+}
+.cw-seg > a, .cw-seg > button {
+  font-family: var(--font-sans); font-size: var(--fs-sm); font-weight: 500;
+  color: var(--text-2); border: none; background: transparent;
+  padding: 5px 11px; border-radius: var(--radius-sm); cursor: pointer;
+  transition: all .12s; display: inline-flex; align-items: center; gap: 6px;
+  text-decoration: none; white-space: nowrap;
+}
+.cw-seg > a:hover, .cw-seg > button:hover { color: var(--text); }
+.cw-seg > .on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+.cw-seg .cnt { font-family: var(--font-mono); font-size: var(--fs-xs); opacity: .65; }
+
+/* ---------- FILTER BAR (the one filter paradigm) ----------
+   search + segments + spacer + secondary controls.              */
+.cw-filterbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: var(--space-4) 0 var(--space-3); }
+.cw-filterbar .cw-select { width: auto; }
+.cw-search { position: relative; flex: 0 0 auto; }
+.cw-search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text-3); pointer-events: none; width: 14px; height: 14px; }
+.cw-search input { padding-left: 33px; width: 260px; }
+
+/* ---------- TABS (page subnav: Activity/Posture sections) ---------- */
+.cw-tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: var(--space-5); }
+.cw-tab {
+  padding: 9px 16px; cursor: pointer; border-bottom: 2px solid transparent;
+  color: var(--text-3); text-decoration: none; font-size: var(--fs-base); font-weight: 500;
+  display: inline-flex; align-items: center; gap: 7px;
+}
+.cw-tab:hover { color: var(--text); }
+.cw-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+.cw-tab .cnt { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-3); }
+
+/* ---------- SIDE NAV (settings) ---------- */
+.cw-sidegrid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: var(--space-6); align-items: start; }
+.cw-sidenav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: var(--space-4); }
+.cw-sidenav a {
+  display: block; padding: 8px 12px; border-radius: 7px; text-decoration: none;
+  color: var(--text-2); font-size: var(--fs-base); font-weight: 500;
+  transition: background .12s, color .12s;
+}
+.cw-sidenav a:hover { background: var(--panel-2); color: var(--text); }
+.cw-sidenav a.active { background: var(--panel-3); color: var(--text); }
+.cw-sidenav .grp {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  color: var(--text-3); text-transform: uppercase; letter-spacing: .07em;
+  padding: 12px 12px 4px;
+}
+
+/* ---------- TABLE (one recipe) ---------- */
+.cw-table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.cw-table th {
+  text-align: left; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
+  color: var(--text-3); letter-spacing: .07em; text-transform: uppercase;
+  padding: 12px 14px 9px; border-bottom: 1px solid var(--border);
+  white-space: nowrap; user-select: none;
+}
+.cw-table td { padding: 11px 14px; border-bottom: 1px solid var(--border); vertical-align: middle; font-size: var(--fs-sm); }
+.cw-table tr:last-child > td { border-bottom: none; }
+.cw-table tbody tr { transition: background .1s; }
+.cw-table tbody tr:hover { background: var(--row-hover); }
+.cw-table th.num, .cw-table td.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.cw-table .cw-row-link { cursor: pointer; }
+/* identity cell: mono name + muted sub-line */
+.cw-id { font-family: var(--font-mono); font-size: var(--fs-base); font-weight: 500; letter-spacing: -.2px; color: var(--text); }
+/* sortable headers */
+.cw-table th a.sort { color: inherit; text-decoration: none; cursor: pointer; }
+.cw-table th a.sort:hover { color: var(--text-2); }
+.cw-table th .arrow { margin-left: 4px; opacity: .7; }
+/* hover-revealed row actions */
+.cw-rowact { display: flex; gap: 4px; opacity: 0; transition: opacity .12s; justify-content: flex-end; }
+.cw-table tbody tr:hover .cw-rowact, .cw-table tbody tr:focus-within .cw-rowact { opacity: 1; }
+/* expansion row (fingerprint groups, scan batches, pivots) */
+.cw-subrow > td { padding: 0 14px 10px; background: var(--inset); }
+tr[data-expand] { cursor: pointer; }
+.chev { transition: transform .15s; color: var(--text-3); display: inline-flex; vertical-align: middle; }
+.chev.open { transform: rotate(180deg); }
+/* wrap a table in a panel without double padding */
+.cw-panel > .cw-table-clip { overflow: hidden; border-radius: inherit; }
+
+/* hosts / entries listed inside an expansion row */
+.cw-subrow .row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+}
+.cw-subrow .row:hover { background: var(--row-hover); }
+.cw-subrow .row > a.cw-id { text-decoration: none; }
+.cw-subrow .row .cw-spacer { flex: 1; }
+/* inline note editor injected next to the note chip */
+.cw-note-form { display: inline-flex; gap: 4px; margin-left: 6px; }
+.cw-note-form .cw-input { width: 200px; padding: 3px 8px; font-size: 12px; }
+
+/* calendar view rows */
+.cw-cal-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--border); }
+.cw-cal-row:first-child { border-top: none; }
+.cw-cal-row.quiet { padding: 5px 0; }
+.cw-cal-date { min-width: 136px; font-size: var(--fs-sm); }
+.cw-cal-now {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 700;
+  color: var(--accent); text-transform: uppercase; letter-spacing: .04em;
+}
+
+/* ---------- PAGINATION ---------- */
+.cw-pager { display: flex; align-items: center; gap: var(--space-4); margin: var(--space-4) 0; font-size: var(--fs-base); color: var(--text-2); }
+
+/* ---------- DISCLOSURE (native <details>, the only mechanism) ---------- */
+details.cw-disclose > summary {
+  list-style: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+}
+details.cw-disclose > summary::-webkit-details-marker { display: none; }
+details.cw-disclose > summary .chev { transition: transform .15s; color: var(--text-3); display: inline-flex; }
+details.cw-disclose[open] > summary .chev { transform: rotate(180deg); }
+/* inline editor variant: summary is a small button, body is a form */
+details.cw-editor { display: block; }
+details.cw-editor > summary { list-style: none; cursor: pointer; display: inline-flex; }
+details.cw-editor > summary::-webkit-details-marker { display: none; }
+details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex; flex-direction: column; gap: var(--space-3); }
+
+/* ---------- KV GRID (detail-page fields) ---------- */
+.cw-kv { display: grid; grid-template-columns: 1fr 1fr; gap: 16px 22px; margin: 0; }
+.cw-kv > div.wide { grid-column: 1 / -1; }
+.cw-kv dt {
+  font-size: var(--fs-xs); color: var(--text-3); font-weight: 500;
+  letter-spacing: .03em; text-transform: uppercase; font-family: var(--font-mono); margin-bottom: 5px;
+}
+.cw-kv dd { margin: 0; font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--text); word-break: break-word; line-height: 1.5; }
+
+/* ---------- DETAIL-PAGE PIECES ---------- */
+.cw-kv-label {
+  font-size: var(--fs-xs); color: var(--text-3); font-weight: 500;
+  letter-spacing: .03em; text-transform: uppercase; font-family: var(--font-mono);
+  margin-bottom: 5px;
+}
+.cw-hero { display: flex; align-items: baseline; gap: 8px; margin-bottom: var(--space-3); }
+.cw-hero-num { font-size: var(--fs-2xl); font-weight: 600; letter-spacing: -.5px; line-height: 1; }
+.cw-validity-ends { display: flex; justify-content: space-between; margin-top: 8px; font-size: 11.5px; }
+.cw-findings { display: flex; flex-direction: column; gap: 7px; }
+.cw-finding { display: flex; align-items: flex-start; gap: 8px; font-size: var(--fs-sm); }
+.cw-finding > span:first-child { flex: 0 0 16px; display: inline-flex; margin-top: 1px; }
+.cw-finding .fail { font-weight: 600; }
+.cw-panel-head-inline { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-2); }
+.cw-notes-pre {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  font-family: var(--font-mono); font-size: var(--fs-sm); line-height: 1.6;
+  color: var(--text-2); background: var(--inset);
+  border: 1px solid var(--border); border-radius: 9px; padding: 11px 13px; min-height: 60px;
+}
+.cw-chaincard {
+  background: var(--panel-2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 11px 13px;
+}
+.cw-chiprow.between { justify-content: space-between; }
+.cw-metarow { margin-top: 7px; }
+
+/* ---------- TIMELINE (chain, renewal history, milestones) ---------- */
+.cw-tl { position: relative; }
+.cw-tl-node { position: relative; padding-left: 30px; padding-bottom: var(--space-4); }
+.cw-tl-node:last-child { padding-bottom: 0; }
+.cw-tl-dot {
+  position: absolute; left: 9px; top: 5px; width: 14px; height: 14px;
+  border-radius: 50%; border: 2px solid var(--cw-tone, var(--accent)); background: var(--panel); z-index: 2;
+}
+.cw-tl-line { position: absolute; left: 15px; top: 19px; bottom: 0; width: 2px; background: var(--border-2); }
+.cw-tl-node:last-child .cw-tl-line { display: none; }
+.cw-tl-role {
+  font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+  white-space: nowrap; color: var(--cw-tone, var(--text-2));
+}
+
+/* ---------- DRAWER (slide-over) ---------- */
+.cw-drawer-bg {
+  position: fixed; inset: 0; background: var(--cw-backdrop); backdrop-filter: blur(2px);
+  opacity: 0; transition: opacity .22s; pointer-events: none; z-index: 40;
+}
+.cw-drawer-bg.on { opacity: 1; pointer-events: auto; }
+.cw-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 452px; max-width: 92vw;
+  background: var(--panel); border-left: 1px solid var(--border);
+  box-shadow: -16px 0 48px rgba(0,0,0,.4);
+  transform: translateX(100%); transition: transform .26s cubic-bezier(.3,.8,.3,1);
+  z-index: 41; display: flex; flex-direction: column;
+}
+.cw-drawer.on { transform: translateX(0); }
+.cw-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); }
+.cw-drawer-title { margin: 0; font-size: var(--fs-md); font-weight: 600; }
+.cw-drawer-body { flex: 1; overflow: auto; padding: 20px; }
+.cw-drawer-foot { display: flex; gap: 10px; padding: 14px 20px; border-top: 1px solid var(--border); }
+.cw-drawer-tabs { padding: 16px 20px 0; }
+.cw-drawer-tabs .cw-seg { display: flex; }
+.cw-drawer-tabs .cw-seg > button { flex: 1; justify-content: center; }
+
+/* dropzone */
+.cw-drop {
+  border: 1.5px dashed var(--border-2); border-radius: 11px; padding: 26px 18px;
+  text-align: center; background: var(--inset); cursor: pointer;
+  transition: border-color .14s, background .14s;
+}
+.cw-drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+.cw-drop-icon {
+  width: 38px; height: 38px; border-radius: 10px; background: var(--panel-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent); margin-bottom: 10px;
+}
+
+/* ---------- MENU (dropdown) ---------- */
+.cw-menuwrap { position: relative; }
+.cw-menu {
+  position: absolute; top: calc(100% + 6px); right: 0; min-width: 220px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow); z-index: 50; padding: 6px 0;
+}
+.cw-menu-label {
+  padding: 6px 14px; font-family: var(--font-mono); font-size: 10px; font-weight: 600;
+  color: var(--text-3); letter-spacing: .05em; text-transform: uppercase;
+}
+.cw-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 8px 14px; font-size: 13px; color: var(--text-2);
+  background: none; border: none; cursor: pointer; font-family: var(--font-sans);
+  text-align: left; transition: all .12s; text-decoration: none;
+}
+.cw-menu-item:hover { background: var(--panel-2); color: var(--text); }
+
+/* ---------- EMPTY STATE (the only one) ---------- */
+.cw-empty { padding: 54px 0; text-align: center; }
+.cw-empty-icon {
+  width: 44px; height: 44px; border-radius: 12px;
+  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-3));
+  display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;
+}
+.cw-empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.cw-empty-sub { font-size: var(--fs-sm); color: var(--text-3); margin-top: 4px; }
+.cw-empty-act { margin-top: var(--space-4); }
+
+/* ---------- FLASH / BANNERS ---------- */
+.cw-flash {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: 10px 26px; font-size: 13px; border-bottom: 1px solid var(--border);
+  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-tone, var(--text-2));
+}
+.cw-flash .x {
+  background: none; border: none; font-size: 16px; line-height: 1; cursor: pointer;
+  color: inherit; opacity: .7; padding: 0 4px;
+}
+.cw-flash .x:hover { opacity: 1; }
+/* in-panel feedback (settings save, async test results) */
+.cw-inline-flash {
+  padding: 9px 12px; border-radius: var(--radius); font-size: var(--fs-sm); line-height: 1.5;
+  background: var(--cw-tone-soft, var(--inset)); color: var(--cw-tone, var(--text-2));
+}
+.cw-testres { font-size: var(--fs-sm); display: inline-flex; align-items: center; gap: 6px; color: var(--cw-tone, var(--text-3)); }
+
+/* Health strip: quiet when ok, tinted when degraded. */
+.cw-health {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 26px; border-bottom: 1px solid var(--border);
+  font-size: 12px; font-weight: 450;
+  background: var(--cw-tone-soft, var(--bg-soft)); color: var(--cw-tone, var(--text-3));
+}
+.cw-health .cw-status { font-size: 12px; font-weight: 450; }
+
+/* ---------- AUTH PAGES (login / setup) ---------- */
+.cw-auth-center { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+.cw-auth-panel { width: 400px; max-width: 92vw; padding: var(--space-6); }
+.cw-auth-mark {
+  width: 40px; height: 40px; border-radius: 10px; margin: 0 auto 12px;
+  display: flex; align-items: center; justify-content: center;
+  color: var(--accent); background: var(--inset); border: 1px solid var(--border-2);
+}
+.cw-auth-intro { text-align: center; margin-bottom: var(--space-6); }
+.cw-auth-intro h1 { margin: 0; font-size: var(--fs-lg); font-weight: 600; }
+
+/* ---------- BADGES ---------- */
+.cw-badge-new {
+  display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px;
+  background: var(--accent); color: var(--cw-accent-fg);
+  font-size: 10px; font-weight: 700; letter-spacing: .05em;
+}
+
+/* ---------- SKELETON / SPINNER ---------- */
+@keyframes cw-shimmer { 0% { background-position: -300px 0; } 100% { background-position: 300px 0; } }
+@keyframes cw-spin { to { transform: rotate(360deg); } }
+.sk {
+  border-radius: 6px; background: var(--panel-2);
+  background-image: linear-gradient(90deg, transparent, var(--row-hover), transparent);
+  background-size: 300px 100%; background-repeat: no-repeat;
+  animation: cw-shimmer 1.2s infinite linear;
+}
+.spin { animation: cw-spin .8s linear infinite; }
+
+/* ---------- CHARTS (shared shapes; geometry via SVG attrs) ----------
+   Fixed rendered height; width follows the viewBox aspect and shrinks
+   to fit narrow panels. Centered so sparse months don't hug the left. */
+.cw-chart { display: block; height: 190px; max-width: 100%; margin: 0 auto; }
+.cw-chart text {
+  font-family: var(--font-mono); font-size: 10px; fill: var(--text-3);
+}
+.cw-chart .grid { stroke: var(--border); stroke-width: 1; }
+.cw-chart rect.seg { fill: var(--cw-tone, var(--text-3)); }
+.cw-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: var(--fs-xs); color: var(--text-2); }
+.cw-legend .swatch { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 5px; vertical-align: -1px; background: var(--cw-tone, var(--text-3)); }
+
+/* ---------- PRINT (reports print from the page; no per-template CSS) ---------- */
+@media print {
+  .cw-topbar, .cw-health, .cw-flash, .cw-page-actions, .cw-filterbar,
+  .cw-tabs, .cw-rowact, .cw-pager, .cw-sidenav, .cw-crumbs { display: none !important; }
+  .cw-app { height: auto; }
+  .cw-page { overflow: visible; }
+  body { background: #fff; color: #111; }
+  .cw-panel, .cw-stats { border-color: #ccc; box-shadow: none; break-inside: avoid; }
+}
+
+/* ---------- RESPONSIVE ---------- */
+@media (max-width: 960px) {
+  .cw-cols { grid-template-columns: 1fr; }
+  .cw-stats { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); }
+  .cw-stats .cw-stat { border-top: 1px solid var(--border); }
+  .cw-stats .cw-stat:nth-child(-n+2) { border-top: none; }
+  .cw-stats .cw-stat:nth-child(odd) { border-left: none; }
+  .cw-form-grid, .cw-kv { grid-template-columns: 1fr; }
+  .cw-sidegrid { grid-template-columns: 1fr; }
+  .cw-sidenav { position: static; flex-direction: row; flex-wrap: wrap; }
+}
+@media (max-width: 640px) {
+  .cw-topbar { flex-wrap: wrap; gap: 8px; padding: 0 12px; height: auto; min-height: var(--cw-topbar-h); }
+  .cw-nav { order: 3; width: 100%; justify-content: center; flex-wrap: wrap; gap: 4px; margin: 0 0 6px; }
+  .cw-ver { display: none; }
+  .cw-wrap { padding: 16px 12px; }
+  .cw-table-clip { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .cw-table { min-width: 640px; }
+  .cw-page-head { flex-direction: column; align-items: flex-start; gap: 12px; }
+  .cw-search input { width: 100%; }
+}
+
+/* ---------- DETAIL LAYOUT ---------- */
+.cw-cols { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
+.cw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+/* Vertical page stack: the standard rhythm between page-level blocks. */
+.cw-vstack { display: flex; flex-direction: column; gap: var(--space-3); }
+.cw-vstack > .cw-panel + .cw-panel { margin-top: 0; }
+.cw-invgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
+.cw-gradecount { min-width: 32px; text-align: right; color: var(--text-2); }
+.cw-cal-row svg.cw-bar { flex: 1; }

@@ -72,7 +72,10 @@ looking. Before calling UI work done:
   timestamps with the `T` separator shown to users.
 - **Zero is not an alarm.** A count of 0 failures/expired renders neutral, not
   red ("Failures **0**" in crit-red shipped).
-- **A utility class that isn't in tokens.css silently does nothing.** Grep
+- **A utility class that isn't in cw.css silently does nothing.** (Since the
+  patina reconciliation, `css/tokens.css` is VENDORED from patina — never edit
+  it here; components and cw-local tokens live in `css/cw.css`, and
+  `tests/test_patina_conformance.py` fails the build on drift.) Grep
   before using one — `cw-gap-9`/`cw-gap-14` were referenced for months while
   undefined, collapsing gaps to zero ("Expiry calendarby time period").
 - **Color budget:** status colors (ok/warn/crit/expired) are reserved for
