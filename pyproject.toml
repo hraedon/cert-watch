@@ -68,6 +68,9 @@ packages = ["src/cert_watch"]
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+# Vendored from patina and byte-verified by tests/test_patina_conformance.py --
+# a formatter pass would break the stamps. See docs/patina/OWNERSHIP.md.
+extend-exclude = ["scripts/patina-check.py", "docs/patina"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]

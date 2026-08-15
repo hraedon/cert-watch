@@ -42,6 +42,10 @@ def _run(*extra):
             # the declaration cannot drift from reality unnoticed.
             "--declaration",
             str(ROOT / "patina.toml"),
+            # patina's own rules, vendored so an agent working here can read
+            # them; byte-verified against the manifest they ship with.
+            "--docs",
+            str(ROOT / "docs" / "patina"),
             "--ratchet-file",
             str(ROOT / "tests" / "patina-ratchet.json"),
             *extra,
