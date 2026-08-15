@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# patina:sha256 c38c65521cec24e9c9f4c66a750453d7ec3e91d07e3694bc08f6eb53ffae0f24 rev:499047c
+# patina:sha256 7066721fb240a898f8a8c62d97f1a6bda85ba2809ed69035fae0a9e8b52dc6a7 rev:fb295d0
 """check_patina.py -- the patina conformance gate (Plan 005).
 
 Verifies that a consuming tool's vendored patina assets have not drifted and
@@ -21,7 +21,11 @@ Checks:
   3. token contract -- every var(--x) referenced in tool CSS must be defined
                        by the contract block or by the tool itself; the tool
                        must not redefine a contract token; with --prefix, all
-                       tool-defined tokens must carry --<prefix>-.
+                       tool-defined tokens must carry --<prefix>-. EXCEPT
+                       inside an at-rule (@media print, forced-colors) carrying
+                       a `patina-allow-context: <reason>`: those are rendering
+                       contexts patina does not define, and before the
+                       exemption a tool could not print legibly and conform.
   4. colour ratchet -- raw colour literals (#hex / rgb / hsl / oklch) in tool
                        CSS are fingerprinted against a committed baseline.
                        A NEW fingerprint fails even if the total is unchanged,
@@ -481,19 +485,28 @@ def tool_css_sources(static_dir: Path, tokens_path: Path, extra_dirs=()):
     return sources
 
 
+# The exemption is for rendering contexts patina genuinely does not define.
+# It is NOT for a competing screen-theme system or a breakpoint: those are
+# exactly the drift the no-shadowing rule exists to stop, and the first version
+# of this check allowed both because it tested only that the prelude began with
+# `@`. It then printed "a rendering context patina does not define" -- asserting
+# something it had not checked.
+CONTEXT_FEATURES = ("print", "forced-colors", "monochrome")
+
+
 def at_rule_interiors(text: str):
-    """Char ranges inside @-rule blocks (@media print, @supports, ...)."""
+    """(start, end, prelude) for each @-rule block."""
     spans, stack = [], []
     prev = 0
     for m in re.finditer(r"[{}]", text):
         i = m.start()
         if text[i] == "{":
             prelude = text[prev:i].strip()
-            stack.append((prelude.startswith("@"), i))
+            stack.append((prelude, i))
         elif stack:
-            is_at, start = stack.pop()
-            if is_at:
-                spans.append((start, i))
+            prelude, start = stack.pop()
+            if prelude.startswith("@"):
+                spans.append((start, i, prelude))
         prev = i + 1
     return spans
 
@@ -501,10 +514,14 @@ def at_rule_interiors(text: str):
 def _enclosing_at_rule(pos: int, spans):
     """The innermost at-rule block containing pos, or None."""
     best = None
-    for a, b in spans:
+    for a, b, prelude in spans:
         if a < pos < b and (best is None or a > best[0]):
-            best = (a, b)
+            best = (a, b, prelude)
     return best
+
+
+def _is_context_at_rule(prelude: str) -> bool:
+    return any(f in prelude for f in CONTEXT_FEATURES)
 
 
 def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
@@ -520,6 +537,16 @@ def check_contract(gate: Gate, contract: set, sources, prefix: str | None):
         for m in TOKEN_DEF_RE.finditer(text):
             name = m.group(1)
             span = _enclosing_at_rule(m.start(), spans) if name in contract else None
+            if span is not None and not _is_context_at_rule(span[2]):
+                gate.fail(
+                    f"{src.label}:{text[: m.start()].count(chr(10)) + 1}: re-maps "
+                    f"contract token {name} inside `{span[2][:48]}`. The at-rule "
+                    "exemption is only for rendering contexts patina does not "
+                    f"define ({', '.join(CONTEXT_FEATURES)}). A competing theme "
+                    "system or a breakpoint re-mapping contract tokens is the "
+                    "drift this rule exists to stop."
+                )
+                continue
             if span is not None:
                 # A contract token re-mapped inside an at-rule is a RENDERING
                 # CONTEXT, not drift. patina defines two contexts, both screen;
@@ -649,6 +676,16 @@ def check_undefined_classes(
         return {}
     used = collect_class_usage(static_dir, extra_dirs, prefix)
     if not used:
+        # Silence is indistinguishable from a pass. A consumer can be fully
+        # conformant on the TOKEN prefix rule while using unprefixed class
+        # names -- openbia was -- and switch this check off without being told.
+        # Prefixing openbia's classes immediately surfaced `button-link`, which
+        # had rendered as bare link text for the life of the file.
+        gate.note(
+            f"no `{prefix}-` classes found in markup -- check 5 did not run. "
+            "The token prefix rule and the class prefix are different "
+            "namespaces; unprefixed class names silently disable this check."
+        )
         return {}
     defined = collect_defined_classes(sources)
     missing = {n: loc for n, loc in used.items() if n not in defined}
@@ -693,7 +730,25 @@ def scan_colour_literals(gate: Gate, sources):
     violations, allows = {}, 0
     for src in sources:
         raw_lines = src.text.splitlines()
-        exempt = set()
+        # A block blessed by `patina-allow-context:` is exempt from the colour
+        # ratchet as well. The docs tell you to write ONE reason for the block;
+        # recording a colour violation per line for obeying that instruction
+        # would pollute the baseline with the single deviation patina has
+        # explicitly blessed -- and would teach people to add a second marker
+        # per line, which is the ceremony the block scope exists to avoid.
+        stripped_full = strip_comments_keep_lines(src.text)
+        context_lines = set()
+        for a, b, prelude in at_rule_interiors(stripped_full):
+            if not _is_context_at_rule(prelude):
+                continue
+            first = stripped_full[:a].count("\n")
+            last = stripped_full[:b].count("\n")
+            if any(
+                CONTEXT_RE.search(ln)
+                for ln in raw_lines[first : last + 1]
+            ):
+                context_lines.update(range(first, last + 1))
+        exempt = set(context_lines)
         for i, line in enumerate(raw_lines):
             # `patina-allow-context:` CONTAINS `patina-allow`, so strip the
             # context marker before judging this line, or every legitimate
@@ -709,7 +764,7 @@ def scan_colour_literals(gate: Gate, sources):
                     f"{src.at(i)}: `{ALLOW_MARK}` without a reason -- write "
                     "`/* patina-allow: <why this literal must stay> */`"
                 )
-        for i, line in enumerate(strip_comments_keep_lines(src.text).splitlines()):
+        for i, line in enumerate(stripped_full.splitlines()):
             if i in exempt:
                 continue
             hits = COLOR_RE.findall(line)
