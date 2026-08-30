@@ -219,7 +219,7 @@
         </div>
         <div class="cw-panel-body">
           <div class="cw-panel-head-inline">
-            <span class="cw-kv-label">Host notes <span class="cw-muted">— apply to all certificates on this host</span></span>
+            <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
             {% if may_write and host_id %}
             <details class="cw-editor">
               <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
@@ -233,7 +233,7 @@
             </details>
             {% endif %}
           </div>
-          <pre class="cw-notes-pre">{{ host_info.notes or 'Add notes about this host (visible on every certificate on it)…' }}</pre>
+          <pre class="cw-notes-pre">{{ host_info.notes or 'Add operational notes for this host (visible on every certificate on it)…' }}</pre>
         </div>
       </div>
       {% endif %}
@@ -399,32 +399,9 @@
         </div>
       </div>
 
-      {% if cert %}
-      {# ---- Certificate notes ---- #}
-      <div class="cw-panel">
-        <div class="cw-panel-head">
-          <h2>{{ icons.svg_icon('file', 15) }} Certificate notes &amp; procedures</h2>
-          {% if may_write %}
-          <details class="cw-editor">
-            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
-            <div class="cw-editor-body">
-              <form method="post" action="/certificates/{{ cert_id }}/notes" class="cw-form">
-                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                <textarea name="notes" class="cw-textarea mono" spellcheck="false">{{ cert.notes }}</textarea>
-                <div class="cw-form-foot">
-                  <button class="cw-btn primary sm" type="submit">Save</button>
-                  <span class="cw-hint">Markdown supported · saved to this certificate only</span>
-                </div>
-              </form>
-            </div>
-          </details>
-          {% endif %}
-        </div>
-        <div class="cw-panel-body">
-          <pre class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</pre>
-        </div>
-      </div>
-      {% endif %}
+      {# Note: per-certificate notes were removed (UI-INVENTORY V1). The single
+         notes surface is the host-scoped Notes panel in the Operational
+         summary section above. #}
 
       {% if not cert %}
       <div class="cw-panel">

@@ -27,15 +27,15 @@ def _insert_cert(conn, cert_id, hostname, port=443, tags="", source="scanned"):
         INSERT INTO certificates
         (id, subject, issuer, not_before, not_after, san_dns_names,
          fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-         parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
+         parent_cert_id, chain_valid, replaces_cert_id, tags,
          created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             cert_id, hostname, f"issuer-{hostname}",
             now.isoformat(), (now + timedelta(days=30)).isoformat(),
             "[]", f"fp-{cert_id}", b"der", source, hostname,
-            port, 1, None, 1, None, "", tags,
+            port, 1, None, 1, None, tags,
             now.isoformat(), now.isoformat(),
         ),
     )

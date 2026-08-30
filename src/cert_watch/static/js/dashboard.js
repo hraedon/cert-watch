@@ -1,4 +1,6 @@
-/* Certificates page — pivot lazy-loading and inline host-note editing. */
+/* Certificates page — pivot lazy-loading (BC-048).
+ * Inline host-note editing was removed (UI-INVENTORY V2): the single notes
+ * editing surface is the Notes panel on the endpoint detail page. */
 (function () {
   'use strict';
 
@@ -60,64 +62,5 @@
         cell.textContent = 'Failed to load: ' + err.message;
         row.removeAttribute('data-loaded');
       });
-  });
-
-  /* ---- inline host-note editing (BC-021) ---- */
-  document.addEventListener('click', function (e) {
-    var btn = e.target.closest('[data-edit-note]');
-    if (!btn) return;
-    var hostId = btn.getAttribute('data-edit-note');
-    var csrf = btn.getAttribute('data-csrf');
-    var scopeRow = btn.closest('tr') || btn.parentElement;
-    var existing = scopeRow.querySelector('.cw-note-form[data-host-id="' + hostId + '"]');
-    if (existing) { existing.remove(); return; }
-
-    var form = document.createElement('form');
-    form.className = 'cw-inline cw-note-form';
-    form.setAttribute('data-host-id', hostId);
-    var input = document.createElement('input');
-    input.type = 'text';
-    input.name = 'notes';
-    input.className = 'cw-input sm';
-    input.placeholder = 'Add note…';
-    input.value = btn.getAttribute('data-note') || '';
-    var save = document.createElement('button');
-    save.type = 'submit';
-    save.className = 'cw-btn sm';
-    save.textContent = 'Save';
-    form.appendChild(input);
-    form.appendChild(save);
-    btn.parentNode.insertBefore(form, btn.nextSibling);
-    input.focus();
-
-    form.addEventListener('submit', function (ev) {
-      ev.preventDefault();
-      var note = input.value;
-      fetch('/api/hosts/' + hostId + '/notes', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
-        body: JSON.stringify({ notes: note }),
-      }).then(function (r) {
-        if (!r.ok) throw new Error('failed to save note');
-        return r.json();
-      }).then(function () {
-        form.remove();
-        btn.setAttribute('data-note', note);
-        // WI-105: scope chip lookup to this row (host_id is not unique per row).
-        var chip = scopeRow.querySelector('.cw-note-chip[data-host-id="' + hostId + '"]');
-        if (note.trim()) {
-          if (chip) {
-            chip.setAttribute('title', note);
-            chip.classList.remove('cw-hidden');
-          }
-        } else if (chip) {
-          chip.classList.add('cw-hidden');
-        }
-      }).catch(function (err) {
-        input.setCustomValidity('Error saving note: ' + err.message);
-        input.reportValidity();
-        input.setCustomValidity('');
-      });
-    });
   });
 })();

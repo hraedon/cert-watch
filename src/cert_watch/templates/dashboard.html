@@ -70,11 +70,10 @@
   {% if show_owner and e.owner_name %}
     <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
   {% endif %}
-  {% if e.host_id %}
-    <span class="cw-chip t-muted cw-note-chip{% if not e.notes %} cw-hidden{% endif %}" title="{{ e.notes or '' }}" data-host-id="{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
-    {% if may_write %}
-      <button type="button" class="cw-iconbtn sm" title="Edit note" data-edit-note="{{ e.host_id }}" data-note="{{ e.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
-    {% endif %}
+  {% if e.host_id and e.notes %}
+    {# Read-only indicator (V2): the single notes editing surface is the Notes
+       panel on the endpoint detail page. #}
+    <span class="cw-chip t-muted cw-note-chip" title="{{ e.notes }}" data-host-id="{{ e.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
   {% endif %}
 {% endmacro %}
 
@@ -240,11 +239,8 @@
                   <span class="cw-sub">scanned {{ h.last_scanned_at[:16] | replace('T', ' ') }}</span>
                 {% endif %}
                 {% if h.owner_name %}<span class="cw-chip">{{ h.owner_name }}</span>{% endif %}
-                {% if h.host_id %}
-                  <span class="cw-chip t-muted cw-note-chip{% if not h.notes %} cw-hidden{% endif %}" title="{{ h.notes or '' }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
-                  {% if may_write %}
-                    <button type="button" class="cw-iconbtn sm" title="Edit note" data-edit-note="{{ h.host_id }}" data-note="{{ h.notes or '' }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('edit', 12) }}</button>
-                  {% endif %}
+                {% if h.host_id and h.notes %}
+                  <span class="cw-chip t-muted cw-note-chip" title="{{ h.notes }}" data-host-id="{{ h.host_id }}">{{ icons.svg_icon('file', 11, 1.6) }}note</span>
                 {% endif %}
                 <span class="cw-spacer"></span>
                 {% if may_write and h.host_id %}

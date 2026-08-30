@@ -423,9 +423,8 @@ tr[data-expand] { cursor: pointer; }
 .cw-subrow .row:hover { background: var(--row-hover); }
 .cw-subrow .row > a.cw-id { text-decoration: none; }
 .cw-subrow .row .cw-spacer { flex: 1; }
-/* inline note editor injected next to the note chip */
-.cw-note-form { display: inline-flex; gap: 4px; margin-left: 6px; }
-.cw-note-form .cw-input { width: 200px; padding: 3px 8px; font-size: 12px; }
+/* read-only note indicator chip (V2: editing lives on the detail page) */
+.cw-note-chip { cursor: help; }
 
 /* calendar view rows */
 .cw-cal-row { display: flex; align-items: center; gap: 14px; padding: 9px 0; border-top: 1px solid var(--border); }

@@ -172,9 +172,9 @@ def store_uploaded(
             INSERT INTO certificates
             (id, subject, issuer, not_before, not_after, san_dns_names,
              fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
+             parent_cert_id, chain_valid, replaces_cert_id, tags,
              created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              """,
             (
                 leaf_id,
@@ -192,7 +192,6 @@ def store_uploaded(
                 None,
                 cv,
                 None,
-                "",
                 tags,
                 now,
                 now,
@@ -205,9 +204,9 @@ def store_uploaded(
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 parent_cert_id, chain_valid, replaces_cert_id,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     chain_id,
@@ -225,7 +224,6 @@ def store_uploaded(
                     leaf_id,
                     None,
                     None,
-                    "",
                     now,
                     now,
                 ),

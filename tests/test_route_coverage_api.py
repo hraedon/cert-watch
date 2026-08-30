@@ -996,19 +996,6 @@ def test_import_hosts_invalid_interval(reload_app, tmp_path):
     assert "scan_interval" in r.headers["location"]
 
 
-# ---------- Notes via API ----------
-
-
-def test_api_update_notes_not_string(reload_app, tmp_path, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
-    with TestClient(app_mod.app) as client:
-        r = client.patch(f"/api/certificates/{cert_id}/notes", json={"notes": 123})
-    assert r.status_code == 400
-    assert "string" in r.json()["error"]
-
-
 # ---------- PEM download encode error ----------
 
 

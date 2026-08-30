@@ -4,6 +4,20 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
+  host-scoped concept. Migration 0030 concatenates every non-empty
+  `certificates.notes` value into the matching `hosts.notes` row and drops the
+  column. Endpoints removed: `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`; the `notes` key was also removed from
+  `GET /api/certificates/{id}` responses. The three dashboard inline note
+  editors were removed — the dashboard shows a read-only note indicator; the
+  single editing surface is the Notes panel on the endpoint detail page
+  (`POST /hosts/{id}/notes`, JSON: `PATCH /api/hosts/{id}/notes`).
+  **Caveat:** notes attached to uploaded certificates with no matching host
+  row cannot be merged; they are listed in a WARNING log at migration time and
+  survive in the pre-migration database backup.
+
 ### Fixed
 - **Immutable release and deployment image tags.** Ordinary `main` builds now
   publish and deploy the commit-SHA image tag; a semantic-version image tag is

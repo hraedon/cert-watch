@@ -220,7 +220,7 @@ def test_certificate_detail_shows_host_notes(
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "Host notes" in r.text
+    assert "operational notes for this host" in r.text
     assert "host-level note" in r.text
 
 
@@ -313,7 +313,8 @@ def test_dashboard_note_chip_uses_data_attr_not_duplicate_id(reload_app, tmp_pat
     The old id-based pattern produced duplicate DOM ids whenever multiple
     rendered chips shared a host_id (invalid HTML; the JS only updated the
     first). The chip now carries a ``cw-note-chip`` class + ``data-host-id``
-    attribute, and the edit-note JS scopes its lookup to the clicked row.
+    attribute. It is read-only (UI-INVENTORY V2): the single notes editing
+    surface is the detail-page Notes panel.
     Verified across both the grouped (host-row) and non-grouped (cert-row)
     chip locations.
     """

@@ -12,6 +12,7 @@ AC-5: Documented, tested restore procedure.
 from __future__ import annotations
 
 import contextlib
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -516,6 +517,9 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
     assert "hostname" in alerts_cols
     assert "subject" in alerts_cols
     assert "tags" in certs_cols
+    # 0030: certificates.notes is merged into hosts.notes and dropped.
+    assert "notes" not in certs_cols
+    assert "notes" in hosts_cols
     assert "expected_issuers" in hosts_cols
     assert "chain_incomplete" in posture_cols
     assert "chain_status" in posture_cols
@@ -631,3 +635,82 @@ def test_migration_0017_adds_caa_columns(tmp_path):
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "caa_present" in cols
     assert "caa_records" in cols
+
+
+# ── 0030: merge per-certificate notes into host notes (UI-INVENTORY V1) ──────
+
+
+def _mk_pre0030_db(db: Path) -> None:
+    """Create a DB at the pre-0030 shape: ensure_base + re-add the column the
+    migration is responsible for dropping."""
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, notes, added_at)"
+            " VALUES ('h1', 'a.example.com', 443, 'existing host note', '2026-01-01')"
+        )
+        for cid, subject, hostname, port, notes in (
+            ("c1", "CN=a.example.com", "a.example.com", 443, "cert note one"),
+            ("c2", "CN=a.example.com", "a.example.com", 443, "cert note two"),
+            ("c3", "CN=orphan.example.com", None, None, "orphan uploaded note"),
+        ):
+            conn.execute(
+                "INSERT INTO certificates (id, subject, issuer, not_before, not_after,"
+                " san_dns_names, fingerprint_sha256, raw_der, source, hostname, port,"
+                " is_leaf, notes, created_at, updated_at)"
+                " VALUES (?, ?, 'CN=Test CA', '2025-01-01', '2026-01-01', '[]',"
+                " ?, X'00', 'scan', ?, ?, 1, ?, '2025-01-01', '2025-01-01')",
+                (cid, subject, "ab" * 32, hostname, port, notes),
+            )
+        conn.commit()
+
+
+def test_migration_0030_merges_notes_and_drops_column(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0030_merge_cert_notes import upgrade
+
+    db = tmp_path / "test.db"
+    _mk_pre0030_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        certs_cols = _table_columns(conn, "certificates")
+        merged = conn.execute(
+            "SELECT notes FROM hosts WHERE hostname = 'a.example.com'"
+        ).fetchone()[0]
+    assert "notes" not in certs_cols
+    assert "existing host note" in merged
+    assert "cert note one" in merged
+    assert "cert note two" in merged
+
+
+def test_migration_0030_warns_on_orphan_notes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Cert notes with no matching host are not silently merged — they are
+    logged (and survive in the runner's pre-migration backup)."""
+    from cert_watch.migrations.m0030_merge_cert_notes import upgrade
+
+    db = tmp_path / "test.db"
+    _mk_pre0030_db(db)
+    with (
+        caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0030"),
+        sqlite3.connect(str(db)) as conn,
+    ):
+        upgrade(conn)
+    assert any("orphan" in r.message and "c3" in r.message for r in caplog.records)
+
+
+def test_migration_0030_noop_without_column(tmp_path: Path) -> None:
+    """Idempotent on fresh DBs where the column never existed."""
+    from cert_watch.migrations.m0030_merge_cert_notes import upgrade
+
+    db = tmp_path / "test.db"
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)  # must not raise
+        cols = _table_columns(conn, "certificates")
+    assert "notes" not in cols

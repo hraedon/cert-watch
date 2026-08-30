@@ -932,32 +932,18 @@ def test_delete_certificate_not_found(reload_app):
     assert r.headers["location"] == "/"
 
 
-# ---------- certificate notes ----------
+# ---------- certificate notes (removed — UI-INVENTORY V1) ----------
 
 
-def test_update_notes_not_found(reload_app):
+def test_certificate_notes_route_removed(reload_app):
+    """POST /certificates/{id}/notes must not exist — notes are host-scoped."""
     app_mod = reload_app()
     _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
         r = client.post(
             f"/certificates/{_MISSING}/notes", data={"notes": "test"}, follow_redirects=False
         )
-    assert r.status_code == 303
-    assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
-
-
-def test_update_notes_too_long(reload_app, tmp_path, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
-    with TestClient(app_mod.app) as client:
-        r = client.post(
-            f"/certificates/{cert_id}/notes",
-            data={"notes": "x" * 10001},
-            follow_redirects=False,
-        )
-    assert r.status_code == 303
-    assert "too+long" in r.headers["location"] or "too%20long" in r.headers["location"]
+    assert r.status_code == 404
 
 
 # ---------- certificate owner ----------

@@ -253,8 +253,9 @@ def test_dashboard_pagination_empty():
     assert "pagination" not in r.text and "Page" not in r.text
 
 
-def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
-    """FEAT-013: detail page should show notes UI for certificates."""
+def test_uploaded_cert_has_no_notes_ui(reload_app, tmp_path, leaf_pem_file):
+    """UI-INVENTORY V1: notes are host-scoped; an uploaded certificate with no
+    host row renders no notes editing control."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
@@ -262,32 +263,7 @@ def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert 'name="notes"' in r.text  # notes editor form
-    assert "note" in r.text  # note chip / editor affordance
-
-
-def test_dashboard_notes_form_posts(reload_app, tmp_path, leaf_pem_file):
-    """FEAT-013: notes form should POST and persist."""
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.upload import UploadedEntry
-    entry = upload_certificate(leaf_pem_file)
-    assert isinstance(entry, UploadedEntry)
-    cert_id = store_uploaded(entry, db)
-
-    with TestClient(app_mod.app) as client:
-        r = client.post(
-            f"/certificates/{cert_id}/notes",
-            data={"notes": "test note from UI"},
-            follow_redirects=False,
-        )
-    assert r.status_code == 303
-
-    # Verify the note persisted via the API
-    with TestClient(app_mod.app) as client:
-        r = client.get(f"/api/certificates/{cert_id}")
-    assert r.status_code == 200
-    assert r.json()["notes"] == "test note from UI"
+    assert 'name="notes"' not in r.text
 
 
 def test_dashboard_pagination_with_data(reload_app, tmp_path):

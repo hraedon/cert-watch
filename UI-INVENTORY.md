@@ -8,13 +8,14 @@ diff fails review.
 
 Paths are relative to `src/cert_watch/`. Endpoints marked **(no UI caller)**
 exist but are invoked by no template or bundled JS. State inventoried:
-branch `redesign/ui-v2` @ 9d364ef, 2026-08-14.
+branch `redesign/attention-home`, 2026-08-30 (V1 + V2 implemented; notes are
+host-scoped only).
 
 ## Certificate (`certificates` table)
 
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
-| Notes & procedures | `certificates.notes` (schema.py:35) | Textarea, cert detail — `templates/certificate_detail.html:411-413` | `POST /certificates/{id}/notes` (routes/certificates.py:482); `PATCH /api/certificates/{id}/notes` (routes/api/certificates.py:119) (no UI caller) | Keep cert-detail textarea — **pending WI-3 adjudication vs. host notes (V1)** |
+| ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` dropped by migration 0030 (merged into `hosts.notes`) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
 | Own tags | `certificates.tags` | Text input (datalist), cert detail — `certificate_detail.html:370-374` | `POST /certificates/{id}/tags` (routes/certificates.py:516); `PUT /api/certificates/{id}/tags` (routes/api/certificates.py:216) (no UI caller) | Cert-detail tags editor (host tags inherited, shown `(host)` — OK) |
 | Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` (routes/certificates.py:674); `POST /certificates/{id}/delete` (:459) | As-is |
 
@@ -23,7 +24,7 @@ branch `redesign/ui-v2` @ 9d364ef, 2026-08-14.
 | Concept | Column(s) | Editing control(s) today | Write endpoint(s) | Single owner (proposed) |
 |---|---|---|---|---|
 | Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One form ("Operational summary → Edit"), cert detail — `certificate_detail.html:138-166` | `POST /certificates/{cert_id\|host_id}/owner` (routes/certificates.py:559 — writes to **hosts**, resolves host when no cert); `PATCH /api/hosts/{id}/owner` (routes/api/hosts.py:85) (no UI caller) | Cert-detail owner form (already single); rename endpoint under `/hosts/` when convenient |
-| Host notes | `hosts.notes` (schema.py:78) | **5 write paths, 2 control types:** (1) textarea, cert detail — `certificate_detail.html:227-229`; (2-4) single-line input injected by `static/js/dashboard.js:66-101` at 3 dashboard slots — `dashboard.html:76` (macro `meta_chips`, called at :217 and :265) and `dashboard.html:246` (host table); (5) `notes` form param on add-host route (routes/hosts.py:139) — **no drawer field exists**; plus CSV `notes` column (routes/hosts.py:296) | (1) `POST /hosts/{id}/notes` (routes/hosts.py:364); (2-4) `PATCH /api/hosts/{id}/notes` (routes/api/hosts.py:191); (5) `POST /hosts` (:130); CSV `POST /hosts/import` (:231) | **Pending WI-3 adjudication (V1/V2)** — do not add further surfaces meanwhile |
+| Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` (routes/hosts.py:139, no drawer field) and CSV `notes` column (:296) | `POST /hosts/{id}/notes` (routes/hosts.py:364); `PATCH /api/hosts/{id}/notes` (routes/api/hosts.py:191) (no UI caller — JSON API path); `POST /hosts` (:130); CSV `POST /hosts/import` (:231) | Detail-page Notes panel — **resolved (V1/V2)** |
 | Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also add-host route param (routes/hosts.py:136, **no drawer field**) and CSV `tags` column (:295) | `POST /hosts/{id}/tags` (routes/hosts.py:397); `PUT /api/hosts/{id}/tags` (routes/api/hosts.py:226) (no UI caller); `POST /hosts`; `POST /hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds, label them as such |
 | Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` (routes/hosts.py:130) | Create-only by design — OK |
 | Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts`; `POST /hosts/import` | No post-creation edit control exists (displayed read-only, `certificate_detail.html:191`) — see "Latent / unsurfaced fields" |
@@ -57,21 +58,26 @@ branch `redesign/ui-v2` @ 9d364ef, 2026-08-14.
 
 ## Violations & open decisions
 
-- **V1 — Two near-identical notes textareas on one page (the motivating case).**
-  `certificate_detail.html:229` (`hosts.notes`) and `:413` (`certificates.notes`)
-  are both 10,000-char free-text controls on the same detail page.
-  **DECIDED 2026-08-14 (owner, patina plan 008 WI-3): merge to ONE
-  host-scoped notes field.** `certificates.notes` migrates (concat) into
-  `hosts.notes`, column and its endpoints dropped; single "Notes" panel on
-  the detail page, scoped "operational notes for this host"; placeholder
-  stops soliciting owner/runbook. Implementation pending — until it lands,
-  no new writes to `certificates.notes`.
-- **V2 — `hosts.notes` has two control types and four live UI surfaces.**
-  Cert-detail textarea (`POST /hosts/{id}/notes`) vs. three dashboard
-  single-line inline editors (`dashboard.html:76→217,265` and `:246`, via
-  `static/js/dashboard.js:96`, `PATCH /api/hosts/{id}/notes`). Same column,
-  different control shape, different verb (form POST vs. JSON PATCH).
-  Resolution follows V1's adjudication; until then, no new surfaces.
+- **V1 — RESOLVED 2026-08-30 (branch `redesign/attention-home`).** Two
+  near-identical notes textareas on the detail page (`hosts.notes` at
+  `certificate_detail.html:229`, `certificates.notes` at `:413`).
+  Per the 2026-08-14 adjudication (merge to ONE host-scoped field):
+  migration **0030** concatenates every non-empty `certificates.notes` into
+  the matching `hosts.notes` (matched on hostname+port) and drops the column.
+  Notes on uploaded certificates with **no matching host row** cannot be
+  merged — they survive only in the migration runner's pre-migration backup
+  and are listed in a `WARNING` log (`cert_watch.migrations.0030`).
+  Both endpoints removed: `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`. The single "Notes" panel is scoped
+  "operational notes for this host". Certificate-less uploaded certs have no
+  notes surface.
+- **V2 — RESOLVED 2026-08-30 (same branch).** The three dashboard
+  single-line inline note editors were removed from `static/js/dashboard.js`
+  and `dashboard.html`; the dashboard now renders a **read-only** note
+  indicator chip (hover tooltip) that deep-links nothing — editing happens on
+  the detail-page Notes panel (`POST /hosts/{id}/notes`, form POST).
+  `PATCH /api/hosts/{id}/notes` remains as the JSON API path (no UI caller).
+  One concept, one control, one verb.
 - **V3 — "Webhook URL" names three distinct concepts.** Alert webhook
   (`settings/channels.html:77`), event-forwarding sink
   (`settings/events.html:36`), per-alert-group webhook

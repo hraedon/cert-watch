@@ -62,7 +62,7 @@ def _seed_fleet(db_path: str | Path) -> list[str]:
             fingerprint_sha256=cid.replace("cert-", "fp-"),
             raw_der=b"\x00",
             is_leaf=True,
-            notes="",
+
             source="scanned",
         )
         seed_certificate(
@@ -256,7 +256,7 @@ def _seed_fleet_with_revocation(db_path: str | Path) -> list[str]:
             fingerprint_sha256=cid.replace("cert-", "fp-"),
             raw_der=b"\x00",
             is_leaf=True,
-            notes="",
+
             source="scanned",
         )
         seed_certificate(
@@ -316,7 +316,7 @@ class TestRevocationMetric:
             not_before=now - timedelta(days=30),
             not_after=now + timedelta(days=100),
             san_dns_names=[], fingerprint_sha256="fp-bad",
-            raw_der=b"\x00", is_leaf=True, notes="", source="scanned",
+            raw_der=b"\x00", is_leaf=True, source="scanned",
         )
         seed_certificate(str(db), cert, cert_id="cert-bad",
                          hostname="bad.example.com", port=443,

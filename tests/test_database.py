@@ -134,7 +134,8 @@ def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
     with sqlite3.connect(str(db)) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         assert "replaces_cert_id" in cols
-        assert "notes" in cols
+        # 0030: certificates.notes is merged into hosts.notes and dropped.
+        assert "notes" not in cols
         idx = {r[1] for r in conn.execute("PRAGMA index_list('certificates')").fetchall()}
         assert "idx_cert_replaces" in idx
 
@@ -228,12 +229,7 @@ def test_update_notes(tmp_path, self_signed_leaf):
 
     loaded = repo.get_by_id(cert_id)
     assert loaded is not None
-    assert loaded.notes == ""
-
-    repo.update_notes(cert_id, "staging cert for renewal")
-    loaded = repo.get_by_id(cert_id)
-    assert loaded is not None
-    assert loaded.notes == "staging cert for renewal"
+    assert loaded.subject == cert.subject
 
 
 def test_list_unified_entries_scanned_pending_uploaded(tmp_path, self_signed_leaf):

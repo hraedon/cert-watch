@@ -1,4 +1,4 @@
-"""Certificate detail, delete, notes, upload, and trust anchor routes."""
+"""Certificate detail, delete, upload, and trust anchor routes."""
 
 from __future__ import annotations
 
@@ -479,39 +479,8 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
     return RedirectResponse(url="/", status_code=303)
 
 
-@router.post("/certificates/{cert_id}/notes")
-async def update_certificate_notes(
-    request: Request, cert_id: IdParam, notes: str = Form(...)
-) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
-    if len(notes) > 10000:
-        return RedirectResponse(
-            url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
-        )
-    db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-
-    repo = SqliteCertificateRepository(db)
-    if repo.get_by_id(cert_id) is None:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    with get_write_lock():
-        repo.update_notes(cert_id, notes)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="cert.update_notes",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"notes_length": len(notes)},
-        source_ip=resolve_source_ip(request),
-    )
-    logger.info("updated notes for certificate %s", cert_id)
-    return RedirectResponse(url="/", status_code=303)
-
+# Note: POST /certificates/{id}/notes was removed (UI-INVENTORY V1). Notes are
+# a host-scoped concept now — the single write surface is POST /hosts/{id}/notes.
 
 @router.post("/certificates/{cert_id}/tags")
 async def update_certificate_tags(
