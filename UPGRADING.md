@@ -48,6 +48,23 @@ are on a pre-0.9.0 release, take the two-step path below.
 Downgrade is **not** supported — migrations are forward-only. To roll back,
 restore the pre-migration backup.
 
+### Behaviour changes in this line to be aware of
+
+- **Per-certificate notes are merged into host notes (migration 0030).** Every
+  non-empty `certificates.notes` value is concatenated into the matching
+  `hosts.notes` row and the column is dropped. Notes on *uploaded*
+  certificates with no matching host row (a hostname+port pair in `hosts`)
+  cannot be merged: they are listed in a WARNING log at migration time and
+  survive only in the pre-migration backup. The UI has a single "Notes" panel
+  per endpoint (host-scoped); `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`, and the `notes` key in
+  `GET /api/certificates/{id}` are removed.
+- **The landing page is now Home; the inventory table moved to `/browse`.**
+  `/` renders the attention queue (what needs a human, ranked by
+  time-to-impact) plus a 12-week expiry horizon. Requests to `/` carrying the
+  dashboard's filter/sort/page/view params (old bookmarks) redirect to
+  `/browse` with the query preserved.
+
 ### Windows / IIS specifics
 
 **Upgrade by re-running `install-windows.ps1`** with the same arguments as your

@@ -374,7 +374,7 @@ class TestSettingsPasswordPost:
         # Login with current password
         _login(page, authed_server, "e2eadmin", "newE2ePass1")
         # Verify login succeeded
-        expect(page.locator("body")).to_contain_text("Certificates", timeout=5000)
+        expect(page.get_by_test_id("home-heading")).to_be_visible(timeout=5000)
 
         # Navigate to auth tab
         page.goto(f"{authed_server}/settings?tab=auth")
@@ -395,7 +395,7 @@ class TestSettingsPasswordPost:
 
         # Verify the new password works
         _login(page, authed_server, "e2eadmin", "rotatedPass1")
-        expect(page.locator("body")).to_contain_text("Certificates")
+        expect(page.get_by_test_id("home-heading")).to_be_visible()
 
 
 class TestAuthedSettingsPostForms:

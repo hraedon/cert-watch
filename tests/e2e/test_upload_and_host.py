@@ -90,22 +90,24 @@ def _switch_tab(page: Page, tab: str) -> None:
 def test_upload_pem_appears_on_dashboard(
     page: Page, cert_watch_server: str, pem_path: Path
 ) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     _open_slide(page)
     _switch_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(str(pem_path))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.locator("body")).to_contain_text("e2e-pem.example.com")
 
 
 def test_upload_pfx_shows_leaf_and_chain(
     page: Page, cert_watch_server: str, pfx_path: Path
 ) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     _open_slide(page)
     _switch_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(str(pfx_path))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     body = page.locator("body")
     expect(body).to_contain_text("e2e-pfx.example.com")
     # Chain info is on the detail page; click through to verify
@@ -117,14 +119,15 @@ def test_upload_pfx_shows_leaf_and_chain(
 
 def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
     hostname = "nonexistent.invalid"
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     _open_slide(page)
     # Scan host tab is active by default
     page.get_by_test_id("scan-hostname-input").fill(hostname)
     page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
     page.get_by_test_id("scan-submit-btn").click()
-    # The scan will fail (host doesn't exist) — the dashboard should still load
+    # The scan will fail (host doesn't exist) — the app should still load
     # without 500. The host is stored even though no cert is captured.
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_have_text("Certificates")
     # Assert the host appears in the table
     expect(page.locator("body")).to_contain_text(hostname)

@@ -191,7 +191,7 @@ def test_valid_ldap_login(
     page.get_by_test_id("login-password").fill(samba_ldap_e2e.admin_password)
     page.get_by_test_id("login-submit-btn").click()
     page.wait_for_url("**/*", timeout=10000)
-    assert "Certificates" in page.inner_text("body") or "dashboard-heading" in page.content()
+    assert "home-heading" in page.content() or "dashboard-heading" in page.content()
 
 
 def test_wrong_password_shows_error(

@@ -1443,7 +1443,7 @@ def test_no_auth_dashboard_shows_all_controls(tmp_path, reload_app):
     app_mod = reload_app()
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
     assert "nav-settings" in r.text
@@ -1499,10 +1499,14 @@ def test_operator_dashboard_has_write_but_no_settings(tmp_path):
     token = create_session("operator", groups=["g-operators"])
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, token)
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
+    # scan-now controls inside the attention queue are gated too
+    r_home = client.get("/")
+    assert r_home.status_code == 200
     assert "nav-settings" not in r.text
+    assert "nav-settings" not in r_home.text
 
 
 def test_admin_dashboard_has_mutating_controls_when_rbac(tmp_path):
@@ -1525,7 +1529,7 @@ def test_admin_dashboard_has_mutating_controls_when_rbac(tmp_path):
     token = create_session("admin", groups=["g-admins"])
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, token)
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
     assert "nav-settings" in r.text

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
     AlertRepository,
@@ -45,7 +46,71 @@ router = APIRouter()
 templates = get_templates()
 
 
-@router.get("/", response_class=HTMLResponse)
+# Query params that belong to the inventory table (now at /browse). A request
+# for / carrying any of them is a legacy bookmark — redirect to /browse.
+_BROWSE_PARAMS = {"q", "urgency", "source", "sort_by", "sort_order", "page", "grouped", "view"}
+
+
+@router.get("/", response_model=None)
+def home(
+    request: Request,
+    error: str | None = None,
+    warning: str | None = None,
+    saved: str | None = None,
+) -> HTMLResponse | RedirectResponse:
+    if _BROWSE_PARAMS & set(request.query_params):
+        return RedirectResponse(url=f"/browse?{request.query_params}", status_code=307)
+
+    db = _db_path(request)
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
+    items = build_attention_queue(db, scope_tags=scope_tags)
+    stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
+
+    # Next-12-weeks horizon with storm markers (same bucket query as the
+    # calendar view on /browse).
+    horizon = list_calendar(db, bucket="week", scope_tags=scope_tags)
+    _now = datetime.now(UTC)
+    _week_start = _now - timedelta(days=_now.weekday())
+    current_week_start = _week_start.strftime("%Y-%m-%d")
+    next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
+    horizon = [b for b in horizon if b["bucket_start"] >= current_week_start][:12]
+    storms = 0
+    for b in horizon:
+        bs = b["bucket_start"]
+        if bs <= current_week_start:
+            b["tone"] = "t-crit"
+        elif bs <= next_week_start:
+            b["tone"] = "t-warn"
+        else:
+            b["tone"] = ""
+        if b.get("count", 0) >= 3:
+            storms += 1
+
+    csrf_ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="home.html",
+        context={
+            "queue": items,
+            "stats": stats,
+            "horizon": horizon,
+            "current_week_start": current_week_start,
+            "horizon_storms": storms,
+            "version": __version__, "commit": __commit__,
+            "error": error,
+            "warning": warning,
+            "saved": saved,
+            **auth_ctx,
+            "active_page": "home",
+            **csrf_ctx,
+        },
+    )
+
+
+@router.get("/browse", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     error: str | None = None,
@@ -159,7 +224,7 @@ def dashboard(
             "error": error,
             "warning": warning,
             **auth_ctx,
-            "active_page": "dashboard",
+            "active_page": "browse",
             "filter_q": q or "",
             "filter_urgency": urgency or "",
             "filter_source": source or "",

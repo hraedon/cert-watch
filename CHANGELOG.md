@@ -36,6 +36,16 @@ All notable changes to cert-watch are documented in this file.
   requests.
 
 ### Changed
+- **Information architecture: Home / Browse split.** The landing page is now a
+  **Home** view organized around the operator's actual question — "what needs
+  a human, and when?" — instead of the raw inventory table. Home shows a
+  ranked attention queue (expired → stalled renewals → critical → failing
+  scans → warnings, with renewal confidence demoting automated renewals) and a
+  12-week expiry horizon with renewal-storm markers. The full inventory table
+  (sorting, urgency filters, pivots, calendar, add drawer) moved to **`/browse`**;
+  requests to `/` carrying the old dashboard's filter/sort/page/view params
+  redirect there (307, query preserved). Nav: Home · Browse · Posture ·
+  Activity · Settings.
 - CI and E2E jobs install from the committed `uv.lock`, Starlette's test client
   uses its supported `httpx2` backend, and the Docker build pins the `uv` image
   by digest for reproducible builds.

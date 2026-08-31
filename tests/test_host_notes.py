@@ -302,7 +302,7 @@ def test_dashboard_host_row_shows_notes_indicator(
     store_scanned(se, db)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "dashboard note" in r.text
 
@@ -341,7 +341,7 @@ def test_dashboard_note_chip_uses_data_attr_not_duplicate_id(reload_app, tmp_pat
     with TestClient(app_mod.app) as client:
         # Exercise both chip locations: non-grouped (cert-row) and grouped
         # (host-row) render paths.
-        for url in ["/?grouped=0", "/?grouped=1"]:
+        for url in ["/browse?grouped=0", "/browse?grouped=1"]:
             r = client.get(url)
             assert r.status_code == 200
             # The legacy id-based pattern is gone entirely.

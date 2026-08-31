@@ -11,6 +11,13 @@ exist but are invoked by no template or bundled JS. State inventoried:
 branch `redesign/attention-home`, 2026-08-30 (V1 + V2 implemented; notes are
 host-scoped only).
 
+IA note: the landing page is now **Home** (`/`, `templates/home.html` — ranked
+attention queue + expiry horizon) and the inventory table lives at
+**/browse** (`templates/dashboard.html`, including the add-certificates
+drawer). Home introduces **no new editing controls** — its only mutating
+surface is the per-item "scan now" button, which posts to the pre-existing
+`POST /hosts/{id}/scan` (same endpoint the detail page and Browse rows use).
+
 ## Certificate (`certificates` table)
 
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |

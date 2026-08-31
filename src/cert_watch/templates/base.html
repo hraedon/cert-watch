@@ -28,9 +28,10 @@
         <span class="cw-ver">v{{ version }}{% if commit %} <span class="cw-muted">({{ commit }})</span>{% endif %}</span>
       </a>
       <nav class="cw-nav" aria-label="Primary">
-        <a href="/" data-testid="nav-dashboard" {% if active_page == 'dashboard' %}class="active" aria-current="page"{% endif %}>Certificates</a>
+        <a href="/" data-testid="nav-home" {% if active_page == 'home' %}class="active" aria-current="page"{% endif %}>Home</a>
+        <a href="/browse" data-testid="nav-browse" {% if active_page == 'browse' %}class="active" aria-current="page"{% endif %}>Browse</a>
         <a href="/posture" data-testid="nav-posture" {% if active_page == 'posture' %}class="active" aria-current="page"{% endif %}>Posture</a>
-        <a href="/activity" data-testid="nav-alerts" {% if active_page == 'activity' %}class="active" aria-current="page"{% endif %}>Activity</a>
+        <a href="/activity" data-testid="nav-activity" {% if active_page == 'activity' %}class="active" aria-current="page"{% endif %}>Activity</a>
         {% if is_admin %}
         <a href="/settings" data-testid="nav-settings" {% if active_page == 'settings' %}class="active" aria-current="page"{% endif %}>Settings</a>
         {% endif %}

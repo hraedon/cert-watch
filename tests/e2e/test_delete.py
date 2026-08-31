@@ -56,13 +56,14 @@ def _switch_tab(page: Page, tab: str) -> None:
 def test_upload_then_delete_removes_cert(
     page: Page, cert_watch_server: str, delete_pem_path: Path
 ) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     _open_slide(page)
     _switch_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(
         str(delete_pem_path),
     )
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     body = page.locator("body")
     expect(body).to_contain_text("e2e-delete.example.com")
 

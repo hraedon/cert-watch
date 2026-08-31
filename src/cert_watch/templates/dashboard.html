@@ -6,18 +6,18 @@
 
 {% macro sort_link(column, label) %}
   {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
-  <a href="/?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="sort">{{ label }}</a>
+  <a href="/browse?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="sort">{{ label }}</a>
   {% if sort_by == column %}<span class="arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
 {% endmacro %}
 
-{% macro filter_link(urgency='') %}{% if urgency %}/?urgency={{ urgency }}{% else %}/?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
+{% macro filter_link(urgency='') %}{% if urgency %}/browse?urgency={{ urgency }}{% else %}/browse?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
 
 {# ---- Shared row cells (used by grouped and plain rows alike) ---- #}
 {% macro tags_cell(e) %}
   {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
   {% if _tags %}
     <div class="cw-chiprow">
-      {% for t in _tags %}<a class="cw-chip" href="/?q={{ t | urlencode }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
+      {% for t in _tags %}<a class="cw-chip" href="/browse?q={{ t | urlencode }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
     </div>
   {% else %}<span class="cw-muted">—</span>{% endif %}
 {% endmacro %}
@@ -114,7 +114,7 @@
   </div>
 
   {# ---- Filter bar ---- #}
-  <form method="get" action="/" class="cw-filterbar">
+  <form method="get" action="/browse" class="cw-filterbar">
     <div class="cw-search">
       {{ icons.svg_icon('search', 15) }}
       <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host, tag…" list="dash-all-tags" data-testid="dashboard-search">
@@ -308,7 +308,7 @@
     {% endif %}
   </div>
 
-  {{ ui.pager(page, total_pages, '/?' ~ ('q=' ~ (filter_q | urlencode) if filter_q else '') ~ ('&urgency=' ~ filter_urgency if filter_urgency else '') ~ ('&source=' ~ filter_source if filter_source else '') ~ ('&sort_by=' ~ sort_by ~ '&sort_order=' ~ sort_order if sort_by != 'days' else '')) }}
+  {{ ui.pager(page, total_pages, '/browse?' ~ ('q=' ~ (filter_q | urlencode) if filter_q else '') ~ ('&urgency=' ~ filter_urgency if filter_urgency else '') ~ ('&source=' ~ filter_source if filter_source else '') ~ ('&sort_by=' ~ sort_by ~ '&sort_order=' ~ sort_order if sort_by != 'days' else '')) }}
   {% endif %}
 </div>
 

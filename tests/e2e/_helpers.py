@@ -17,12 +17,14 @@ from pathlib import Path
 from playwright.sync_api import Page
 
 # Top-level nav → destination heading. The 2026-08 redesign collapsed the
-# 7-item nav into 4 domains: scan history and the audit log are tabs inside
-# Activity, and Insights' trends became the Posture page.
+# 7-item nav into 4 domains (scan history and the audit log as tabs inside
+# Activity; Insights' trends as Posture); attention-home then added Home in
+# front and moved the inventory table to Browse.
 PAGES = {
-    "nav-dashboard": "dashboard-heading",
+    "nav-home": "home-heading",
+    "nav-browse": "dashboard-heading",
     "nav-posture": "insights-heading",
-    "nav-alerts": "alerts-heading",
+    "nav-activity": "alerts-heading",
 }
 
 

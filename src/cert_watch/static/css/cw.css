@@ -677,3 +677,13 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
 .cw-invgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: var(--space-3); }
 .cw-gradecount { min-width: 32px; text-align: right; color: var(--text-2); }
 .cw-cal-row svg.cw-bar { flex: 1; }
+
+/* ---------- home / attention queue ---------- */
+.cw-att-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 0; border-top: 1px solid var(--border);
+}
+.cw-att-row:first-child { border-top: none; }
+.cw-att-sev { flex: 0 0 auto; min-width: 120px; }
+.cw-att-main { flex: 1 1 auto; min-width: 0; }
+.cw-att-main .cw-id { text-decoration: none; }

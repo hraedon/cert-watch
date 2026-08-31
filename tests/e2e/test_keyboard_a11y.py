@@ -62,12 +62,13 @@ def pem_path_space(tmp_path: Path) -> Path:
 
 def _upload_cert(page: Page, base_url: str, pem: Path, cn: str) -> None:
     """Upload a PEM via the slide-over so a cert row exists on the dashboard."""
-    page.goto(base_url)
+    page.goto(f"{base_url}/browse")
     page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-drawer.on").wait_for()
     page.get_by_test_id("tab-upload-btn").click()
     page.get_by_test_id("upload-file-input").set_input_files(str(pem))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{base_url}/browse")
     expect(page.locator("body")).to_contain_text(cn)
 
 
@@ -78,7 +79,7 @@ def _upload_cert(page: Page, base_url: str, pem: Path, cn: str) -> None:
 def test_enter_activates_cert_row(page: Page, cert_watch_server: str, pem_path: Path) -> None:
     """Enter on a tabindex'd cert row (role=link) navigates to detail page."""
     _upload_cert(page, cert_watch_server, pem_path, "kb-test.example.com")
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     row = page.locator('[data-testid="cert-row"]').first
     expect(row).to_be_visible()
     row.focus()
@@ -90,7 +91,7 @@ def test_enter_activates_cert_row(page: Page, cert_watch_server: str, pem_path: 
 def test_space_activates_cert_row(page: Page, cert_watch_server: str, pem_path_space: Path) -> None:
     """Space on a tabindex'd cert row (role=link) navigates to detail page."""
     _upload_cert(page, cert_watch_server, pem_path_space, "kb-space.example.com")
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     row = page.locator('[data-testid="cert-row"]', has_text="kb-space.example.com")
     expect(row).to_be_visible()
     row.focus()
@@ -104,7 +105,7 @@ def test_space_activates_cert_row(page: Page, cert_watch_server: str, pem_path_s
 
 def test_escape_closes_slide_over(page: Page, cert_watch_server: str) -> None:
     """Escape closes the slide-over and returns focus to the trigger."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-drawer.on").wait_for()
     # Escape should close (the .on class is removed; panel slides off-screen)
@@ -120,7 +121,7 @@ def test_escape_closes_slide_over(page: Page, cert_watch_server: str) -> None:
 
 def test_focus_trapped_in_slide_over(page: Page, cert_watch_server: str) -> None:
     """Tab cycles within the open dialog (focus trap), not escaping to the page."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
     panel = page.locator("#add-drawer")
     panel.wait_for(state="visible")
@@ -141,7 +142,7 @@ def test_focus_trapped_in_slide_over(page: Page, cert_watch_server: str) -> None
 
 def test_reports_menu_arrow_key_nav(page: Page, cert_watch_server: str) -> None:
     """Arrow Down moves focus between menuitems; Escape closes and restores focus."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("dashboard-heading").wait_for()
     btn = page.locator("#reports-btn")
     btn.click()
@@ -170,7 +171,7 @@ def test_reports_menu_arrow_key_nav(page: Page, cert_watch_server: str) -> None:
 
 def test_add_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -> None:
     """Arrow Right/Left switches tabs in the Add-certificates tablist."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-drawer.on").wait_for()
     scan_tab = page.get_by_test_id("tab-scan-btn")
@@ -207,7 +208,7 @@ def test_add_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -> Non
 
 def test_add_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None:
     """Home/End jumps to the first/last tab in the Add-certificates tablist."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
     page.locator(".cw-drawer.on").wait_for()
     scan_tab = page.get_by_test_id("tab-scan-btn")
@@ -229,7 +230,7 @@ def test_add_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None
 
 def test_reports_menu_home_end_nav(page: Page, cert_watch_server: str) -> None:
     """Home/End jumps focus to the first/last menuitem in the reports menu."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("dashboard-heading").wait_for()
     page.locator("#reports-btn").click()
     items = page.locator('#export-menu [role="menuitem"]')

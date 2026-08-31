@@ -45,7 +45,7 @@ def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):
                 follow_redirects=True,
             )
         assert r.status_code == 200
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "leaf.example.com" in r.text
 
@@ -169,13 +169,13 @@ def test_dashboard_stat_cards_are_urgency_filters(
     store_uploaded(upload_certificate_from_bytes(expired.der, "expired.der"), db)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
-    assert '<a href="/?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
-    assert 'href="/?urgency=expired"' in r.text
-    assert 'href="/?urgency=critical"' in r.text
-    assert 'href="/?urgency=warning"' in r.text
-    assert 'href="/?urgency=healthy"' in r.text
+    assert '<a href="/browse?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
+    assert 'href="/browse?urgency=expired"' in r.text
+    assert 'href="/browse?urgency=critical"' in r.text
+    assert 'href="/browse?urgency=warning"' in r.text
+    assert 'href="/browse?urgency=healthy"' in r.text
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
@@ -194,13 +194,14 @@ def test_dashboard_stat_cards_are_urgency_filters(
     assert _stat_value(r.text, "Healthy") == 1
 
     assert r.text.count('class="cw-stat active"') == 1
-    assert 'href="/?" class="cw-stat active"' in r.text  # unfiltered: the Tracked cell is active
+    # unfiltered: the Tracked cell is active
+    assert 'href="/browse?" class="cw-stat active"' in r.text
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?urgency=expired")
+        r = client.get("/browse?urgency=expired")
     assert r.status_code == 200
     assert r.text.count('class="cw-stat active"') == 1
-    assert 'href="/?urgency=expired" class="cw-stat active"' in r.text
+    assert 'href="/browse?urgency=expired" class="cw-stat active"' in r.text
     assert "expired.example.com" in r.text
     assert "leaf.example.com" not in r.text
 
@@ -291,7 +292,7 @@ def test_dashboard_pagination_with_data(reload_app, tmp_path):
         repo.add(cert)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Page 1 of" in r.text
     assert "Next" in r.text
@@ -299,7 +300,7 @@ def test_dashboard_pagination_with_data(reload_app, tmp_path):
     assert "cert29.example.com" in r.text
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?page=2")
+        r = client.get("/browse?page=2")
     assert r.status_code == 200
     assert "Page 2 of" in r.text
     assert "Prev" in r.text
@@ -373,7 +374,7 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
         return int(match.group(1))
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?page=2")
+        r = client.get("/browse?page=2")
     assert r.status_code == 200
     assert "Page 2 of" in r.text
     # Page 2 rows are the 5 healthiest certs; the stat-card counters
@@ -599,7 +600,7 @@ def test_dashboard_grouped_by_fingerprint(reload_app, tmp_path):
     replace_scanned(db, "host3.example.com", 443, unique_cert, [], True)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "2 hosts" in r.text
     assert 'data-expand="group-hosts-' in r.text

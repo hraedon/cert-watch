@@ -73,7 +73,8 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     with sqlite3.connect(str(v090_db)) as conn:
         applied = [r[0] for r in conn.execute("SELECT id FROM schema_version ORDER BY id")]
     assert applied == expected_ids
-    assert [i for i in applied if i > "0023"] == ["0024", "0025", "0026", "0027", "0028", "0029", "0030"]
+    expected_tail = ["0024", "0025", "0026", "0027", "0028", "0029", "0030"]
+    assert [i for i in applied if i > "0023"] == expected_tail
 
     # No data lost.
     assert _counts(v090_db) == before

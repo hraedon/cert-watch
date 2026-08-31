@@ -35,13 +35,13 @@ def test_compliance_report_renders(page: Page, cert_watch_server: str) -> None:
 
 
 def test_dashboard_search_box_present(page: Page, cert_watch_server: str) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.get_by_test_id("dashboard-search")).to_be_visible()
 
 
 def test_add_slide_tabs_switch(page: Page, cert_watch_server: str) -> None:
     """The Add-host slide-over opens and its tabs switch (scan/upload/bulk)."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     open_add_slide(page)
     switch_add_tab(page, "upload")
     expect(page.get_by_test_id("upload-file-input")).to_be_attached()
@@ -110,11 +110,12 @@ def test_cert_detail_page_renders(
     p = tmp_path / "detail.pem"
     p.write_bytes(cert.public_bytes(Encoding.PEM))
 
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     open_add_slide(page)
     switch_add_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(str(p))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.locator("body")).to_contain_text(cn)
 
     page.get_by_test_id("cert-row").filter(has_text=cn).click()
