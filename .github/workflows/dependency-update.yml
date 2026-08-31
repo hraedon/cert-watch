@@ -35,7 +35,7 @@ jobs:
           .venv/bin/pip-audit --strict --requirement /tmp/audit-reqs.txt
 
       - name: Create PR for lockfile update
-        uses: peter-evans/create-pull-request@67ccf791d7cd4286270ff4f6b2b8df4e2c5ab537 # v7
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "deps: monthly uv lock refresh"
