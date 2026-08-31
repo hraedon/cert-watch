@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ssl
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -192,8 +194,9 @@ def test_test_smtp_send_success(reload_app, monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, *, context=None):
             calls["starttls"] = True
+            calls["tls_context"] = context
 
         def login(self, user, password):
             calls["login"] = (user, password)
@@ -217,8 +220,10 @@ def test_test_smtp_send_success(reload_app, monkeypatch):
         )
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    assert calls["target"] == ("smtp.example.com", 587)
+    assert calls["target"] == ("93.184.216.34", 587)
     assert calls.get("starttls") is True
+    assert calls["tls_context"].verify_mode == ssl.CERT_REQUIRED
+    assert calls["tls_context"].check_hostname is True
     assert calls.get("login") == ("svc", "pw")
     assert calls.get("sent_to") == "ops@example.com"
 
@@ -243,7 +248,7 @@ def test_test_smtp_port25_no_starttls_no_creds_succeeds(reload_app, monkeypatch)
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, *, context=None):
             raise smtplib.SMTPNotSupportedError("STARTTLS not supported")
 
         def send_message(self, msg):
@@ -282,7 +287,7 @@ def test_test_smtp_no_starttls_with_creds_refuses(reload_app, monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, *, context=None):
             raise smtplib.SMTPNotSupportedError("STARTTLS not supported")
 
         def login(self, user, password):  # pragma: no cover - must not be reached
@@ -1527,9 +1532,13 @@ def test_test_smtp_port_465_uses_smtp_ssl(reload_app, monkeypatch):
     calls = {}
 
     class FakeSMTP_SSL:
-        def __init__(self, host, port, timeout=10):
-            calls["target"] = (host, port)
+        def __init__(self, timeout=10, context=None):
             calls["class"] = "SMTP_SSL"
+            calls["tls_context"] = context
+
+        def connect(self, host, port):
+            calls["target"] = (host, port)
+            return 220, b"ready"
 
         def __enter__(self):
             return self
@@ -1556,8 +1565,10 @@ def test_test_smtp_port_465_uses_smtp_ssl(reload_app, monkeypatch):
         )
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    assert calls["target"] == ("smtp.example.com", 465)
+    assert calls["target"] == ("93.184.216.34", 465)
     assert calls["class"] == "SMTP_SSL"
+    assert calls["tls_context"].verify_mode == ssl.CERT_REQUIRED
+    assert calls["tls_context"].check_hostname is True
 
 
 def test_test_smtp_nonnumeric_port_returns_error(reload_app):
@@ -1601,6 +1612,33 @@ def test_test_smtp_ssrf_blocked_ip(reload_app):
     assert "blocked" in data["error"].lower()
 
 
+def test_test_smtp_unresolved_host_fails_without_transport(reload_app, monkeypatch):
+    import smtplib
+    import socket as _socket
+    from unittest.mock import MagicMock
+
+    def unresolved(*args, **kwargs):
+        raise _socket.gaierror("not found")
+
+    monkeypatch.setattr(_socket, "getaddrinfo", unresolved)
+    smtp = MagicMock()
+    monkeypatch.setattr(smtplib, "SMTP", smtp)
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/settings/test-smtp",
+            data={
+                "smtp_host": "unresolved.example",
+                "smtp_port": "587",
+                "alert_from": "a@example.com",
+                "alert_recipients": "ops@example.com",
+            },
+        )
+    assert r.status_code == 200
+    assert r.json() == {"ok": False, "error": "SMTP host could not be resolved"}
+    smtp.assert_not_called()
+
+
 def test_test_smtp_private_hostname_allowed_by_default(reload_app, monkeypatch):
     """Regression: a hostname resolving to a private IP (10.x) must not be
     blocked when CERT_WATCH_ALLOW_PRIVATE_IPS is unset (defaults to 1).
@@ -1631,7 +1669,7 @@ def test_test_smtp_private_hostname_allowed_by_default(reload_app, monkeypatch):
         def __exit__(self, *a):
             return False
 
-        def starttls(self):
+        def starttls(self, *, context=None):
             pass
 
         def send_message(self, msg):

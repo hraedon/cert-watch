@@ -21,6 +21,7 @@ from cert_watch.database import (
     list_unified_entries,
     store_scan_posture,
 )
+from cert_watch.database.connection import _connect
 from cert_watch.scan import ScannedEntry, store_scanned
 
 
@@ -333,3 +334,23 @@ def test_get_cert_detail_uploaded(tmp_path, self_signed_leaf):
     assert detail is not None
     assert detail["id"] == cert_id
     assert detail["source"] == "uploaded"
+
+
+def test_dashboard_and_detail_recover_malformed_san_shape(tmp_path, self_signed_leaf):
+    db = tmp_path / "detail_bad_san.sqlite3"
+    _seed(db, self_signed_leaf)
+    rows, _ = list_dashboard_page(db, q="alpha", per_page=0)
+    cert_id = rows[0]["id"]
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificates SET san_dns_names = ? WHERE id = ?",
+            ('{"not": "a-list"}', cert_id),
+        )
+        conn.commit()
+
+    dashboard_rows, _ = list_dashboard_page(db, q="alpha", per_page=0)
+    detail = get_cert_detail(db, cert_id)
+
+    assert dashboard_rows[0]["san_dns_names"] == []
+    assert detail is not None
+    assert detail["san_dns_names"] == []

@@ -1,6 +1,7 @@
 """Tests for renewal digest (WI-3.1 / Plan 048)."""
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -12,8 +13,17 @@ from cert_watch.digest import (
     _flush_digest_pool,
     build_renewal_digest,
     send_renewal_digest,
+    shutdown_digest_pool,
+    start_digest_pool,
 )
 from cert_watch.events import Event, emit_event
+
+
+@pytest.fixture(autouse=True)
+def _reset_digest_pool():
+    start_digest_pool()
+    yield
+    _flush_digest_pool()
 
 
 def _add_host(db: Path, hostname: str, owner_email: str = ""):
@@ -279,6 +289,107 @@ class TestSendRenewalDigest:
             _flush_digest_pool()
         assert result is True
 
+    def test_webhook_success_callback_runs_only_after_delivery(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        callback = MagicMock()
+        with patch("cert_watch.alerts.send_webhook", return_value=True):
+            result = send_renewal_digest(
+                db,
+                None,
+                wh,
+                days=7,
+                delivery_completion_callback=callback,
+            )
+            assert result is None
+            _flush_digest_pool()
+        callback.assert_called_once_with(True)
+
+    def test_webhook_failure_reports_completion_failure(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        callback = MagicMock()
+        with (
+            patch("cert_watch.alerts.send_webhook", return_value=False),
+            patch("cert_watch.retry.time.sleep"),
+        ):
+            result = send_renewal_digest(
+                db,
+                None,
+                wh,
+                days=7,
+                delivery_completion_callback=callback,
+            )
+            assert result is None
+            _flush_digest_pool()
+        callback.assert_called_once_with(False)
+
+    def test_shutdown_waits_for_delivery_completion_callback(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        wh = WebhookConfig(url="http://localhost:9999/hook")
+        entered = threading.Event()
+        release = threading.Event()
+        callback = MagicMock()
+
+        def blocked_delivery(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=5)
+            return True
+
+        with patch("cert_watch.alerts.send_webhook", side_effect=blocked_delivery):
+            result = send_renewal_digest(
+                db,
+                None,
+                wh,
+                days=7,
+                delivery_completion_callback=callback,
+            )
+            assert result is None
+            assert entered.wait(timeout=5)
+            shutdown_thread = threading.Thread(target=shutdown_digest_pool)
+            shutdown_thread.start()
+            assert shutdown_thread.is_alive()
+            release.set()
+            shutdown_thread.join(timeout=5)
+
+        assert not shutdown_thread.is_alive()
+        callback.assert_called_once_with(True)
+        start_digest_pool()
+
+    def test_shutdown_rejects_new_webhook_submission(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        callback = MagicMock()
+        shutdown_digest_pool()
+        try:
+            with patch("cert_watch.alerts.send_webhook") as send:
+                result = send_renewal_digest(
+                    db,
+                    None,
+                    WebhookConfig(url="http://localhost:9999/hook"),
+                    delivery_completion_callback=callback,
+                )
+            assert result is None
+            send.assert_not_called()
+            callback.assert_called_once_with(False)
+        finally:
+            start_digest_pool()
+
     def test_global_digest_sent_in_smtp_fallback(self, empty_db):
         """Global digest must be sent even when the initial SMTP connection fails.
 
@@ -297,13 +408,16 @@ class TestSendRenewalDigest:
             from_addr="a@b",
             recipients=["global@recipient.test"],
         )
-        with patch("cert_watch.alerts.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")), \
-             patch("cert_watch.retry.time.sleep"), \
-             patch("cert_watch.digest._send_digest_email_msg", return_value=True) as mock_fallback:
+        smtp = MagicMock()
+        smtp.send_message.return_value = {}
+        with patch(
+            "cert_watch.alerts._open_smtp_connection",
+            side_effect=[None, smtp, smtp],
+        ), patch("cert_watch.retry.time.sleep"):
             result = send_renewal_digest(db, config, None, days=7)
-        assert result is True  # global + owner retried via _send_digest_email_msg, both succeeded
+        assert result is True
         sent_tos = [
-            str(call.args[0]["To"]) for call in mock_fallback.call_args_list
+            str(call.args[0]["To"]) for call in smtp.send_message.call_args_list
         ]
         assert any("global@recipient.test" in to for to in sent_tos), \
             "global digest must be sent via fallback when initial SMTP connection fails"
@@ -360,9 +474,7 @@ class TestSendRenewalDigest:
         assert result is True
         assert mock_wh.call_count >= 1
 
-    def test_smtp_connection_break_falls_back_to_per_send(self, empty_db):
-        """If a send fails on the shared SMTP connection, remaining sends
-        must be retried with new connections via _send_digest_email_msg."""
+    def test_smtp_deliveries_use_retrying_per_digest_sender(self, empty_db):
         from cert_watch.alerts import AlertConfig
 
         db = empty_db
@@ -377,18 +489,255 @@ class TestSendRenewalDigest:
             from_addr="a@b",
             recipients=["global@test"],
         )
-        smtp_mock = MagicMock()
-        # First send (global) succeeds, second send (first owner) fails,
-        # breaking the connection. Remaining owner should be retried.
-        smtp_mock.send_message.side_effect = [None, ConnectionError("conn dropped")]
-        with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock), \
-             patch("cert_watch.retry.time.sleep"), \
-             patch("cert_watch.digest._send_digest_email_msg", return_value=True) as mock_fallback:
+        smtp = MagicMock()
+        smtp.send_message.return_value = {}
+        with patch("cert_watch.retry.time.sleep"), patch(
+            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        ):
             send_renewal_digest(db, config, None, days=7)
 
-        # The shared connection made 2 calls (global + failed owner).
-        # The fallback _send_digest_email_msg must have been called for the
-        # remaining unsent owner (proving the retry fired).
-        assert smtp_mock.send_message.call_count == 2
-        assert mock_fallback.call_count >= 1, \
-            "unsent owner digest must be retried via _send_digest_email_msg"
+        assert smtp.send_message.call_count == 3  # global + one digest per owner
+
+    def test_smtp_refused_recipient_retries_without_resending_accepted(self, empty_db):
+        from cert_watch.alerts import AlertConfig
+        from cert_watch.database import _connect
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["Accepted@Test", "Refused@Test"],
+        )
+        smtp = MagicMock()
+        smtp.send_message.side_effect = [
+            {"Refused@Test": (550, b"mailbox unavailable")},
+            {},
+        ]
+
+        with patch("cert_watch.alerts._open_smtp_connection", return_value=smtp), patch(
+            "cert_watch.retry.time.sleep"
+        ):
+            assert send_renewal_digest(db, config, None, days=7) is True
+
+        assert smtp.send_message.call_count == 2
+        first_to = str(smtp.send_message.call_args_list[0].args[0]["To"])
+        retry_to = str(smtp.send_message.call_args_list[1].args[0]["To"])
+        assert "Accepted@Test" in first_to and "Refused@Test" in first_to
+        assert retry_to == "Refused@Test"
+        with _connect(db) as conn:
+            rows = conn.execute(
+                "SELECT target, status, lease_owner FROM digest_deliveries "
+                "WHERE channel = 'smtp' ORDER BY target"
+            ).fetchall()
+        assert [(row["target"], row["status"], row["lease_owner"]) for row in rows] == [
+            ("accepted@test", "sent", None),
+            ("refused@test", "sent", None),
+        ]
+
+    def test_permanently_refused_recipient_releases_failed_claim(self, empty_db):
+        from cert_watch.alerts import ALERT_MAX_RETRIES, AlertConfig
+        from cert_watch.database import _connect
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["Accepted@Test", "Refused@Test"],
+        )
+        smtp = MagicMock()
+        smtp.send_message.side_effect = [
+            {"Refused@Test": (550, b"mailbox unavailable")}
+            for _ in range(ALERT_MAX_RETRIES)
+        ]
+
+        with patch("cert_watch.alerts._open_smtp_connection", return_value=smtp), patch(
+            "cert_watch.retry.time.sleep"
+        ):
+            assert send_renewal_digest(db, config, None, days=7) is False
+
+        assert smtp.send_message.call_count == ALERT_MAX_RETRIES
+        assert "Accepted@Test" in str(smtp.send_message.call_args_list[0].args[0]["To"])
+        assert all(
+            str(call.args[0]["To"]) == "Refused@Test"
+            for call in smtp.send_message.call_args_list[1:]
+        )
+        with _connect(db) as conn:
+            rows = conn.execute(
+                "SELECT target, status, lease_owner, lease_expires_at "
+                "FROM digest_deliveries WHERE channel = 'smtp' ORDER BY target"
+            ).fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("accepted@test", "sent", None, None),
+            ("refused@test", "failed", None, None),
+        ]
+
+    def test_partial_webhook_retry_skips_successful_owner(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="alice@test")
+        _add_host(db, "host-b.example.com", owner_email="bob@test")
+        _emit_renewal(db, "host-a.example.com")
+        _emit_renewal(db, "host-b.example.com")
+        webhook = WebhookConfig(url="http://localhost:9999/hook", kind="pagerduty")
+        first_callback = MagicMock()
+        second_callback = MagicMock()
+
+        with patch("cert_watch.digest.send_orphan_notice"), patch(
+            "cert_watch.alerts.send_webhook",
+            side_effect=[True, False, False, False, True],
+        ) as send:
+            send_renewal_digest(
+                db, None, webhook, delivery_completion_callback=first_callback
+            )
+            _flush_digest_pool()
+            send_renewal_digest(
+                db, None, webhook, delivery_completion_callback=second_callback
+            )
+            _flush_digest_pool()
+
+        first_callback.assert_called_once_with(False)
+        second_callback.assert_called_once_with(True)
+        assert send.call_count == 5
+        cert_ids = [call.args[0].cert_id for call in send.call_args_list]
+        assert cert_ids[0] not in cert_ids[1:]
+        assert len(set(cert_ids[1:])) == 1
+
+    def test_overlapping_processes_send_recipient_once(self, empty_db):
+        from cert_watch.alerts import AlertConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=["global@test"],
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        first_result: list[bool | None] = []
+
+        def blocked_send(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=5)
+            return True
+
+        smtp = MagicMock()
+        smtp.send_message.side_effect = blocked_send
+        with patch("cert_watch.digest.send_orphan_notice"), patch(
+            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        ):
+            first = threading.Thread(
+                target=lambda: first_result.append(
+                    send_renewal_digest(db, config, None, days=7)
+                )
+            )
+            first.start()
+            assert entered.wait(timeout=5)
+            second_result = send_renewal_digest(db, config, None, days=7)
+            release.set()
+            first.join(timeout=5)
+
+        assert not first.is_alive()
+        assert first_result == [True]
+        assert second_result is False
+        smtp.send_message.assert_called_once()
+
+    def test_webhook_claim_is_acquired_only_when_owner_send_starts(self, empty_db):
+        from cert_watch.alerts import WebhookConfig
+        from cert_watch.database import _connect
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="alice@test")
+        _add_host(db, "host-b.example.com", owner_email="bob@test")
+        _emit_renewal(db, "host-a.example.com")
+        _emit_renewal(db, "host-b.example.com")
+        entered = threading.Event()
+        release = threading.Event()
+
+        def slow_first_send(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=5)
+            return True
+
+        with patch("cert_watch.digest.send_orphan_notice"), patch(
+            "cert_watch.alerts.send_webhook", side_effect=slow_first_send
+        ):
+            send_renewal_digest(
+                db,
+                None,
+                WebhookConfig(url="http://localhost:9999/hook"),
+            )
+            assert entered.wait(timeout=5)
+            with _connect(db) as conn:
+                rows = conn.execute(
+                    "SELECT target, status FROM digest_deliveries "
+                    "WHERE channel LIKE 'webhook:%'"
+                ).fetchall()
+            assert [(row["target"], row["status"]) for row in rows] == [
+                ("alice@test", "claimed")
+            ]
+            release.set()
+            _flush_digest_pool()
+
+    def test_smtp_claim_is_acquired_only_when_owner_send_starts(self, empty_db):
+        from cert_watch.alerts import AlertConfig
+        from cert_watch.database import _connect
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="alice@test")
+        _add_host(db, "host-b.example.com", owner_email="bob@test")
+        _emit_renewal(db, "host-a.example.com")
+        _emit_renewal(db, "host-b.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=[],
+        )
+        entered = threading.Event()
+        release = threading.Event()
+        result: list[bool | None] = []
+        smtp = MagicMock()
+
+        def slow_first_send(*args, **kwargs):
+            entered.set()
+            assert release.wait(timeout=5)
+            return {}
+
+        smtp.send_message.side_effect = slow_first_send
+        with patch("cert_watch.digest.send_orphan_notice"), patch(
+            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        ):
+            worker = threading.Thread(
+                target=lambda: result.append(
+                    send_renewal_digest(db, config, None, days=7)
+                )
+            )
+            worker.start()
+            assert entered.wait(timeout=5)
+            with _connect(db) as conn:
+                rows = conn.execute(
+                    "SELECT target, status FROM digest_deliveries "
+                    "WHERE channel = 'smtp'"
+                ).fetchall()
+            assert [(row["target"], row["status"]) for row in rows] == [
+                ("alice@test", "claimed")
+            ]
+            release.set()
+            worker.join(timeout=5)
+
+        assert not worker.is_alive()
+        assert result == [True]

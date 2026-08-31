@@ -39,6 +39,26 @@ def test_dashboard_search_box_present(page: Page, cert_watch_server: str) -> Non
     expect(page.get_by_test_id("dashboard-search")).to_be_visible()
 
 
+def test_mobile_dashboard_layout_does_not_overlap_or_clip_chrome(
+    page: Page, cert_watch_server: str
+) -> None:
+    """The wrapped mobile header and five-stat strip retain usable geometry."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(cert_watch_server)
+    expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
+
+    nav_box = page.locator(".cw-nav").bounding_box()
+    banner_box = page.locator("#cw-health-banner").bounding_box()
+    assert nav_box is not None and banner_box is not None
+    assert nav_box["y"] + nav_box["height"] <= banner_box["y"]
+
+    column_count = page.locator(".cw-stats").evaluate(
+        "el => getComputedStyle(el).gridTemplateColumns.split(' ').length"
+    )
+    assert column_count == 2
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+
+
 def test_add_slide_tabs_switch(page: Page, cert_watch_server: str) -> None:
     """The Add-host slide-over opens and its tabs switch (scan/upload/bulk)."""
     page.goto(cert_watch_server)

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso
+from cert_watch.database.connection import _connect, _iso, _parse_iso, parse_san_dns_names
+from cert_watch.host_validation import hostname_is_valid
 
 # ---------- dataclasses ----------
 
@@ -564,7 +565,7 @@ class SqliteTrustAnchorRepository:
                 issuer=r["issuer"],
                 not_before=_parse_iso(r["not_before"]),
                 not_after=_parse_iso(r["not_after"]),
-                san_dns_names=json.loads(r["san_dns_names"]),
+                san_dns_names=parse_san_dns_names(r["san_dns_names"]),
                 fingerprint_sha256=r["fingerprint_sha256"],
                 raw_der=bytes(r["raw_der"]),
                 created_at=_parse_iso(r["created_at"]),
@@ -603,6 +604,8 @@ class SqliteHostRepository:
         starttls_mode: str = "",
     ) -> str:
         import sqlite3
+        if not hostname_is_valid(hostname):
+            raise ValueError("hostname must be syntactically valid before persistence")
         host_id = str(uuid.uuid4())
         with _connect(self.db_path) as conn:
             try:

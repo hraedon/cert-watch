@@ -15,6 +15,13 @@ Config (env; ``*_FILE`` supported for the token via ``read_secret``):
 The Windows Event Log sink (``CERT_WATCH_EVENTLOG=1``) writes to the Application
 log via pywin32; install the ``cert-watch[windows]`` extra. On non-Windows hosts
 the sink disables itself gracefully. It runs inline (local + fast), like syslog.
+
+Trust model: ``CERT_WATCH_SYSLOG_HOST`` is operator-configured (env var) and is
+**not** routed through the SSRF blocklist that governs webhook/SMTP delivery
+(`http_client._is_blocked_ip`). Syslog would naturally target ``127.0.0.1`` or
+a private SIEM collector — exactly what the SSRF guard exists to block on
+untrusted input. The HEC URL, by contrast, is an HTTP POST and is routed
+through `ssrf_safe_urlopen` (with `allow_private=True`) like other webhooks.
 """
 
 from __future__ import annotations

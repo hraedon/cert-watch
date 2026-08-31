@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import smtplib
 from email.message import EmailMessage
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.alerts import negotiate_starttls
+from cert_watch.alerts import connect_smtp_transport, negotiate_starttls
+from cert_watch.http_client import resolve_smtp_host
 from cert_watch.middleware import require_admin_write
 from cert_watch.routes.settings.config import _SMTP_KEYS
 from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section
@@ -19,16 +19,14 @@ router = APIRouter()
 
 def _send_smtp_test(
     host: str,
+    pinned_ip: str,
     port: int,
     user: str,
     password: str,
     msg: EmailMessage,
 ) -> str | None:
     """Send the probe message synchronously, returning a policy error if any."""
-    if port == 465:
-        smtp: smtplib.SMTP_SSL | smtplib.SMTP = smtplib.SMTP_SSL(host, port, timeout=10)
-    else:
-        smtp = smtplib.SMTP(host, port, timeout=10)
+    smtp = connect_smtp_transport(host, pinned_ip, port, timeout=10)
     with smtp:
         if not negotiate_starttls(smtp, port, bool(user)):
             return (
@@ -54,7 +52,6 @@ async def test_smtp_connection(
 ) -> JSONResponse:
     import logging
 
-    from cert_watch.http_client import validate_smtp_host
     from cert_watch.routes._deps import _get_settings
 
     logger = logging.getLogger("cert_watch.routes.settings")
@@ -80,24 +77,28 @@ async def test_smtp_connection(
     if not host:
         return JSONResponse({"ok": False, "error": "SMTP host is required"})
 
-    # SSRF guard: block connections to loopback/link-local/metadata addresses.
-    # Uses the actual CERT_WATCH_ALLOW_PRIVATE_IPS / ALLOWED_SUBNETS settings so
-    # the test path matches the real alert-delivery path (BC-116 SMTP parity).
-    settings = _get_settings(request)
-    ssrf_err = await asyncio.to_thread(
-        validate_smtp_host,
-        host,
-        allow_private=settings.allow_private,
-        allowed_subnets=settings.allowed_subnets,
-    )
-    if ssrf_err:
-        return JSONResponse({"ok": False, "error": f"SMTP host blocked: {ssrf_err}"})
-
     if not from_addr or not recipients:
         return JSONResponse({
             "ok": False,
             "error": "From address and recipients are required for test",
         })
+
+    # SSRF guard: resolve once, validate every answer, and connect to the
+    # returned address so the test path matches real delivery.
+    # Uses the actual CERT_WATCH_ALLOW_PRIVATE_IPS / ALLOWED_SUBNETS settings so
+    # the test path matches the real alert-delivery path (BC-116 SMTP parity).
+    settings = _get_settings(request)
+    ssrf_err, pinned_ip = await asyncio.to_thread(
+        resolve_smtp_host,
+        host,
+        port,
+        allow_private=settings.allow_private,
+        allowed_subnets=settings.allowed_subnets,
+    )
+    if ssrf_err:
+        return JSONResponse({"ok": False, "error": f"SMTP host blocked: {ssrf_err}"})
+    if pinned_ip is None:
+        return JSONResponse({"ok": False, "error": "SMTP host could not be resolved"})
 
     msg = EmailMessage()
     msg["Subject"] = "[cert-watch] SMTP test"
@@ -110,7 +111,7 @@ async def test_smtp_connection(
 
     try:
         policy_error = await asyncio.to_thread(
-            _send_smtp_test, host, port, user, password, msg
+            _send_smtp_test, host, pinned_ip, port, user, password, msg
         )
         if policy_error:
             return JSONResponse({"ok": False, "error": policy_error})

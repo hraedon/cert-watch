@@ -16,7 +16,7 @@
   {# ---- Header ---- #}
   <div class="cw-page-head cw-page-head--start cw-mb-20">
     <div>
-      <div class="cw-flex cw-items-center cw-gap-12">
+      <div class="cw-flex cw-items-center cw-gap-12 cw-wrap">
         <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="cert-detail-heading">{{ subject_cn }}</h1>
         {{ urgency_macros.urgency_pill(urgency) }}
         {% if posture %}
@@ -208,28 +208,28 @@
           {% if f.status == 'pass' %}
           <div class="cw-flex cw-items-start cw-gap-8">
             <span class="cw-fz-12 cw-text-text-ok cw-min-w-16">{{ icons.svg_icon('check', 13) }}</span>
-            <div>
+            <div class="cw-min-w-0">
               <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
             </div>
           </div>
           {% elif f.status == 'warn' %}
           <div class="cw-flex cw-items-start cw-gap-8">
             <span class="cw-fz-12 cw-text-text-warn cw-min-w-16">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
-            <div>
+            <div class="cw-min-w-0">
               <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
             </div>
           </div>
           {% elif f.status == 'fail' %}
           <div class="cw-flex cw-items-start cw-gap-8">
             <span class="cw-fz-12 cw-text-text-crit cw-min-w-16">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
-            <div>
+            <div class="cw-min-w-0">
               <span class="cw-fz-12-5 cw-text-text cw-fw-600">{{ f.message }}</span>
             </div>
           </div>
           {% elif f.status == 'info' %}
           <div class="cw-flex cw-items-start cw-gap-8">
             <span class="cw-fz-12 cw-text-text-3 cw-min-w-16">—</span>
-            <div>
+            <div class="cw-min-w-0">
               <span class="cw-fz-12-5 cw-text-text-3">{{ f.message }}</span>
             </div>
           </div>

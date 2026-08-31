@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from cert_watch.database.connection import _connect, parse_san_dns_names
 from cert_watch.http_client import ssrf_safe_urlopen
 from cert_watch.renewal_analytics import RenewalOverdueSignal
 
@@ -40,8 +41,6 @@ class RenewalWebhookConfig:
 def _resolve_cert_details(
     db_path: str | Path, hostname: str, fingerprint: str
 ) -> dict[str, Any]:
-    from cert_watch.database.connection import _connect
-
     with _connect(db_path) as conn:
         row = conn.execute(
             """SELECT id, subject AS subject_cn, san_dns_names AS san_names,
@@ -80,11 +79,7 @@ def build_renewal_payload(
     cert = _resolve_cert_details(db_path, signal.hostname, signal.cert_fingerprint)
     automation = _resolve_automation_hint(db_path, signal.hostname)
 
-    san_raw = cert.get("san_names", "")
-    try:
-        san_list = json.loads(san_raw) if san_raw else []
-    except (json.JSONDecodeError, TypeError):
-        san_list = []
+    san_list = parse_san_dns_names(cert.get("san_names"))
 
     payload: dict[str, Any] = {
         "event": "renewal_needed",

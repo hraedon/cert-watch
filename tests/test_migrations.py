@@ -329,6 +329,19 @@ def test_drop_ct_issuer_first_seen_idempotent(db_path: Path) -> None:
     assert "ct_issuer_first_seen" not in tables
 
 
+def test_digest_delivery_ledger_migration_is_idempotent(db_path: Path) -> None:
+    from cert_watch.migrations.m0029_digest_delivery_ledger import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        upgrade(conn)
+        upgrade(conn)
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(digest_deliveries)"
+        ).fetchall()}
+    assert {"digest_key", "channel", "target", "lease_expires_at", "sent_at"} <= columns
+
+
 def test_backup_created_before_migration(tmp_path: Path) -> None:
     db = tmp_path / "test.sqlite3"
     init_schema(db)

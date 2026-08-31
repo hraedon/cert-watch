@@ -25,6 +25,12 @@ third-party service wrapper and IIS manages the process lifecycle for you.
    - Reverse proxy: install **URL Rewrite** and **Application Request Routing
      (ARR)**, then enable proxying (IIS Manager → server node → *Application
      Request Routing Cache* → *Server Proxy Settings* → check *Enable proxy*).
+   - **Application Initialization** role service (`Web-AppInit` /
+     `IIS-ApplicationInit`): required for `preloadEnabled` to do anything at
+     all — without it IIS silently ignores the setting (see the preload
+     section below). Server Manager → Add Role Services →
+     *Web Server → Application Development → Application Initialization*, or
+     `Install-WindowsFeature Web-AppInit`.
 3. **Unlock the `handlers` config section.** IIS locks `<system.webServer/handlers>`
    by default on some configurations, which blocks the site's `web.config` from
    registering the HttpPlatformHandler module. Unlock it once at the server level:
@@ -185,6 +191,26 @@ effect on the next pool start. Verify after the next reboot/recycle that
 additionally keep the app warm with a scheduled task that requests the
 public `/healthz` endpoint every few minutes (liveness only; do not depend
 on `/readyz`, which requires auth when a provider is configured).
+
+**preloadEnabled is silently inert without the Application Initialization
+role service.** IIS gives no warning when the feature is missing — the
+setting is accepted, visible in config, and completely ignored. That is not
+hypothetical: it caused a second silent scan gap on the mvmcitest01 estate
+(WI-140 follow-up, 2026-08-20) — preload was configured on 2026-07-27, but
+after an IIS recycle on 2026-08-16 the backend never restarted and scanning
+stopped for 4 days. Verify the feature is actually installed:
+
+```powershell
+# Feature present iff this file exists:
+Test-Path "$env:windir\System32\inetsrv\warmup.dll"
+# Install if missing (no reboot normally required):
+Install-WindowsFeature Web-AppInit
+```
+
+The install script verifies Windows feature state, native-module registration,
+and `warmup.dll`, and installs the feature automatically (step 2b). This is
+installer validation only; reboot/no-traffic behavior still requires an
+operator-paced deployment check.
 
 ### 2a.5 — Grant the app-pool identity access to data, secrets, and Python
 

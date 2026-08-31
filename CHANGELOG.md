@@ -5,6 +5,86 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Fixed
+- **Cross-process digest delivery deduplication and shutdown safety.** Renewal,
+  expiry, and orphan digest sends now take atomic per-recipient/channel claims
+  in a SQLite delivery ledger (migration 0029). Claims are acquired/renewed
+  immediately before each sequential send rather than while queued. Successful
+  partial deliveries are skipped on retry; SMTP refusal mappings commit
+  accepted recipients and release/retry only refused recipients. Abandoned
+  claims become retryable after an expiring lease, and provider idempotency
+  identities remain stable (including PagerDuty's dedup key). SMTP remains
+  intentionally **at-least-once**: a
+  process crash after the relay accepts a message but before the ledger commit
+  can produce one duplicate after lease expiry. Scheduler executor shutdown is
+  now terminal until explicit startup; stopping during a long scan prevents
+  later cycle stages from submitting new work or recreating an executor.
+- **Renewal digest cadence.** The scheduler's nominally weekly renewal digest
+  was guarded by weekday changes and therefore ran daily. It is now guarded by
+  a durable ISO year/week ledger in the existing `kv_store`; both renewal and
+  expiry digest ledgers advance only after successful delivery, survive
+  restarts, and retry failures. Asynchronous completion reports both success
+  and failure, clears failed in-flight weeks for same-week retry, ignores stale
+  or duplicate callbacks, and drains completion during shutdown. Production-
+  code tests cover success, failure/retry, restart, rollover, and shutdown.
+- **Status-colour separation under colour-vision deficiency (WI-145).**
+  The dark-theme `--expired` (pink `#fb6f92`) collapsed onto `--ok` under
+  deuteranopia (dE76 2.7) and onto `--crit` under tritanopia (dE76 2.7) —
+  exactly the pair an operator must not confuse on a triage page. `--expired`
+  is now violet in both themes (dark `#a78bfa` / light `#6d28d9`), keeping
+  a measured minimum dE76 of 43.4 from every status colour under normal vision
+  and all three dichromacy simulations. A new ratchet test
+  (`tests/test_color_separation.py`) parses `tokens.css` and asserts the
+  floors so a future palette refresh can't silently collapse the separation.
+- **IIS installer now requires the Application Initialization role service
+  (WI-140 follow-up).** `preloadEnabled` is silently ignored by IIS unless
+  the feature (`Web-AppInit`, `warmup.dll`) is installed — no warning, no
+  error. That trap caused a second silent scan gap on the mvmcitest01 estate:
+  preload was configured on 2026-07-27, but after an IIS recycle on
+  2026-08-16 the backend never restarted and scanning stopped for 4 days.
+  `install-windows.ps1` now verifies feature state, native-module registration,
+  and `warmup.dll`; it installs the feature (Server Manager cmdlet or DISM
+  fallback) and fails loudly if required state is still missing rather than
+  leave an inert preload config. README documents the trap and verification.
+- **Scheduler false-success on rolled-back scan transactions (WI-142).**
+  `store_scanned` silently returned `""` when its transaction failed and
+  rolled back, which the scheduler path recorded as `status='success'` —
+  hiding scan-data loss from the operator and skipping fast-retry. It now
+  re-raises on rollback (matching the contract of the route-layer path), and
+  the scheduler treats an empty leaf-id return from `store_fn` as a failure
+  too (defense in depth).
+- **SMTP port 465 SSRF IP pinning (WI-143).** Implicit-TLS delivery
+  previously fell back to hostname-based connection because `SMTP_SSL`
+  cannot override `_host` after connect — reopening a DNS-rebinding window
+  for the admin-configured SMTP relay. Resolution and validation now share
+  one DNS answer (`resolve_smtp_host`) and the transport connects to the
+  pinned IP while retaining the hostname for SNI/cert verification on both
+  the 465 and STARTTLS paths.
+- **X-Forwarded-For peer validation (WI-144).** Setting
+  `CERT_WATCH_TRUSTED_PROXIES` alone caused headers from any TCP peer to be
+  trusted. The peer is now required to be in the allowlist before XFF is
+  consulted, and malformed chain entries fall back to the peer address.
+- **Secret redaction for short SMTP passwords and routing keys (B4).** The
+  `>= 4` length gate on `_sanitize_smtp_error` / `_sanitize_webhook_error`
+  leaked 1-3 char secrets into `alert.error_message` and WARNING logs.
+  Passwords and routing keys are now always redacted, using word-boundary
+  regex for short secrets so common substrings like `nope` are not
+  corrupted.
+- **`_row_to_cert` robustness (B2).** Corrupted `san_dns_names` JSON (manual
+  DB edit, disk error, partial migration) no longer crashes every dashboard,
+  cert-detail, or list call; the fallback is an empty list.
+- **Hostname length cap (B6).** `/hosts` form and CSV import now reject
+  hostnames longer than 253 octets (RFC 1035) at the route layer, blocking
+  a write-authorized user from bloating dashboard queries with multi-MB
+  hostname strings.
+- **Real-LDAP E2E selection.** The opt-in real-server test is now marked as an
+  integration test and skips before fixture setup, so the ordinary browser job
+  no longer tries to start it without LDAP credentials.
+- **Mobile dashboard layout.** The wrapped navigation now increases the header
+  height instead of overlapping the health banner, and the five-cell status
+  strip correctly collapses to two columns at narrow breakpoints.
+- **Documentation truth-keeping.** The README now reflects per-scan CAA
+  collection, pinned SSRF-safe HTTP delivery, the maintenance-mode database/PDF
+  boundaries, and the current readiness, crypto, team, and event endpoints.
 - **Immutable release and deployment image tags.** Ordinary `main` builds now
   publish and deploy the commit-SHA image tag; a semantic-version image tag is
   published only when that exact tag points at the build commit. This prevents
@@ -60,6 +140,17 @@ All notable changes to cert-watch are documented in this file.
   `deploy/iis/README.md`.
 
 ### Security
+- **Cryptography security floor.** `cryptography` now requires 50.0.0, which
+  fixes CVE-2026-69247 / PYSEC-2026-3552. cert-watch does not use the affected
+  PKCS#7 decryption APIs, but the update keeps the locked closure and strict
+  advisory gate clean.
+- **Trusted-proxy peer enforcement.** Forwarded client-IP headers are accepted
+  only when the immediate TCP peer is in `CERT_WATCH_TRUSTED_PROXIES`; malformed
+  forwarding chains fail closed to the peer address.
+- **SMTP DNS-rebinding closure.** SMTP delivery and the admin test route now
+  resolve and validate the relay once, connect to that pinned address on both
+  STARTTLS and implicit-TLS paths, preserve the configured hostname for
+  certificate verification, and fail closed when resolution fails.
 - **Removed `CERT_WATCH_CSRF_DISABLED` env var (WI-097).** CSRF protection can
   no longer be disabled at runtime via environment variable. The deprecated env
   var (which globally disabled CSRF on all routes) has been removed from

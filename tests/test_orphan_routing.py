@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from cert_watch.alerts import (
     AlertConfig,
     find_orphan_certs,
@@ -26,6 +28,15 @@ from cert_watch.database import (
 )
 from cert_watch.database.users_roles import SqliteUserRepository, User
 from cert_watch.digest import _admin_emails, send_orphan_notice, send_renewal_digest
+
+
+@pytest.fixture(autouse=True)
+def _reset_digest_pool():
+    from cert_watch.digest import _flush_digest_pool, start_digest_pool
+
+    start_digest_pool()
+    yield
+    _flush_digest_pool()
 
 
 def _add_leaf(db: Path, hostname: str, *, port: int = 443, tags: str = "",
@@ -184,6 +195,16 @@ def test_orphan_notice_sends_to_admins_and_flags(db: Path):
     body = sent.get_content()
     assert "lonely.example.com" in body
     assert "[orphan]" in body
+
+
+def test_successful_orphan_notice_is_not_resent_in_same_period(db: Path):
+    _make_admin(db, "boss@co.com")
+    _add_leaf(db, "lonely.example.com")
+    conn = _patch_smtp()
+    with patch("cert_watch.alerts._open_smtp_connection", return_value=conn):
+        assert send_orphan_notice(db, _cfg()) is True
+        assert send_orphan_notice(db, _cfg()) is True
+    conn.send_message.assert_called_once()
 
 
 def test_orphan_notice_smtp_failure_returns_false(db: Path):

@@ -190,13 +190,25 @@ def _extract_client_ip(request: Request) -> str:
     used for rate limiting. When trusted, the value is validated as a
     well-formed IP address to prevent garbage injection.
     """
+    peer = request.client.host if request.client else "unknown"
     if not _TRUST_PROXY:
-        return request.client.host if request.client else "unknown"
+        return peer
+
+    # A configured allowlist describes which immediate TCP peers may supply
+    # forwarding headers. Without this check, merely setting TRUSTED_PROXIES
+    # caused headers from every peer to be trusted (WI-144).
+    if _TRUSTED_PROXIES and peer not in _TRUSTED_PROXIES:
+        return peer
+
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         parts = [p.strip() for p in xff.split(",")]
         if _TRUSTED_PROXIES:
             for part in reversed(parts):
+                try:
+                    ipaddress.ip_address(part)
+                except ValueError:
+                    return peer
                 if part not in _TRUSTED_PROXIES:
                     return part
         elif len(parts) > 1:
@@ -210,7 +222,7 @@ def _extract_client_ip(request: Request) -> str:
                 pass
             else:
                 return real_ip
-    return request.client.host if request.client else "unknown"
+    return peer
 
 
 def _init_rate_db(db_path: Path | str) -> None:

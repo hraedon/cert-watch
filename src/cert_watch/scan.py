@@ -1009,13 +1009,21 @@ def store_scanned(
             with contextlib.suppress(sqlite3.Error):
                 conn.rollback()
             raise
+        # WI-142: re-raise non-lock failures so callers (scheduler, route
+        # layer) record them as failures. The previous silent ``return ""``
+        # collapsed "transaction rolled back" and "nothing to store" into
+        # the same value, and the scheduler path treated the empty string
+        # as a successful scan — recording ``status='success'`` for a cert
+        # that was never persisted, skipping fast-retry, and hiding the
+        # failure from the operator. There is no legitimate "nothing to
+        # store" path; success always returns a non-empty leaf id.
         logger.warning(
             "store_scanned transaction failed for %s:%s",
             entry.host, entry.port, exc_info=True,
         )
         with contextlib.suppress(sqlite3.Error):
             conn.rollback()
-        return ""
+        raise
 
     # Post-transaction HTTP: failures must not invalidate the scan.
     # When _deferred is provided, stash the work for the caller to execute

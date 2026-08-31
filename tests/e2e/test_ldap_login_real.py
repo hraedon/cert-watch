@@ -20,7 +20,15 @@ from collections.abc import Iterator
 
 import pytest
 
-pytestmark = [pytest.mark.e2e, pytest.mark.ldap_e2e]
+pytestmark = [
+    pytest.mark.e2e,
+    pytest.mark.integration,
+    pytest.mark.ldap_e2e,
+    pytest.mark.skipif(
+        not os.environ.get("CW_LDAP_E2E"),
+        reason="CW_LDAP_E2E not set",
+    ),
+]
 
 # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -78,12 +86,6 @@ def ldap_server() -> Iterator[str]:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             proc.kill()
-
-
-@pytest.fixture(autouse=True)
-def _skip_unless_enabled():
-    if not os.environ.get("CW_LDAP_E2E"):
-        pytest.skip("CW_LDAP_E2E not set")
 
 
 class TestLDAPLogin:

@@ -362,6 +362,36 @@ def test_extract_client_ip_xff_trusted_proxy(monkeypatch):
     assert mw._extract_client_ip(req) == "203.0.113.1"
 
 
+def test_extract_client_ip_rejects_headers_from_untrusted_peer(monkeypatch):
+    """A proxy allowlist applies to the TCP peer, not merely XFF chain entries."""
+    from unittest.mock import MagicMock
+
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
+    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    req = MagicMock()
+    req.client.host = "198.51.100.9"
+    req.headers = {
+        "x-forwarded-for": "203.0.113.1, 10.0.0.1",
+        "x-real-ip": "203.0.113.2",
+    }
+    assert mw._extract_client_ip(req) == "198.51.100.9"
+
+
+def test_extract_client_ip_rejects_malformed_trusted_chain(monkeypatch):
+    from unittest.mock import MagicMock
+
+    import cert_watch.middleware as mw
+
+    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
+    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    req = MagicMock()
+    req.client.host = "10.0.0.1"
+    req.headers = {"x-forwarded-for": "attacker-controlled, 10.0.0.1"}
+    assert mw._extract_client_ip(req) == "10.0.0.1"
+
+
 def test_extract_client_ip_real_ip(monkeypatch):
     from unittest.mock import MagicMock
 

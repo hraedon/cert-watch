@@ -481,6 +481,71 @@ if ($ConfigureIIS) {
             throw "Failed to unlock system.webServer/handlers. Run manually: appcmd unlock config -section:system.webServer/handlers"
         }
 
+        # 2b. Application Initialization role service -- REQUIRED for preload.
+        # Verify feature state and native-module registration; warmup.dll alone
+        # is not proof that IIS has the feature enabled.
+        $warmupDll = Join-Path $env:windir "System32\inetsrv\warmup.dll"
+        $appHostConfig = Join-Path $env:windir "System32\inetsrv\config\applicationHost.config"
+        function Get-AppInitVerification {
+            $featureEnabled = $false
+            $featureKnown = $false
+            if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
+                $feature = Get-WindowsFeature Web-AppInit -ErrorAction SilentlyContinue
+                if ($feature) {
+                    $featureKnown = $true
+                    $featureEnabled = [bool]$feature.Installed
+                }
+            } elseif (Get-Command Get-WindowsOptionalFeature -ErrorAction SilentlyContinue) {
+                $feature = Get-WindowsOptionalFeature -Online -FeatureName IIS-ApplicationInit -ErrorAction SilentlyContinue
+                if ($feature) {
+                    $featureKnown = $true
+                    $featureEnabled = $feature.State -in @("Enabled", "EnablePending")
+                }
+            }
+            if (-not $featureKnown) {
+                # Last-resort compatibility signal for older Windows images.
+                $featureEnabled = Test-Path $warmupDll
+            }
+            $moduleRegistered = (Test-Path $appHostConfig) -and
+                (Select-String -Path $appHostConfig -Pattern 'name="ApplicationInitializationModule"' -Quiet)
+            return [PSCustomObject]@{
+                FeatureEnabled = $featureEnabled
+                ModuleRegistered = $moduleRegistered
+            }
+        }
+
+        $appInit = Get-AppInitVerification
+        if (-not $appInit.FeatureEnabled -or -not $appInit.ModuleRegistered -or -not (Test-Path $warmupDll)) {
+            Write-Host "  Installing IIS Application Initialization (required for preloadEnabled) ..."
+            if (Get-Command Install-WindowsFeature -ErrorAction SilentlyContinue) {
+                $featResult = Install-WindowsFeature Web-AppInit
+                if (-not $featResult.Success) {
+                    throw "Install-WindowsFeature Web-AppInit failed. Install the Application Initialization role service manually, then re-run."
+                }
+            } else {
+                & dism /online /enable-feature /featurename:IIS-ApplicationInit /norestart | Out-Null
+                if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 3010) {
+                    throw "dism could not enable IIS-ApplicationInit (exit $LASTEXITCODE). Enable it via Server Manager / Optional Features, then re-run."
+                }
+                if ($LASTEXITCODE -eq 3010) {
+                    Write-Host "    NOTE: feature installed but a reboot is required before preload works."
+                }
+            }
+            $appInit = Get-AppInitVerification
+            if (-not $appInit.FeatureEnabled) {
+                throw "Application Initialization feature is not enabled after the install attempt. Refusing to configure inert preload."
+            }
+            if (-not $appInit.ModuleRegistered) {
+                throw "ApplicationInitializationModule is not registered in applicationHost.config after the install attempt."
+            }
+            if (-not (Test-Path $warmupDll)) {
+                throw "Application Initialization module binary is missing after the install attempt ($warmupDll)."
+            }
+            Write-Host "    Application Initialization enabled and module registered."
+        } else {
+            Write-Host "  Application Initialization enabled and module registered."
+        }
+
         # 3. Create app pool
         $poolPath = "IIS:\AppPools\$AppPool"
         $existingPool = Get-Item $poolPath -ErrorAction SilentlyContinue
@@ -548,10 +613,13 @@ if ($ConfigureIIS) {
         # unless the application has preloadEnabled=true. Without preload, a
         # reboot (or process exit) with no inbound traffic silently stops all
         # scanning until someone visits the site (observed in production:
-        # 12-day scan gap, WI-140). Applying applicationDefaults to an
-        # EXISTING site recycles that site's applications (a brief backend
-        # restart); the preload behavior itself takes effect on the next
-        # pool start.
+        # 12-day scan gap, WI-140). And preload itself requires the
+        # Application Initialization role service (checked/installed in step
+        # 2b) -- without warmup.dll this setting is silently inert, which
+        # caused a second 4-day silent gap (WI-140 follow-up, 2026-08-20).
+        # Applying applicationDefaults to an EXISTING site recycles that
+        # site's applications (a brief backend restart); the preload behavior
+        # itself takes effect on the next pool start.
         Set-ItemProperty $sitePathIIS -Name applicationDefaults.preloadEnabled -Value $true
         Write-Host "    Application preload enabled (backend warm-starts with the app pool)."
 

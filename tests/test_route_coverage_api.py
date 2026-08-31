@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
@@ -868,6 +869,67 @@ def test_add_host_invalid_port(reload_app):
     assert "port" in r.headers["location"]
 
 
+def test_add_host_hostname_too_long(reload_app):
+    """B6: an over-length hostname is rejected at the route layer (RFC 1035
+    caps FQDNs at 253 octets) rather than stored as a multi-MB blob.
+    """
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": "a" * 300, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+def test_add_host_hostname_idna_octets_too_long(reload_app):
+    app_mod = reload_app()
+    hostname = ("é." * 50) + "example"
+    assert len(hostname) <= 253
+    assert len(hostname.encode("idna")) > 253
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": hostname, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "octets" in r.headers["location"]
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        "-bad.example",
+        "bad-.example",
+        "bad..example",
+        "bad_name.example",
+        "bad name.example",
+        "bad\x00name.example",
+        f"{'a' * 64}.example",
+    ],
+)
+def test_add_host_rejects_syntactically_invalid_hostname(reload_app, hostname):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": hostname, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+@pytest.mark.parametrize("hostname", ["example.com", "münchen.example", "2001:db8::1"])
+def test_hostname_validation_accepts_dns_idna_and_ip_literals(hostname):
+    from cert_watch.routes.hosts import _hostname_within_octet_limit
+
+    assert _hostname_within_octet_limit(hostname) is True
+
+
 def test_add_host_invalid_threshold(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -992,6 +1054,34 @@ def test_import_hosts_port_out_of_range(reload_app, tmp_path):
         )
     assert r.status_code == 303
     assert "port" in r.headers["location"]
+
+
+def test_import_hosts_hostname_too_long(reload_app, tmp_path):
+    """B6: an over-length hostname row is reported as an error, not stored."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        csv_content = f"hostname,port\n{'a' * 300},443\n"
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content.encode(), "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+def test_import_hosts_hostname_idna_octets_too_long(reload_app, tmp_path):
+    app_mod = reload_app()
+    hostname = ("é." * 50) + "example"
+    with TestClient(app_mod.app) as client:
+        csv_content = f"hostname,port\n{hostname},443\n"
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content.encode(), "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "octets" in r.headers["location"]
 
 
 def test_import_hosts_invalid_port(reload_app, tmp_path):

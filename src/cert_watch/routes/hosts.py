@@ -17,6 +17,7 @@ from cert_watch.alerts import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
+from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
@@ -102,6 +103,10 @@ async def _scan_and_store(
         )
         return "store_error", f"store failed: {exc}"
     if not leaf_id:
+        # Defense in depth (WI-142): store_scanned now raises rather than
+        # returning "" on a rolled-back transaction, so this branch should
+        # be unreachable from the real store path. Kept as a safety net for
+        # any future store_fn regression that silently returns empty.
         logger.warning(
             "store_scanned returned empty (transaction rolled back) for %s:%d",
             hostname, port,
@@ -124,7 +129,16 @@ router = APIRouter()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_CSV_ROWS = 500
+# RFC 1035 caps a fully-qualified domain name at 253 octets; IPv6 literals
+# are far shorter. Rejecting absurd-length hostnames at the route layer
+# prevents a write-authorized user from bloating dashboard queries and
+# audit rows with multi-MB hostname strings (B6).
 COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
+
+
+def _hostname_within_octet_limit(hostname: str) -> bool:
+    """Backward-compatible route-local alias for the shared validator."""
+    return hostname_is_valid(hostname)
 
 
 @router.post("/hosts")
@@ -142,6 +156,12 @@ async def add_host(
     write_err = await require_write_form(request)
     if write_err:
         return write_err
+    hostname = hostname.strip()
+    if not _hostname_within_octet_limit(hostname):
+        return RedirectResponse(
+            url=f"/?error={quote('hostname must be valid and at most 253 IDNA octets')}",
+            status_code=303,
+        )
     if not common_ports and not (1 <= port <= 65535):
         return RedirectResponse(
             url=f"/?error={quote('port must be between 1 and 65535')}", status_code=303
@@ -267,6 +287,12 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
         hostname = (row.get("hostname") or "").strip()
         if not hostname:
             errors.append(f"row {i}: missing hostname")
+            continue
+        if not _hostname_within_octet_limit(hostname):
+            errors.append(
+                f"row {i}: hostname is invalid or exceeds "
+                f"{MAX_HOSTNAME_OCTETS} IDNA octets"
+            )
             continue
         port_str = (row.get("port") or "443").strip()
         try:

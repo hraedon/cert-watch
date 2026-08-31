@@ -172,6 +172,20 @@ CREATE TABLE IF NOT EXISTS session_versions (
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS digest_deliveries (
+    digest_key TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    target TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('claimed', 'failed', 'sent')),
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    idempotency_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT,
+    PRIMARY KEY (digest_key, channel, target)
+);
 """
 
 _BASE_INDEXES = """
@@ -194,6 +208,10 @@ CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
     ON cert_history(hostname, port, scanned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cert_history_fp
     ON cert_history(fingerprint_sha256);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_digest_deliveries_idempotency
+    ON digest_deliveries(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_digest_deliveries_lease
+    ON digest_deliveries(status, lease_expires_at);
 """
 
 # Maps resolved path → (st_ino, st_size, st_mtime) from the last successful

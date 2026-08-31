@@ -69,7 +69,12 @@
   --ok: #34d399;      --ok-soft: rgba(52, 211, 153, 0.14);
   --warn: #fbbf24;    --warn-soft: rgba(251, 191, 36, 0.15);
   --crit: #f87171;    --crit-soft: rgba(248, 113, 113, 0.15);
-  --expired: #fb6f92; --expired-soft: rgba(251, 111, 146, 0.15);
+  /* Expired is violet, not pink (WI-145): the old #fb6f92 collapsed onto
+     --ok under deutanopia (dE 2.7) and onto --crit under tritanopia (dE 2.7).
+     The measured minimum is dE76 43.4 (dark tritanopia vs --warn) across
+     normal vision and all three dichromacy simulations; see
+     tests/test_color_separation.py. */
+  --expired: #a78bfa; --expired-soft: rgba(167, 139, 250, 0.15);
 
   --success-bg: #0a3a1a;
   --success-text: #4ade80;
@@ -133,7 +138,8 @@
   --ok: #15a34a;      --ok-soft: rgba(21, 163, 74, 0.10);
   --warn: #c2740a;    --warn-soft: rgba(194, 116, 10, 0.11);
   --crit: #dc3030;    --crit-soft: rgba(220, 48, 48, 0.10);
-  --expired: #c41d6f; --expired-soft: rgba(196, 29, 111, 0.10);
+  /* Violet in both themes for hue consistency (WI-145, see dark-theme note). */
+  --expired: #6d28d9; --expired-soft: rgba(109, 40, 217, 0.10);
 
   --success-bg: #dcfce7;
   --success-text: #166534;
@@ -500,6 +506,7 @@ body {
 .cw-gap-7, .cw-gap-8, .cw-gap-9, .cw-gap-10 { gap: var(--space-2); }
 .cw-gap-12, .cw-gap-14, .cw-gap-16 { gap: var(--space-3); }
 .cw-flex-1 { flex: 1; }
+.cw-min-w-0 { min-width: 0; }
 .cw-justify-center { justify-content: center; }
 .cw-items-center { align-items: center; }
 .cw-items-start { align-items: flex-start; }
@@ -1230,10 +1237,14 @@ body {
 @media (max-width: 960px) {
   .cw-layout-16-1 { grid-template-columns: 1fr; }
   .cw-stats { grid-template-columns: repeat(2, 1fr); }
+  .cw-stats.cw-stats-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cw-stats.cw-stats-5 .cw-stat:last-child { grid-column: 1 / -1; }
   .cw-stats .cw-stat { border-top: 1px solid var(--border); }
   .cw-stats .cw-stat:nth-child(-n+2) { border-top: none; }
   .cw-stats .cw-stat:nth-child(odd) { border-left: none; }
-  .cw-stats-3 { grid-template-columns: 1fr; }
+  .cw-stats.cw-stats-3 { grid-template-columns: 1fr; }
+  .cw-stats.cw-stats-3 .cw-stat { border-left: none; border-top: 1px solid var(--border); }
+  .cw-stats.cw-stats-3 .cw-stat:first-child { border-top: none; }
   .cw-field-row { grid-template-columns: 1fr; }
   .cw-grid-2-16-22 { grid-template-columns: 1fr; }
   .cw-col-span-2 { grid-column: span 1; }
@@ -1249,10 +1260,17 @@ body {
   .cw-ver { display: none; }
 }
 @media (max-width: 640px) {
-  .cw-topbar { flex-wrap: wrap; gap: 8px; padding: 0 12px; }
+  .cw-topbar {
+    flex-wrap: wrap; gap: 8px; height: auto; min-height: 58px;
+    padding: 8px 12px;
+  }
   .cw-nav { order: 3; width: 100%; justify-content: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
   .cw-nav a { padding: 6px 8px; font-size: 12px; }
-  .cw-page { padding: 16px 12px; }
+  .cw-page { padding: 0; }
+  /* Login/setup render .cw-page directly (no -wrap/-constrained inner box);
+     keep their mobile gutter now that the shared .cw-page padding is 0. */
+  .cw-page.cw-login-center { padding: 16px 12px; }
+  .cw-page-wrap { padding: 16px 12px; }
   .cw-page--constrained { padding: 16px 12px; }
   .cw-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .cw-table { min-width: 640px; }
@@ -1266,7 +1284,9 @@ body {
   .cw-nav a { padding: 5px 6px; font-size: 11px; }
   .cw-mark { width: 24px; height: 24px; }
   .cw-name { font-size: 12px; }
-  .cw-page { padding: 12px 8px; }
+  .cw-page { padding: 0; }
+  .cw-page.cw-login-center { padding: 12px 8px; }
+  .cw-page-wrap { padding: 12px 8px; }
   .cw-page--constrained { padding: 12px 8px; }
   .cw-table { min-width: 520px; }
   .cw-panel { padding: 12px !important; }
@@ -1274,4 +1294,3 @@ body {
   .cw-fz-13 { font-size: 12px; }
   .cw-fz-15 { font-size: 13px; }
 }
-

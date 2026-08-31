@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso, get_write_lock
+from cert_watch.database.connection import (
+    _connect,
+    _iso,
+    _parse_iso,
+    get_write_lock,
+    parse_san_dns_names,
+)
 from cert_watch.database.schema import init_schema
 
 
@@ -211,7 +217,7 @@ def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> lis
         days_added = (new_leaf.not_after - old_expiry).days
         if days_added > 0:
             changes.append(f"expiry extended by {days_added} days")
-    old_sans = set(json.loads(old_row["san_dns_names"]))
+    old_sans = set(parse_san_dns_names(old_row["san_dns_names"]))
     new_sans = set(new_leaf.san_dns_names)
     added = new_sans - old_sans
     removed = old_sans - new_sans

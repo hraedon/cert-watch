@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import logging
 import sqlite3
 import statistics
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
@@ -22,30 +24,62 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_digest_pool = concurrent.futures.ThreadPoolExecutor(
+_digest_pool: concurrent.futures.ThreadPoolExecutor | None = concurrent.futures.ThreadPoolExecutor(
     max_workers=2, thread_name_prefix="cw-digest",
 )
 _digest_pool_lock = threading.Lock()
 
 
 def _flush_digest_pool() -> None:
-    """Wait for all pending digest webhook tasks to finish (test helper)."""
+    """Drain pending tasks and explicitly reset the pool (test helper)."""
     global _digest_pool
     with _digest_pool_lock:
-        _digest_pool.shutdown(wait=True)
-        _digest_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="cw-digest",
-        )
+        pool = _digest_pool
+        _digest_pool = None
+    if pool is not None:
+        pool.shutdown(wait=True)
+    start_digest_pool()
+
+
+def start_digest_pool() -> None:
+    """Enable digest task submission for an explicit scheduler startup."""
+    global _digest_pool
+    with _digest_pool_lock:
+        if _digest_pool is None:
+            _digest_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="cw-digest",
+            )
 
 
 def shutdown_digest_pool() -> None:
-    """Shut down the digest webhook pool (called from stop_scheduler)."""
+    """Terminally stop digest submissions until ``start_digest_pool``."""
+    pool = _detach_digest_pool()
+    if pool is not None:
+        pool.shutdown(wait=True)
+
+
+def _detach_digest_pool() -> concurrent.futures.ThreadPoolExecutor | None:
+    """Close the submission gate immediately and return the pool to drain."""
     global _digest_pool
     with _digest_pool_lock:
-        _digest_pool.shutdown(wait=True)
-        _digest_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="cw-digest",
-        )
+        pool = _digest_pool
+        _digest_pool = None
+    return pool
+
+
+def _submit_digest_task(fn: Callable[..., Any], *args: Any) -> bool:
+    """Submit only while the pool is accepting work; never revive it implicitly."""
+    with _digest_pool_lock:
+        if _digest_pool is None:
+            return False
+        _digest_pool.submit(fn, *args)
+    return True
+
+
+def _webhook_channel(config: WebhookConfig) -> str:
+    endpoint = config.routing_key if config.kind == "pagerduty" else config.url
+    endpoint_hash = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
+    return f"webhook:{config.kind}:{endpoint_hash}"
 
 
 @dataclass
@@ -298,15 +332,14 @@ def send_orphan_notice(db_path: str | Path, alert_config: AlertConfig | None) ->
     get standing visibility into certs that resolve to nobody specific, even in a
     week with no renewal activity. Returns ``None`` when there is nothing to send
     (no orphans, no admin recipients, or no SMTP config), ``True`` on delivery,
-    ``False`` on SMTP failure. Delivers nothing else; mutates nothing.
+    ``False`` on SMTP failure. Successful per-admin deliveries are durably
+    recorded so overlapping/repeated weekly runs do not resend them.
     """
-    import contextlib
     from email.message import EmailMessage
 
     from cert_watch.alerts import (
         AlertConfig,
-        _open_smtp_connection,
-        _sanitize_smtp_error,
+        _send_claimed_digest_smtp,
         _validate_email,
         find_orphan_certs,
     )
@@ -320,68 +353,29 @@ def send_orphan_notice(db_path: str | Path, alert_config: AlertConfig | None) ->
     if not admins:
         return None
 
-    msg = EmailMessage()
-    msg["Subject"] = (
-        f"[cert-watch] {len(orphans)} orphaned certificate(s) — no alert routing"
-    )
-    msg["From"] = alert_config.from_addr
-    msg["To"] = ", ".join(admins)
-    msg.set_content(_build_orphan_message(orphans))
+    from cert_watch.database.digest_deliveries import digest_period_key
 
-    conn = _open_smtp_connection(alert_config)
-    if conn is None:
-        return False
-    try:
-        conn.send_message(msg)
-        return True
-    except Exception as exc:  # noqa: BLE001 — SMTP failures must not raise
-        logger.warning(
-            "orphan notice delivery failed: %s",
-            _sanitize_smtp_error(str(exc), alert_config),
+    digest_key = digest_period_key("orphan", 7)
+
+    def _build_message(recipients: list[str]) -> EmailMessage:
+        msg = EmailMessage()
+        msg["Subject"] = (
+            f"[cert-watch] {len(orphans)} orphaned certificate(s) — no alert routing"
         )
-        return False
-    finally:
-        with contextlib.suppress(Exception):
-            conn.quit()
+        msg["From"] = alert_config.from_addr
+        msg["To"] = ", ".join(recipients)
+        msg.set_content(_build_orphan_message(orphans))
+        return msg
 
-
-def _send_digest_email_msg(
-    msg: EmailMessage,
-    config: AlertConfig,
-) -> bool:
-    """Send a pre-built EmailMessage via SMTP with retry.
-
-    Unlike ``_send_digest_smtp`` (which constructs its own message from cert
-    data), this sends an already-built message — needed for the renewal digest
-    where the body is a textual summary, not a per-cert expiry listing.
-    """
-    import contextlib
-
-    from cert_watch.alerts import (
-        ALERT_MAX_RETRIES,
-        ALERT_RETRY_DELAY,
-        _open_smtp_connection,
-        _sanitize_smtp_error,
-        backoff_range,
+    outcomes, busy = _send_claimed_digest_smtp(
+        db_path,
+        digest_key,
+        admins,
+        alert_config,
+        _build_message,
+        failure_label="orphan notice delivery",
     )
-
-    for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
-        try:
-            conn = _open_smtp_connection(config)
-            if conn is None:
-                continue
-            try:
-                conn.send_message(msg)
-                return True
-            finally:
-                with contextlib.suppress(Exception):
-                    conn.quit()
-        except Exception as exc:
-            logger.warning(
-                "renewal digest email failed: %s",
-                _sanitize_smtp_error(str(exc), config),
-            )
-    return False
+    return bool(outcomes) and all(outcomes.values()) and not busy
 
 
 def send_renewal_digest(
@@ -391,20 +385,22 @@ def send_renewal_digest(
     *,
     days: int = 7,
     cadence_days: int | None = None,
-) -> bool:
+    delivery_completion_callback: Callable[[bool], None] | None = None,
+) -> bool | None:
     """Build and send the renewal digest through the existing alert pipeline.
 
     When SMTP and webhook configs are both absent, returns False.
     Sends one digest per owner plus one global digest for unowned hosts.
     For SMTP delivery, returns True only when all deliveries succeeded.
-    For webhook delivery, returns True after submitting to the thread pool
-    (delivery happens asynchronously; failures are logged, not surfaced).
+    For webhook delivery, the default API remains submission-based and returns
+    True after queueing. When *delivery_completion_callback* is supplied,
+    returns None for an asynchronous submission and invokes the callback with
+    the final success/failure result after all webhook deliveries complete.
     """
     from cert_watch.alerts import (
         AlertConfig,
         WebhookConfig,
-        _open_smtp_connection,
-        _sanitize_smtp_error,
+        _send_claimed_digest_smtp,
     )
     from cert_watch.database import Alert
 
@@ -417,14 +413,16 @@ def send_renewal_digest(
     # Offloaded to the thread pool so SMTP latency does not block the scheduler
     # thread (same bug class as WI-134 webhook path).
     try:
-        with _digest_pool_lock:
-            _digest_pool.submit(send_orphan_notice, db_path, alert_config)
+        orphan_submitted = _submit_digest_task(send_orphan_notice, db_path, alert_config)
     except Exception:
         logger.warning(
             "orphan notice pool submit failed; delivering inline",
             exc_info=True,
         )
         send_orphan_notice(db_path, alert_config)
+    else:
+        if not orphan_submitted:
+            logger.info("orphan notice not submitted because digest pool is stopped")
 
     digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
     if not digests:
@@ -457,11 +455,13 @@ def send_renewal_digest(
 
     any_smtp_success = False
     any_smtp_failure = False
+    smtp_busy = False
 
     if isinstance(alert_config, AlertConfig):
-        import contextlib
+        from cert_watch.database.digest_deliveries import digest_period_key
 
         effective_days = cadence_days if cadence_days is not None else days
+        digest_key = digest_period_key("renewal", effective_days)
 
         global_digest = RenewalDigest(
             days=effective_days,
@@ -480,11 +480,11 @@ def send_renewal_digest(
             f"{global_digest.overdue_count} overdue"
         )
 
-        def _build_global_msg() -> EmailMessage:
+        def _build_global_msg(recipients: list[str]) -> EmailMessage:
             m = EmailMessage()
             m["Subject"] = global_subject
             m["From"] = alert_config.from_addr
-            m["To"] = ", ".join(global_recipients_original)
+            m["To"] = ", ".join(recipients)
             m.set_content(global_body)
             return m
 
@@ -502,55 +502,42 @@ def send_renewal_digest(
             m.set_content(body)
             return m
 
-        smtp_conn = _open_smtp_connection(alert_config)
-        global_sent = False
-        sent_owners: set[str] = set()
+        if global_recipients_original:
+            outcomes, busy = _send_claimed_digest_smtp(
+                db_path,
+                digest_key,
+                global_recipients_original,
+                alert_config,
+                _build_global_msg,
+                failure_label="global renewal digest",
+            )
+            smtp_busy |= busy
+            any_smtp_success |= any(outcomes.values())
+            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
 
-        if smtp_conn is not None:
-            conn_broken = False
-            try:
-                if global_recipients_original:
-                    try:
-                        smtp_conn.send_message(_build_global_msg())
-                        any_smtp_success = True
-                        global_sent = True
-                    except Exception as exc:
-                        logger.warning(
-                            "global renewal digest failed: %s",
-                            _sanitize_smtp_error(str(exc), alert_config),
-                        )
-                        any_smtp_failure = True
-                        conn_broken = True
-                if not conn_broken:
-                    for cf_email, od in owner_digests.items():
-                        try:
-                            smtp_conn.send_message(_build_owner_msg(cf_email, od))
-                            any_smtp_success = True
-                            sent_owners.add(cf_email)
-                        except Exception as exc:
-                            logger.warning(
-                                "owner digest for %s failed: %s",
-                                original_emails.get(cf_email, cf_email),
-                                _sanitize_smtp_error(str(exc), alert_config),
-                            )
-                            any_smtp_failure = True
-                            conn_broken = True
-                            break
-            finally:
-                with contextlib.suppress(Exception):
-                    smtp_conn.quit()
-
-        if not global_sent and global_recipients_original:
-            if _send_digest_email_msg(_build_global_msg(), alert_config):
-                any_smtp_success = True
-            else:
-                any_smtp_failure = True
         for cf_email, od in owner_digests.items():
-            if cf_email not in sent_owners:
-                if _send_digest_email_msg(_build_owner_msg(cf_email, od), alert_config):
-                    any_smtp_success = True
-                else:
-                    any_smtp_failure = True
+            original = original_emails.get(cf_email, cf_email)
+
+            def _build_current_owner_msg(
+                _recipients: list[str],
+                owner_email: str = cf_email,
+                owner_digest: RenewalDigest = od,
+            ) -> EmailMessage:
+                return _build_owner_msg(owner_email, owner_digest)
+
+            outcomes, busy = _send_claimed_digest_smtp(
+                db_path,
+                digest_key,
+                [original],
+                alert_config,
+                _build_current_owner_msg,
+                failure_label=f"owner digest for {original}",
+            )
+            smtp_busy |= busy
+            any_smtp_success |= any(outcomes.values())
+            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
+
+        any_smtp_failure |= smtp_busy
 
     if any_smtp_success and not any_smtp_failure:
         return True
@@ -558,14 +545,33 @@ def send_renewal_digest(
     if any_smtp_failure and webhook_config is None:
         return False
 
+    if smtp_busy:
+        return False
+
     if isinstance(webhook_config, WebhookConfig):
         from cert_watch.alerts import ALERT_MAX_RETRIES, ALERT_RETRY_DELAY, send_webhook
+        from cert_watch.database.digest_deliveries import (
+            claim_digest_delivery,
+            complete_digest_delivery,
+            digest_period_key,
+            renew_digest_delivery,
+        )
         from cert_watch.retry import backoff_range
 
-        def _deliver_digest_webhook(od: RenewalDigest) -> None:
+        effective_days = cadence_days if cadence_days is not None else days
+        digest_key = digest_period_key("renewal", effective_days)
+        channel = _webhook_channel(webhook_config)
+
+        def _deliver_digest_webhook(od: RenewalDigest) -> bool:
+            target = od.owner_email.casefold() or "_unowned"
+            claim = claim_digest_delivery(db_path, digest_key, channel, target)
+            if claim.state == "sent":
+                return True
+            if not claim.acquired:
+                return False
             body = _build_digest_message(od)
             alert = Alert(
-                cert_id=f"renewal-digest:{days}",
+                cert_id=claim.idempotency_key,
                 alert_type="renewal_digest",
                 status="pending",
                 message=body,
@@ -576,23 +582,41 @@ def send_renewal_digest(
             for _ in backoff_range(
                 ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
             ):
+                if not renew_digest_delivery(db_path, claim):
+                    return False
                 if send_webhook(alert, webhook_config):
-                    return
+                    complete_digest_delivery(db_path, claim, succeeded=True)
+                    return True
             logger.warning(
                 "renewal digest webhook failed after %d attempts",
                 ALERT_MAX_RETRIES,
             )
+            complete_digest_delivery(db_path, claim, succeeded=False)
+            return False
 
-        for od in digests:
-            try:
-                with _digest_pool_lock:
-                    _digest_pool.submit(_deliver_digest_webhook, od)
-            except Exception:
-                logger.warning(
-                    "digest webhook pool submit failed; delivering inline",
-                    exc_info=True,
-                )
-                _deliver_digest_webhook(od)
-        return True
+        def _deliver_all_digest_webhooks() -> bool:
+            delivered = all([_deliver_digest_webhook(od) for od in digests])
+            if delivery_completion_callback is not None:
+                try:
+                    delivery_completion_callback(delivered)
+                except Exception:
+                    logger.exception("digest delivery completion callback failed")
+            return delivered
+
+        try:
+            submitted = _submit_digest_task(_deliver_all_digest_webhooks)
+        except Exception:
+            logger.warning(
+                "digest webhook pool submit failed; delivering inline",
+                exc_info=True,
+            )
+            return _deliver_all_digest_webhooks()
+        if not submitted:
+            logger.info("digest webhook not submitted because digest pool is stopped")
+            if delivery_completion_callback is not None:
+                delivery_completion_callback(False)
+                return None
+            return False
+        return None if delivery_completion_callback is not None else True
 
     return False
