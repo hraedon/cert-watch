@@ -76,8 +76,8 @@ a { color: revert; text-decoration: revert; }    /* links are opt-in .cw-link */
 /* ---------- BASE HELPERS (cert-watch's own) ---------- */
 a.cw-link, .cw-link { color: var(--accent); cursor: pointer; text-decoration: none; }
 .cw-link:hover { text-decoration: underline; }
-.cw-muted { color: var(--text-3); }
-.cw-sub { font-size: var(--fs-sm); color: var(--text-3); margin-top: 3px; }
+.cw-muted { color: var(--text-2); }
+.cw-sub { font-size: var(--fs-sm); color: var(--text-2); margin-top: 3px; }
 .cw-divider { height: 1px; background: var(--border); border: none; margin: var(--space-4) 0; }
 .cw-hidden { display: none !important; }
 form.cw-inline { display: inline; }
@@ -145,11 +145,11 @@ form.cw-inline { display: inline; }
   gap: var(--space-4); margin-bottom: 18px;
 }
 .cw-page-head h1 { margin: 0; font-size: var(--fs-xl); font-weight: 600; letter-spacing: -.4px; }
-.cw-page-head-sub { font-size: var(--fs-base); color: var(--text-3); margin-top: 4px; }
+.cw-page-head-sub { font-size: var(--fs-base); color: var(--text-2); margin-top: 4px; }
 .cw-page-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 
-.cw-crumbs { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--text-3); margin-bottom: 16px; }
-.cw-crumbs a { color: var(--text-3); text-decoration: none; }
+.cw-crumbs { display: flex; align-items: center; gap: 7px; font-size: var(--fs-sm); color: var(--text-2); margin-bottom: 16px; }
+.cw-crumbs a { color: var(--text-2); text-decoration: none; }
 .cw-crumbs a:hover { color: var(--text-2); }
 
 /* In-page section header (replaces three per-template versions). */
@@ -194,7 +194,7 @@ a.cw-stat:hover { background: var(--panel-2); }
 .cw-stat-label {
   display: flex; align-items: center; gap: 7px;
   font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
-  color: var(--text-3); text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-2); text-transform: uppercase; letter-spacing: .07em;
 }
 .cw-stat-label svg { width: 13px; height: 13px; opacity: .85; }
 .cw-stat-val {
@@ -205,7 +205,7 @@ a.cw-stat:hover { background: var(--panel-2); }
 /* Tone applies to the value only when the count is non-zero:
    templates put .t-* on the value span only when val > 0.       */
 .cw-stat-val.t-ok, .cw-stat-val.t-warn, .cw-stat-val.t-crit, .cw-stat-val.t-expired { color: var(--cw-tone); }
-.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-3); margin-top: 6px; }
+.cw-stat-sub { font-size: var(--fs-xs); color: var(--text-2); margin-top: 6px; }
 
 /* ---------- STATUS (dot + colored text) ---------- */
 .cw-status {
@@ -298,7 +298,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 }
 .cw-input.mono, .cw-textarea.mono { font-family: var(--font-mono); font-size: var(--fs-sm); }
 .cw-textarea { min-height: 110px; resize: vertical; line-height: 1.6; }
-.cw-hint { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.5; }
+.cw-hint { font-size: var(--fs-xs); color: var(--text-2); line-height: 1.5; }
 .cw-form { display: flex; flex-direction: column; gap: var(--space-4); }
 .cw-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
 .cw-form-grid .wide { grid-column: 1 / -1; }
@@ -380,7 +380,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 .cw-sidenav a.active { background: var(--panel-3); color: var(--text); }
 .cw-sidenav .grp {
   font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--text-3); text-transform: uppercase; letter-spacing: .07em;
+  color: var(--text-2); text-transform: uppercase; letter-spacing: .07em;
   padding: 12px 12px 4px;
 }
 
@@ -388,7 +388,7 @@ svg.cw-bar .mark { fill: var(--text); opacity: .6; }
 .cw-table { width: 100%; border-collapse: separate; border-spacing: 0; }
 .cw-table th {
   text-align: left; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
-  color: var(--text-3); letter-spacing: .07em; text-transform: uppercase;
+  color: var(--text-2); letter-spacing: .07em; text-transform: uppercase;
   padding: 12px 14px 9px; border-bottom: 1px solid var(--border);
   white-space: nowrap; user-select: none;
 }
@@ -549,7 +549,7 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
 }
 .cw-menu-label {
   padding: 6px 14px; font-family: var(--font-mono); font-size: 10px; font-weight: 600;
-  color: var(--text-3); letter-spacing: .05em; text-transform: uppercase;
+  color: var(--text-2); letter-spacing: .05em; text-transform: uppercase;
 }
 .cw-menu-item {
   display: flex; align-items: center; gap: 10px; width: 100%;
@@ -567,7 +567,7 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
   display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px;
 }
 .cw-empty-title { font-size: 14px; font-weight: 600; color: var(--text); }
-.cw-empty-sub { font-size: var(--fs-sm); color: var(--text-3); margin-top: 4px; }
+.cw-empty-sub { font-size: var(--fs-sm); color: var(--text-2); margin-top: 4px; }
 .cw-empty-act { margin-top: var(--space-4); }
 
 /* ---------- FLASH / BANNERS ---------- */
@@ -674,6 +674,9 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
 /* ---------- DETAIL LAYOUT ---------- */
 .cw-cols { display: grid; grid-template-columns: 1.6fr 1fr; gap: 18px; align-items: start; }
 .cw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
+@media (max-width: 960px) {
+  .cw-cols, .cw-grid-2 { grid-template-columns: 1fr; }
+}
 /* Vertical page stack: the standard rhythm between page-level blocks. */
 .cw-vstack { display: flex; flex-direction: column; gap: var(--space-3); }
 .cw-vstack > .cw-panel + .cw-panel { margin-top: 0; }

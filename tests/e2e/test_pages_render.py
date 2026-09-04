@@ -28,6 +28,28 @@ def test_settings_page_renders(page: Page, cert_watch_server: str) -> None:
     expect(page.get_by_test_id("settings-heading")).to_be_visible()
 
 
+def test_secondary_page_copy_meets_normal_text_contrast(
+    page: Page, cert_watch_server: str
+) -> None:
+    page.goto(cert_watch_server)
+    contrast = page.locator(".cw-page-head-sub").evaluate(
+        """el => {
+          const parse = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
+          const lum = value => {
+            const rgb = parse(value).map(v => {
+              v /= 255;
+              return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+            });
+            return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+          };
+          const fg = lum(getComputedStyle(el).color);
+          const bg = lum(getComputedStyle(document.body).backgroundColor);
+          return (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05);
+        }"""
+    )
+    assert contrast >= 4.5
+
+
 def test_compliance_report_renders(page: Page, cert_watch_server: str) -> None:
     """The compliance report page (linked from Insights) renders + offers exports."""
     page.goto(f"{cert_watch_server}/reports/compliance")
@@ -168,3 +190,13 @@ def test_cert_detail_page_renders(
     page.wait_for_url("**/certificates/*")
     expect(page.get_by_test_id("cert-detail-heading")).to_be_visible()
     expect(page.get_by_test_id("cert-download-pem")).to_be_visible()
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.reload()
+    panels = page.locator(".cw-cols .cw-panel")
+    expect(panels.first).to_be_visible()
+    for bounds in panels.evaluate_all(
+        "els => els.map(el => el.getBoundingClientRect().toJSON())"
+    ):
+        assert bounds["left"] >= 0
+        assert bounds["right"] <= 390
