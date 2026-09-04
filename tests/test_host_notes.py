@@ -222,6 +222,9 @@ def test_certificate_detail_shows_host_notes(
     assert r.status_code == 200
     assert "operational notes for this host" in r.text
     assert "host-level note" in r.text
+    assert r.text.count('data-testid="notes-view"') == 1
+    assert r.text.count('data-testid="notes-editor"') == 1
+    assert "No operational notes for this host." not in r.text
 
 
 def test_add_host_accepts_notes(tmp_path, reload_app, monkeypatch):

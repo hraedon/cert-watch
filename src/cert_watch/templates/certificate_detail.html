@@ -133,7 +133,7 @@
           <h2>Operational summary</h2>
           {% if may_write and host_id %}
           <details class="cw-editor">
-            <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit host details</summary>
             <div class="cw-editor-body">
               <form method="post" action="/certificates/{{ cert_id if cert else host_id }}/owner" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -212,18 +212,21 @@
             <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
             {% if may_write and host_id %}
             <details class="cw-editor">
-              <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+              <summary class="cw-btn ghost sm" data-testid="notes-edit-toggle">
+                {{ icons.svg_icon('edit', 13) }}<span class="when-closed">Edit notes</span><span class="when-open">Cancel editing</span>
+              </summary>
               <div class="cw-editor-body">
                 <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-form">
                   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                  <textarea name="notes" class="cw-textarea mono" spellcheck="false">{{ host_info.notes }}</textarea>
-                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit">Save</button></div>
+                  <label class="cw-label" for="host-notes">Host notes</label>
+                  <textarea id="host-notes" name="notes" class="cw-textarea mono" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">{{ host_info.notes }}</textarea>
+                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
                 </form>
               </div>
             </details>
             {% endif %}
           </div>
-          <pre class="cw-notes-pre">{{ host_info.notes or 'Add operational notes for this host (visible on every certificate on it)…' }}</pre>
+          <div class="cw-notes-view" data-testid="notes-view">{{ host_info.notes or 'No operational notes for this host.' }}</div>
         </div>
       </div>
       {% endif %}
@@ -364,7 +367,7 @@
           <h2>{{ icons.svg_icon('tag', 15) }} Tags</h2>
           {% if may_write %}
           <details class="cw-editor">
-            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit tags</summary>
             <div class="cw-editor-body">
               <form method="post" action="{{ '/certificates/' ~ cert_id ~ '/tags' if cert else '/hosts/' ~ host_id ~ '/tags' }}" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
