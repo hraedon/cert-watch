@@ -687,3 +687,7 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
 .cw-att-sev { flex: 0 0 auto; min-width: 120px; }
 .cw-att-main { flex: 1 1 auto; min-width: 0; }
 .cw-att-main .cw-id { text-decoration: none; }
+.cw-att-row:hover .cw-rowact, .cw-att-row:focus-within .cw-rowact { opacity: 1; }
+@media (hover: none) {
+  .cw-att-row .cw-rowact { opacity: 1; }
+}

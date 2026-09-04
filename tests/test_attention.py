@@ -198,3 +198,17 @@ class TestHomeAndBrowseRoutes:
         assert "crit.example.com" in r.text
         assert "manual renewal" in r.text
         assert "ops" in r.text
+
+    def test_home_summary_does_not_count_expired_as_expiring(self, reload_app, tmp_path):
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        init_schema(db)
+        _seed(db, "expired", -10)
+        with TestClient(app_mod.app) as client:
+            r = client.get("/")
+        assert r.status_code == 200
+        expiring = r.text.split('data-testid="home-expiring-stat"', 1)[1].split(
+            "</a>", 1
+        )[0]
+        assert '<div class="cw-stat-val">0</div>' in expiring
+        assert "No expirations in the next 12 weeks" in r.text

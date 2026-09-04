@@ -44,7 +44,7 @@ def test_mobile_dashboard_layout_does_not_overlap_or_clip_chrome(
 ) -> None:
     """The wrapped mobile header and five-stat strip retain usable geometry."""
     page.set_viewport_size({"width": 390, "height": 844})
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
 
     nav_box = page.locator(".cw-nav").bounding_box()
@@ -57,6 +57,20 @@ def test_mobile_dashboard_layout_does_not_overlap_or_clip_chrome(
     )
     assert column_count == 2
     assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+
+
+def test_attention_actions_reveal_on_hover(
+    page: Page, cert_watch_server: str
+) -> None:
+    """Attention-row actions use their own hover selector outside a table."""
+    page.set_content(
+        f'<link rel="stylesheet" href="{cert_watch_server}/static/css/cw.css">'
+        '<div class="cw-att-row"><a class="cw-rowact" href="#">Details</a></div>'
+    )
+    row = page.locator(".cw-att-row")
+    action = page.locator(".cw-rowact")
+    row.hover()
+    expect(action).to_have_css("opacity", "1")
 
 
 def test_add_slide_tabs_switch(page: Page, cert_watch_server: str) -> None:

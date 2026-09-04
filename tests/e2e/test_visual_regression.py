@@ -74,7 +74,8 @@ _MASKS = ["[data-testid=auth-user]", ".cw-ver", "#cw-health"]
 
 # Empty-state pages with stable layout (no certs/dates seeded).
 _VISUAL_PAGES = {
-    "dashboard": ("/", "dashboard-heading"),
+    "home": ("/", "home-heading"),
+    "dashboard": ("/browse", "dashboard-heading"),
     "alerts": ("/alerts", "alerts-heading"),
     "posture": ("/posture", "insights-heading"),
     "audit": ("/audit", "audit-heading"),
@@ -112,6 +113,7 @@ def test_page_visual(
 # ---------------------------------------------------------------------------
 
 _POPULATED_MASKS = [*_MASKS, "tbody td:nth-child(4)"]  # Expires column (dates + relative strings)
+_HOME_POPULATED_MASKS = [*_MASKS, ".cw-att-row .cw-sub", ".cw-cal-date"]
 
 
 @pytest.fixture(scope="module")
@@ -156,7 +158,7 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
 def test_dashboard_populated_visual(
     page: Page, populated_server: str, assert_snapshot
 ) -> None:
-    page.goto(populated_server)
+    page.goto(f"{populated_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # All five seeded rows rendered before the shot.
     expect(page.locator("tbody tr")).to_have_count(5)
@@ -164,4 +166,18 @@ def test_dashboard_populated_visual(
     page.wait_for_timeout(400)
     assert_snapshot(
         page, name="dashboard-populated.png", mask_elements=_POPULATED_MASKS
+    )
+
+
+@pytest.mark.visual
+def test_home_populated_visual(
+    page: Page, populated_server: str, assert_snapshot
+) -> None:
+    page.goto(populated_server)
+    expect(page.get_by_test_id("home-heading")).to_be_visible()
+    expect(page.get_by_test_id("attention-item")).to_have_count(3)
+    page.evaluate("document.fonts.ready")
+    page.wait_for_timeout(400)
+    assert_snapshot(
+        page, name="home-populated.png", mask_elements=_HOME_POPULATED_MASKS
     )

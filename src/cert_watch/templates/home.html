@@ -27,15 +27,15 @@
 
   {# ---- Stat strip: the cells deep-link into Browse filters ---- #}
   <div class="cw-stats">
-    {{ ui.stat('Expiring < 30d', stats.expired + stats.critical + stats.warning, 'certificates', icon='clock',
-                href='/browse', tone='' ) }}
+    {{ ui.stat('Expiring < 30d', stats.critical + stats.warning, 'certificates', icon='clock',
+                href='/browse', tone='', testid='home-expiring-stat') }}
     {{ ui.stat('Expired', stats.expired, 'needs attention' if stats.expired else 'none', tone='t-expired', icon='alert',
                 href='/browse?urgency=expired') }}
     {{ ui.stat('Critical', stats.critical, '< 7 days' if stats.critical else 'none', tone='t-crit', icon='alert',
                 href='/browse?urgency=critical') }}
     {{ ui.stat('Warning', stats.warning, '7–29 days' if stats.warning else 'none', tone='t-warn', icon='clock',
                 href='/browse?urgency=warning') }}
-    {{ ui.stat('Healthy', stats.healthy, 'no action needed' if stats.healthy else 'none', tone='t-ok', icon='check-circle',
+    {{ ui.stat('Healthy', stats.healthy, 'expiry healthy' if stats.healthy else 'none', tone='t-ok', icon='check-circle',
                 href='/browse?urgency=healthy') }}
   </div>
 
@@ -117,7 +117,7 @@
           {% endif %}
         </div>
       {% else %}
-        {{ ui.empty('No upcoming expirations', 'All tracked certificates are well within their validity window.', icon='check-circle', tone='t-ok') }}
+        {{ ui.empty('No expirations in the next 12 weeks', 'Future expirations will appear here as they enter the horizon.', icon='calendar', tone='t-accent') }}
       {% endfor %}
     </div>
   </div>
