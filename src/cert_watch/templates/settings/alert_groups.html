@@ -38,10 +38,10 @@
       <div class="cw-hint">Days-to-expiry at which this team's alerts fire. Leave empty to use the global thresholds.</div>
     </div>
     <div class="cw-field">
-      <label class="cw-label" for="{{ prefix }}_digest_cadence_days">Digest cadence (days)</label>
+      <label class="cw-label" for="{{ prefix }}_digest_cadence_days">Digest window (days)</label>
       <input class="cw-input" type="number" min="1" id="{{ prefix }}_digest_cadence_days" name="digest_cadence_days"
              value="{{ g.digest_cadence_days if g else '7' }}">
-      <div class="cw-hint">How often this team's digest is sent, in days. Default 7.</div>
+      <div class="cw-hint">Digests are sent weekly and use the largest window configured across all groups. This does not set a separate delivery schedule for this team.</div>
     </div>
   </div>
 {% endmacro %}
@@ -58,7 +58,7 @@
       <div>
         A group matches certificates by tag (a team's default tag) and routes
         their alerts to that team's recipients/webhook, with an optional
-        per-team alert threshold and digest cadence. A cert with no matching
+        per-team alert threshold and a shared weekly digest window. A cert with no matching
         group falls back to the global alert settings.
       </div>
     </div>
