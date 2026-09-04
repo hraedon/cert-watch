@@ -30,7 +30,7 @@
         <h1 class="mono" data-testid="{{ 'cert-detail-heading' if cert else 'host-detail-heading' }}">{{ subject_cn }}</h1>
         {% if cert %}
           {{ ui.status(urgency) }}
-          {% if posture %}{{ ui.grade(posture.grade) }}{% endif %}
+          {% if posture and not chain_posture_changed %}{{ ui.grade(posture.grade) }}{% endif %}
           {% if chain_issue == 'incomplete' %}
             <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.8) }}Incomplete chain</span>
           {% elif chain_issue == 'invalid' %}
@@ -133,7 +133,7 @@
           <h2>Operational summary</h2>
           {% if may_write and host_id %}
           <details class="cw-editor">
-            <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit host details</summary>
             <div class="cw-editor-body">
               <form method="post" action="/certificates/{{ cert_id if cert else host_id }}/owner" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -199,17 +199,7 @@
             {% endif %}
             {% if cert %}
             {% call detail_field('Chain status', 'wide') %}
-              {% if chain_status in ('public', 'private') %}
-                <span class="cw-chip t-ok">Verified to trusted root</span>
-              {% elif chain_status == 'incomplete' %}
-                <span class="cw-chip t-warn">Incomplete — {% if cert.source == 'uploaded' %}missing intermediate(s) in uploaded file{% else %}server missing intermediate(s){% endif %}</span>
-              {% elif chain_status == 'self-signed' %}
-                <span class="cw-chip">Self-signed</span>
-              {% elif chain_status == 'invalid' %}
-                <span class="cw-chip t-crit">Chain validation failed</span>
-              {% else %}
-                <span class="cw-chip t-muted">Issuer not uploaded</span>
-              {% endif %}
+              <a href="#chain-guidance" class="cw-link">{{ chain_guidance.title }}</a>
               {% if posture and posture.get('chain_incomplete') %}
                 <span class="cw-chip t-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
               {% endif %}
@@ -222,18 +212,21 @@
             <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
             {% if may_write and host_id %}
             <details class="cw-editor">
-              <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+              <summary class="cw-btn ghost sm" data-testid="notes-edit-toggle">
+                {{ icons.svg_icon('edit', 13) }}<span class="when-closed">Edit notes</span><span class="when-open">Cancel editing</span>
+              </summary>
               <div class="cw-editor-body">
                 <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-form">
                   <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-                  <textarea name="notes" class="cw-textarea mono" spellcheck="false">{{ host_info.notes }}</textarea>
-                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit">Save</button></div>
+                  <label class="cw-label" for="host-notes">Host notes</label>
+                  <textarea id="host-notes" name="notes" class="cw-textarea mono" rows="5" maxlength="10000" spellcheck="false" data-testid="notes-editor">{{ host_info.notes }}</textarea>
+                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit" data-testid="notes-save">Save notes</button></div>
                 </form>
               </div>
             </details>
             {% endif %}
           </div>
-          <pre class="cw-notes-pre">{{ host_info.notes or 'Add operational notes for this host (visible on every certificate on it)…' }}</pre>
+          <div class="cw-notes-view" data-testid="notes-view">{{ host_info.notes or 'No operational notes for this host.' }}</div>
         </div>
       </div>
       {% endif %}
@@ -244,17 +237,26 @@
       <div class="cw-panel">
         <div class="cw-panel-head">
           <h2>{{ icons.svg_icon('shield', 15) }} Security posture</h2>
-          {{ ui.grade(posture.grade) }}
+          <div class="cw-chiprow">
+            {% if chain_posture_changed %}<span class="cw-hint">Last scan grade</span>{% endif %}
+            {{ ui.grade(posture.grade) }}
+          </div>
         </div>
         <div class="cw-panel-body">
+          {% if posture.scanned_at %}<p class="cw-hint">Last evaluated {{ posture.scanned_at[:19] | replace("T", " ") }}</p>{% endif %}
+          {% if chain_posture_changed %}
+          <p class="cw-note t-warn" data-testid="chain-posture-changed">{% if posture.get('chain_status') %}Chain validation has changed since the last scan.{% else %}Chain validation was not recorded with this scan.{% endif %}
+            This grade describes that scan; <a href="#chain-guidance" class="cw-link">see current chain validation</a>
+            and scan again to refresh the posture.</p>
+          {% endif %}
           <div class="cw-findings">
-            {% for f in posture.findings %}
+            {% for f in posture.findings if not (chain_posture_changed and f.check == 'chain_completeness') %}
               <div class="cw-finding">
                 {% if f.status == 'pass' %}<span class="t-ok">{{ icons.svg_icon('check', 13) }}</span>
                 {% elif f.status == 'warn' %}<span class="t-warn">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
                 {% elif f.status == 'fail' %}<span class="t-crit">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
                 {% else %}<span class="cw-muted">—</span>{% endif %}
-                <span class="{{ 'cw-muted' if f.status == 'info' }}{{ ' fail' if f.status == 'fail' }}">{{ f.message }}</span>
+                <span class="{{ 'cw-muted' if f.status == 'info' }}{{ ' fail' if f.status == 'fail' }}">{{ chain_guidance.title if f.check == 'chain_completeness' and not posture.get('chain_incomplete') else f.message }}</span>
               </div>
             {% endfor %}
           </div>
@@ -365,7 +367,7 @@
           <h2>{{ icons.svg_icon('tag', 15) }} Tags</h2>
           {% if may_write %}
           <details class="cw-editor">
-            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit tags</summary>
             <div class="cw-editor-body">
               <form method="post" action="{{ '/certificates/' ~ cert_id ~ '/tags' if cert else '/hosts/' ~ host_id ~ '/tags' }}" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
@@ -447,7 +449,7 @@
             <div class="cw-chaincard">
               <div class="cw-chiprow between">
                 <span class="cw-id">{{ c.subject_cn }}</span>
-                <span class="cw-tl-role">Intermediate CA</span>
+                <span class="cw-tl-role">{{ 'Root CA (self-issued)' if c.self_issued else 'Intermediate CA' }}</span>
               </div>
               <div class="cw-chiprow cw-metarow">
                 <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
@@ -468,7 +470,14 @@
           'invalid': ('t-crit', 'alert', 'chain invalid')
         } %}
         {% set _tone, _icon, _label = _chain_notes.get(chain_status, ('t-muted', 'link', 'issuer not uploaded')) %}
-        <div class="cw-note {{ _tone }} cw-metarow">{{ icons.svg_icon(_icon, 14) }}<b>{{ _label }}</b></div>
+        <div id="chain-guidance" data-testid="chain-guidance" class="cw-metarow">
+          <div class="cw-note {{ _tone }}">{{ icons.svg_icon(_icon, 14) }}<b>{{ chain_guidance.title }}</b></div>
+          <p class="cw-sub">{{ chain_guidance.explanation }}</p>
+          {% if chain_guidance.expected_issuer %}
+          <dl class="cw-kv"><div class="wide"><dt>Expected issuer</dt><dd class="mono">{{ chain_guidance.expected_issuer }}</dd></div></dl>
+          {% endif %}
+          {% if chain_guidance.remediation %}<p class="cw-sub"><strong>Next step:</strong> {{ chain_guidance.remediation }}</p>{% endif %}
+        </div>
       </div>
     </div>
     {% endif %}

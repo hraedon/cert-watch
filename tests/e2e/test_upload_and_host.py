@@ -139,3 +139,34 @@ def test_add_host_creates_row(page: Page, cert_watch_server: str) -> None:
         toggle.click()
     expect(page.get_by_text("nonexistent.invalid:443", exact=True).first).to_be_visible()
     expect(page.locator(".cw-subrow .cw-chip.t-crit").first).to_be_visible()
+
+
+def test_host_notes_editor_has_distinct_view_and_edit_states(
+    page: Page, cert_watch_server: str
+) -> None:
+    hostname = "notes-ux.invalid"
+    page.goto(f"{cert_watch_server}/browse")
+    _open_slide(page)
+    page.get_by_test_id("scan-hostname-input").fill(hostname)
+    page.locator('[data-tab-pane="scan"] input[name="port"]').fill("443")
+    page.get_by_test_id("scan-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
+    page.get_by_test_id("cert-row").filter(has_text=hostname).click()
+    detail_url = page.url
+
+    view = page.get_by_test_id("notes-view")
+    editor = page.get_by_test_id("notes-editor")
+    expect(view).to_have_text("No operational notes for this host.")
+    expect(editor).not_to_be_visible()
+    page.get_by_test_id("notes-edit-toggle").click()
+    expect(view).not_to_be_visible()
+    expect(editor).to_be_visible()
+    expect(editor).to_be_editable()
+    editor.fill("Renew through the network team.")
+    page.get_by_test_id("notes-save").click()
+
+    page.goto(detail_url)
+    expect(page.get_by_test_id("notes-view")).to_have_text(
+        "Renew through the network team."
+    )
+    expect(page.get_by_test_id("notes-editor")).not_to_be_visible()

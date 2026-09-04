@@ -19,6 +19,13 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Certificate detail chain guidance and notes editing.** Preserve public-root
+  trust validation after loading certificates from the database, fixing false
+  incomplete-chain warnings beside a passing scan grade. Identify the expected
+  issuer at a chain gap, distinguish missing issuers from untrusted roots, and
+  suggest the appropriate bundle or trust-store repair. Label historical grades
+  when current chain validation differs. Notes now have one visible view or
+  editor, with explicit Edit notes, Cancel editing, and Save notes controls.
 - **UI review and branch reconciliation.** Bound Home's horizon to twelve
   calendar weeks, correct expiry summaries, reveal attention-row actions,
   remove closed-drawer shadows, make mobile Browse modes scrollable, stack

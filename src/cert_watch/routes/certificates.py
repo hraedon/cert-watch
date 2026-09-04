@@ -15,6 +15,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.cert_chain import validate_is_ca_certificate
+from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
     SqliteCertificateRepository,
     SqliteHostRepository,
@@ -201,6 +202,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 "subject_cn": subject_cn(c.subject),
                 "issuer_org": friendly_issuer(c.issuer),
                 "key_type": kt,
+                "self_issued": c.subject == c.issuer,
             }
         )
 
@@ -405,6 +407,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "fingerprint": fp_hex,
             "chain": chain_certs,
             "chain_status": cs,
+            "chain_guidance": describe_chain(cert, chain_certs_objects, cs),
+            "chain_posture_changed": bool(
+                _posture and _posture.get("chain_status") != cs
+            ),
             "urgency": urgency,
             "days_remaining": leaf_days,
             "subject_cn": subject_cn(cert.subject),
