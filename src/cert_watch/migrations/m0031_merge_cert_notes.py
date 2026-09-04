@@ -3,12 +3,14 @@
 Implements the UI content-model decision recorded in UI-INVENTORY.md (V1,
 decided 2026-08-14): notes are ONE host-scoped concept. Every non-empty
 ``certificates.notes`` value is concatenated into the matching ``hosts.notes``
-(matched on hostname+port), then the column is dropped.
+(matched on hostname+port). The column is dropped when every note can be
+merged.
 
 Certificates with notes but no matching host row (uploaded files on hosts that
-were never added for scanning) cannot be merged. Those notes are preserved in
-the pre-migration backup the runner takes (``backup=True``) and listed in a
-warning log; they are dropped from the live schema with the column.
+were never added for scanning) cannot be merged. To avoid destructive data
+loss, their notes remain live in the deprecated column and are listed in a
+warning log. The column's existing default supports current inserts that no
+longer name it.
 """
 
 from __future__ import annotations
@@ -62,18 +64,22 @@ def upgrade(conn: sqlite3.Connection) -> None:
         if note and note not in existing:
             combined = f"{existing.rstrip()}\n\n{note}" if existing.strip() else note
             conn.execute("UPDATE hosts SET notes = ? WHERE id = ?", (combined, host[0]))
+        # Leave only notes that could not be represented in the host model in
+        # the deprecated column.
+        conn.execute("UPDATE certificates SET notes = '' WHERE id = ?", (cert_id,))
         merged += 1
 
     if orphans:
         logger.warning(
             "migration 0031: %d certificate note(s) have no matching host and "
-            "cannot be merged into hosts.notes; they are preserved only in the "
-            "pre-migration backup: %s",
+            "cannot be merged into hosts.notes; preserving them in the live "
+            "deprecated certificates.notes column: %s",
             len(orphans),
             [(cid, subj) for cid, subj, _ in orphans],
         )
     if rows:
         logger.info("migration 0031: merged %d certificate note(s) into hosts.notes", merged)
 
-    conn.execute("ALTER TABLE certificates DROP COLUMN notes")
+    if not orphans:
+        conn.execute("ALTER TABLE certificates DROP COLUMN notes")
     conn.commit()

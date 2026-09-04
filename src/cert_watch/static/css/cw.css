@@ -33,7 +33,7 @@
 :root,
 :root[data-theme="dark"] {
   --cw-accent-fg: #0e0d0b;
-  --cw-expired: #a78bfa; /* WI-145: violet remains distinct from urgent red. */
+  --cw-expired: #a78bfa; /* WI-145: measured expired-status separation */
   --cw-backdrop: rgba(4, 3, 2, .55);
   --cw-pad-panel: 15px 18px;
   --cw-pad-page: 22px 26px;
@@ -41,7 +41,7 @@
 }
 :root[data-theme="light"] {
   --cw-accent-fg: #ffffff;
-  --cw-expired: #6d28d9;
+  --cw-expired: #6d28d9; /* WI-145: measured expired-status separation */
   --cw-backdrop: rgba(40, 32, 16, .35);
 }
 

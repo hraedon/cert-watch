@@ -55,7 +55,10 @@ restore the pre-migration backup.
   `hosts.notes` row and the column is dropped. Notes on *uploaded*
   certificates with no matching host row (a hostname+port pair in `hosts`)
   cannot be merged: they are listed in a WARNING log at migration time and
-  survive only in the pre-migration backup. The UI has a single "Notes" panel
+  retained in the deprecated `certificates.notes` column in the live database.
+  Matched notes are cleared from that column after merging. The column is
+  dropped only when no unmatched notes remain; the pre-migration backup is
+  also retained. The UI has a single "Notes" panel
   per endpoint (host-scoped); `POST /certificates/{id}/notes`,
   `PATCH /api/certificates/{id}/notes`, and the `notes` key in
   `GET /api/certificates/{id}` are removed.

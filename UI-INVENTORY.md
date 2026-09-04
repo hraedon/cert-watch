@@ -70,7 +70,7 @@ surface is the per-item "scan now" button, which posts to the pre-existing
   `certificate_detail.html:229`, `certificates.notes` at `:413`).
   Per the 2026-08-14 adjudication (merge to ONE host-scoped field):
   migration **0031** concatenates every non-empty `certificates.notes` into
-  the matching `hosts.notes` (matched on hostname+port) and drops the column.
+  the matching `hosts.notes` (matched on hostname+port) and drops the column only when no unmatched notes remain.
   Notes on uploaded certificates with **no matching host row** cannot be
   merged — they survive only in the migration runner's pre-migration backup
   and are listed in a `WARNING` log (`cert_watch.migrations.0031`).

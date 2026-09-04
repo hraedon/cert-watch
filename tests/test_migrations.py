@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -653,7 +654,7 @@ def test_migration_0017_adds_caa_columns(tmp_path):
 # ── 0031: merge per-certificate notes into host notes (UI-INVENTORY V1) ──────
 
 
-def _mk_pre0031_db(db: Path) -> None:
+def _mk_pre0031_db(db: Path, *, include_orphan: bool = True) -> None:
     """Create a DB at the pre-0031 shape: ensure_base + re-add the column the
     migration is responsible for dropping."""
     ensure_base(db)
@@ -665,11 +666,15 @@ def _mk_pre0031_db(db: Path) -> None:
             "INSERT INTO hosts (id, hostname, port, notes, added_at)"
             " VALUES ('h1', 'a.example.com', 443, 'existing host note', '2026-01-01')"
         )
-        for cid, subject, hostname, port, notes in (
+        certs = [
             ("c1", "CN=a.example.com", "a.example.com", 443, "cert note one"),
             ("c2", "CN=a.example.com", "a.example.com", 443, "cert note two"),
-            ("c3", "CN=orphan.example.com", None, None, "orphan uploaded note"),
-        ):
+        ]
+        if include_orphan:
+            certs.append(
+                ("c3", "CN=orphan.example.com", None, None, "orphan uploaded note")
+            )
+        for cid, subject, hostname, port, notes in certs:
             conn.execute(
                 "INSERT INTO certificates (id, subject, issuer, not_before, not_after,"
                 " san_dns_names, fingerprint_sha256, raw_der, source, hostname, port,"
@@ -685,7 +690,7 @@ def test_migration_0031_merges_notes_and_drops_column(tmp_path: Path) -> None:
     from cert_watch.migrations.m0031_merge_cert_notes import upgrade
 
     db = tmp_path / "test.db"
-    _mk_pre0031_db(db)
+    _mk_pre0031_db(db, include_orphan=False)
     with sqlite3.connect(str(db)) as conn:
         upgrade(conn)
 
@@ -703,18 +708,52 @@ def test_migration_0031_merges_notes_and_drops_column(tmp_path: Path) -> None:
 def test_migration_0031_warns_on_orphan_notes(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """Cert notes with no matching host are not silently merged — they are
-    logged (and survive in the runner's pre-migration backup)."""
-    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+    """Startup preserves orphan notes while moving matched notes to hosts."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database.repo import SqliteCertificateRepository
 
     db = tmp_path / "test.db"
     _mk_pre0031_db(db)
-    with (
-        caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0031"),
-        sqlite3.connect(str(db)) as conn,
-    ):
-        upgrade(conn)
-    assert any("orphan" in r.message and "c3" in r.message for r in caplog.records)
+    _stamp_feature_branch_migrations(
+        db, tuple(f"{number:04d}" for number in range(1, 31))
+    )
+    with caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0031"):
+        init_schema(db)
+
+    with sqlite3.connect(str(db)) as conn:
+        certs_cols = _table_columns(conn, "certificates")
+        legacy_notes = dict(
+            conn.execute("SELECT id, notes FROM certificates ORDER BY id").fetchall()
+        )
+        host_notes = conn.execute(
+            "SELECT notes FROM hosts WHERE id = 'h1'"
+        ).fetchone()[0]
+    assert "notes" in certs_cols
+    assert legacy_notes == {"c1": "", "c2": "", "c3": "orphan uploaded note"}
+    assert "cert note one" in host_notes
+    assert "cert note two" in host_notes
+    assert any(
+        "preserving" in record.message and "c3" in record.message
+        for record in caplog.records
+    )
+
+    # Current repository inserts omit the deprecated column and rely on its
+    # non-null empty-string default while an orphan keeps the column alive.
+    new_id = SqliteCertificateRepository(db, source="upload").add(
+        Certificate(
+            subject="CN=new.example.com",
+            issuer="CN=Test CA",
+            not_before=datetime(2026, 1, 1, tzinfo=UTC),
+            not_after=datetime(2027, 1, 1, tzinfo=UTC),
+            fingerprint_sha256="cd" * 32,
+            raw_der=b"new",
+        )
+    )
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute(
+            "SELECT notes FROM certificates WHERE id = ?", (new_id,)
+        ).fetchone()[0] == ""
 
 
 def test_migration_0031_noop_without_column(tmp_path: Path) -> None:

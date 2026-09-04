@@ -28,16 +28,16 @@
       "sample": "--cw-backdrop: rgba(40, 32, 16, .35);"
     },
     {
-      "fp": "de1f2f10d8a963c4",
+      "fp": "f23287e141c6b6fc",
       "n": 1,
       "where": "cw.css",
-      "sample": "--cw-expired: #c41d6f;"
+      "sample": "--cw-expired: #6d28d9;"
     },
     {
-      "fp": "76c49347cd94023f",
+      "fp": "0a35fe45db6ce8f3",
       "n": 1,
       "where": "cw.css",
-      "sample": "--cw-expired: #fb6f92;"
+      "sample": "--cw-expired: #a78bfa;"
     },
     {
       "fp": "cf63084ff2e4ece3",

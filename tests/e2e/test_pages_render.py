@@ -47,8 +47,9 @@ def test_mobile_dashboard_layout_does_not_overlap_or_clip_chrome(
     page.goto(f"{cert_watch_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
 
+    expect(page.locator("#cw-health")).to_be_visible()
     nav_box = page.locator(".cw-nav").bounding_box()
-    banner_box = page.locator("#cw-health-banner").bounding_box()
+    banner_box = page.locator("#cw-health").bounding_box()
     assert nav_box is not None and banner_box is not None
     assert nav_box["y"] + nav_box["height"] <= banner_box["y"]
 
