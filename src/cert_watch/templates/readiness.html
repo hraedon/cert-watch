@@ -34,7 +34,7 @@
     <tbody>
       {% for h in hosts %}
       <tr>
-        <td class="mono">{{ h.hostname }}</td>
+        <td class="mono">{{ h.hostname }}{% if h.port and h.port != 443 %}:{{ h.port }}{% endif %}</td>
         <td>{{ class_chip(h.classification) }}</td>
         <td class="num">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
         <td class="num">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>

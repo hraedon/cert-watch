@@ -20,6 +20,7 @@ class RenewalOverdueSignal:
     expected_renewal_at_days: float
     days_overdue: float
     confidence: str
+    port: int | None = None
 
 
 @dataclass
@@ -33,6 +34,7 @@ class HostRenewalAnalytics:
     automation_classification: str
     classification_evidence: dict[str, Any]
     cert_count: int
+    port: int | None = None
 
 
 def _is_acme_issuer(issuer: str) -> bool:
@@ -99,7 +101,7 @@ def _classify_automation(
 
 
 def _compute_host_from_entries(
-    hostname: str, entries: list[dict[str, Any]]
+    hostname: str, entries: list[dict[str, Any]], *, port: int | None = None
 ) -> HostRenewalAnalytics:
     if not entries:
         return HostRenewalAnalytics(
@@ -112,16 +114,14 @@ def _compute_host_from_entries(
             automation_classification="unknown",
             classification_evidence={},
             cert_count=0,
+            port=port,
         )
 
     fingerprint_periods: list[dict[str, Any]] = []
-    seen_fingerprints: dict[str, int] = {}
 
     for entry in entries:
         fp = entry["fingerprint_sha256"]
-        if fp not in seen_fingerprints:
-            idx = len(fingerprint_periods)
-            seen_fingerprints[fp] = idx
+        if not fingerprint_periods or fingerprint_periods[-1]["fingerprint"] != fp:
             fingerprint_periods.append(
                 {
                     "fingerprint": fp,
@@ -133,8 +133,7 @@ def _compute_host_from_entries(
                 }
             )
         else:
-            idx = seen_fingerprints[fp]
-            fingerprint_periods[idx]["last_scanned_at"] = entry["scanned_at"]
+            fingerprint_periods[-1]["last_scanned_at"] = entry["scanned_at"]
 
     cert_count = len(fingerprint_periods)
 
@@ -186,6 +185,7 @@ def _compute_host_from_entries(
         automation_classification=classification,
         classification_evidence=evidence,
         cert_count=cert_count,
+        port=port,
     )
 
 
@@ -198,7 +198,7 @@ def compute_host_analytics(
 ) -> HostRenewalAnalytics:
     init_schema(db_path)
 
-    if scope_tags:
+    if scope_tags and port is not None:
         from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
 
         scope_sql = "SELECT 1 FROM hosts h WHERE h.hostname = ?"
@@ -213,7 +213,7 @@ def compute_host_analytics(
         with _connect(db_path) as conn:
             row = conn.execute(scope_sql, scope_params).fetchone()
         if row is None:
-            return _compute_host_from_entries(hostname, [])
+            return _compute_host_from_entries(hostname, [], port=port)
 
     if port is not None:
         with _connect(db_path) as conn:
@@ -224,6 +224,21 @@ def compute_host_analytics(
                    ORDER BY scanned_at ASC""",
                 (hostname, port),
             ).fetchall()
+    elif scope_tags:
+        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
+
+        sql = (
+            "SELECT ch.hostname, ch.fingerprint_sha256, ch.issuer, ch.not_after,"
+            " ch.not_before, ch.scanned_at FROM cert_history ch"
+            " JOIN hosts h ON h.hostname = ch.hostname AND h.port = ch.port"
+            " WHERE ch.hostname = ?"
+        )
+        sql, params = _add_effective_tag_filter(
+            sql, [hostname], scope_tags, col_cert=None, col_host="h.tags"
+        )
+        sql += " ORDER BY ch.scanned_at ASC"
+        with _connect(db_path) as conn:
+            rows = conn.execute(sql, params).fetchall()
     else:
         with _connect(db_path) as conn:
             rows = conn.execute(
@@ -235,7 +250,7 @@ def compute_host_analytics(
             ).fetchall()
 
     entries = [dict(r) for r in rows]
-    return _compute_host_from_entries(hostname, entries)
+    return _compute_host_from_entries(hostname, entries, port=port)
 
 
 def compute_fleet_analytics(
@@ -270,14 +285,20 @@ def compute_fleet_analytics(
             ).fetchall()
 
     from collections import defaultdict
-    by_host: dict[tuple[str, int], list[dict[str, Any]]] = defaultdict(list)
+    by_host: dict[tuple[str, int | None], list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
         d = dict(r)
         by_host[(d["hostname"], d.get("port", 0))].append(d)
 
     results: list[HostRenewalAnalytics] = []
-    for (hostname, _port), entries in sorted(by_host.items()):
-        results.append(_compute_host_from_entries(hostname, entries))
+    ordered = sorted(
+        by_host.items(),
+        key=lambda item: (
+            item[0][0].casefold(), item[0][1] is not None, item[0][1] or 0,
+        ),
+    )
+    for (hostname, port), entries in ordered:
+        results.append(_compute_host_from_entries(hostname, entries, port=port))
     return results
 
 
@@ -323,14 +344,32 @@ def detect_renewal_overdue(
         return None
 
     expected_renewal_point = not_after - timedelta(days=analytics.median_lead_time)
+    # The current deployment period starts after the most recent observation
+    # of a different fingerprint on this endpoint. This keeps another port's
+    # history and an earlier A in an A-B-A rollback from making current A look
+    # older than it is.
     with _connect(db_path) as conn:
-        first_seen_row = conn.execute(
-            """SELECT MIN(scanned_at) as first_seen
-               FROM cert_history
-               WHERE hostname = ? AND fingerprint_sha256 = ?""",
-            (hostname, current_fp),
-        ).fetchone()
-    if first_seen_row and first_seen_row["first_seen"]:
+        if port is not None:
+            first_seen_row = conn.execute(
+                """SELECT MIN(scanned_at) AS first_seen FROM cert_history
+                   WHERE hostname = ? AND port = ? AND fingerprint_sha256 = ?
+                     AND scanned_at > COALESCE((
+                         SELECT MAX(scanned_at) FROM cert_history
+                         WHERE hostname = ? AND port = ? AND fingerprint_sha256 != ?
+                     ), '')""",
+                (hostname, port, current_fp, hostname, port, current_fp),
+            ).fetchone()
+        else:
+            first_seen_row = conn.execute(
+                """SELECT MIN(scanned_at) AS first_seen FROM cert_history
+                   WHERE hostname = ? AND fingerprint_sha256 = ?
+                     AND scanned_at > COALESCE((
+                         SELECT MAX(scanned_at) FROM cert_history
+                         WHERE hostname = ? AND fingerprint_sha256 != ?
+                     ), '')""",
+                (hostname, current_fp, hostname, current_fp),
+            ).fetchone()
+    if first_seen_row is not None and first_seen_row["first_seen"]:
         first_seen = _parse_iso(first_seen_row["first_seen"])
         if first_seen > expected_renewal_point:
             return None
@@ -352,4 +391,5 @@ def detect_renewal_overdue(
         expected_renewal_at_days=analytics.median_lead_time,
         days_overdue=round(days_overdue, 1),
         confidence=confidence,
+        port=port,
     )
