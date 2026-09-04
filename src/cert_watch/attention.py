@@ -90,7 +90,16 @@ def build_attention_queue(
             conf = renewal_confidence(e.get("renewal_method") or "")
             cert_id = e.get("id")
             host = e.get("host") or ""
-            endpoint = e.get("name") or host or grouped_entry.get("name") or "—"
+            endpoint = (
+                host
+                if e.get("host_id") and host
+                else e.get("name") or grouped_entry.get("name") or host or "—"
+            )
+            confidence_label = (
+                "upload replacement certificate"
+                if not e.get("host_id") and kind != "pending"
+                else _conf_label(conf)
+            )
             base = {
                 "cert_id": cert_id,
                 "detail_url": f"/certificates/{cert_id}" if cert_id else None,
@@ -100,7 +109,7 @@ def build_attention_queue(
                 "days_remaining": days,
                 "owner_name": e.get("owner_name") or "",
                 "confidence": conf,
-                "confidence_label": _conf_label(conf),
+                "confidence_label": confidence_label,
                 "host_count": 1,
             }
 
@@ -157,7 +166,7 @@ def build_attention_queue(
 
             if severity is not None:
                 if item_kind in {"expiry", "expired", "renewal_stalled"}:
-                    reasons.append(_conf_label(conf))
+                    reasons.append(confidence_label)
                 items.append({**base, "severity": severity, "kind": item_kind, "reasons": reasons})
 
             if failing and days is not None:

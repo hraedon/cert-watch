@@ -9,7 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
+from cert_watch.database import (
+    SqliteAlertRepository,
+    SqliteCertificateRepository,
+    SqliteHostRepository,
+    init_schema,
+)
 from cert_watch.database.repo import Alert
 from tests._helpers import seed_scanned
 
@@ -132,6 +137,43 @@ class TestQueueAssembly:
         _seed(db, "auto-wording", 20, renewal_method="acme")
         item = build_attention_queue(db)[0]
         assert item["confidence_label"] == "automation configured"
+
+    def test_uploaded_expiry_has_replacement_guidance(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", 20))
+
+        item = build_attention_queue(db)[0]
+        assert item["kind"] == "expiry"
+        assert item["host_id"] is None
+        assert item["reasons"][-1] == "upload replacement certificate"
+        assert "renewal unknown" not in item["reasons"]
+
+    def test_deployment_endpoint_prefers_host_over_certificate_name(
+        self, db: Path, monkeypatch
+    ):
+        import cert_watch.database as database
+        from cert_watch.attention import build_attention_queue
+
+        deployment = {
+            "id": "cert-1",
+            "kind": "scanned",
+            "source": "scanned",
+            "name": "*.example.com",
+            "host": "api.example.com:443",
+            "host_id": "host-1",
+            "days_remaining": 20,
+            "chain_status": "public",
+            "renewal_method": "manual",
+        }
+        monkeypatch.setattr(
+            database,
+            "list_dashboard_grouped_page",
+            lambda *args, **kwargs: ([{"kind": "grouped", "hosts": [deployment]}], 1),
+        )
+
+        item = build_attention_queue(db)[0]
+        assert item["endpoint"] == "api.example.com:443"
 
     def test_sent_stalled_alert_is_not_queued(self, db: Path):
         from cert_watch.attention import build_attention_queue
