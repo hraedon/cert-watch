@@ -81,6 +81,9 @@ from cert_watch.database.dashboard_stats import (
     count_leaf_certs as count_leaf_certs,
 )
 from cert_watch.database.dashboard_stats import (
+    dashboard_expiry_stats as dashboard_expiry_stats,
+)
+from cert_watch.database.dashboard_stats import (
     dashboard_urgency_stats as dashboard_urgency_stats,
 )
 from cert_watch.database.dashboard_stats import (
@@ -290,6 +293,7 @@ __all__ = [
     # dashboard
     "count_dashboard_leaves",
     "count_leaf_certs",
+    "dashboard_expiry_stats",
     "dashboard_urgency_stats",
     "get_cert_detail",
     "list_dashboard_grouped_page",

@@ -36,7 +36,11 @@ def renewal_confidence(renewal_method: str) -> str:
 
 
 def _conf_label(conf: str) -> str:
-    return {"auto": "auto-renews", "manual": "manual renewal", "unknown": "renewal unknown"}[conf]
+    return {
+        "auto": "automation configured",
+        "manual": "manual renewal",
+        "unknown": "renewal unknown",
+    }[conf]
 
 
 def _entry_hosts(entry: dict[str, Any]) -> list[dict[str, Any]]:
@@ -69,9 +73,7 @@ def build_attention_queue(
     from cert_watch.database import list_dashboard_grouped_page
     from cert_watch.database.repo import SqliteAlertRepository
 
-    entries, _total = list_dashboard_grouped_page(
-        db_path, per_page=100_000, scope_tags=scope_tags
-    )
+    entries, _total = list_dashboard_grouped_page(db_path, per_page=100_000, scope_tags=scope_tags)
     stalled_ids = {
         a.cert_id
         for a in SqliteAlertRepository(db_path).list_pending_scoped(scope_tags or [])
@@ -79,76 +81,97 @@ def build_attention_queue(
     }
 
     items: list[dict[str, Any]] = []
-    for e in entries:
-        kind = e.get("kind")
-        days = e.get("days_remaining")
-        hosts = _entry_hosts(e)
-        failing = [h for h in hosts if h.get("scan_status") == "failure"]
-        conf = renewal_confidence(e.get("renewal_method") or "")
-        base = {
-            "cert_id": e.get("id"),
-            "detail_url": f"/certificates/{e['id']}" if e.get("id") else None,
-            "endpoint": e.get("name") or e.get("host") or "—",
-            "host": e.get("host") or "",
-            "host_id": e.get("host_id"),
-            "days_remaining": days,
-            "owner_name": e.get("owner_name") or "",
-            "confidence": conf,
-            "confidence_label": _conf_label(conf),
-            "host_count": e.get("host_count") or 1,
-        }
+    for grouped_entry in entries:
+        deployments = _entry_hosts(grouped_entry) or [grouped_entry]
+        for e in deployments:
+            kind = e.get("kind") or grouped_entry.get("kind")
+            days = e.get("days_remaining")
+            failing = e.get("scan_status") == "failure"
+            conf = renewal_confidence(e.get("renewal_method") or "")
+            cert_id = e.get("id")
+            host = e.get("host") or ""
+            endpoint = e.get("name") or host or grouped_entry.get("name") or "—"
+            base = {
+                "cert_id": cert_id,
+                "detail_url": f"/certificates/{cert_id}" if cert_id else None,
+                "endpoint": endpoint,
+                "host": host,
+                "host_id": e.get("host_id"),
+                "days_remaining": days,
+                "owner_name": e.get("owner_name") or "",
+                "confidence": conf,
+                "confidence_label": _conf_label(conf),
+                "host_count": 1,
+            }
 
-        if kind == "pending" or e.get("source") == "scanned" and days is None:
-            if failing:
-                err = failing[0].get("scan_error") or "no certificate retrieved"
-                items.append({
-                    **base, "severity": "failing", "kind": "scan_failing",
-                    "reasons": [f"scan failing: {err}"],
-                })
-            else:
-                items.append({
-                    **base, "severity": "info", "kind": "never_scanned",
-                    "reasons": ["added but never successfully scanned"],
-                })
-            continue
+            if kind == "pending" or e.get("source") == "scanned" and days is None:
+                if failing:
+                    err = e.get("scan_error") or "no certificate retrieved"
+                    items.append(
+                        {
+                            **base,
+                            "severity": "failing",
+                            "kind": "scan_failing",
+                            "reasons": [f"scan failing: {err}"],
+                        }
+                    )
+                else:
+                    items.append(
+                        {
+                            **base,
+                            "severity": "info",
+                            "kind": "never_scanned",
+                            "reasons": ["added but never successfully scanned"],
+                        }
+                    )
+                continue
 
-        reasons: list[str] = []
-        severity: str | None = None
-        item_kind = "expiry"
-        if days is not None:
-            if days < 0:
-                severity, item_kind = "expired", "expired"
-                reasons.append(f"expired {-days} day{'s' if -days != 1 else ''} ago")
-            elif e.get("id") in stalled_ids:
-                severity, item_kind = "stalled", "renewal_stalled"
-                reasons.append("inside its renewal window with no successor cert yet")
-            elif days < 7:
-                severity = "critical"
-                reasons.append(f"expires in {days} day{'s' if days != 1 else ''}")
-            elif days < 30:
-                severity = "warning"
-                reasons.append(f"expires in {days} days")
-        chain_status = e.get("chain_status")
-        if chain_status == "invalid":
-            reasons.append("chain validation failed")
-            severity = severity or "warning"
-        elif chain_status == "incomplete":
-            reasons.append("chain incomplete")
-            severity = severity or "warning"
+            reasons: list[str] = []
+            severity: str | None = None
+            item_kind = "expiry"
+            if days is not None:
+                if days < 0:
+                    severity, item_kind = "expired", "expired"
+                    reasons.append(f"expired {-days} day{'s' if -days != 1 else ''} ago")
+                elif cert_id in stalled_ids:
+                    severity, item_kind = "stalled", "renewal_stalled"
+                    reasons.append("inside its renewal window with no successor cert yet")
+                elif days < 7:
+                    severity = "critical"
+                    reasons.append(f"expires in {days} day{'s' if days != 1 else ''}")
+                elif days < 30:
+                    severity = "warning"
+                    reasons.append(f"expires in {days} days")
+            chain_status = str(e.get("chain_status") or "")
+            trust_issue = {
+                "invalid": ("chain_invalid", "chain validation failed"),
+                "incomplete": ("chain_incomplete", "chain incomplete"),
+                "unknown": ("chain_unknown", "issuer certificate is not available"),
+                "self-signed": ("chain_self_signed", "certificate is self-signed and untrusted"),
+            }.get(chain_status)
+            if trust_issue:
+                trust_kind, trust_reason = trust_issue
+                reasons.append(trust_reason)
+                if severity is None:
+                    severity, item_kind = "warning", trust_kind
 
-        if severity is not None:
-            reasons.append(_conf_label(conf))
-            items.append({**base, "severity": severity, "kind": item_kind, "reasons": reasons})
+            if severity is not None:
+                if item_kind in {"expiry", "expired", "renewal_stalled"}:
+                    reasons.append(_conf_label(conf))
+                items.append({**base, "severity": severity, "kind": item_kind, "reasons": reasons})
 
-        if failing and days is not None:
-            items.append({
-                **base, "severity": "failing", "kind": "scan_failing",
-                "reasons": [
-                    f"scan failing on {failing[0].get('host') or 'a host'}: "
-                    f"{failing[0].get('scan_error') or 'no certificate retrieved'}",
-                    "inventory data on this row may be stale",
-                ],
-            })
+            if failing and days is not None:
+                items.append(
+                    {
+                        **base,
+                        "severity": "failing",
+                        "kind": "scan_failing",
+                        "reasons": [
+                            f"scan failing: {e.get('scan_error') or 'no certificate retrieved'}",
+                            "inventory data on this row may be stale",
+                        ],
+                    }
+                )
 
     def _key(item: dict[str, Any]) -> tuple[int, int, int, str]:
         conf_boost = 0 if item["confidence"] != "auto" else 1
