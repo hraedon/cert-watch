@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS certificates (
     parent_cert_id TEXT,
     chain_valid INTEGER,
     replaces_cert_id TEXT,
-    notes TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -264,8 +263,8 @@ def ensure_base(db_path: str | Path) -> None:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
         if "replaces_cert_id" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN replaces_cert_id TEXT")
-        if "notes" not in cols:
-            conn.execute("ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+        # certificates.notes was removed by migration 0031 (merged into
+        # hosts.notes) — never re-add it here.
         host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
         if "threshold_days" not in host_cols:
             conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")

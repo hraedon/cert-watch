@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from cert_watch.routes.activity import router as activity_router
 from cert_watch.routes.alerts_view import router as alerts_view_router
 from cert_watch.routes.api import router as api_router
 from cert_watch.routes.audit import router as audit_router
@@ -22,6 +23,7 @@ api: list[APIRouter] = [
     auth_router,
     health_router,
     dashboard_router,
+    activity_router,
     alerts_view_router,
     scan_history_router,
     insights_router,

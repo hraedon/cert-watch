@@ -14,8 +14,8 @@ def test_settings_page_loads_with_tabs(page: Page, cert_watch_server: str) -> No
     page.goto(f"{cert_watch_server}/settings")
     expect(page.get_by_test_id("settings-heading")).to_be_visible()
     expect(page.locator("body")).to_contain_text("Authentication")
-    expect(page.locator("body")).to_contain_text("SMTP")
-    expect(page.locator("body")).to_contain_text("Alerts")
+    expect(page.locator("body")).to_contain_text("Channels")
+    expect(page.locator("body")).to_contain_text("Alert groups")
 
 
 def test_settings_auth_tab_default_no_provider(page: Page, cert_watch_server: str) -> None:

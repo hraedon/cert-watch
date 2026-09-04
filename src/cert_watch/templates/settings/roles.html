@@ -1,0 +1,160 @@
+{% extends "settings/_base.html" %}
+
+{% macro tier_options(selected='viewer', idp='') %}
+  <option value="viewer" {% if selected == 'viewer' %}selected{% endif %}>Viewer — read only</option>
+  <option value="operator" {% if selected == 'operator' %}selected{% endif %}>Operator — read and write</option>
+  <option value="admin" {% if selected == 'admin' %}selected{% endif %}>Admin — full settings access</option>
+{% endmacro %}
+
+{% macro role_fields(r=none, alert_groups=[], suffix='', tag_tiers_value='') %}
+  {# One role = three concerns, presented as three groups so they stop
+     masquerading as one. #}
+  <div class="cw-field">
+    <label class="cw-label" for="role_name{{ suffix }}">Name</label>
+    <input class="cw-input" type="text" id="role_name{{ suffix }}" name="name" value="{{ r.name if r else '' }}" placeholder="e.g., platform-operators" required>
+    <div class="cw-hint">Also the join key for IdP mapping — groups/users mapped to this name get the role.</div>
+  </div>
+  <div class="cw-divider"></div>
+  <div class="cw-kv-label">Access</div>
+  <div class="cw-form-grid">
+    <div class="cw-field">
+      <label class="cw-label" for="role_scope{{ suffix }}">Scope tags</label>
+      <input class="cw-input mono" type="text" id="role_scope{{ suffix }}" name="scope_tag" value="{{ r.scope_tag if r else '' }}" placeholder="prod, payments">
+      <div class="cw-hint">Empty = the whole estate. Set = members see only resources carrying these tags.</div>
+    </div>
+    <div class="cw-field">
+      <label class="cw-label" for="role_tier{{ suffix }}">Tier</label>
+      <select class="cw-select" id="role_tier{{ suffix }}" name="permission_tier">
+        {{ tier_options(r.permission_tier if r else 'viewer') }}
+      </select>
+      <div class="cw-hint">Unscoped role: this is the global tier. Scoped role: this tier applies <b>within the scope tags</b> — it never elevates access outside them.</div>
+    </div>
+    <div class="cw-field wide">
+      <label class="cw-label" for="role_tag_tiers{{ suffix }}">Per-tag tier overrides <span class="cw-muted">(optional)</span></label>
+      <input class="cw-input mono" type="text" id="role_tag_tiers{{ suffix }}" name="tag_tiers"
+             value="{{ tag_tiers_value }}" placeholder="prod=operator, edge=viewer">
+      <div class="cw-hint">Give individual scope tags a different tier than the role default — e.g. operator for <span class="mono">prod</span>, viewer for <span class="mono">edge</span>.</div>
+    </div>
+  </div>
+  <div class="cw-divider"></div>
+  <div class="cw-kv-label">Notifications</div>
+  <div class="cw-form-grid">
+    <div class="cw-field">
+      <label class="cw-label" for="role_group{{ suffix }}">Linked alert group</label>
+      <select class="cw-select" id="role_group{{ suffix }}" name="alert_group_id">
+        <option value="" {% if not r or not r.alert_group_id %}selected{% endif %}>— none —</option>
+        {% for ag in alert_groups %}
+        <option value="{{ ag.id }}" {% if r and r.alert_group_id == ag.id %}selected{% endif %}>{{ ag.name }}</option>
+        {% endfor %}
+      </select>
+      <div class="cw-hint">With scope tags set, members are alerted for matching certs via this group.</div>
+    </div>
+    <div class="cw-field">
+      <label class="cw-label" for="role_email{{ suffix }}">Notification email</label>
+      <input class="cw-input" type="email" id="role_email{{ suffix }}" name="email" value="{{ r.email if r else '' }}" placeholder="ops@example.com">
+      <div class="cw-hint">Alert fanout also mails this address when a host's owner email matches it.</div>
+    </div>
+  </div>
+  <div class="cw-field">
+    <label class="cw-label" for="role_description{{ suffix }}">Description</label>
+    <input class="cw-input" type="text" id="role_description{{ suffix }}" name="description" value="{{ r.description if r else '' }}" placeholder="Certificate operators">
+  </div>
+{% endmacro %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Roles</h2>
+    <span class="cw-hint">a role bundles access (tier + scope) and alert routing for a team</span>
+  </div>
+  <div class="cw-panel-body">
+    <details class="cw-editor">
+      <summary class="cw-btn primary">{{ icons.svg_icon('plus', 14) }}Add role</summary>
+      <div class="cw-editor-body">
+        <form method="post" action="/settings/roles" class="cw-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          {{ role_fields(none, alert_groups) }}
+          <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Add role</button></div>
+        </form>
+      </div>
+    </details>
+  </div>
+  {% if roles %}
+  <div class="cw-table-clip">
+  <table class="cw-table">
+    <thead>
+      <tr><th>Name</th><th>Access</th><th>Alert group</th><th>Email</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for r in roles %}
+      <tr>
+        <td>
+          <span class="cw-id">{{ r.name }}</span>
+          {% if r.description %}<div class="cw-sub">{{ r.description }}</div>{% endif %}
+        </td>
+        <td>
+          {% set overrides = role_tag_tiers.get(r.id, {}) %}
+          {% if r.scope_tag %}
+            <div class="cw-chiprow">
+              {% for t in r.scope_tag.split(',') | map('trim') | select %}
+                {% set tt = overrides.get(t, r.permission_tier) %}
+                <span class="cw-chip {{ 't-accent' if tt in ('operator', 'admin') else '' }}">{{ t }} · {{ tt }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="cw-chip {{ 't-accent' if r.permission_tier in ('operator', 'admin') else 't-muted' }}">{{ r.permission_tier }} · whole estate</span>
+          {% endif %}
+        </td>
+        <td>{% if r.alert_group_id %}{% for ag in alert_groups %}{% if ag.id == r.alert_group_id %}{{ ag.name }}{% endif %}{% endfor %}{% else %}<span class="cw-muted">—</span>{% endif %}</td>
+        <td class="mono">{{ r.email or '—' }}</td>
+        <td>
+          <div class="cw-chiprow">
+            <details class="cw-editor">
+              <summary class="cw-btn ghost sm">Edit</summary>
+              <div class="cw-editor-body">
+                <form method="post" action="/settings/roles/{{ r.id }}" class="cw-form">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  {{ role_fields(r, alert_groups, suffix='_' ~ r.id,
+                                 tag_tiers_value=role_tag_tiers.get(r.id, {}).items() | map('join', '=') | join(', ')) }}
+                  <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save changes</button></div>
+                </form>
+              </div>
+            </details>
+            <details class="cw-editor">
+              <summary class="cw-btn ghost sm">IdP mapping</summary>
+              <div class="cw-editor-body">
+                <form method="post" action="/settings/ldap-role-map" class="cw-form">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <div class="cw-field">
+                    <label class="cw-label" for="role_map_{{ r.id }}">Groups (semicolon-separated DNs)</label>
+                    <input class="cw-input mono" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
+                           value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join('; ') }}"
+                           placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="role_users_{{ r.id }}">Users (comma-separated usernames / UPNs)</label>
+                    <input class="cw-input mono" type="text" id="role_users_{{ r.id }}" name="role_users_{{ r.id }}"
+                           value="{{ ldap_role_map.get(r.name, {}).get('users', []) | join(', ') }}"
+                           placeholder="jsmith, alice@example.com">
+                    <div class="cw-hint">Grant this role to specific IdP users directly — for users without a suitable group.</div>
+                  </div>
+                  <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save mapping</button></div>
+                </form>
+              </div>
+            </details>
+            <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role? Members lose its access and alert routing.">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="cw-btn danger sm">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No roles yet', 'Create one above to define a team and its access.', icon='users') }}
+  {% endif %}
+</div>
+{% endblock %}

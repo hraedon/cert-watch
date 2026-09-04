@@ -271,6 +271,7 @@ class TestSettingsRolesPost:
 
     def test_create_role(self, page: Page, cert_watch_server: str) -> None:
         page.goto(f"{cert_watch_server}/settings/roles")
+        page.get_by_text("Add role", exact=False).first.click()  # open the cw-editor details
         page.locator("#role_name").fill("operators")
         page.locator("#role_email").fill("ops@example.com")
         page.locator("#role_description").fill("Certificate operators")
@@ -285,6 +286,7 @@ class TestSettingsUsersPost:
 
     def test_create_user(self, page: Page, cert_watch_server: str) -> None:
         page.goto(f"{cert_watch_server}/settings/users")
+        page.get_by_text("Add user", exact=False).first.click()  # open the cw-editor details
         page.locator("#user_username").fill("testuser")
         page.locator("#user_email").fill("test@example.com")
         page.locator("#user_password").fill("testPass123")
@@ -301,7 +303,7 @@ class TestReadinessPage:
         page.goto(f"{cert_watch_server}/readiness")
         expect(page.get_by_test_id("readiness-heading")).to_be_visible()
         # The milestone timeline and stats boxes should render
-        expect(page.locator(".cw-milestone-box").first).to_be_visible()
+        expect(page.locator(".cw-tl-node").first).to_be_visible()
         expect(page.locator(".cw-stats").first).to_be_visible()
         # Host table or empty-state message must be present
         assert page.locator(".cw-table").count() + page.locator(".cw-empty").count() >= 1
@@ -372,7 +374,7 @@ class TestSettingsPasswordPost:
         # Login with current password
         _login(page, authed_server, "e2eadmin", "newE2ePass1")
         # Verify login succeeded
-        expect(page.locator("body")).to_contain_text("Certificates", timeout=5000)
+        expect(page.get_by_test_id("home-heading")).to_be_visible(timeout=5000)
 
         # Navigate to auth tab
         page.goto(f"{authed_server}/settings?tab=auth")
@@ -393,7 +395,7 @@ class TestSettingsPasswordPost:
 
         # Verify the new password works
         _login(page, authed_server, "e2eadmin", "rotatedPass1")
-        expect(page.locator("body")).to_contain_text("Certificates")
+        expect(page.get_by_test_id("home-heading")).to_be_visible()
 
 
 class TestAuthedSettingsPostForms:

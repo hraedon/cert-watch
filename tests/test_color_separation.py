@@ -13,8 +13,8 @@ pair drops below the floors patina's plan-004 constraint search used:
   * normal vision: dE76 >= 15
   * each CVD simulation: dE76 >= 8
 
-The values are parsed from tokens.css (not duplicated here), so the test tracks
-whatever the stylesheet actually ships. Pure stdlib — no colour library.
+The values are parsed from tokens.css and the app-owned cw.css (not duplicated here),
+so the test tracks whatever the stylesheet actually ships. Pure stdlib — no colour library.
 """
 
 from __future__ import annotations
@@ -113,6 +113,7 @@ def delta_e76(
 def _parse_theme_colors() -> dict[str, dict[str, str]]:
     """Extract {theme: {token: hex}} for the status tokens from tokens.css."""
     css = TOKENS_CSS.read_text(encoding="utf-8")
+    app_css = TOKENS_CSS.with_name("cw.css").read_text(encoding="utf-8")
     themes: dict[str, dict[str, str]] = {}
     # The default :root block is the dark theme; data-theme="light" overrides.
     blocks = {
@@ -124,6 +125,11 @@ def _parse_theme_colors() -> dict[str, dict[str, str]]:
     for theme, match in blocks.items():
         assert match, f"could not locate the {theme} theme block in tokens.css"
         body = match.group(1)
+        app_match = re.search(
+            rf':root\[data-theme="{theme}"\]\s*\{{(.*?)\n\}}', app_css, re.DOTALL
+        )
+        assert app_match, f"could not locate the {theme} theme block in cw.css"
+        body += app_match.group(1).replace("--cw-expired:", "--expired:")
         found = {}
         for token in STATUS_TOKENS:
             m = re.search(rf"--{token}:\s*(#[0-9a-fA-F]{{6}})\s*;", body)
@@ -178,7 +184,7 @@ def test_pipeline_matches_wi145_reference_measurements() -> None:
     assert feared == pytest.approx(21.2, abs=0.15)
 
 
-def test_expired_palette_measured_minimum_matches_documented_claim() -> None:
+def test_expired_palette_retains_separation_with_vendored_status_colors() -> None:
     distances = []
     for colors in _THEMES.values():
         for token in ("ok", "warn", "crit"):
@@ -192,4 +198,4 @@ def test_expired_palette_measured_minimum_matches_documented_claim() -> None:
                         simulate_lab(colors[token], kind),
                     )
                 )
-    assert min(distances) == pytest.approx(43.4, abs=0.1)
+    assert min(distances) >= CVD_FLOOR

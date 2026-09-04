@@ -45,7 +45,7 @@ def test_dashboard_shows_uploaded_cert(reload_app, leaf_pem_file):
                 follow_redirects=True,
             )
         assert r.status_code == 200
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "leaf.example.com" in r.text
 
@@ -169,38 +169,39 @@ def test_dashboard_stat_cards_are_urgency_filters(
     store_uploaded(upload_certificate_from_bytes(expired.der, "expired.der"), db)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
-    assert 'class="cw-stat cw-stat-link"' in r.text
-    assert 'href="/?urgency=expired"' in r.text
-    assert 'href="/?urgency=critical"' in r.text
-    assert 'href="/?urgency=warning"' in r.text
-    assert 'href="/?urgency=healthy"' in r.text
+    assert '<a href="/browse?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
+    assert 'href="/browse?urgency=expired"' in r.text
+    assert 'href="/browse?urgency=critical"' in r.text
+    assert 'href="/browse?urgency=warning"' in r.text
+    assert 'href="/browse?urgency=healthy"' in r.text
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
-            r'<span class="cw-stat-label[^"]*">'
+            r'<span class="cw-stat-label[^"]*">(?:(?!</span>).)*?'
             + re.escape(label)
-            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+            + r'</span>\s*<div class="cw-stat-val[^"]*">(\d+)</div>'
         )
         match = re.search(pattern, text, re.S)
         assert match, f"stat card {label!r} not found"
         return int(match.group(1))
 
-    assert _stat_value(r.text, "Tracked certificates") == 3
+    assert _stat_value(r.text, "Tracked") == 3
     assert _stat_value(r.text, "Expired") == 1
     assert _stat_value(r.text, "Critical") == 1
     assert _stat_value(r.text, "Warning") == 0
     assert _stat_value(r.text, "Healthy") == 1
 
-    assert r.text.count("cw-stat-active") == 1
-    assert 'cw-stat-active" href="/?urgency=' not in r.text
+    assert r.text.count('class="cw-stat active"') == 1
+    # unfiltered: the Tracked cell is active
+    assert 'href="/browse?" class="cw-stat active"' in r.text
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?urgency=expired")
+        r = client.get("/browse?urgency=expired")
     assert r.status_code == 200
-    assert r.text.count("cw-stat-active") == 1
-    assert 'cw-stat-active" href="/?urgency=expired"' in r.text
+    assert r.text.count('class="cw-stat active"') == 1
+    assert 'href="/browse?urgency=expired" class="cw-stat active"' in r.text
     assert "expired.example.com" in r.text
     assert "leaf.example.com" not in r.text
 
@@ -253,8 +254,9 @@ def test_dashboard_pagination_empty():
     assert "pagination" not in r.text and "Page" not in r.text
 
 
-def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
-    """FEAT-013: detail page should show notes UI for certificates."""
+def test_uploaded_cert_has_no_notes_ui(reload_app, tmp_path, leaf_pem_file):
+    """UI-INVENTORY V1: notes are host-scoped; an uploaded certificate with no
+    host row renders no notes editing control."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
@@ -262,32 +264,7 @@ def test_dashboard_notes_ui(reload_app, tmp_path, leaf_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "notes-textarea" in r.text
-    assert "Notes" in r.text
-
-
-def test_dashboard_notes_form_posts(reload_app, tmp_path, leaf_pem_file):
-    """FEAT-013: notes form should POST and persist."""
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.upload import UploadedEntry
-    entry = upload_certificate(leaf_pem_file)
-    assert isinstance(entry, UploadedEntry)
-    cert_id = store_uploaded(entry, db)
-
-    with TestClient(app_mod.app) as client:
-        r = client.post(
-            f"/certificates/{cert_id}/notes",
-            data={"notes": "test note from UI"},
-            follow_redirects=False,
-        )
-    assert r.status_code == 303
-
-    # Verify the note persisted via the API
-    with TestClient(app_mod.app) as client:
-        r = client.get(f"/api/certificates/{cert_id}")
-    assert r.status_code == 200
-    assert r.json()["notes"] == "test note from UI"
+    assert 'name="notes"' not in r.text
 
 
 def test_dashboard_pagination_with_data(reload_app, tmp_path):
@@ -315,7 +292,7 @@ def test_dashboard_pagination_with_data(reload_app, tmp_path):
         repo.add(cert)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Page 1 of" in r.text
     assert "Next" in r.text
@@ -323,7 +300,7 @@ def test_dashboard_pagination_with_data(reload_app, tmp_path):
     assert "cert29.example.com" in r.text
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?page=2")
+        r = client.get("/browse?page=2")
     assert r.status_code == 200
     assert "Page 2 of" in r.text
     assert "Prev" in r.text
@@ -388,16 +365,16 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
-            r'<span class="cw-stat-label[^"]*">'
+            r'<span class="cw-stat-label[^"]*">(?:(?!</span>).)*?'
             + re.escape(label)
-            + r'</span>.*?<div class="cw-stat-val[^"]*">(\d+)</div>'
+            + r'</span>\s*<div class="cw-stat-val[^"]*">(\d+)</div>'
         )
         match = re.search(pattern, text, re.S)
         assert match, f"stat card {label!r} not found"
         return int(match.group(1))
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/?page=2")
+        r = client.get("/browse?page=2")
     assert r.status_code == 200
     assert "Page 2 of" in r.text
     # Page 2 rows are the 5 healthiest certs; the stat-card counters
@@ -406,7 +383,7 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
     assert _stat_value(r.text, "Healthy") == 21
     assert _stat_value(r.text, "Critical") == 3
     assert _stat_value(r.text, "Warning") == 5
-    assert _stat_value(r.text, "Tracked certificates") == 30
+    assert _stat_value(r.text, "Tracked") == 30
 
 
 def test_group_entries_by_fingerprint():
@@ -623,10 +600,10 @@ def test_dashboard_grouped_by_fingerprint(reload_app, tmp_path):
     replace_scanned(db, "host3.example.com", 443, unique_cert, [], True)
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "2 hosts" in r.text
-    assert "cw-group-header" in r.text
+    assert 'data-expand="group-hosts-' in r.text
     assert "group-hosts-" in r.text
     assert "host3.example.com" in r.text
 
@@ -732,6 +709,6 @@ def test_dashboard_pivot_disables_urgency_cards(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=issuer")
     assert r.status_code == 200
-    assert "cw-stat-disabled" in r.text
-    assert 'aria-disabled="true"' in r.text
+    assert "/?urgency=" not in r.text  # pivot view: stat cells are not filter links
+    # (stat cells render as plain <div>s in pivot views — no anchors, no aria state needed)
     assert 'class="cw-stat cw-stat-link"' not in r.text

@@ -48,8 +48,9 @@ def test_csp_nonce_rendered_and_per_request(tmp_path, monkeypatch):
 
     app_mod = _reload_app(tmp_path, monkeypatch)
     with TestClient(app_mod.app) as client:
-        r1 = client.get("/")
-        r2 = client.get("/")
+        # /browse: base scripts + the page's own <script> block (dashboard.js).
+        r1 = client.get("/browse")
+        r2 = client.get("/browse")
     assert r1.status_code == 200
 
     nonces1 = re.findall(r'<script\b[^>]*nonce="([^"]+)"', r1.text)

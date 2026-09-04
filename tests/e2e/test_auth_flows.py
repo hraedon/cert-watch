@@ -126,7 +126,7 @@ class TestLoginAndSession:
         cookies = page.context.cookies()
         auth_cookies = [c for c in cookies if c["name"] == "cw_auth"]
         assert len(auth_cookies) >= 1, "Expected cw_auth session cookie"
-        expect(page.locator("body")).to_contain_text("Certificates")
+        expect(page.get_by_test_id("home-heading")).to_be_visible()
 
     def test_login_with_wrong_password_shows_error(
         self, page: Page, auth_server: str
@@ -147,7 +147,7 @@ class TestLoginAndSession:
         page.get_by_test_id("login-password").fill("e2eTestPass1")
         page.get_by_test_id("login-submit-btn").click()
         page.wait_for_url("**/*", timeout=5000)
-        expect(page.locator("body")).to_contain_text("Certificates")
+        expect(page.get_by_test_id("home-heading")).to_be_visible()
 
         page.goto(f"{auth_server}/")
         page.get_by_test_id("logout-btn").click()

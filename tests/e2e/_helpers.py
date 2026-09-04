@@ -16,12 +16,15 @@ from pathlib import Path
 
 from playwright.sync_api import Page
 
+# Top-level nav → destination heading. The 2026-08 redesign collapsed the
+# 7-item nav into 4 domains (scan history and the audit log as tabs inside
+# Activity; Insights' trends as Posture); attention-home then added Home in
+# front and moved the inventory table to Browse.
 PAGES = {
-    "nav-dashboard": "dashboard-heading",
-    "nav-alerts": "alerts-heading",
-    "nav-scans": "scans-heading",
-    "nav-insights": "insights-heading",
-    "nav-audit": "audit-heading",
+    "nav-home": "home-heading",
+    "nav-browse": "dashboard-heading",
+    "nav-posture": "insights-heading",
+    "nav-activity": "alerts-heading",
 }
 
 
@@ -82,12 +85,12 @@ def inject_session(page: Page, base_url: str, token: str) -> None:
 
 
 def open_add_slide(page: Page) -> None:
-    """Open the dashboard Add-host slide-over."""
+    """Open the dashboard Add-certificates drawer."""
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
 
 
 def switch_add_tab(page: Page, tab: str) -> None:
-    """Switch the slide-over tab (scan | upload | bulk)."""
+    """Switch the drawer tab (scan | upload | bulk)."""
     page.get_by_test_id(f"tab-{tab}-btn").click()
-    page.locator(f"#tab-{tab}").wait_for()
+    page.locator(f'[data-tab-pane="{tab}"]:not(.cw-hidden)').wait_for()

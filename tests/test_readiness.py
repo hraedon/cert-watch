@@ -40,7 +40,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         fingerprint_sha256="fp-auto-1",
         raw_der=b"\x00",
         is_leaf=True,
-        notes="",
+
         source="scanned",
     )
     seed_certificate(db_path, automated_cert, cert_id="cert-auto",
@@ -74,7 +74,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         fingerprint_sha256="fp-manual-1",
         raw_der=b"\x00",
         is_leaf=True,
-        notes="",
+
         source="scanned",
     )
     seed_certificate(db_path, manual_cert, cert_id="cert-manual",
@@ -108,7 +108,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         fingerprint_sha256="fp-unknown-1",
         raw_der=b"\x00",
         is_leaf=True,
-        notes="",
+
         source="scanned",
     )
     seed_certificate(db_path, unknown_cert, cert_id="cert-unknown",
@@ -134,7 +134,7 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
         fingerprint_sha256="fp-private-1",
         raw_der=b"\x00",
         is_leaf=True,
-        notes="",
+
         source="scanned",
     )
     seed_certificate(db_path, private_cert, cert_id="cert-private",

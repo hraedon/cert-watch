@@ -87,9 +87,15 @@ def scope_write_denied(
 
     scope_tags = parse_tags(scope_tag)
     target_tags = _effective_tags(db_path, cert_id=cert_id, host_id=host_id)
-    if any(t in target_tags for t in scope_tags):
-        return None
-    return "operation not permitted outside your team scope"
+    if not any(t in target_tags for t in scope_tags):
+        return "operation not permitted outside your team scope"
+    # Plan 053 (WI-064): visibility is necessary but no longer sufficient —
+    # the write tier must also cover the target's tags. may_write_tags is
+    # True for global writers and for any intersecting per-tag operator.
+    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
+    if callable(may_write_tags) and not may_write_tags(target_tags):
+        return "your access to this resource's tags is read-only"
+    return None
 
 
 def scope_read_denied(

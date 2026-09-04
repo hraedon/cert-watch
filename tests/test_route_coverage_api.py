@@ -1110,19 +1110,6 @@ def test_import_hosts_invalid_interval(reload_app, tmp_path):
     assert "scan_interval" in r.headers["location"]
 
 
-# ---------- Notes via API ----------
-
-
-def test_api_update_notes_not_string(reload_app, tmp_path, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
-    with TestClient(app_mod.app) as client:
-        r = client.patch(f"/api/certificates/{cert_id}/notes", json={"notes": 123})
-    assert r.status_code == 400
-    assert "string" in r.json()["error"]
-
-
 # ---------- PEM download encode error ----------
 
 
@@ -1199,10 +1186,12 @@ def test_settings_page_renders(reload_app, tmp_path):
 def test_settings_page_tabs(reload_app, tmp_path):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        for tab in ("auth", "smtp", "alerts"):
+        # Legacy ?tab= URLs 303 to the per-section pages (smtp + alerts
+        # merged into channels).
+        for tab, section in (("auth", "auth"), ("smtp", "channels"), ("alerts", "channels")):
             r = client.get(f"/settings?tab={tab}")
             assert r.status_code == 200
-            assert f"tab-{tab}" in r.text
+            assert str(r.url).endswith(f"/settings/{section}")
 
 
 def test_settings_save_smtp(reload_app, tmp_path):

@@ -33,13 +33,14 @@ def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     page = max(1, min(page, total_pages))
     return templates.TemplateResponse(
         request=request,
-        name="scan_history.html",
+        name="activity.html",
         context={
             "batches": rows,
             "version": __version__, "commit": __commit__,
             **get_auth_context(request),
             **get_csrf_context(request),
-            "active_page": "scans",
+            "active_page": "activity",
+            "tab": "scans",
             "page": page,
             "total_pages": total_pages,
             "has_prev": page > 1,

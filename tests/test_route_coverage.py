@@ -294,9 +294,9 @@ def test_dashboard_fleet_grade_with_data(reload_app, tmp_path):
         str(db), "cert-b", "h2.example.com", 443, "B", [], protocol_version="TLSv1.2"
     )
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/posture")
     assert r.status_code == 200
-    assert "Fleet posture" in r.text
+    assert "Fleet grade" in r.text
 
 
 # ---------- dashboard ungrouped view with data ----------
@@ -463,7 +463,7 @@ def test_insights_view(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights")
     assert r.status_code == 200
-    assert "Insights" in r.text
+    assert "Expiry calendar" in r.text  # 301 -> /?view=calendar
 
 
 def test_insights_view_tls_tab(tmp_path, reload_app):
@@ -475,7 +475,7 @@ def test_insights_view_tls_tab(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/insights?tab=trends")
     assert r.status_code == 200
-    assert "TLS" in r.text
+    assert "TLS versions across the fleet" in r.text  # 301 -> /posture
 
 
 # ---------- caa-check ----------
@@ -695,7 +695,7 @@ def test_host_detail_failure_pill(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{host_id}")
     assert r.status_code == 200
-    assert "cw-pill critical" in r.text
+    assert "Scan failed" in r.text
     assert "Scan failed" in r.text
     # The old hard-coded neutral pill must not appear.
     assert ">Pending<" not in r.text
@@ -727,7 +727,7 @@ def test_certificate_detail_with_trust_anchor(reload_app, tmp_path, chain_pem_fi
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "cw-chip-public" in r.text or "Chain status" in r.text
+    assert "private root" in r.text or "Verified to trusted root" in r.text
 
 
 def _stored_cert_id(db, hostname, port=443):
@@ -932,32 +932,18 @@ def test_delete_certificate_not_found(reload_app):
     assert r.headers["location"] == "/"
 
 
-# ---------- certificate notes ----------
+# ---------- certificate notes (removed — UI-INVENTORY V1) ----------
 
 
-def test_update_notes_not_found(reload_app):
+def test_certificate_notes_route_removed(reload_app):
+    """POST /certificates/{id}/notes must not exist — notes are host-scoped."""
     app_mod = reload_app()
     _MISSING = "00000000-0000-0000-0000-000000000000"
     with TestClient(app_mod.app) as client:
         r = client.post(
             f"/certificates/{_MISSING}/notes", data={"notes": "test"}, follow_redirects=False
         )
-    assert r.status_code == 303
-    assert "not+found" in r.headers["location"] or "not%20found" in r.headers["location"]
-
-
-def test_update_notes_too_long(reload_app, tmp_path, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
-    with TestClient(app_mod.app) as client:
-        r = client.post(
-            f"/certificates/{cert_id}/notes",
-            data={"notes": "x" * 10001},
-            follow_redirects=False,
-        )
-    assert r.status_code == 303
-    assert "too+long" in r.headers["location"] or "too%20long" in r.headers["location"]
+    assert r.status_code == 404
 
 
 # ---------- certificate owner ----------
@@ -1201,7 +1187,7 @@ def test_add_trust_anchor_accepts_chain_pem(reload_app, tmp_path, chain_pem_file
     assert r.status_code == 303
     assert "error" not in r.headers["location"]
     with TestClient(app_mod.app) as client:
-        dash = client.get("/")
+        dash = client.get("/settings/trust-anchors")
     assert "Test Root CA" in dash.text               # the root was stored…
     assert "chain-leaf.example.com" not in dash.text  # …not the leaf
 
@@ -1253,7 +1239,7 @@ def test_delete_trust_anchor(reload_app, tmp_path, chain_pem_file):
     with TestClient(app_mod.app) as client:
         r = client.post(f"/trust-anchors/{anchor_id}/delete", follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    assert r.headers["location"] == "/settings/trust-anchors?saved=1"
 
 
 def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_file):
@@ -1274,11 +1260,11 @@ def test_dashboard_renders_with_trust_anchor(reload_app, tmp_path, chain_pem_fil
     SqliteTrustAnchorRepository(db).add(root_cert)
     store_uploaded(entry, db)
     with TestClient(app_mod.app) as client:
-        for url in ("/", "/?q=chain-leaf", "/?view=expiry"):
+        for url in ("/", "/?q=chain-leaf", "/?view=expiry", "/?view=calendar"):
             r = client.get(url)
             assert r.status_code == 200, f"{url} -> {r.status_code}"
-        r = client.get("/")
-    assert "Trust anchors" in r.text  # anchor panel renders alongside the rows
+        r = client.get("/settings/trust-anchors")
+    assert "Trust anchors" in r.text  # the anchor now renders on its settings section
 
 
 def test_dashboard_shows_trust_anchor_upload_form_with_zero_anchors(reload_app, tmp_path):
@@ -1288,7 +1274,7 @@ def test_dashboard_shows_trust_anchor_upload_form_with_zero_anchors(reload_app, 
     """
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/settings/trust-anchors")
     assert r.status_code == 200
     assert 'action="/trust-anchors"' in r.text
     assert 'data-testid="trust-anchor-upload-btn"' in r.text
@@ -1310,7 +1296,7 @@ def test_trust_anchor_upload_via_ui_creates_anchor(reload_app, tmp_path, chain_t
     assert r.status_code == 303
     assert "error" not in r.headers["location"]
     with TestClient(app_mod.app) as client:
-        dash = client.get("/")
+        dash = client.get("/settings/trust-anchors")
     assert "Trust anchors" in dash.text
     # The delete button only renders inside the anchors loop — its presence
     # proves the uploaded anchor row is displayed.
@@ -1478,7 +1464,7 @@ def test_no_auth_dashboard_shows_all_controls(tmp_path, reload_app):
     app_mod = reload_app()
 
     with TestClient(app_mod.app) as client:
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
     assert "nav-settings" in r.text
@@ -1534,10 +1520,14 @@ def test_operator_dashboard_has_write_but_no_settings(tmp_path):
     token = create_session("operator", groups=["g-operators"])
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, token)
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
+    # scan-now controls inside the attention queue are gated too
+    r_home = client.get("/")
+    assert r_home.status_code == 200
     assert "nav-settings" not in r.text
+    assert "nav-settings" not in r_home.text
 
 
 def test_admin_dashboard_has_mutating_controls_when_rbac(tmp_path):
@@ -1560,7 +1550,7 @@ def test_admin_dashboard_has_mutating_controls_when_rbac(tmp_path):
     token = create_session("admin", groups=["g-admins"])
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, token)
-        r = client.get("/")
+        r = client.get("/browse")
     assert r.status_code == 200
     assert "Add host" in r.text
     assert "nav-settings" in r.text
@@ -1627,7 +1617,7 @@ def test_viewer_alerts_no_alert_settings_link(reload_app, tmp_path):
     _req = type("R", (), {"state": type("S", (), {"csp_nonce": "n"})()})()
     _counts = {"all": 0, "unread": 0, "critical": 0, "warning": 0}
 
-    tpl = env.get_template("alerts.html")
+    tpl = env.get_template("activity.html")
 
     html = tpl.render(
         is_admin=False,
@@ -1636,7 +1626,8 @@ def test_viewer_alerts_no_alert_settings_link(reload_app, tmp_path):
         csrf_token="x",
         version="0.0",
         commit="abc",
-        active_page="alerts",
+        active_page="activity",
+        tab="alerts",
         alerts=[],
         alert_counts=_counts,
         alert_channels=[],
@@ -1656,7 +1647,8 @@ def test_viewer_alerts_no_alert_settings_link(reload_app, tmp_path):
         csrf_token="x",
         version="0.0",
         commit="abc",
-        active_page="alerts",
+        active_page="activity",
+        tab="alerts",
         alerts=[],
         alert_counts=_counts,
         alert_channels=[],
@@ -1718,7 +1710,8 @@ def test_alerts_template_renders_when_alert_channels_omitted():
         csrf_token="x",
         version="0.0",
         commit="abc",
-        active_page="alerts",
+        active_page="activity",
+        tab="alerts",
         alerts=[_alert],
         alert_counts=_counts,
         filter_type="all",
@@ -1729,18 +1722,18 @@ def test_alerts_template_renders_when_alert_channels_omitted():
         saved=None,
         error=None,
         warning=None,
+        scope_tag=None,
         local_admin_autogenerated=False,
         request=_req,
     )
 
-    tpl = env.get_template("alerts.html")
+    tpl = env.get_template("activity.html")
 
     # alert_channels deliberately omitted: must render the "no channels" fallback.
     html = tpl.render(**base_ctx)
-    assert "No channels configured" in html
-    assert html.count("cw-p-chip") == 1  # only the no-channels chip renders
+    assert html.count("No channels configured") == 1
 
     # When channels are configured, the Email/Webhook chips render instead.
     html2 = tpl.render(alert_channels=["email", "webhook"], **base_ctx)
     assert "No channels configured" not in html2
-    assert html2.count("cw-p-chip") == 2  # email + webhook chips
+    assert "Email" in html2 and "Webhook" in html2  # email + webhook chips

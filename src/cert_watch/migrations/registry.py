@@ -72,6 +72,12 @@ from cert_watch.migrations.m0028_drop_ct_issuer_first_seen import (
 from cert_watch.migrations.m0029_digest_delivery_ledger import (
     upgrade as digest_delivery_ledger_upgrade,
 )
+from cert_watch.migrations.m0030_role_tag_tiers import (
+    upgrade as role_tag_tiers_upgrade,
+)
+from cert_watch.migrations.m0031_merge_cert_notes import (
+    upgrade as merge_cert_notes_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -164,4 +170,12 @@ runner.register(
 runner.register(
     "0029", "add durable digest delivery claim ledger",
     digest_delivery_ledger_upgrade,
+)
+runner.register(
+    "0030", "per-tag permission tiers for roles (Plan 053 / WI-064)",
+    role_tag_tiers_upgrade,
+)
+runner.register(
+    "0031", "merge certificates.notes into hosts.notes, drop column (UI-INVENTORY V1)",
+    merge_cert_notes_upgrade,
 )

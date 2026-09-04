@@ -232,7 +232,7 @@ class TestCryptoRoute:
             r = client.get("/crypto")
         assert r.status_code == 200
         assert "text/html" in r.headers["content-type"]
-        assert "Crypto Inventory" in r.text
+        assert "No certificates scanned yet" in r.text  # /crypto 301s to /posture; empty estate
 
     def test_crypto_page_shows_weak_offender(self, tmp_path, reload_app):
         from cryptography.hazmat.primitives import hashes

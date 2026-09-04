@@ -5,11 +5,11 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
-from cert_watch.middleware import get_auth_context, require_auth
+from cert_watch.middleware import get_auth_context, require_admin, require_admin_form
 from cert_watch.routes._deps import _db_path, get_templates
 
 logger = logging.getLogger("cert_watch.routes.audit")
@@ -19,13 +19,18 @@ router = APIRouter()
 templates = get_templates()
 
 
-@router.get("/audit", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
+# Admin-gated (plan 055 / C5): the audit log carries actor IPs and actions
+# across the whole fleet, which a tag-scoped viewer must not see.
+@router.get("/audit", response_class=HTMLResponse, response_model=None)
 def audit_page(
     request: Request,
     target_type: str = "",
     actor: str = "",
     page: int = 1,
-) -> HTMLResponse:
+) -> HTMLResponse | RedirectResponse:
+    admin_err = require_admin_form(request)
+    if admin_err:
+        return admin_err
     db = _db_path(request)
     limit = 50
     total = count_audit(db, target_type=target_type or None, actor=actor or None)
@@ -40,13 +45,14 @@ def audit_page(
     )
     return templates.TemplateResponse(
         request=request,
-        name="audit.html",
+        name="activity.html",
         context={
             "rows": rows,
             "version": __version__,
             "commit": __commit__,
             **get_auth_context(request),
-            "active_page": "audit",
+            "active_page": "activity",
+            "tab": "audit",
             "filter_target_type": target_type,
             "filter_actor": actor,
             "page": page,
@@ -61,7 +67,7 @@ def audit_page(
 @router.get("/api/audit")
 def api_audit(
     request: Request,
-    _auth: str = Depends(require_auth),
+    _auth: str = Depends(require_admin),
     target_type: str = "",
     target_id: str = "",
     actor: str = "",

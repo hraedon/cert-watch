@@ -22,12 +22,12 @@ def _repository(request: Request) -> SqliteApiKeyRepository:
     )
 
 
-@router.get("/settings/api-keys", response_model=None)
-def api_keys_page(request: Request) -> RedirectResponse:
+@router.get("/settings/api-keys", response_class=HTMLResponse, response_model=None)
+def api_keys_page(request: Request) -> HTMLResponse | RedirectResponse:
     redirect_resp = require_admin_form(request)
     if redirect_resp:
         return redirect_resp
-    return RedirectResponse(url="/settings?tab=api-keys", status_code=303)
+    return _render_api_keys(request)
 
 
 @router.post("/settings/api-keys", response_class=HTMLResponse, response_model=None)

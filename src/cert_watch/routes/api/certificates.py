@@ -85,7 +85,6 @@ def api_get_certificate(
             "fingerprint_sha256": cert.fingerprint_sha256,
             "is_leaf": cert.is_leaf,
             "days_until_expiry": cert.days_until_expiry(),
-            "notes": cert.notes,
             "tags": parse_tags(repo.get_tags(cert_id)),
             "effective_tags": repo.effective_tags(cert_id),
         }
@@ -121,40 +120,8 @@ def api_download_pem(
     )
 
 
-@router.patch("/api/certificates/{cert_id}/notes")
-async def api_update_notes(
-    cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
-) -> JSONResponse:
-    db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
-    repo = SqliteCertificateRepository(db)
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
-    notes = body.get("notes", "")
-    if not isinstance(notes, str):
-        return JSONResponse(content={"error": "notes must be a string"}, status_code=400)
-    if len(notes) > 10000:
-        return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
-    with get_write_lock():
-        cert = repo.get_by_id(cert_id)
-        if cert is None:
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-        repo.update_notes(cert_id, notes)
-        record_audit(
-            _db_path(request),
-            actor=resolve_actor(request),
-            action="cert.update_notes",
-            target_type="certificate",
-            target_id=cert_id,
-            detail={"notes_length": len(notes)},
-            source_ip=resolve_source_ip(request),
-        )
-    return JSONResponse(content={"id": cert_id, "notes": notes})
-
+# Note: PATCH /api/certificates/{id}/notes was removed (UI-INVENTORY V1).
+# Notes are host-scoped now: PATCH /api/hosts/{id}/notes is the JSON write path.
 
 @router.get("/api/certificates/{cert_id}/history")
 def api_cert_history(

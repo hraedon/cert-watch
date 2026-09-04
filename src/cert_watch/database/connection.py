@@ -219,7 +219,6 @@ def _row_to_cert(row: sqlite3.Row | dict[str, Any]) -> Certificate:
         fingerprint_sha256=row["fingerprint_sha256"],
         raw_der=bytes(row["raw_der"]),
         is_leaf=bool(row["is_leaf"]),
-        notes=dict(row).get("notes", ""),
         source=dict(row).get("source", "unknown"),
     )
     return cert

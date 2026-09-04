@@ -44,25 +44,26 @@ def delete_pem_path(tmp_path: Path) -> Path:
 def _open_slide(page: Page) -> None:
     """Open the Add-host slide-over panel."""
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
 
 
 def _switch_tab(page: Page, tab: str) -> None:
     """Switch to a tab in the slide-over."""
     page.get_by_test_id(f"tab-{tab}-btn").click()
-    page.locator(f"#tab-{tab}").wait_for()
+    page.locator(f'[data-tab-pane="{tab}"]:not(.cw-hidden)').wait_for()
 
 
 def test_upload_then_delete_removes_cert(
     page: Page, cert_watch_server: str, delete_pem_path: Path
 ) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     _open_slide(page)
     _switch_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(
         str(delete_pem_path),
     )
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     body = page.locator("body")
     expect(body).to_contain_text("e2e-delete.example.com")
 

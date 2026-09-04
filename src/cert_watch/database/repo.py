@@ -119,9 +119,9 @@ class SqliteCertificateRepository(CertificateRepository):
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 parent_cert_id, chain_valid, replaces_cert_id,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert_id,
@@ -139,7 +139,6 @@ class SqliteCertificateRepository(CertificateRepository):
                     self.parent_cert_id,
                     cv,
                     self.replaces_cert_id,
-                    cert.notes,
                     now,
                     now,
                 ),
@@ -184,15 +183,6 @@ class SqliteCertificateRepository(CertificateRepository):
         from cert_watch.database.cert_ops import delete_certificate_cascade
 
         delete_certificate_cascade(self.db_path, cert_id)
-
-    def update_notes(self, cert_id: str, notes: str) -> None:
-        now = _iso(datetime.now(UTC))
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE certificates SET notes = ?, updated_at = ? WHERE id = ?",
-                (notes, now, cert_id),
-            )
-            conn.commit()
 
     def get_tags(self, cert_id: str) -> str:
         """Return the cert's own (normalized) tag string, or '' if not found."""

@@ -70,15 +70,17 @@ def _read_audit_rows(db_path):
 # ---------- GET /settings/api-keys ----------
 
 
-def test_get_api_keys_authenticated_admin_redirects(reload_app, tmp_path, monkeypatch):
+def test_get_api_keys_authenticated_admin_renders(reload_app, tmp_path, monkeypatch):
+    # /settings/api-keys is now the canonical section URL (it used to 303 to
+    # /settings?tab=api-keys; the redirect now runs the other way).
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     _seed_local_admin(tmp_path)
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         _login_admin(client, monkeypatch)
         r = client.get("/settings/api-keys", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/settings?tab=api-keys"
+    assert r.status_code == 200
+    assert 'data-testid="api-keys-heading"' in r.text
 
 
 def test_get_api_keys_unauthenticated_redirects_to_login(reload_app, tmp_path, monkeypatch):

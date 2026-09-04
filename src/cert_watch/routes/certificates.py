@@ -1,4 +1,4 @@
-"""Certificate detail, delete, notes, upload, and trust anchor routes."""
+"""Certificate detail, delete, upload, and trust anchor routes."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from cert_watch.database import (
     _connect,
     _row_to_cert,
     delete_certificate_cascade,
+    distinct_tags,
     get_renewal_history,
     get_write_lock,
 )
@@ -81,17 +82,45 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             slack_configured = (
                 getattr(settings, "webhook_kind", "") == "slack" if settings else False
             )
+            # Pending host: same detail template, degraded (cert is None).
+            rm = host.renewal_method or ""
+            rm_label = {"acme": "ACME", "cert-manager": "cert-manager", "manual": "Manual"}.get(
+                rm, rm.capitalize() if rm else ""
+            )
+            rm_indicator = (
+                "auto-renews"
+                if rm in ("acme", "cert-manager")
+                else ("requires manual action" if rm == "manual" else "")
+            )
             return templates.TemplateResponse(
                 request=request,
-                name="host_detail.html",
+                name="certificate_detail.html",
                 context={
-                    "host": host,
+                    "cert": None,
+                    "cert_id": cert_id,
+                    "subject_cn": f"{host.hostname}:{host.port}",
+                    "host_id": host.id,
+                    "hostname": host.hostname,
+                    "port": host.port,
+                    "host_info": {
+                        "owner_name": host.owner_name or None,
+                        "owner_email": host.owner_email or None,
+                        "owner_slack": host.owner_slack or None,
+                        "renewal_method": host.renewal_method or "",
+                        "runbook_url": host.runbook_url or None,
+                        "notes": host.notes or "",
+                        "tags": host.tags or "",
+                        "threshold_days": host.threshold_days,
+                    },
+                    "renewal_method_label": rm_label,
+                    "renewal_method_indicator": rm_indicator,
+                    "all_tags": distinct_tags(db),
                     "scan_status": scan_row["status"] if scan_row else None,
                     "scan_error": scan_row["error_message"] if scan_row else None,
                     "scan_at": scan_row["scanned_at"] if scan_row else None,
                     **auth_ctx,
                     **csrf_ctx,
-                    "active_page": "dashboard",
+                    "active_page": "browse",
                     "version": __version__,
                     "commit": __commit__,
                     "slack_configured": slack_configured,
@@ -359,8 +388,6 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         getattr(settings, "webhook_kind", "") == "slack" if settings else False
     )
 
-    from cert_watch.database import distinct_tags
-
     return templates.TemplateResponse(
         request=request,
         name="certificate_detail.html",
@@ -371,7 +398,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "version": __version__,
             "commit": __commit__,
             **auth_ctx,
-            "active_page": "dashboard",
+            "active_page": "browse",
             "key_type": key_type_str,
             "sig_alg": sig_alg,
             "serial": serial,
@@ -452,39 +479,8 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
     return RedirectResponse(url="/", status_code=303)
 
 
-@router.post("/certificates/{cert_id}/notes")
-async def update_certificate_notes(
-    request: Request, cert_id: IdParam, notes: str = Form(...)
-) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
-    if len(notes) > 10000:
-        return RedirectResponse(
-            url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
-        )
-    db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-
-    repo = SqliteCertificateRepository(db)
-    if repo.get_by_id(cert_id) is None:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    with get_write_lock():
-        repo.update_notes(cert_id, notes)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="cert.update_notes",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"notes_length": len(notes)},
-        source_ip=resolve_source_ip(request),
-    )
-    logger.info("updated notes for certificate %s", cert_id)
-    return RedirectResponse(url="/", status_code=303)
-
+# Note: POST /certificates/{id}/notes was removed (UI-INVENTORY V1). Notes are
+# a host-scoped concept now — the single write surface is POST /hosts/{id}/notes.
 
 @router.post("/certificates/{cert_id}/tags")
 async def update_certificate_tags(
@@ -712,14 +708,18 @@ async def add_trust_anchor(
             tmp.close()
             Path(tmp.name).unlink(missing_ok=True)
             return RedirectResponse(
-                url=f"/?error={quote('file too large (max 10 MB)')}", status_code=303
+                url=f"/settings/trust-anchors?error={quote('file too large (max 10 MB)')}",
+                status_code=303,
             )
         tmp.write(content)
         tmp_path = Path(tmp.name)
     try:
         entry = upload_certificate(tmp_path)
         if isinstance(entry, ParseError):
-            return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
+            return RedirectResponse(
+                url=f"/settings/trust-anchors?error={quote(entry.error_message)}",
+                status_code=303,
+            )
         # Pick the CA cert to anchor on. A chain PEM (leaf+intermediate+root)
         # has a non-CA leaf, so entry.leaf would be rejected; prefer the self-
         # signed root (typically last), else the first CA cert in the bundle.
@@ -733,7 +733,8 @@ async def add_trust_anchor(
         ca_err = validate_is_ca_certificate(anchor_cert.raw_der)
         if ca_err:
             return RedirectResponse(
-                url=f"/?error={quote('Invalid trust anchor: ' + ca_err)}", status_code=303
+                url=f"/settings/trust-anchors?error={quote('Invalid trust anchor: ' + ca_err)}",
+                status_code=303,
             )
         # Store as a trust anchor (not a certificate for monitoring)
         repo = SqliteTrustAnchorRepository(db)
@@ -751,7 +752,7 @@ async def add_trust_anchor(
         logger.info("uploaded trust anchor: %s", anchor_cert.subject)
     finally:
         tmp_path.unlink(missing_ok=True)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
@@ -772,4 +773,4 @@ async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectR
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted trust anchor %s", anchor_id)
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)

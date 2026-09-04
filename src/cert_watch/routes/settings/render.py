@@ -81,10 +81,13 @@ def _settings_context(
     roles_data: list[Any] = []
     users_data: list[Any] = []
     alert_groups_data: list[Any] = []
+    role_tag_tiers: dict[str, dict[str, str]] = {}
     if tab in ("roles", "users"):
         from cert_watch.database import SqliteRoleRepository, SqliteUserRepository
-        roles_data = SqliteRoleRepository(db).list_all()
+        role_repo = SqliteRoleRepository(db)
+        roles_data = role_repo.list_all()
         users_data = SqliteUserRepository(db).list_all()
+        role_tag_tiers = role_repo.all_tag_tiers()
         if tab == "roles":
             from cert_watch.database import SqliteAlertGroupRepository
             alert_groups_data = SqliteAlertGroupRepository(db).list_all()
@@ -101,6 +104,15 @@ def _settings_context(
     if tab == "policy":
         from cert_watch.policy import load_policy_set
         policy_set = load_policy_set(str(db))
+
+    trust_anchors: list[Any] = []
+    if tab == "trust-anchors":
+        from cert_watch.database import SqliteTrustAnchorRepository
+        trust_anchors = SqliteTrustAnchorRepository(db).list_entries()
+
+    tag_registry: list[dict[str, Any]] = []
+    if tab == "tags":
+        tag_registry = _build_tag_registry(db)
 
     auth_ctx = get_auth_context(request)
     csrf_ctx = get_csrf_context(request)
@@ -122,7 +134,10 @@ def _settings_context(
         "policy_set": policy_set,
         "roles": roles_data,
         "users": users_data,
+        "role_tag_tiers": role_tag_tiers,
         "alert_groups": alert_groups_data,
+        "trust_anchors": trust_anchors,
+        "tag_registry": tag_registry,
         "active_page": "settings",
         "new_token": new_token,
         "new_name": new_name,
@@ -130,6 +145,100 @@ def _settings_context(
         **auth_ctx,
         **csrf_ctx,
     }
+
+
+# One template per settings section (the settings.html monolith rendered
+# all nine panels on every request and hid eight with CSS).
+SECTION_TEMPLATES: dict[str, str] = {
+    "auth": "settings/auth.html",
+    "channels": "settings/channels.html",
+    "alert-groups": "settings/alert_groups.html",
+    "events": "settings/events.html",
+    "policy": "settings/policy.html",
+    "roles": "settings/roles.html",
+    "users": "settings/users.html",
+    "api-keys": "settings/api_keys.html",
+    "tags": "settings/tags.html",
+    "trust-anchors": "settings/trust_anchors.html",
+}
+
+# Old ?tab= names → canonical section slugs (smtp and alerts merged).
+LEGACY_TAB_MAP: dict[str, str] = {
+    "auth": "auth",
+    "smtp": "channels",
+    "alerts": "channels",
+    "policy": "policy",
+    "api-keys": "api-keys",
+    "roles": "roles",
+    "users": "users",
+    "alert-groups": "alert-groups",
+    "events": "events",
+}
+
+
+def _render_settings(
+    request: Request,
+    tab: str,
+    **extra: Any,
+) -> HTMLResponse:
+    """Render one settings section with the shared context."""
+    template = SECTION_TEMPLATES.get(tab, SECTION_TEMPLATES["auth"])
+    ctx = _settings_context(request, tab=tab, **extra)
+    return templates.TemplateResponse(request=request, name=template, context=ctx)
+
+
+def _build_tag_registry(db: Any) -> list[dict[str, Any]]:
+    """Every tag in use, with what it labels, scopes, and routes.
+
+    Tags are simultaneously labels, access boundaries (role scopes /
+    per-tag tiers), and alert-routing selectors — renaming one silently
+    changes access and routing, so the registry shows all three facets.
+    """
+    from cert_watch.database import (
+        SqliteAlertGroupRepository,
+        SqliteRoleRepository,
+        _connect,
+    )
+    from cert_watch.tags import parse_tags
+
+    host_counts: dict[str, int] = {}
+    cert_counts: dict[str, int] = {}
+    with _connect(db) as conn:
+        for row in conn.execute("SELECT tags FROM hosts WHERE tags != ''"):
+            for t in parse_tags(row["tags"]):
+                host_counts[t] = host_counts.get(t, 0) + 1
+        for row in conn.execute(
+            "SELECT tags FROM certificates WHERE tags != '' AND is_leaf = 1"
+        ):
+            for t in parse_tags(row["tags"]):
+                cert_counts[t] = cert_counts.get(t, 0) + 1
+
+    role_repo = SqliteRoleRepository(db)
+    overrides = role_repo.all_tag_tiers()
+    roles_by_tag: dict[str, list[dict[str, str]]] = {}
+    for role in role_repo.list_all():
+        for t in parse_tags(role.scope_tag):
+            tier = overrides.get(role.id, {}).get(t, role.permission_tier)
+            roles_by_tag.setdefault(t, []).append({"name": role.name, "tier": tier})
+
+    groups_by_tag: dict[str, list[str]] = {}
+    for grp in SqliteAlertGroupRepository(db).list_all():
+        for t in parse_tags(getattr(grp, "match_tags", "") or ""):
+            groups_by_tag.setdefault(t, []).append(grp.name)
+
+    all_tags = sorted(
+        set(host_counts) | set(cert_counts) | set(roles_by_tag) | set(groups_by_tag)
+    )
+    return [
+        {
+            "tag": t,
+            "hosts": host_counts.get(t, 0),
+            "certs": cert_counts.get(t, 0),
+            "roles": roles_by_tag.get(t, []),
+            "groups": groups_by_tag.get(t, []),
+        }
+        for t in all_tags
+    ]
 
 
 def _render_api_keys(
@@ -141,18 +250,12 @@ def _render_api_keys(
 ) -> HTMLResponse:
     """Render the API-keys management page inside the settings chrome.
 
-    ``new_token`` is shown exactly once.  Uses ``settings.html`` (tab=api-keys)
-    so the settings tabs remain visible — the old ``api_keys.html`` standalone
-    template is no longer used here.
+    ``new_token`` is shown exactly once.
     """
-    return templates.TemplateResponse(
-        request=request,
-        name="settings.html",
-        context=_settings_context(
-            request,
-            tab="api-keys",
-            new_token=new_token,
-            new_name=new_name,
-            error=error,
-        ),
+    return _render_settings(
+        request,
+        "api-keys",
+        new_token=new_token,
+        new_name=new_name,
+        error=error,
     )

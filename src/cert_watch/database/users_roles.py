@@ -140,8 +140,44 @@ class SqliteRoleRepository:
                 "UPDATE users SET role_id = NULL WHERE role_id = ?",
                 (role_id,),
             )
+            conn.execute("DELETE FROM role_tag_tiers WHERE role_id = ?", (role_id,))
             conn.execute("DELETE FROM roles WHERE id = ?", (role_id,))
             conn.commit()
+
+    # ---- per-tag tiers (Plan 053 / WI-064) ----
+
+    def list_tag_tiers(self, role_id: str) -> dict[str, str]:
+        """Return {tag: permission_tier} overrides for one role."""
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT tag, permission_tier FROM role_tag_tiers WHERE role_id = ?",
+                (role_id,),
+            ).fetchall()
+        return {row["tag"]: row["permission_tier"] for row in rows}
+
+    def set_tag_tiers(self, role_id: str, tag_tiers: dict[str, str]) -> None:
+        """Replace a role's per-tag tier overrides with *tag_tiers*."""
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                "DELETE FROM role_tag_tiers WHERE role_id = ?", (role_id,)
+            )
+            conn.executemany(
+                "INSERT INTO role_tag_tiers (role_id, tag, permission_tier)"
+                " VALUES (?, ?, ?)",
+                [(role_id, tag, tier) for tag, tier in tag_tiers.items()],
+            )
+            conn.commit()
+
+    def all_tag_tiers(self) -> dict[str, dict[str, str]]:
+        """Return {role_id: {tag: permission_tier}} for every role."""
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT role_id, tag, permission_tier FROM role_tag_tiers"
+            ).fetchall()
+        result: dict[str, dict[str, str]] = {}
+        for row in rows:
+            result.setdefault(row["role_id"], {})[row["tag"]] = row["permission_tier"]
+        return result
 
 
 class SqliteUserRepository:

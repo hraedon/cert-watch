@@ -230,10 +230,6 @@ from cert_watch.database.session_versions import (
 )
 
 # Team dashboard
-from cert_watch.database.team import (
-    team_dashboard_data as team_dashboard_data,
-)
-
 # Users & Roles (Plan 040)
 from cert_watch.database.users_roles import (
     Role,
@@ -332,5 +328,4 @@ __all__ = [
     # calendar
     "list_calendar",
     # team
-    "team_dashboard_data",
 ]

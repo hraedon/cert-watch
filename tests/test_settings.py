@@ -31,9 +31,10 @@ def test_settings_page_loads(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/settings")
     assert r.status_code == 200
+    # /settings 303s to /settings/auth; the section nav lists every area.
     assert "Authentication" in r.text
-    assert "SMTP" in r.text
-    assert "Alerts" in r.text
+    assert "Channels" in r.text
+    assert "Alert groups" in r.text
 
 
 def test_settings_page_auth_tab(reload_app):

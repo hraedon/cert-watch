@@ -1,0 +1,179 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Email (SMTP)</h2>
+    <span class="cw-hint">the mail relay used for alert and digest delivery</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/smtp" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_host">SMTP host
+            {% if env_overrides.smtp_host is defined %}<span class="cw-envbadge">env</span>{% endif %}
+          </label>
+          <input class="cw-input mono" type="text" id="smtp_host" name="smtp_host"
+                 value="{{ smtp.smtp_host }}" placeholder="smtp.example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_port">Port</label>
+          <input class="cw-input" type="number" id="smtp_port" name="smtp_port"
+                 value="{{ smtp.smtp_port }}" placeholder="587">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_user">Username <span class="cw-muted">(optional)</span></label>
+          <input class="cw-input" type="text" id="smtp_user" name="smtp_user"
+                 value="{{ smtp.smtp_user }}" placeholder="user@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_password">Password <span class="cw-muted">(optional)</span></label>
+          <input class="cw-input" type="password" id="smtp_password" name="smtp_password"
+                 value="" placeholder="{% if smtp.smtp_password %}••••••••{% else %}password{% endif %}"
+                 autocomplete="new-password">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_from">From address</label>
+          <input class="cw-input" type="email" id="alert_from" name="alert_from"
+                 value="{{ smtp.alert_from }}" placeholder="cert-watch@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_recipients">Recipients (comma-separated)</label>
+          <input class="cw-input" type="text" id="alert_recipients" name="alert_recipients"
+                 value="{{ smtp.alert_recipients }}" placeholder="ops@example.com, security@example.com">
+        </div>
+      </div>
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save SMTP settings</button>
+        <button type="button" class="cw-btn" id="smtp-test-btn">Send test email</button>
+        <span id="smtp-test-result" class="cw-testres"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# Webhook + behavior share ONE form (one POST to /settings/alerts), so they
+   live in one panel with two labelled groups — never split a form. #}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Webhook &amp; behavior</h2>
+    <span class="cw-hint">webhook delivery, digest cadence, and alert engine tuning</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/alerts" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+      <div class="cw-kv-label">Webhook</div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_preset">Webhook preset</label>
+        <select class="cw-select" id="webhook_preset" name="webhook_preset">
+          {% for value, label in webhook_kind_options %}
+          <option value="{{ value }}" {% if (alert.webhook_kind or 'generic') == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_url">Webhook URL <span class="cw-muted">(optional)</span></label>
+        <input class="cw-input mono" type="text" id="webhook_url" name="webhook_url"
+               value="{{ alert.webhook_url }}" placeholder="https://hooks.slack.com/services/...">
+      </div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_template">Webhook template <span class="cw-muted">(optional)</span></label>
+        <textarea class="cw-textarea mono" id="webhook_template" name="webhook_template" rows="3"
+                  placeholder="Leave empty for default JSON payload">{{ alert.webhook_template }}</textarea>
+      </div>
+      <input type="hidden" id="webhook_kind" name="webhook_kind" value="{{ alert.webhook_kind or 'generic' }}">
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_headers">Custom webhook headers (JSON)
+          {% if env_overrides.webhook_headers %}<span class="cw-envbadge">env</span>{% endif %}
+        </label>
+        <textarea class="cw-textarea mono" id="webhook_headers" name="webhook_headers" rows="3"
+                  placeholder="{% if alert.webhook_headers %}•••••••• headers configured (leave empty to keep; retype to replace){% else %}{&quot;Authorization&quot;: &quot;Bearer ...&quot;, &quot;X-Scope&quot;: &quot;certs&quot;}{% endif %}"></textarea>
+        <div class="cw-hint">A JSON object of HTTP headers added to webhook requests. Leave empty for none. Invalid JSON is ignored.</div>
+      </div>
+
+      <div class="cw-divider"></div>
+      <div class="cw-kv-label">Alert behavior</div>
+      <div class="cw-hint">
+        Env vars take precedence: a field with an <span class="cw-envbadge">env</span>
+        badge is locked to its environment value and changes here will not take
+        effect until the env var is unset.
+      </div>
+
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="alert_digest_only">Digest mode</label>
+          <select class="cw-select" id="alert_digest_only" name="alert_digest_only">
+            <option value="0" {% if alert.alert_digest_only != '1' %}selected{% endif %}>Per-certificate alerts</option>
+            <option value="1" {% if alert.alert_digest_only == '1' %}selected{% endif %}>Weekly digest (urgent alerts still sent)</option>
+          </select>
+          <div class="cw-hint">One weekly summary instead of individual routine alerts. Urgent alerts (&le;3 days to expiry) are always sent individually.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="drift_alerts">Drift alerts
+            {% if env_overrides.drift_alerts %}<span class="cw-envbadge">env</span>{% endif %}
+          </label>
+          <select class="cw-select" id="drift_alerts" name="drift_alerts">
+            <option value="1" {% if alert.drift_alerts != '0' %}selected{% endif %}>On</option>
+            <option value="0" {% if alert.drift_alerts == '0' %}selected{% endif %}>Off</option>
+          </select>
+          <div class="cw-hint">Alert when posture drifts: issuer change, key-size drop, SHA-1 downgrade, posture-grade drop, or TLS-version downgrade. On by default.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="renewal_window_days">Renewal-stalled window (days)
+            {% if env_overrides.renewal_window_days %}<span class="cw-envbadge">env</span>{% endif %}
+          </label>
+          <input class="cw-input" type="number" min="0" id="renewal_window_days"
+                 name="renewal_window_days"
+                 value="{{ alert.renewal_window_days if alert.renewal_window_days != '' else '30' }}">
+          <div class="cw-hint">Days before expiry to fire a renewal-stalled alert for a cert with no successor. Default 30. Set 0 to disable.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_retention_days">Alert retention (days)
+            {% if env_overrides.alert_retention_days %}<span class="cw-envbadge">env</span>{% endif %}
+          </label>
+          <input class="cw-input" type="number" min="0" id="alert_retention_days"
+                 name="alert_retention_days"
+                 value="{{ alert.alert_retention_days if alert.alert_retention_days != '' else '90' }}">
+          <div class="cw-hint">Days of alert history to keep before purging. Default 90. Set 0 to disable purging.</div>
+        </div>
+        <div class="cw-field">
+          <span class="cw-label">Daily scan time (UTC)
+            {% if env_overrides.sched_hour or env_overrides.sched_min %}<span class="cw-envbadge">env</span>{% endif %}
+          </span>
+          <div class="cw-form-grid">
+            <input class="cw-input" type="number" min="0" max="23" id="sched_hour"
+                   name="sched_hour"
+                   value="{{ alert.sched_hour if alert.sched_hour != '' else '6' }}"
+                   aria-label="Hour (0-23)">
+            <input class="cw-input" type="number" min="0" max="59" id="sched_min"
+                   name="sched_min"
+                   value="{{ alert.sched_min if alert.sched_min != '' else '0' }}"
+                   aria-label="Minute (0-59)">
+          </div>
+          <div class="cw-hint">When the daily scan + alert cycle runs, in UTC. Default 06:00.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="check_revocation">OCSP/CRL revocation checks
+            {% if env_overrides.check_revocation %}<span class="cw-envbadge">env</span>{% endif %}
+          </label>
+          <select class="cw-select" id="check_revocation" name="check_revocation">
+            <option value="0" {% if alert.check_revocation != '1' %}selected{% endif %}>Off</option>
+            <option value="1" {% if alert.check_revocation == '1' %}selected{% endif %}>On</option>
+          </select>
+          <div class="cw-hint">Probe OCSP/CRL during posture evaluation to flag revoked certificates. Off by default (adds outbound network calls per scan).</div>
+        </div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save alert settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/settings.js" nonce="{{ request.state.csp_nonce }}"></script>
+{% endblock %}

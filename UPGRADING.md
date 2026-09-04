@@ -48,6 +48,23 @@ are on a pre-0.9.0 release, take the two-step path below.
 Downgrade is **not** supported — migrations are forward-only. To roll back,
 restore the pre-migration backup.
 
+### Behaviour changes in this line to be aware of
+
+- **Per-certificate notes are merged into host notes (migration 0031).** Every
+  non-empty `certificates.notes` value is concatenated into the matching
+  `hosts.notes` row and the column is dropped. Notes on *uploaded*
+  certificates with no matching host row (a hostname+port pair in `hosts`)
+  cannot be merged: they are listed in a WARNING log at migration time and
+  survive only in the pre-migration backup. The UI has a single "Notes" panel
+  per endpoint (host-scoped); `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`, and the `notes` key in
+  `GET /api/certificates/{id}` are removed.
+- **The landing page is now Home; the inventory table moved to `/browse`.**
+  `/` renders the attention queue (what needs a human, ranked by
+  time-to-impact) plus a 12-week expiry horizon. Requests to `/` carrying the
+  dashboard's filter/sort/page/view params (old bookmarks) redirect to
+  `/browse` with the query preserved.
+
 ### Windows / IIS specifics
 
 **Upgrade by re-running `install-windows.ps1`** with the same arguments as your
@@ -88,6 +105,35 @@ There is no full-fidelity data export/import tool. Two options:
   re-add tracked hosts with the **CSV bulk import** (Settings → Hosts → Import).
   This re-establishes the host inventory; historical scan/cert/audit history is
   not carried across by this path.
+
+## UI redesign (plan 055)
+
+The web UI was rebuilt around four domains — **Certificates**, **Posture**,
+**Activity**, **Settings**. Old URLs redirect permanently, so bookmarks keep
+working:
+
+| Old | New |
+|---|---|
+| `/insights` (calendar) | `/?view=calendar` |
+| `/insights?tab=trends`, `/crypto` | `/posture` |
+| `/alerts`, `/scan-history`, `/audit` | unchanged (tabs of Activity) |
+| `/team` | `/` (the tag-scope model replaces the email-keyed team view) |
+| `/settings?tab=X` | `/settings/{section}` (`smtp`+`alerts` merged into `channels`) |
+| Trust anchors (dashboard) | `/settings/trust-anchors` |
+
+Behavior changes to note:
+
+- **The audit log is now admin-only** (it exposes actor IPs and fleet-wide
+  actions). Grant `settings:admin` to users who need it.
+- **Per-tag permission tiers** (migration `0030`, plan 053): a scoped role's
+  tier now applies *within its scope tags* — a role with tier `operator` and
+  scope `prod` grants writes on `prod`-tagged resources. Existing scoped
+  roles were tier-inert before; if you created scoped operator/admin roles
+  in the past, they now grant in-scope writes. Set the role's tier back to
+  `viewer` (or use per-tag overrides) if that isn't intended. Unscoped-role
+  behavior and the global tier are unchanged.
+- The CSP tightened (`style-src 'self'`); custom reverse-proxy CSP overrides
+  may need updating.
 
 ## Notes
 

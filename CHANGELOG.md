@@ -4,6 +4,20 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Removed
+- **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
+  host-scoped concept. Migration 0030 concatenates every non-empty
+  `certificates.notes` value into the matching `hosts.notes` row and drops the
+  column. Endpoints removed: `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`; the `notes` key was also removed from
+  `GET /api/certificates/{id}` responses. The three dashboard inline note
+  editors were removed — the dashboard shows a read-only note indicator; the
+  single editing surface is the Notes panel on the endpoint detail page
+  (`POST /hosts/{id}/notes`, JSON: `PATCH /api/hosts/{id}/notes`).
+  **Caveat:** notes attached to uploaded certificates with no matching host
+  row cannot be merged; they are listed in a WARNING log at migration time and
+  survive in the pre-migration database backup.
+
 ### Fixed
 - **Cross-process digest delivery deduplication and shutdown safety.** Renewal,
   expiry, and orphan digest sends now take atomic per-recipient/channel claims
@@ -102,6 +116,16 @@ All notable changes to cert-watch are documented in this file.
   requests.
 
 ### Changed
+- **Information architecture: Home / Browse split.** The landing page is now a
+  **Home** view organized around the operator's actual question — "what needs
+  a human, and when?" — instead of the raw inventory table. Home shows a
+  ranked attention queue (expired → stalled renewals → critical → failing
+  scans → warnings, with renewal confidence demoting automated renewals) and a
+  12-week expiry horizon with renewal-storm markers. The full inventory table
+  (sorting, urgency filters, pivots, calendar, add drawer) moved to **`/browse`**;
+  requests to `/` carrying the old dashboard's filter/sort/page/view params
+  redirect there (307, query preserved). Nav: Home · Browse · Posture ·
+  Activity · Settings.
 - CI and E2E jobs install from the committed `uv.lock`, Starlette's test client
   uses its supported `httpx2` backend, and the Docker build pins the `uv` image
   by digest for reproducible builds.

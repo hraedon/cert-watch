@@ -101,7 +101,7 @@ def test_unauthenticated_redirects_to_login(page: Page, rbac_server: str) -> Non
 
 def test_admin_sees_write_controls(page: Page, rbac_server: str) -> None:
     _login_as(page, rbac_server, groups=[_ADMIN_DN])
-    page.goto(rbac_server)
+    page.goto(f"{rbac_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     expect(page.get_by_test_id("add-host-btn")).to_be_visible()
     expect(page.get_by_test_id("readonly-notice")).to_have_count(0)
@@ -109,7 +109,7 @@ def test_admin_sees_write_controls(page: Page, rbac_server: str) -> None:
 
 def test_viewer_gets_readonly_dashboard(page: Page, rbac_server: str) -> None:
     _login_as(page, rbac_server, groups=[_VIEWER_DN])
-    page.goto(rbac_server)
+    page.goto(f"{rbac_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     # The viewer must NOT see the Add-host control, and must see the notice.
     expect(page.get_by_test_id("add-host-btn")).to_have_count(0)
