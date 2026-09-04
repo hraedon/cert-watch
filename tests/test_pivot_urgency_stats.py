@@ -53,12 +53,13 @@ def _add_leaf(db, subject, *, not_after):
     replace_scanned(db, host, port, cert, [], True)
 
 
-def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
+def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path, monkeypatch):
     """A cert that expired a few hours ago today must count as expired.
 
     This is the exact case the old string compare missed: same UTC date, so the
     'T' (0x54) vs ' ' (0x20) separator made the stored value sort *after* now.
     """
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     now = datetime.now(UTC)
@@ -100,13 +101,14 @@ def test_dashboard_stats_match_chain_aware_row_urgency(tmp_path, chain_pem_file)
     }
 
 
-def test_pivot_stats_are_tag_scoped(tmp_path):
+def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
     """A scoped user's summary cards must count only certs in their tag scope.
 
     Mirrors list_fleet_pivot's scoped population so the cards agree with the
     grouped rows; previously the cards aggregated every leaf cert globally,
     leaking out-of-scope counts to tag-scoped (non-admin) users.
     """
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     hosts = SqliteHostRepository(db)
@@ -171,7 +173,8 @@ def test_pivot_stats_are_tag_scoped(tmp_path):
     }
 
 
-def test_pivot_stats_bucket_boundaries(tmp_path):
+def test_pivot_stats_bucket_boundaries(tmp_path, monkeypatch):
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     now = datetime.now(UTC)

@@ -74,6 +74,20 @@ def test_dashboard_page_empty_db(tmp_path):
     assert total == 0
 
 
+def test_long_lived_untrusted_chain_has_warning_composite_status(
+    tmp_path, self_signed_leaf
+):
+    db = tmp_path / "composite-status.sqlite3"
+    _seed(db, self_signed_leaf)
+
+    rows, _ = list_dashboard_page(db, q="alpha.example.com", per_page=0)
+
+    assert len(rows) == 1
+    assert rows[0]["chain_status"] in {"unknown", "self-signed"}
+    assert rows[0]["leaf_urgency"] == "healthy"
+    assert rows[0]["urgency"] == "warning"
+
+
 def test_grouped_page_empty_db(tmp_path):
     db = tmp_path / "empty2.sqlite3"
     rows, total = list_dashboard_grouped_page(db)

@@ -14,7 +14,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.cert_chain import validate_is_ca_certificate
+from cert_watch.cert_chain import (
+    ACTIONABLE_CHAIN_STATUSES,
+    display_urgency,
+    validate_is_ca_certificate,
+)
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -223,11 +227,11 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     leaf_days = cert.days_until_expiry()
     all_chain_days = [ch["days_remaining"] for ch in chain_certs]
     worst_days = min([leaf_days] + all_chain_days) if all_chain_days else leaf_days
-    urgency = compute_urgency(worst_days)
+    urgency = display_urgency(compute_urgency(worst_days), cs)
 
     # Override urgency if chain issue
     chain_issue = None
-    if cs in ("incomplete", "invalid"):
+    if cs in ACTIONABLE_CHAIN_STATUSES:
         chain_issue = cs
 
     # Get host info if scanned
