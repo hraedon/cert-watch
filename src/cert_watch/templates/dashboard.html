@@ -108,9 +108,9 @@
                 href=filter_link('expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
     {{ ui.stat('Critical', pivot_stats.critical, '< 7 days' if pivot_stats.critical else 'none', tone='t-crit', icon='alert',
                 href=filter_link('critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
-    {{ ui.stat('Warning', pivot_stats.warning, '7–29 days' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
+    {{ ui.stat('Warning', pivot_stats.warning, 'expiry or trust issue' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
                 href=filter_link('warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
-    {{ ui.stat('Expiry healthy', pivot_stats.healthy, '30+ days remaining', tone='t-ok', icon='check-circle',
+    {{ ui.stat('Healthy', pivot_stats.healthy, '30+ days · trusted chain', tone='t-ok', icon='check-circle',
                 href=filter_link('healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
   </div>
 

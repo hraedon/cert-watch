@@ -99,7 +99,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 rm, rm.capitalize() if rm else ""
             )
             rm_indicator = (
-                "auto-renews"
+                "automation configured"
                 if rm in ("acme", "cert-manager")
                 else ("requires manual action" if rm == "manual" else "")
             )
@@ -285,10 +285,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             rm = h.get("renewal_method", "")
             if rm == "acme":
                 renewal_method_label = "ACME"
-                renewal_method_indicator = "auto-renews"
+                renewal_method_indicator = "automation configured"
             elif rm == "cert-manager":
                 renewal_method_label = "cert-manager"
-                renewal_method_indicator = "auto-renews"
+                renewal_method_indicator = "automation configured"
             elif rm == "manual":
                 renewal_method_label = "Manual"
                 renewal_method_indicator = "requires manual action"

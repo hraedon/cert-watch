@@ -190,8 +190,10 @@ def test_dashboard_stat_cards_are_urgency_filters(
     assert _stat_value(r.text, "Tracked") == 3
     assert _stat_value(r.text, "Expired") == 1
     assert _stat_value(r.text, "Critical") == 1
-    assert _stat_value(r.text, "Warning") == 0
-    assert _stat_value(r.text, "Healthy") == 1
+    # The long-lived fixture is self-signed: its expiry is healthy, its
+    # composite certificate status correctly requires trust attention.
+    assert _stat_value(r.text, "Warning") == 1
+    assert _stat_value(r.text, "Healthy") == 0
 
     assert r.text.count('class="cw-stat active"') == 1
     # unfiltered: the Tracked cell is active
@@ -322,7 +324,7 @@ def upload_certificate_from_bytes(der_bytes, filename):
         tmp_path.unlink(missing_ok=True)
 
 
-def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
+def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path, monkeypatch):
     """Stat-card urgency counts must reflect the full fleet, not only page 2."""
     import re
 
@@ -335,6 +337,8 @@ def test_dashboard_page2_stats_use_fleet_urgency_totals(reload_app, tmp_path):
     from tests.conftest import _make_cert
 
     app_mod = reload_app()
+    # Isolate pagination/date aggregation from trust validation of fixture DER.
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args, **kwargs: "public")
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
 

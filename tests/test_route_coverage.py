@@ -870,9 +870,9 @@ def test_certificate_detail_host_info_acme(reload_app, tmp_path, leaf_pem_file):
                         follow_redirects=False)
     assert r.status_code == 200
     assert "acme.example.com" in r.text  # the detail page, not a redirect
-    # ACME hosts render the "ACME" label and the "auto-renews" indicator chip.
+    # ACME hosts render the "ACME" label and the "automation configured" indicator chip.
     assert "ACME" in r.text
-    assert "auto-renews" in r.text
+    assert "automation configured" in r.text
     assert "Ops Team" in r.text
 
 
@@ -901,9 +901,9 @@ def test_certificate_detail_host_info_cert_manager(reload_app, tmp_path):
         r = client.get(f"/certificates/{_stored_cert_id(db, 'cm.example.com')}",
                         follow_redirects=False)
     assert r.status_code == 200
-    # cert-manager is also an automated renewer → "auto-renews" indicator.
+    # cert-manager is also an automated renewer → "automation configured" indicator.
     assert "cert-manager" in r.text
-    assert "auto-renews" in r.text
+    assert "automation configured" in r.text
 
 
 def test_certificate_detail_host_info_manual(reload_app, tmp_path):
@@ -934,7 +934,7 @@ def test_certificate_detail_host_info_manual(reload_app, tmp_path):
     # Manual renewal must be flagged distinctly from the auto-renewers.
     assert "Manual" in r.text
     assert "requires manual action" in r.text
-    assert "auto-renews" not in r.text
+    assert "automation configured" not in r.text
 
 
 def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
@@ -964,7 +964,7 @@ def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
     assert r.status_code == 200
     # An unknown method is title-cased as-is with no auto/manual indicator.
     assert "Terraform" in r.text
-    assert "auto-renews" not in r.text
+    assert "automation configured" not in r.text
     assert "requires manual action" not in r.text
 
 

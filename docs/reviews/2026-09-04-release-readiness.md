@@ -11,7 +11,7 @@ This review treats cert-watch as an operator console rather than a certificate c
 
 The resulting information model separates concepts that were previously easy to conflate. **Status** describes certificate expiry and chain trust. **Grade** is evidence from the last live TLS scan, not a property inferred from an uploaded certificate. Uploaded artifacts contribute to cryptographic inventory, while monitored endpoints contribute deployment, renewal, scan, and fleet-posture evidence. Home ranks actionable deployments; Browse supports investigation across the complete inventory; Posture aggregates evidence and makes its coverage limits explicit; Activity records alerts, delivery, scans, and audit events.
 
-Release readiness remains pending until the combined CI suite and backend validation pass. This document records the independent UI assessment and implemented corrections; it does not assert production readiness.
+Release readiness is tracked by PR #24 and its final combined CI results. This document records the independent UI assessment and implemented corrections; it does not assert production readiness.
 
 ## Verified defects and implemented changes
 
@@ -37,7 +37,7 @@ A shared certificate deployed to multiple hosts can have different owners, renew
 
 ### Copy overstated evidence
 
-“Healthy — no action needed” implied operational health when the value only described expiry. Browse now labels the measure “Expiry healthy” and defines it as 30 or more days remaining. Posture explains that uploaded files contribute to crypto inventory, while fleet grades and TLS trends require live host scans. Grade presentation is explicitly tied to the last TLS scan. Activity describes its actual domains, and actions that are provably no-ops in the empty state are disabled.
+“Healthy — no action needed” implied operational health when the value only described expiry. Browse now defines healthy certificate status as at least 30 days remaining with a trusted chain; Home keeps separate expiry-only statistics. Unknown, self-signed, incomplete, and invalid chains receive a warning floor without altering grades or trust decisions. Posture explains that uploaded files contribute to crypto inventory, while fleet grades and TLS trends require live host scans. Grade presentation is explicitly tied to the last TLS scan. Activity describes its actual domains, and actions that are provably no-ops in the empty state are disabled.
 
 ### Important actions lacked a clear affordance
 
@@ -67,3 +67,21 @@ These are candidates for later work rather than release blockers established by 
 - **Validate a real deployment path before release promotion.** Run an actual browser check against a benign deployed environment and exercise the live IIS pre-tag workflow. Synthetic fixtures verify layout and state transitions, but they cannot establish proxy headers, authentication integration, platform certificate stores, or IIS metadata behavior.
 
 The design should continue to preserve the distinction between an observed artifact and a monitored deployment. New summaries or automation should always state their evidence source and age; otherwise they recreate the ambiguity this release removes.
+
+## Backend and release corrections
+
+- Inventory statistics now use the same computed urgency as displayed rows. Home retains separate expiry-only counts. Attention tracks individual deployments instead of borrowing the owner, chain, renewal method, or certificate link from a representative wildcard deployment.
+- Renewal analytics retain `(hostname, port)` identity, preserve non-contiguous fingerprint reuse as separate deployment periods, and tolerate legacy history with no port. Readiness reports the latest observed lifetime rather than a historical median. Report/analytics JSON gains an additive `port` field; the single-host analytics API accepts a validated `?port=` selector. Omitted-port calls retain their legacy combined-host behavior; callers needing endpoint-specific results should supply the port.
+- Overdue detection uses the start of the current deployment period on the exact endpoint. Event deduplication includes the port, preserves the 24-hour guard for legacy events without a port, and ignores malformed historical payloads without aborting the scan cycle.
+- Tag suggestions use the existing effective-tag scope, matching visibility of certificate and host resources. This changes read filtering, not permissions or write policy.
+- Readiness tolerates transient SQLite contention, but reports read-only/storage failures as degraded. Failed health queries no longer produce a healthy banner.
+- Image publication now depends on CI, browser/visual checks, and deployment smoke for the exact commit. Semantic version tags trigger versioned image publication, must agree with package/fallback metadata, and cannot update deployment manifests or move `latest`. The Windows gate installs and verifies Web-AppInit while retaining the production install verifier.
+- Digest configuration now describes a shared weekly window. Independent per-team send schedules remain unsupported. SMTP-first delivery with webhook fallback remains the tested behavior; configuring both does not promise duplicate delivery through both channels.
+
+No SQLite migration, runtime dependency, version bump, or release tag is part of this change. Chain-aware inventory totals now compute validation over all matching rows; this improves agreement but adds work compared with expiry-only SQL counts. Large-estate performance should be measured before substantially expanding deployment size.
+
+## Validation boundary
+
+New regressions were observed failing without their corresponding fixes. Validation includes source/type/template checks, workflow actionlint, isolated execution of the actual version-tag shell, unit tests, browser interactions, and integration tests. Final counts and CI links are recorded in the pull request after its last update. Visual baseline changes must come from the GitHub Ubuntu artifact.
+
+Live Windows/IIS upgrade/reboot, real production AD sign-in, outbound notification delivery, and production certificate scanning have not been exercised in this review. The configured real-AD checks remain opt-in; synthetic and hosted-runner checks do not substitute for these operator checks before release promotion.
