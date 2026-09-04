@@ -202,9 +202,18 @@ Project is registered with agent-notes and routes to its regista schema via path
 
 ## CI workflows
 
-- `ci.yml` — ruff + pytest (unit) on every push/PR
-- `e2e.yml` — Playwright E2E on every push/PR. Two jobs: the functional job runs `-m "e2e and not visual"`; the **`visual` job is a required gate** that screenshot-compares against the committed baselines in `tests/e2e/__screenshots__/`. Those baselines are pinned to GitHub's `ubuntu-latest` font rendering — **they cannot be faithfully regenerated on a dev box or a local container** (both drift). When a deliberate UI change makes the visual job fail: run `scripts/update-visual-baselines.sh --latest` to download the `visual-snapshot-diffs` artifact and overwrite the committed baselines with the `actual_*.png` files it contains (those ARE the correct ubuntu-latest baselines), then commit. Do not regenerate baselines locally with `--update-snapshots`.
-- `release.yml` — on `main`: multi-arch image build → GHCR → commit kustomize tag bump (skips itself via `paths-ignore`). Does **not** gate on the e2e/visual jobs — a red visual gate won't block the image build, but leaving it red is a maintenance-contract violation (doc truth-keeping).
+- `ci.yml` — reusable ruff + mypy + pytest workflow; runs directly on PRs and
+  is called by `release.yml` for `main` and release-tag pushes.
+- `e2e.yml` — reusable Playwright E2E workflow; runs directly on PRs and is
+  called by `release.yml`. Two jobs: the functional job runs `-m "e2e and not visual"`; the **`visual` job is a required gate** that screenshot-compares against the committed baselines in `tests/e2e/__screenshots__/`. Those baselines are pinned to GitHub's `ubuntu-latest` font rendering — **they cannot be faithfully regenerated on a dev box or a local container** (both drift). When a deliberate UI change makes the visual job fail: run `scripts/update-visual-baselines.sh --latest` to download the `visual-snapshot-diffs` artifact and overwrite the committed baselines with the `actual_*.png` files it contains (those ARE the correct ubuntu-latest baselines), then commit. Do not regenerate baselines locally with `--update-snapshots`.
+- `deploy-smoke.yml` — reusable Docker, Linux entrypoint, kind, and Windows
+  deployment checks; runs directly on PRs and is called by `release.yml`.
+- `release.yml` — on `main` and semantic-version tags: call CI, E2E, and
+  deploy-smoke for the exact commit, then build and publish the multi-arch image
+  only after all three pass. `main` publishes `latest` + SHA and commits the
+  kustomize tag bump. A tag additionally publishes the semver image after its
+  version matches `pyproject.toml` and `_version.txt`; tag runs never write a
+  kustomize commit from detached HEAD.
 
 ## Maintenance mode
 

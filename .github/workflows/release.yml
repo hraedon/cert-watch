@@ -2,6 +2,8 @@ name: release
 on:
   push:
     branches: [main]
+    tags:
+      - 'v*'
     paths-ignore:
       - 'deploy/k8s/kustomization.yaml'
       - 'deploy/k8s-demo/kustomization.yaml'
@@ -13,7 +15,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Run every gate against this workflow's exact commit. Nothing is published
+  # until the application, browser, and deployment suites all succeed.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  e2e:
+    uses: ./.github/workflows/e2e.yml
+
+  deploy-smoke:
+    uses: ./.github/workflows/deploy-smoke.yml
+
   build-and-bump:
+    needs: [ci, e2e, deploy-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -46,6 +60,29 @@ jobs:
           fi
           release_tag="${release_tags[0]:-}"
           echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+
+          # Package metadata is authoritative at runtime. Refuse a semver image
+          # whose tag would disagree with either packaged version source.
+          if [ -n "$release_tag" ]; then
+            metadata_version=$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          with pathlib.Path("pyproject.toml").open("rb") as handle:
+              print(tomllib.load(handle)["project"]["version"])
+          PY
+            )
+            fallback_version=$(grep -v '^#' src/cert_watch/_version.txt | head -n1)
+            tag_version="${release_tag#v}"
+            if [ "$metadata_version" != "$tag_version" ]; then
+              echo "Tag $release_tag disagrees with pyproject.toml version $metadata_version" >&2
+              exit 1
+            fi
+            if [ "$fallback_version" != "$tag_version" ]; then
+              echo "Tag $release_tag disagrees with _version.txt version $fallback_version" >&2
+              exit 1
+            fi
+          fi
 
           {
             echo "image_tags<<EOF"
@@ -110,6 +147,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Bump kustomize image tag
+        if: github.ref == 'refs/heads/main'
         run: |
           KUSTOMIZE_VERSION="v5.4.3"
           KUSTOMIZE_URL="https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize/${KUSTOMIZE_VERSION}/kustomize_${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
@@ -130,6 +168,7 @@ jobs:
           done
 
       - name: Commit tag bump
+        if: github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"

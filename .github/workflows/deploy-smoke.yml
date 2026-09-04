@@ -1,8 +1,7 @@
 name: deploy-smoke
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
+  workflow_call:
+  pull_request:
 
 concurrency:
   group: deploy-smoke-${{ github.ref }}
@@ -374,6 +373,32 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+
+      # The production verifier deliberately fails when preloadEnabled would
+      # be inert. Hosted runners do not enable this IIS role service by default,
+      # so install and verify the real prerequisite instead of weakening the
+      # production preflight for the service-model smoke test.
+      - name: Install IIS Application Initialization prerequisite
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module ServerManager
+          $result = Install-WindowsFeature Web-AppInit
+          if (-not $result.Success) {
+            throw 'Install-WindowsFeature Web-AppInit did not succeed'
+          }
+          $state = Get-WindowsFeature Web-AppInit
+          if (-not $state.Installed) {
+            throw 'Web-AppInit is not installed after Install-WindowsFeature'
+          }
+          $warmup = Join-Path $env:windir 'System32\inetsrv\warmup.dll'
+          if (-not (Test-Path $warmup)) {
+            throw ('Web-AppInit binary is missing: ' + $warmup)
+          }
+          $appHost = Join-Path $env:windir 'System32\inetsrv\config\applicationHost.config'
+          if (-not (Select-String -Path $appHost -Pattern 'name="ApplicationInitializationModule"' -Quiet)) {
+            throw 'ApplicationInitializationModule is not registered after feature install'
+          }
 
       # Parse both PS scripts on Windows PowerShell 5.1 (the production shell, not
       # pwsh 7) to catch the 5.1-only syntax / quoting-codepage class of bug
