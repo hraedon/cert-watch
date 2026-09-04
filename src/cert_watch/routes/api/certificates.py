@@ -182,7 +182,8 @@ def api_check_revocation(
 def api_list_tags(request: Request, _auth: str = Depends(require_auth)) -> JSONResponse:
     from cert_watch.database import distinct_tags
 
-    return JSONResponse(content={"tags": distinct_tags(_db_path(request))})
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    return JSONResponse(content={"tags": distinct_tags(_db_path(request), scope_tags=scope_tags)})
 
 
 @router.put("/api/certificates/{cert_id}/tags")

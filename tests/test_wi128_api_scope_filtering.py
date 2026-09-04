@@ -666,3 +666,24 @@ class TestApiRoutesScopeFiltering:
         assert len(r_evt.json()["events"]) == 3
         assert sum(b["count"] for b in r_cal.json()["buckets"]) == 2
         assert r_rd.json()["total_hosts"] == 2
+
+
+def test_tag_suggestions_follow_visible_resources(db, tmp_path):
+    from cert_watch.database import distinct_tags
+
+    _seed_two_teams(db)
+    with _connect(db) as conn:
+        conn.execute("UPDATE hosts SET tags='team-a,web' WHERE hostname='host-a.example.com'")
+        conn.execute("UPDATE certificates SET tags='certificate-label' WHERE id='cert-a'")
+        _insert_cert(conn, "a" * 32, "host-a.example.com")
+        conn.commit()
+    assert distinct_tags(db, scope_tags=("team-a",)) == ["certificate-label", "team-a", "web"]
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+    with _scoped_client(app, groups) as client:
+        response = client.get("/api/tags")
+        assert response.status_code == 200
+        assert response.json()["tags"] == ["certificate-label", "team-a", "web"]
+        for path in ("/browse", "/certificates/" + "a" * 32):
+            page = client.get(path)
+            assert page.status_code == 200
+            assert 'value="team-b"' not in page.text

@@ -216,7 +216,7 @@ def dashboard(
         name="dashboard.html",
         context={
             "entries": display_entries,
-            "all_tags": distinct_tags(db),
+            "all_tags": distinct_tags(db, scope_tags=scope_tags),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
             "pivot_view": view if (pivot_groups or calendar_data is not None) else "",

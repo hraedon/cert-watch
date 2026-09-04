@@ -42,7 +42,12 @@ from cert_watch.middleware import (
     require_write_form,
 )
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
-from cert_watch.routes._scoped import scope_read_denied, scope_write_denied, tags_with_scope
+from cert_watch.routes._scoped import (
+    scope_read_denied,
+    scope_tags_from_auth,
+    scope_write_denied,
+    tags_with_scope,
+)
 from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
@@ -58,6 +63,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
 
     repo = SqliteCertificateRepository(db)
     cert = repo.get_by_id(cert_id)
@@ -115,7 +121,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                     },
                     "renewal_method_label": rm_label,
                     "renewal_method_indicator": rm_indicator,
-                    "all_tags": distinct_tags(db),
+                    "all_tags": distinct_tags(db, scope_tags=scope_tags),
                     "scan_status": scan_row["status"] if scan_row else None,
                     "scan_error": scan_row["error_message"] if scan_row else None,
                     "scan_at": scan_row["scanned_at"] if scan_row else None,
@@ -396,7 +402,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
         context={
             "cert": cert,
             "cert_id": cert_id,
-            "all_tags": distinct_tags(db),
+            "all_tags": distinct_tags(db, scope_tags=scope_tags),
             "version": __version__,
             "commit": __commit__,
             **auth_ctx,
