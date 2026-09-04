@@ -247,3 +247,25 @@ def test_reports_menu_home_end_nav(page: Page, cert_watch_server: str) -> None:
 # ---------------------------------------------------------------------------
 # Insights page tablist: Home / End switching
 # ---------------------------------------------------------------------------
+
+
+def test_enter_on_tag_link_filters_instead_of_opening_certificate(
+    page: Page, cert_watch_server: str, tmp_path: Path,
+) -> None:
+    """Row keyboard shortcuts must not intercept a nested control's Enter."""
+    pem_path = tmp_path / "keyboard-tag.pem"
+    pem_path.write_bytes(_make_cert_pem("kb-tag.example.com"))
+    _upload_cert(page, cert_watch_server, pem_path, "kb-tag.example.com")
+    row = page.get_by_test_id("cert-row").filter(has_text="kb-tag.example.com")
+    row.click()
+    page.wait_for_url("**/certificates/*")
+    page.get_by_text("Edit tags", exact=True).click()
+    page.locator('input[name="tags"]').fill("keyboard-team")
+    page.get_by_role("button", name="Save tags", exact=True).click()
+    page.goto(f"{cert_watch_server}/browse")
+    link = page.get_by_test_id("cert-row").filter(has_text="kb-tag.example.com").get_by_role(
+        "link", name="keyboard-team", exact=True,
+    )
+    link.focus()
+    link.press("Enter")
+    page.wait_for_url("**/browse?q=keyboard-team", timeout=5000)

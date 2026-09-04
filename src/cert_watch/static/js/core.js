@@ -124,7 +124,9 @@
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     var el = e.target.closest('[data-href][tabindex], [data-expand][tabindex]');
-    if (!el) return;
+    // Nested links and form controls own their native keyboard activation.
+    // Only synthesize a click when focus is on the row itself.
+    if (!el || e.target !== el) return;
     e.preventDefault();
     el.click();
   });
