@@ -74,6 +74,17 @@ def test_attention_actions_reveal_on_hover(
     expect(action).to_have_css("opacity", "1")
 
 
+def test_mobile_closed_drawer_has_no_shadow_and_filters_scroll(
+    page: Page, cert_watch_server: str
+) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{cert_watch_server}/browse")
+    expect(page.locator(".cw-drawer")).to_have_css("box-shadow", "none")
+    mode_picker = page.locator('.cw-filterbar .cw-seg[aria-label="Group certificates"]')
+    expect(mode_picker).to_have_css("overflow-x", "auto")
+    assert mode_picker.evaluate("el => el.scrollWidth > el.clientWidth")
+
+
 def test_add_slide_tabs_switch(page: Page, cert_watch_server: str) -> None:
     """The Add-host slide-over opens and its tabs switch (scan/upload/bulk)."""
     page.goto(f"{cert_watch_server}/browse")

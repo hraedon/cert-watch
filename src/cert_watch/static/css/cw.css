@@ -512,11 +512,10 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
 .cw-drawer {
   position: fixed; top: 0; right: 0; bottom: 0; width: 452px; max-width: 92vw;
   background: var(--panel); border-left: 1px solid var(--border);
-  box-shadow: -16px 0 48px rgba(0,0,0,.4);
   transform: translateX(100%); transition: transform .26s cubic-bezier(.3,.8,.3,1);
   z-index: 41; display: flex; flex-direction: column;
 }
-.cw-drawer.on { transform: translateX(0); }
+.cw-drawer.on { transform: translateX(0); box-shadow: -16px 0 48px rgba(0,0,0,.4); }
 .cw-drawer-head { display: flex; align-items: flex-start; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--border); }
 .cw-drawer-title { margin: 0; font-size: var(--fs-md); font-weight: 600; }
 .cw-drawer-body { flex: 1; overflow: auto; padding: 20px; }
@@ -666,6 +665,7 @@ details.cw-editor > .cw-editor-body { margin-top: var(--space-3); display: flex;
   .cw-table { min-width: 640px; }
   .cw-page-head { flex-direction: column; align-items: flex-start; gap: 12px; }
   .cw-search input { width: 100%; }
+  .cw-filterbar .cw-seg { max-width: 100%; overflow-x: auto; }
 }
 
 /* ---------- DETAIL LAYOUT ---------- */

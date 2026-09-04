@@ -111,7 +111,7 @@ class TestLDAPLogin:
         page.get_by_test_id("login-password").fill(os.environ["LDAP_TEST_PASSWORD"])
         page.get_by_test_id("login-submit-btn").click()
         page.wait_for_url(f"{ldap_server}/", timeout=10000)
-        expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
+        expect(page.get_by_test_id("home-heading")).to_be_visible()
 
     def test_wrong_password(self, page, ldap_server):
         """Wrong password yields an error, not a crash."""

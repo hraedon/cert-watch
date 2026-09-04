@@ -22,7 +22,7 @@ surface is the per-item "scan now" button, which posts to the pre-existing
 
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
-| ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` dropped by migration 0031 (merged into `hosts.notes`) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
+| ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` merged by migration 0031 (deprecated column retained for unmatched notes) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
 | Own tags | `certificates.tags` | Text input (datalist), cert detail — `certificate_detail.html:370-374` | `POST /certificates/{id}/tags` (routes/certificates.py:516); `PUT /api/certificates/{id}/tags` (routes/api/certificates.py:216) (no UI caller) | Cert-detail tags editor (host tags inherited, shown `(host)` — OK) |
 | Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` (routes/certificates.py:674); `POST /certificates/{id}/delete` (:459) | As-is |
 
@@ -72,7 +72,7 @@ surface is the per-item "scan now" button, which posts to the pre-existing
   migration **0031** concatenates every non-empty `certificates.notes` into
   the matching `hosts.notes` (matched on hostname+port) and drops the column only when no unmatched notes remain.
   Notes on uploaded certificates with **no matching host row** cannot be
-  merged — they survive only in the migration runner's pre-migration backup
+  merged — they remain in the live deprecated column and the pre-migration backup
   and are listed in a `WARNING` log (`cert_watch.migrations.0031`).
   Both endpoints removed: `POST /certificates/{id}/notes`,
   `PATCH /api/certificates/{id}/notes`. The single "Notes" panel is scoped
