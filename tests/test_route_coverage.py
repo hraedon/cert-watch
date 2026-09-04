@@ -5,6 +5,9 @@ Plan 024 Slice 1 — read/render paths, filter branches, error paths.
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
@@ -63,6 +66,37 @@ def test_readyz_db_error(monkeypatch, reload_app):
     data = r.json()
     assert data["status"] == "degraded"
     monkeypatch.setattr(views_mod, "_connect", orig)
+
+
+def test_readyz_non_busy_write_error_is_degraded(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class WriteFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if sql.startswith("UPDATE kv_store"):
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return self.conn.execute(sql, params)
+
+        def commit(self):
+            return self.conn.commit()
+
+    @contextmanager
+    def write_failing_connect(db):
+        with original_connect(db) as conn:
+            yield WriteFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", write_failing_connect)
+        response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["db_write"] == "error"
 
 
 def test_readyz_shallow_body_when_unauthenticated(reload_app):
@@ -170,6 +204,65 @@ def test_api_health_with_scan_and_alerts(tmp_path, reload_app):
     data = r.json()
     assert data["last_scan_status"] == "failure"
     assert data["overall"] == "warning"
+
+
+def test_api_health_scan_query_error_is_critical(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class ScanFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if "FROM scan_history" in sql:
+                raise sqlite3.OperationalError("scan history unavailable")
+            return self.conn.execute(sql, params)
+
+    @contextmanager
+    def scan_failing_connect(db):
+        with original_connect(db) as conn:
+            yield ScanFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", scan_failing_connect)
+        response = client.get("/api/health")
+
+    data = response.json()
+    assert data["last_scan_at"] is None
+    assert data["last_scan_status"] is None
+    assert data["overall"] == "critical"
+
+
+def test_api_health_alert_query_error_is_critical(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class AlertFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if "FROM alerts" in sql:
+                raise sqlite3.OperationalError("alerts unavailable")
+            return self.conn.execute(sql, params)
+
+    @contextmanager
+    def alert_failing_connect(db):
+        with original_connect(db) as conn:
+            yield AlertFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", alert_failing_connect)
+        response = client.get("/api/health")
+
+    data = response.json()
+    assert data["failed_alerts_24h"] == 0
+    assert data["overall"] == "critical"
 
 
 # ---------- favicon ----------
@@ -777,9 +870,9 @@ def test_certificate_detail_host_info_acme(reload_app, tmp_path, leaf_pem_file):
                         follow_redirects=False)
     assert r.status_code == 200
     assert "acme.example.com" in r.text  # the detail page, not a redirect
-    # ACME hosts render the "ACME" label and the "auto-renews" indicator chip.
+    # ACME hosts render the "ACME" label and the "automation configured" indicator chip.
     assert "ACME" in r.text
-    assert "auto-renews" in r.text
+    assert "automation configured" in r.text
     assert "Ops Team" in r.text
 
 
@@ -808,9 +901,9 @@ def test_certificate_detail_host_info_cert_manager(reload_app, tmp_path):
         r = client.get(f"/certificates/{_stored_cert_id(db, 'cm.example.com')}",
                         follow_redirects=False)
     assert r.status_code == 200
-    # cert-manager is also an automated renewer → "auto-renews" indicator.
+    # cert-manager is also an automated renewer → "automation configured" indicator.
     assert "cert-manager" in r.text
-    assert "auto-renews" in r.text
+    assert "automation configured" in r.text
 
 
 def test_certificate_detail_host_info_manual(reload_app, tmp_path):
@@ -841,7 +934,7 @@ def test_certificate_detail_host_info_manual(reload_app, tmp_path):
     # Manual renewal must be flagged distinctly from the auto-renewers.
     assert "Manual" in r.text
     assert "requires manual action" in r.text
-    assert "auto-renews" not in r.text
+    assert "automation configured" not in r.text
 
 
 def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
@@ -871,7 +964,7 @@ def test_certificate_detail_host_info_custom_method(reload_app, tmp_path):
     assert r.status_code == 200
     # An unknown method is title-cased as-is with no auto/manual indicator.
     assert "Terraform" in r.text
-    assert "auto-renews" not in r.text
+    assert "automation configured" not in r.text
     assert "requires manual action" not in r.text
 
 

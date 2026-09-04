@@ -20,7 +20,7 @@ def _build_dashboard_rows(
     anchor_rows: list[Any],
 ) -> list[dict[str, Any]]:
     """Build rich dashboard rows from raw certificate and anchor rows."""
-    from cert_watch.cert_chain import chain_status
+    from cert_watch.cert_chain import chain_status, display_urgency
 
     # anchor_rows come from trust_anchors, which lacks the certificate-only
     # columns (is_leaf, source) that _row_to_cert reads — default them.
@@ -73,9 +73,7 @@ def _build_dashboard_rows(
         leaf_cert = _row_to_cert(leaf)
         chain_certs = [_row_to_cert(c) for c in chain]
         _chain_status = chain_status(leaf_cert, chain_certs, anchors)
-        row_urgency = _urgency(min_days)
-        if _chain_status in ("incomplete", "invalid") and row_urgency == "healthy":
-            row_urgency = "warning"
+        row_urgency = display_urgency(_urgency(min_days), _chain_status)
         dash.append(
             {
                 "id": leaf["id"],

@@ -9,7 +9,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
+from cert_watch.database import (
+    SqliteAlertRepository,
+    SqliteCertificateRepository,
+    SqliteHostRepository,
+    init_schema,
+)
 from cert_watch.database.repo import Alert
 from tests._helpers import seed_scanned
 
@@ -45,7 +50,10 @@ class TestQueueAssembly:
         from cert_watch.attention import build_attention_queue
 
         _seed(db, "ok", 90, renewal_method="acme")
-        assert build_attention_queue(db) == []
+        queue = build_attention_queue(db)
+        assert len(queue) == 1
+        assert queue[0]["kind"] == "chain_unknown"
+        assert "issuer certificate" in queue[0]["reasons"][0]
 
     def test_expired_is_first(self, db: Path):
         from cert_watch.attention import build_attention_queue
@@ -98,6 +106,75 @@ class TestQueueAssembly:
         # The same cert must not also appear as a plain expiry item.
         assert [i["cert_id"] for i in q].count(cert_id) == 1
 
+    def test_grouped_stall_uses_affected_deployment(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        cert = _mk_cert("shared", 20)
+        hosts = SqliteHostRepository(db)
+        hosts.add("a.example.com", 443, renewal_method="acme")
+        hosts.add("z.example.com", 443, renewal_method="manual")
+        first_id = seed_scanned(db, "a.example.com", 443, cert)
+        affected_id = seed_scanned(db, "z.example.com", 443, cert)
+        SqliteAlertRepository(db).create(
+            Alert(
+                cert_id=affected_id,
+                alert_type="renewal_stalled",
+                status="pending",
+                message="stalled",
+            )
+        )
+
+        stalled = [item for item in build_attention_queue(db) if item["kind"] == "renewal_stalled"]
+        assert len(stalled) == 1
+        assert stalled[0]["cert_id"] == affected_id
+        assert stalled[0]["cert_id"] != first_id
+        assert stalled[0]["host"] == "z.example.com:443"
+        assert stalled[0]["confidence_label"] == "manual renewal"
+
+    def test_configured_automation_is_not_claimed_as_observed(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        _seed(db, "auto-wording", 20, renewal_method="acme")
+        item = build_attention_queue(db)[0]
+        assert item["confidence_label"] == "automation configured"
+
+    def test_uploaded_expiry_has_replacement_guidance(self, db: Path):
+        from cert_watch.attention import build_attention_queue
+
+        SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", 20))
+
+        item = build_attention_queue(db)[0]
+        assert item["kind"] == "expiry"
+        assert item["host_id"] is None
+        assert item["reasons"][-1] == "upload replacement certificate"
+        assert "renewal unknown" not in item["reasons"]
+
+    def test_deployment_endpoint_prefers_host_over_certificate_name(
+        self, db: Path, monkeypatch
+    ):
+        import cert_watch.database as database
+        from cert_watch.attention import build_attention_queue
+
+        deployment = {
+            "id": "cert-1",
+            "kind": "scanned",
+            "source": "scanned",
+            "name": "*.example.com",
+            "host": "api.example.com:443",
+            "host_id": "host-1",
+            "days_remaining": 20,
+            "chain_status": "public",
+            "renewal_method": "manual",
+        }
+        monkeypatch.setattr(
+            database,
+            "list_dashboard_grouped_page",
+            lambda *args, **kwargs: ([{"kind": "grouped", "hosts": [deployment]}], 1),
+        )
+
+        item = build_attention_queue(db)[0]
+        assert item["endpoint"] == "api.example.com:443"
+
     def test_sent_stalled_alert_is_not_queued(self, db: Path):
         from cert_watch.attention import build_attention_queue
 
@@ -121,6 +198,7 @@ class TestQueueAssembly:
         from datetime import UTC as _UTC
 
         from cert_watch.database.connection import _connect
+
         with _connect(db) as conn:
             conn.execute(
                 "INSERT INTO scan_history (id, hostname, port, status, scanned_at, error_message)"
@@ -207,8 +285,6 @@ class TestHomeAndBrowseRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/")
         assert r.status_code == 200
-        expiring = r.text.split('data-testid="home-expiring-stat"', 1)[1].split(
-            "</a>", 1
-        )[0]
+        expiring = r.text.split('data-testid="home-expiring-stat"', 1)[1].split("</a>", 1)[0]
         assert '<div class="cw-stat-val">0</div>' in expiring
         assert "No expirations in the next 12 weeks" in r.text

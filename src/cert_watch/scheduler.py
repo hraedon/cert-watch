@@ -466,7 +466,8 @@ def _check_renewal_overdue(
         from cert_watch.renewal_analytics import detect_renewal_overdue
 
         cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
-        already_emitted: set[tuple[str, str]] = set()
+        already_emitted: set[tuple[str, int | None, str]] = set()
+        legacy_emitted: set[tuple[str, str]] = set()
         with _conn(db_path) as conn:
             rows = conn.execute(
                 """SELECT payload FROM event_log
@@ -477,8 +478,20 @@ def _check_renewal_overdue(
         for r in rows:
             try:
                 p = _json.loads(r["payload"])
-                already_emitted.add((p["hostname"], p["cert_fingerprint"]))
-            except (KeyError, _json.JSONDecodeError):
+                if not isinstance(p, dict):
+                    continue
+                hostname = p.get("hostname")
+                fingerprint = p.get("cert_fingerprint")
+                event_port = p.get("port")
+                if not isinstance(hostname, str) or not isinstance(fingerprint, str):
+                    continue
+                if event_port is None:
+                    # Old payloads represented a hostname-wide identity. Keep
+                    # that 24-hour suppression contract after adding ports.
+                    legacy_emitted.add((hostname, fingerprint))
+                elif type(event_port) is int and 1 <= event_port <= 65535:
+                    already_emitted.add((hostname, event_port, fingerprint))
+            except (_json.JSONDecodeError, TypeError):
                 pass
 
         seen: set[tuple[str, int]] = set()
@@ -488,7 +501,10 @@ def _check_renewal_overdue(
             seen.add((hostname, port))
             signal = detect_renewal_overdue(db_path, hostname, port=port)
             if signal is not None:
-                if (signal.hostname, signal.cert_fingerprint) in already_emitted:
+                if (
+                    (signal.hostname, port, signal.cert_fingerprint) in already_emitted
+                    or (signal.hostname, signal.cert_fingerprint) in legacy_emitted
+                ):
                     continue
                 emit_event(
                     Event(
@@ -496,6 +512,7 @@ def _check_renewal_overdue(
                         timestamp=datetime.now(UTC),
                         payload={
                             "hostname": signal.hostname,
+                            "port": port,
                             "cert_fingerprint": signal.cert_fingerprint,
                             "days_remaining": signal.days_remaining,
                             "expected_renewal_at_days": signal.expected_renewal_at_days,
@@ -506,7 +523,7 @@ def _check_renewal_overdue(
                     ),
                     db_path,
                 )
-                already_emitted.add((signal.hostname, signal.cert_fingerprint))
+                already_emitted.add((signal.hostname, port, signal.cert_fingerprint))
                 _send_renewal_webhook_if_configured(
                     signal, hostname, port, db_path, settings=settings,
                 )

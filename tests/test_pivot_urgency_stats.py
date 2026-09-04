@@ -7,6 +7,7 @@ space-separated, so ``'…T17:00…' < '… 20:00'`` is *false* for a cert that
 expired earlier the same UTC day — it was misbucketed as not-expired.  The fix
 uses ``julianday()`` for the boundary.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -52,12 +53,13 @@ def _add_leaf(db, subject, *, not_after):
     replace_scanned(db, host, port, cert, [], True)
 
 
-def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
+def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path, monkeypatch):
     """A cert that expired a few hours ago today must count as expired.
 
     This is the exact case the old string compare missed: same UTC date, so the
     'T' (0x54) vs ' ' (0x20) separator made the stored value sort *after* now.
     """
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     now = datetime.now(UTC)
@@ -71,13 +73,42 @@ def test_pivot_stats_counts_same_day_expiry_as_expired(tmp_path):
     assert stats["warning"] == 0
 
 
-def test_pivot_stats_are_tag_scoped(tmp_path):
+def test_dashboard_stats_match_chain_aware_row_urgency(tmp_path, chain_pem_file):
+    from cert_watch.database import (
+        dashboard_expiry_stats,
+        dashboard_urgency_stats,
+        list_dashboard_page,
+    )
+    from cert_watch.upload import store_uploaded, upload_certificate
+
+    db = tmp_path / "chain-stats.sqlite3"
+    store_uploaded(upload_certificate(chain_pem_file), db)
+
+    rows, _ = list_dashboard_page(db, per_page=0)
+    assert rows[0]["chain_status"] == "incomplete"
+    assert rows[0]["urgency"] == "warning"
+    assert dashboard_urgency_stats(db) == {
+        "expired": 0,
+        "critical": 0,
+        "warning": 1,
+        "healthy": 0,
+    }
+    assert dashboard_expiry_stats(db) == {
+        "expired": 0,
+        "critical": 0,
+        "warning": 0,
+        "healthy": 1,
+    }
+
+
+def test_pivot_stats_are_tag_scoped(tmp_path, monkeypatch):
     """A scoped user's summary cards must count only certs in their tag scope.
 
     Mirrors list_fleet_pivot's scoped population so the cards agree with the
     grouped rows; previously the cards aggregated every leaf cert globally,
     leaking out-of-scope counts to tag-scoped (non-admin) users.
     """
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     hosts = SqliteHostRepository(db)
@@ -118,24 +149,32 @@ def test_pivot_stats_are_tag_scoped(tmp_path):
     repo.set_tags(cert_id, "team-c")
 
     # Admin (no scope) sees everything.
-    assert pivot_urgency_stats(db) == {
-        "expired": 2, "critical": 1, "warning": 0, "healthy": 1
-    }
+    assert pivot_urgency_stats(db) == {"expired": 2, "critical": 1, "warning": 0, "healthy": 1}
     # Scoped to team-a: only the one expired team-a cert.
     assert pivot_urgency_stats(db, scope_tags=["team-a"]) == {
-        "expired": 1, "critical": 0, "warning": 0, "healthy": 0
+        "expired": 1,
+        "critical": 0,
+        "warning": 0,
+        "healthy": 0,
     }
     # Scoped to team-b: one expired + one healthy.
     assert pivot_urgency_stats(db, scope_tags=["team-b"]) == {
-        "expired": 1, "critical": 0, "warning": 0, "healthy": 1
+        "expired": 1,
+        "critical": 0,
+        "warning": 0,
+        "healthy": 1,
     }
     # Scoped to team-c: matched via the cert's own tag (host untagged).
     assert pivot_urgency_stats(db, scope_tags=["team-c"]) == {
-        "expired": 0, "critical": 1, "warning": 0, "healthy": 0
+        "expired": 0,
+        "critical": 1,
+        "warning": 0,
+        "healthy": 0,
     }
 
 
-def test_pivot_stats_bucket_boundaries(tmp_path):
+def test_pivot_stats_bucket_boundaries(tmp_path, monkeypatch):
+    monkeypatch.setattr("cert_watch.cert_chain.chain_status", lambda *args: "public")
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     now = datetime.now(UTC)

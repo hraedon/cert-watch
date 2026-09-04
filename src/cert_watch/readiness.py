@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,6 +33,7 @@ class HostReadiness:
     current_lifetime: int | None
     margins: list[dict[str, Any]] = field(default_factory=list)
     chain_status: str | None = None
+    port: int | None = None
 
 
 @dataclass
@@ -59,28 +59,30 @@ class ReadinessReport:
 
 
 
-def _batch_chain_statuses(db_path: str | Path, hostnames: list[str]) -> dict[str, str | None]:
-    if not hostnames:
+def _batch_chain_statuses(
+    db_path: str | Path, endpoints: list[tuple[str, int | None]]
+) -> dict[tuple[str, int | None], str | None]:
+    if not endpoints:
         return {}
+    # Read the latest stored posture for each exact endpoint. A hostname can
+    # serve unrelated public and private certificates on different ports.
+    hostnames = sorted({hostname for hostname, _port in endpoints})
     placeholders = ",".join("?" * len(hostnames))
     with _connect(db_path) as conn:
         rows = conn.execute(
-            f"""SELECT c.hostname, sp.chain_status FROM scan_posture sp
+            f"""SELECT c.hostname, c.port, sp.chain_status FROM scan_posture sp
                 JOIN certificates c ON c.id = sp.cert_id
                 WHERE c.is_leaf = 1 AND c.hostname IN ({placeholders})
-                ORDER BY sp.scanned_at DESC""",
+                ORDER BY sp.scanned_at DESC, sp.rowid DESC""",
             hostnames,
         ).fetchall()
-    # First (latest) row wins, even when its chain_status is NULL — a `seen`
-    # set rather than a sentinel value keeps NULL from looking like "no row"
-    # (the NULL-collision bug this replaced).
-    result: dict[str, str | None] = dict.fromkeys(hostnames)
-    seen: set[str] = set()
+    result: dict[tuple[str, int | None], str | None] = dict.fromkeys(endpoints)
+    seen: set[tuple[str, int | None]] = set()
     for row in rows:
-        hn = row["hostname"]
-        if hn in result and hn not in seen:
-            result[hn] = row["chain_status"]
-            seen.add(hn)
+        endpoint = (row["hostname"], row["port"])
+        if endpoint in result and endpoint not in seen:
+            result[endpoint] = row["chain_status"]
+            seen.add(endpoint)
     return result
 
 
@@ -121,12 +123,13 @@ def _compute_host_readiness(
 ) -> HostReadiness:
     lead_time = analytics.median_lead_time
     lifetimes = analytics.observed_lifetimes
-    current_lifetime = int(statistics.median(lifetimes)) if lifetimes else None
+    current_lifetime = lifetimes[-1] if lifetimes else None
 
     is_private = chain_status == "private"
 
     return HostReadiness(
         hostname=analytics.hostname,
+        port=analytics.port,
         classification=analytics.automation_classification,
         current_lead_time=lead_time,
         current_lifetime=current_lifetime,
@@ -165,7 +168,9 @@ def _compute_workload_forecast(
             if m.get("renew_late"):
                 label = m["milestone"]
                 if label in hosts_by_risk:
-                    hosts_by_risk[label].append(h.hostname)
+                    hosts_by_risk[label].append(
+                        f"{h.hostname}:{h.port}" if h.port not in (None, 443) else h.hostname
+                    )
 
     return WorkloadForecast(
         current_renewals_per_month=round(total_current, 1),
@@ -181,15 +186,15 @@ def build_readiness_report(
     init_schema(db_path)
     fleet = compute_fleet_analytics(db_path, scope_tags=scope_tags)
 
-    hostnames = [a.hostname for a in fleet]
-    chain_statuses = _batch_chain_statuses(db_path, hostnames)
+    endpoints = [(a.hostname, a.port) for a in fleet]
+    chain_statuses = _batch_chain_statuses(db_path, endpoints)
 
     public_hosts: list[HostReadiness] = []
     private_hosts: list[HostReadiness] = []
     unknown_hosts: list[HostReadiness] = []
 
     for a in fleet:
-        cs = chain_statuses.get(a.hostname)
+        cs = chain_statuses.get((a.hostname, a.port))
         readiness = _compute_host_readiness(a, cs)
         if cs == "private":
             private_hosts.append(readiness)
@@ -223,6 +228,7 @@ def readiness_report_to_dict(report: ReadinessReport) -> dict[str, Any]:
     def _host_dict(h: HostReadiness) -> dict[str, Any]:
         return {
             "hostname": h.hostname,
+            "port": h.port,
             "classification": h.classification,
             "current_lead_time": h.current_lead_time,
             "current_lifetime": h.current_lifetime,

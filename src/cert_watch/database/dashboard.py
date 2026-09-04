@@ -13,6 +13,7 @@ The implementation has been decomposed into focused submodules:
 This module re-exports the full public surface so that existing imports
 ``from cert_watch.database.dashboard import X`` continue to work unchanged.
 """
+
 from __future__ import annotations
 
 # --- detail ----------------------------------------------------------------
@@ -100,6 +101,9 @@ from cert_watch.database.dashboard_rows import (
 
 # --- stats -----------------------------------------------------------------
 from cert_watch.database.dashboard_stats import (
+    dashboard_expiry_stats as dashboard_expiry_stats,
+)
+from cert_watch.database.dashboard_stats import (
     dashboard_urgency_stats as dashboard_urgency_stats,
 )
 from cert_watch.database.dashboard_stats import (
@@ -152,6 +156,7 @@ __all__ = [
     "count_dashboard_leaves",
     # stats
     "pivot_urgency_stats",
+    "dashboard_expiry_stats",
     "dashboard_urgency_stats",
     # unified
     "list_unified_entries",

@@ -24,8 +24,8 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
 
     _HIST_SQL = (
         "INSERT INTO cert_history"
-        " (hostname,fingerprint_sha256,issuer,not_after,not_before,scanned_at)"
-        " VALUES (?,?,?,?,?,?)"
+        " (hostname,port,fingerprint_sha256,issuer,not_after,not_before,scanned_at)"
+        " VALUES (?,443,?,?,?,?,?)"
     )
 
     init_schema(db_path)

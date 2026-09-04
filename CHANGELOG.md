@@ -19,6 +19,25 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Release correctness review.** Align inventory counts, row status, and detail
+  status; keep expiry-only Home counts separate from chain trust. Show attention
+  for each affected deployment of a shared certificate, including unknown and
+  self-signed chains. Distinguish configured automation from observed renewal.
+- **Endpoint renewal and readiness analytics.** Preserve port identity, rollback
+  deployment periods, and the latest certificate lifetime. Add `port` to report
+  and analytics results and an optional validated port selector to host analytics.
+  Scope overdue detection and deduplication to the endpoint while retaining
+  legacy-event compatibility.
+- **Accessible mobile investigation.** Present Browse rows as cards, compact
+  primary navigation, keep menus/actions and crypto tables reachable, and preserve
+  native keyboard activation of tag links inside clickable inventory rows.
+- **Scope and health accuracy.** Limit tag suggestions to visible resources;
+  report database write/query failures as degraded instead of healthy. Clarify
+  that digest settings control a shared weekly window, not per-team schedules.
+- **Verified image publication.** Gate images on exact-commit CI, browser/visual,
+  and deployment smoke checks. Support validated version-tag builds without
+  changing `latest` or deployment manifests; install the IIS preload prerequisite
+  in Windows smoke tests without weakening the production verifier.
 - **Certificate detail chain guidance and notes editing.** Preserve public-root
   trust validation after loading certificates from the database, fixing false
   incomplete-chain warnings beside a passing scan grade. Identify the expected

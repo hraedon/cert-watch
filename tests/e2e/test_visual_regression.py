@@ -175,7 +175,9 @@ def test_home_populated_visual(
 ) -> None:
     page.goto(populated_server)
     expect(page.get_by_test_id("home-heading")).to_be_visible()
-    expect(page.get_by_test_id("attention-item")).to_have_count(3)
+    # The seed has three expiring/expired leaves and two long-lived leaves
+    # without an issuing chain. Trust issues also require operator attention.
+    expect(page.get_by_test_id("attention-item")).to_have_count(5)
     page.evaluate("document.fonts.ready")
     page.wait_for_timeout(400)
     assert_snapshot(

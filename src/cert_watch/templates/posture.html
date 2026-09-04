@@ -32,6 +32,9 @@
     {{ ui.stat('Weak primitives', posture.weak_count, 'SHA-1 · RSA<2048 · weak curve', tone='t-warn', icon='alert', testid='crypto-weak-count') }}
     {{ ui.stat('Key families', posture.families | length, 'algorithm families in use', icon='key') }}
   </div>
+  {% if posture.total and not fleet_grade %}
+  <div class="cw-note">{{ icons.svg_icon('info', 14) }}Crypto inventory includes uploaded certificate files. Fleet grades and TLS trends appear after a live host scan records connection posture.</div>
+  {% endif %}
 
   {# ---- Trends ---- #}
   <div class="cw-grid-2">

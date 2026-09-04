@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -132,6 +133,21 @@ def test_chain_status_self_signed_not_in_system_store(self_signed_leaf, monkeypa
 def test_chain_status_unknown_no_chain(chain_triplet):
     leaf = parse_certificate(chain_triplet["leaf"].der)
     assert chain_status(leaf, [], []) == "unknown"
+
+
+@pytest.mark.parametrize("status", ["unknown", "self-signed", "incomplete", "invalid"])
+def test_display_urgency_warns_for_actionable_chain_status(status):
+    from cert_watch.cert_chain import display_urgency
+
+    assert display_urgency("healthy", status) == "warning"
+
+
+def test_display_urgency_preserves_expiry_severity_and_trusted_health():
+    from cert_watch.cert_chain import display_urgency
+
+    assert display_urgency("critical", "unknown") == "critical"
+    assert display_urgency("healthy", "public") == "healthy"
+    assert display_urgency("healthy", "private") == "healthy"
 
 
 def test_chain_status_leaf_only_directly_anchored(chain_triplet):

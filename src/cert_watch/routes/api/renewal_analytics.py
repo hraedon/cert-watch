@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.middleware import require_auth
@@ -27,9 +28,12 @@ def api_renewal_analytics(
 
 @router.get("/api/renewal-analytics/{hostname}")
 def api_renewal_analytics_host(
-    hostname: str, request: Request, _auth: str = Depends(require_auth)
+    hostname: str,
+    request: Request,
+    _auth: str = Depends(require_auth),
+    port: Annotated[int | None, Query(ge=1, le=65535)] = None,
 ) -> JSONResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-    analytics = compute_host_analytics(db, hostname, scope_tags=scope_tags)
+    analytics = compute_host_analytics(db, hostname, port=port, scope_tags=scope_tags)
     return JSONResponse(content=asdict(analytics))

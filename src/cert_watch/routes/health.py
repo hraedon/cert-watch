@@ -25,6 +25,15 @@ logger = logging.getLogger("cert_watch.routes.health")
 router = APIRouter()
 
 
+def _is_sqlite_busy(exc: sqlite3.OperationalError) -> bool:
+    """Return whether a write failed only because another transaction owns the DB."""
+    code = getattr(exc, "sqlite_errorcode", None)
+    if code in {sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED}:
+        return True
+    message = str(exc).lower()
+    return "database is locked" in message or "database table is locked" in message
+
+
 @router.get("/healthz")
 def healthz(request: Request) -> dict[str, str]:
     """Lightweight liveness probe — process is alive.
@@ -86,9 +95,14 @@ def readyz(request: Request) -> JSONResponse:
                     )
                 conn.commit()
             checks["db_write"] = "ok"
-        except sqlite3.OperationalError:
-            logger.debug("readyz heartbeat write failed (DB busy), continuing")
-            checks["db_write"] = "ok"
+        except sqlite3.OperationalError as exc:
+            if _is_sqlite_busy(exc):
+                logger.debug("readyz heartbeat write failed (DB busy), continuing")
+                checks["db_write"] = "ok"
+            else:
+                logger.warning("readyz heartbeat write failed", exc_info=True)
+                checks["db_write"] = "error"
+                ok = False
     # Scheduler
     from cert_watch.scheduler import _scheduler_thread
     if _scheduler_thread is not None and _scheduler_thread.is_alive():
@@ -110,6 +124,9 @@ def readyz(request: Request) -> JSONResponse:
         checks["expired"] = str(expired_row[0] if expired_row else 0)
     except Exception:
         logger.warning("readyz cert count query failed", exc_info=True)
+        checks["certificates"] = "error"
+        checks["expired"] = "error"
+        ok = False
     # Shallow body for unauthenticated callers under an auth provider; open
     # mode (no provider) and authenticated callers get the full detail.
     # /readyz is a public path, so auth_middleware never runs on it and
@@ -147,6 +164,8 @@ def api_health(request: Request) -> JSONResponse:
     """Structured health data for the dashboard banner."""
     db = _db_path(request)
     checks: dict[str, object] = {}
+    scan_query_ok = True
+    alert_query_ok = True
 
     # Scheduler
     from cert_watch.scheduler import _scheduler_thread
@@ -168,8 +187,10 @@ def api_health(request: Request) -> JSONResponse:
             checks["last_scan_at"] = None
             checks["last_scan_status"] = None
     except Exception:
+        logger.warning("health scan history query failed", exc_info=True)
         checks["last_scan_at"] = None
         checks["last_scan_status"] = None
+        scan_query_ok = False
 
     # Failed alerts in last 24h
     try:
@@ -181,7 +202,9 @@ def api_health(request: Request) -> JSONResponse:
             ).fetchone()
         checks["failed_alerts_24h"] = row[0] if row else 0
     except Exception:
+        logger.warning("health failed-alert query failed", exc_info=True)
         checks["failed_alerts_24h"] = 0
+        alert_query_ok = False
 
     # Auth status
     auth = getattr(request.app.state, "auth_provider", None)
@@ -198,7 +221,7 @@ def api_health(request: Request) -> JSONResponse:
             conn.execute("SELECT 1").fetchone()
     except Exception:
         db_ok = False
-    if not db_ok or not checks["scheduler_running"]:
+    if not db_ok or not scan_query_ok or not alert_query_ok or not checks["scheduler_running"]:
         overall = "critical"
     elif (
         (checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0

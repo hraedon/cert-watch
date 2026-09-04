@@ -17,6 +17,7 @@ from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
     SqliteAlertRepository,
+    dashboard_expiry_stats,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -66,7 +67,7 @@ def home(
     scope_tags = scope_tags_from_auth(auth_ctx)
 
     items = build_attention_queue(db, scope_tags=scope_tags)
-    stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
+    stats = dashboard_expiry_stats(db, scope_tags=scope_tags)
 
     # Next-12-weeks horizon with storm markers (same bucket query as the
     # calendar view on /browse).
@@ -216,7 +217,7 @@ def dashboard(
         name="dashboard.html",
         context={
             "entries": display_entries,
-            "all_tags": distinct_tags(db),
+            "all_tags": distinct_tags(db, scope_tags=scope_tags),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
             "pivot_view": view if (pivot_groups or calendar_data is not None) else "",

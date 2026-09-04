@@ -19,16 +19,29 @@ from cert_watch.database.connection import (
 from cert_watch.database.schema import init_schema
 
 
-def distinct_tags(db_path: str | Path) -> list[str]:
-    """Return the sorted set of distinct tags across all hosts and certificates."""
+def distinct_tags(
+    db_path: str | Path, *, scope_tags: tuple[str, ...] = ()
+) -> list[str]:
+    """Return tags from resources visible under the effective-tag scope."""
+    from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
     from cert_watch.tags import merge_tags
 
     init_schema(db_path)
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT tags FROM hosts UNION ALL SELECT tags FROM certificates"
-        ).fetchall()
-    all_tags = merge_tags(*[r["tags"] for r in rows])
+        host_sql, host_params = _add_effective_tag_filter(
+            "SELECT h.tags FROM hosts h WHERE 1=1", [], scope_tags, col_cert=None,
+        )
+        cert_sql, cert_params = _add_effective_tag_filter(
+            "SELECT c.tags, h.tags AS host_tags FROM certificates c "
+            "LEFT JOIN hosts h ON c.hostname=h.hostname AND c.port=h.port WHERE 1=1",
+            [], scope_tags,
+        )
+        host_rows = conn.execute(host_sql, host_params).fetchall()
+        cert_rows = conn.execute(cert_sql, cert_params).fetchall()
+    all_tags = merge_tags(
+        *[r["tags"] for r in host_rows],
+        *[value for r in cert_rows for value in (r["tags"], r["host_tags"])],
+    )
     return sorted(all_tags, key=str.casefold)
 
 

@@ -184,7 +184,7 @@
             {% call detail_field('Renewal') %}
               {{ renewal_method_label or '—' }}
               {% if renewal_method_indicator %}
-                <span class="cw-chip {{ 't-ok' if renewal_method_indicator == 'auto-renews' else 't-warn' }}">{{ renewal_method_indicator }}</span>
+                <span class="cw-chip t-neutral">{{ renewal_method_indicator }}</span>
               {% endif %}
             {% endcall %}
             {% if not cert %}

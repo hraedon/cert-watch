@@ -14,6 +14,19 @@ from cert_watch.certificate_model import Certificate, parse_certificate
 
 logger = logging.getLogger("cert_watch.cert_chain")
 
+ACTIONABLE_CHAIN_STATUSES = frozenset({"unknown", "self-signed", "incomplete", "invalid"})
+
+
+def display_urgency(expiry_urgency: str, chain_status: str | None) -> str:
+    """Apply the chain-attention floor used by composite UI status.
+
+    Expiry severity remains authoritative when already actionable. This does
+    not alter certificate grades or trust decisions.
+    """
+    if expiry_urgency == "healthy" and chain_status in ACTIONABLE_CHAIN_STATUSES:
+        return "warning"
+    return expiry_urgency
+
 
 class _AnchorLike(Protocol):
     """Minimal protocol for chain-status anchors.

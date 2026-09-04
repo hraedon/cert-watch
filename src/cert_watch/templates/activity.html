@@ -8,7 +8,7 @@
 <div class="cw-wrap">
   {# ---- Page header (per-tab subtitle + actions) ---- #}
   {% if tab == 'alerts' %}
-    {% set head_sub = 'Expiry & scan notifications sent via email and webhook.' %}
+    {% set head_sub = 'Certificate alerts, delivery status, and items awaiting attention.' %}
     {% set head_testid = 'alerts-heading' %}
   {% elif tab == 'scans' %}
     {% set head_sub = 'TLS handshakes performed on tracked hosts, scheduled and on-demand.' %}
@@ -25,11 +25,11 @@
       {% if may_write %}
       <form method="post" action="/alerts/mark-all-read" class="cw-inline">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="cw-btn ghost" data-action="mark-all-read">{{ icons.svg_icon('check', 13) }}Mark all read</button>
+        <button type="submit" class="cw-btn ghost" data-action="mark-all-read"{% if not alert_counts.unread %} disabled title="No unread alerts"{% endif %}>{{ icons.svg_icon('check', 13) }}Mark all read</button>
       </form>
       <form method="post" action="/alerts/flush" class="cw-inline">
         <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="cw-btn ghost" data-action="flush-queue">{{ icons.svg_icon('send', 13) }}Flush queue</button>
+        <button type="submit" class="cw-btn ghost" data-action="flush-queue"{% if not alert_counts.all %} disabled title="No queued alerts"{% endif %}>{{ icons.svg_icon('send', 13) }}Flush queue</button>
       </form>
       {% endif %}
     {% elif tab == 'scans' %}

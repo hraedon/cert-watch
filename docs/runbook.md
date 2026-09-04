@@ -20,7 +20,12 @@ Data persists in the `cert-watch-data` volume (mounted at `/var/lib/cert-watch` 
 kubectl apply -f deploy/argocd/application.yaml
 ```
 
-Argo CD watches `deploy/k8s/` and syncs automatically. CI builds and pushes a multi-arch image to GHCR on every merge to `main`, then commits the new tag to `deploy/k8s/kustomization.yaml`.
+Argo CD watches `deploy/k8s/` and syncs automatically. On every merge to
+`main`, the release workflow runs CI, browser, visual, LDAP, and deployment
+smoke gates against that exact commit. After every gate passes, it builds and
+pushes a multi-arch image to GHCR, then commits the new tag to
+`deploy/k8s/kustomization.yaml`. Semantic-version tag pushes run the same gates
+and publish the versioned image, but do not change deployment manifests.
 
 ### Direct Kubernetes apply
 
