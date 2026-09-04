@@ -109,7 +109,7 @@
                 href=filter_link('critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
     {{ ui.stat('Warning', pivot_stats.warning, '7–29 days' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
                 href=filter_link('warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
-    {{ ui.stat('Healthy', pivot_stats.healthy, 'no action needed' if pivot_stats.healthy else 'none', tone='t-ok', icon='check-circle',
+    {{ ui.stat('Expiry healthy', pivot_stats.healthy, '30+ days remaining', tone='t-ok', icon='check-circle',
                 href=filter_link('healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
   </div>
 
@@ -190,7 +190,7 @@
       </tbody>
     </table>
     {% else %}
-    <table class="cw-table">
+    <table class="cw-table cw-inventory-table">
       <thead>
         <tr>
           <th>{{ sort_link('name', 'Certificate (CN)') }}</th>
@@ -207,7 +207,7 @@
           {% if e.kind == 'grouped' %}
           {% set urg = e.urgency %}
           <tr data-expand="group-hosts-{{ e.group_id }}" tabindex="0" role="button" aria-expanded="false" aria-controls="group-hosts-{{ e.group_id }}">
-            <td>
+            <td data-label="Certificate">
               <div class="cw-chiprow">
                 <span class="chev">{{ icons.svg_icon('chevron-down', 14) }}</span>
                 <span class="cw-id">{{ e.name or '—' }}</span>
@@ -215,12 +215,12 @@
               </div>
               <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
             </td>
-            <td>{{ tags_cell(e) }}</td>
-            <td>{{ source_cell(e, grouped=true) }}</td>
-            <td>{{ expires_cell(e, urg) }}</td>
-            <td>{{ ui.status(urg) }}</td>
-            <td>{{ grade_cell(e) }}</td>
-            <td>
+            <td data-label="Tags">{{ tags_cell(e) }}</td>
+            <td data-label="Source">{{ source_cell(e, grouped=true) }}</td>
+            <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
+            <td data-label="Status">{{ ui.status(urg) }}</td>
+            <td data-label="Grade">{{ grade_cell(e) }}</td>
+            <td data-label="Action">
               <div class="cw-rowact">
                 <a href="/certificates/{{ e.id }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
               </div>
@@ -254,9 +254,9 @@
             </td>
           </tr>
           {% else %}
-          {% set urg = e.days_remaining | urgency if e.days_remaining is not none else 'gray' %}
+          {% set urg = e.urgency if e.urgency else (e.days_remaining | urgency if e.days_remaining is not none else 'gray') %}
           <tr class="cw-row-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
-            <td>
+            <td data-label="Certificate">
               <div class="cw-chiprow"><span class="cw-id">{{ e.name or (e.host if e.host else '—') }}</span></div>
               <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
               {% if e.san_dns_names %}
@@ -271,12 +271,12 @@
                 {% endif %}
               {% endif %}
             </td>
-            <td>{{ tags_cell(e) }}</td>
-            <td>{{ source_cell(e) }}</td>
-            <td>{{ expires_cell(e, urg) }}</td>
-            <td>{{ ui.status(urg) }}</td>
-            <td>{{ grade_cell(e) }}</td>
-            <td>
+            <td data-label="Tags">{{ tags_cell(e) }}</td>
+            <td data-label="Source">{{ source_cell(e) }}</td>
+            <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
+            <td data-label="Status">{{ ui.status(urg) }}</td>
+            <td data-label="Grade">{{ grade_cell(e) }}</td>
+            <td data-label="Action">
               <div class="cw-rowact">
                 {% if may_write and e.host_id %}
                   <form method="post" action="/hosts/{{ e.host_id }}/scan" class="cw-inline">
