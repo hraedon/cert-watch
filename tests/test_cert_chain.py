@@ -157,6 +157,19 @@ def test_chain_status_leaf_only_indirect_stays_unknown(chain_triplet):
     assert chain_status(leaf, [], [root]) == "unknown"
 
 
+def test_chain_status_leaf_only_direct_system_root(chain_triplet, monkeypatch):
+    """A leaf directly signed by a system root has a complete public chain."""
+    root_x509 = chain_triplet["root"].cert
+    direct_leaf = parse_certificate(chain_triplet["intermediate"].der)
+    root_subject = root_x509.subject.public_bytes(Encoding.DER)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._system_ca_cache",
+        ({root_subject}, {root_subject: [root_x509]}),
+    )
+
+    assert chain_status(direct_leaf, [], []) == "public"
+
+
 def test_chain_status_public_root(chain_pem_bytes, monkeypatch):
     certs = extract_chain_from_pem(chain_pem_bytes.decode())
     monkeypatch.setattr(
@@ -339,6 +352,47 @@ def test_chain_status_genuine_chain_public_root(chain_triplet, monkeypatch):
         "cert_watch.cert_chain._is_anchored_by_system_root", lambda chain: True
     )
     assert chain_status(leaf, [intermediate, root], []) == "public"
+
+
+def test_chain_status_public_survives_database_round_trip(
+    chain_triplet, monkeypatch, tmp_path,
+):
+    """Persisted chain names must compare in the same canonical form as scans."""
+    from cert_watch.database import (
+        SqliteCertificateRepository,
+        _connect,
+        _row_to_cert,
+        init_schema,
+        replace_scanned,
+    )
+
+    db = tmp_path / "chain.sqlite3"
+    leaf = parse_certificate(chain_triplet["leaf"].der)
+    intermediate = parse_certificate(chain_triplet["intermediate"].der)
+    root = parse_certificate(chain_triplet["root"].der)
+    root_x509 = chain_triplet["root"].cert
+    root_subject = root_x509.subject.public_bytes(Encoding.DER)
+    monkeypatch.setattr(
+        "cert_watch.cert_chain._system_ca_cache",
+        ({root_subject}, {root_subject: [root_x509]}),
+    )
+    assert chain_status(leaf, [intermediate, root], []) == "public"
+
+    init_schema(db)
+    repo = SqliteCertificateRepository(db)
+    leaf_id, _ = replace_scanned(
+        db, "chain-leaf.example.com", 443, leaf, [intermediate, root], None
+    )
+    stored_leaf = repo.get_by_id(leaf_id)
+    with _connect(db) as conn:
+        rows = conn.execute(
+            "SELECT * FROM certificates WHERE parent_cert_id = ? ORDER BY rowid",
+            (leaf_id,),
+        ).fetchall()
+    stored_chain = [_row_to_cert(row) for row in rows]
+
+    assert stored_leaf is not None
+    assert chain_status(stored_leaf, stored_chain, []) == "public"
 
 
 def test_self_signed_cert_still_scans_no_inventory_regression(self_signed_leaf):

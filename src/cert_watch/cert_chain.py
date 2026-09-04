@@ -24,6 +24,8 @@ class _AnchorLike(Protocol):
 
     fingerprint_sha256: str
     raw_der: bytes
+    subject: str
+    issuer: str
 
 
 def extract_chain(der_bytes: bytes) -> list[Certificate]:
@@ -72,22 +74,39 @@ def _mark_leaf(certs: list[Certificate]) -> None:
         c.is_leaf = i == 0
 
 
-def _subject_bytes(cert: Certificate) -> bytes:
+def _name_bytes(cert: Certificate | _AnchorLike, attribute: str) -> bytes:
+    """Return a canonical DER Name, including after a database round trip."""
+    is_subject = attribute == "subject"
+    cached = getattr(cert, "subject_der" if is_subject else "issuer_der", b"")
+    if cached:
+        return bytes(cached)
+    if cert.raw_der:
+        try:
+            parsed = x509.load_der_x509_certificate(cert.raw_der)
+            name = parsed.subject if is_subject else parsed.issuer
+            return name.public_bytes(Encoding.DER)
+        except (ValueError, TypeError):
+            pass
+    name_text = cert.subject if is_subject else cert.issuer
+    return name_text.encode("utf-8")
+
+
+def _subject_bytes(cert: Certificate | _AnchorLike) -> bytes:
     """Return DER-encoded subject for robust comparison.
 
-    Prefers subject_der (from fresh x509 parsing). Falls back to
-    UTF-8 encoded rfc4514 string for DB-loaded certificates.
+    Prefers cached subject_der, then derives it from persisted raw DER.
+    String encoding is only a fallback for records without parseable DER.
     """
-    return cert.subject_der or cert.subject.encode("utf-8")
+    return _name_bytes(cert, "subject")
 
 
-def _issuer_bytes(cert: Certificate) -> bytes:
+def _issuer_bytes(cert: Certificate | _AnchorLike) -> bytes:
     """Return DER-encoded issuer for robust comparison.
 
-    Prefers issuer_der (from fresh x509 parsing). Falls back to
-    UTF-8 encoded rfc4514 string for DB-loaded certificates.
+    Prefers cached issuer_der, then derives it from persisted raw DER.
+    String encoding is only a fallback for records without parseable DER.
     """
-    return cert.issuer_der or cert.issuer.encode("utf-8")
+    return _name_bytes(cert, "issuer")
 
 
 _SYSTEM_CA_BUNDLE_PATHS = [
@@ -408,6 +427,8 @@ def chain_status(
         # Plan 030 / positioning.md.)
         if anchors and _is_signature_anchored_by_user([leaf], anchors):
             return "private"
+        if _is_anchored_by_system_root([leaf]):
+            return "public"
         return "unknown"
     full = [leaf, *chain]
     # Names must line up AND every link must be signature-verified. A
@@ -458,4 +479,3 @@ def validate_is_ca_certificate(der_bytes: bytes) -> str | None:
         return "certificate lacks BasicConstraints extension (not a valid CA)"
 
     return None
-
