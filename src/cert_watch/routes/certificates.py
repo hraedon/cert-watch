@@ -409,8 +409,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "chain_status": cs,
             "chain_guidance": describe_chain(cert, chain_certs_objects, cs),
             "chain_posture_changed": bool(
-                _posture and _posture.get("chain_status")
-                and _posture["chain_status"] != cs
+                _posture and _posture.get("chain_status") != cs
             ),
             "urgency": urgency,
             "days_remaining": leaf_days,

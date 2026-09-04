@@ -245,7 +245,7 @@
         <div class="cw-panel-body">
           {% if posture.scanned_at %}<p class="cw-hint">Last evaluated {{ posture.scanned_at[:19] | replace("T", " ") }}</p>{% endif %}
           {% if chain_posture_changed %}
-          <p class="cw-note t-warn" data-testid="chain-posture-changed">Chain validation has changed since the last scan.
+          <p class="cw-note t-warn" data-testid="chain-posture-changed">{% if posture.get('chain_status') %}Chain validation has changed since the last scan.{% else %}Chain validation was not recorded with this scan.{% endif %}
             This grade describes that scan; <a href="#chain-guidance" class="cw-link">see current chain validation</a>
             and scan again to refresh the posture.</p>
           {% endif %}

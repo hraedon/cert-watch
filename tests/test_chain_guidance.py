@@ -1,4 +1,5 @@
 """Operator guidance follows the stored chain, without fetching issuer URLs."""
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import extract_chain_from_pem
@@ -18,7 +19,8 @@ def test_detail_names_untrusted_root_and_gives_remediation(reload_app, tmp_path,
     assert "server missing intermediate(s)" not in response.text
 
 
-def test_detail_labels_stale_chain_posture(reload_app, tmp_path, chain_pem_file):
+@pytest.mark.parametrize("stored_status", ["public", None])
+def test_detail_labels_stale_chain_posture(reload_app, tmp_path, chain_pem_file, stored_status):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     entry = upload_certificate(chain_pem_file)
@@ -26,11 +28,12 @@ def test_detail_labels_stale_chain_posture(reload_app, tmp_path, chain_pem_file)
     store_scan_posture(db, cert_id, None, None, "A+", [
         {"check": "chain_completeness", "status": "pass", "message": "Chain complete"},
         {"check": "tls_version", "status": "pass", "message": "TLS TLSv1.3"},
-    ], chain_status="public", protocol_version="TLSv1.3", scanned_at="2026-09-01T12:00:00+00:00")
+    ], chain_status=stored_status, protocol_version="TLSv1.3",
+        scanned_at="2026-09-01T12:00:00+00:00")
     with TestClient(app_mod.app) as client:
         response = client.get(f"/certificates/{cert_id}")
     assert response.status_code == 200
-    assert "Chain validation has changed since the last scan" in response.text
+    assert 'data-testid="chain-posture-changed"' in response.text
     assert "Last scan grade" in response.text
     assert "Chain complete</span>" not in response.text
     assert "TLS TLSv1.3" in response.text
