@@ -5,6 +5,9 @@ Plan 024 Slice 1 — read/render paths, filter branches, error paths.
 
 from __future__ import annotations
 
+import sqlite3
+from contextlib import contextmanager
+
 from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
@@ -63,6 +66,37 @@ def test_readyz_db_error(monkeypatch, reload_app):
     data = r.json()
     assert data["status"] == "degraded"
     monkeypatch.setattr(views_mod, "_connect", orig)
+
+
+def test_readyz_non_busy_write_error_is_degraded(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class WriteFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if sql.startswith("UPDATE kv_store"):
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return self.conn.execute(sql, params)
+
+        def commit(self):
+            return self.conn.commit()
+
+    @contextmanager
+    def write_failing_connect(db):
+        with original_connect(db) as conn:
+            yield WriteFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", write_failing_connect)
+        response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["db_write"] == "error"
 
 
 def test_readyz_shallow_body_when_unauthenticated(reload_app):
@@ -170,6 +204,65 @@ def test_api_health_with_scan_and_alerts(tmp_path, reload_app):
     data = r.json()
     assert data["last_scan_status"] == "failure"
     assert data["overall"] == "warning"
+
+
+def test_api_health_scan_query_error_is_critical(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class ScanFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if "FROM scan_history" in sql:
+                raise sqlite3.OperationalError("scan history unavailable")
+            return self.conn.execute(sql, params)
+
+    @contextmanager
+    def scan_failing_connect(db):
+        with original_connect(db) as conn:
+            yield ScanFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", scan_failing_connect)
+        response = client.get("/api/health")
+
+    data = response.json()
+    assert data["last_scan_at"] is None
+    assert data["last_scan_status"] is None
+    assert data["overall"] == "critical"
+
+
+def test_api_health_alert_query_error_is_critical(monkeypatch, reload_app):
+    app_mod = reload_app()
+    import cert_watch.routes.health as health
+
+    original_connect = health._connect
+
+    class AlertFailingConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def execute(self, sql, params=()):
+            if "FROM alerts" in sql:
+                raise sqlite3.OperationalError("alerts unavailable")
+            return self.conn.execute(sql, params)
+
+    @contextmanager
+    def alert_failing_connect(db):
+        with original_connect(db) as conn:
+            yield AlertFailingConnection(conn)
+
+    with TestClient(app_mod.app) as client:
+        monkeypatch.setattr(health, "_connect", alert_failing_connect)
+        response = client.get("/api/health")
+
+    data = response.json()
+    assert data["failed_alerts_24h"] == 0
+    assert data["overall"] == "critical"
 
 
 # ---------- favicon ----------
