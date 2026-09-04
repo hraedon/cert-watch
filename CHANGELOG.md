@@ -19,6 +19,10 @@ All notable changes to cert-watch are documented in this file.
   survive in the pre-migration database backup.
 
 ### Fixed
+- **Complete owner renewal digests with case-variant addresses.** Hosts whose
+  stored owner emails differ only by letter case are now combined before SMTP
+  or webhook delivery. Previously the shared case-insensitive delivery claim
+  let the first digest suppress later variants, omitting their hosts.
 - **Cross-process digest delivery deduplication and shutdown safety.** Renewal,
   expiry, and orphan digest sends now take atomic per-recipient/channel claims
   in a SQLite delivery ledger (migration 0029). Claims are acquired/renewed

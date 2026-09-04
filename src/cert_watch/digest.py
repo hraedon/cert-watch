@@ -257,6 +257,35 @@ def _fmt_expiry(not_after: str | None) -> str:
         return ""
 
 
+def _merge_owner_address_variants(
+    digests: list[RenewalDigest],
+) -> list[RenewalDigest]:
+    """Combine digests whose owner addresses differ only by case.
+
+    Email mailbox comparison and delivery claims are case-insensitive in the
+    send path. Keeping case variants as separate digests would let the first
+    claim suppress the second and omit some of that owner's hosts.
+    """
+    merged: dict[str, RenewalDigest] = {}
+    for digest in digests:
+        key = digest.owner_email.casefold()
+        existing = merged.get(key)
+        if existing is None:
+            merged[key] = digest
+            continue
+        existing.renewed_count += digest.renewed_count
+        existing.overdue_count += digest.overdue_count
+        existing.shortened_count += digest.shortened_count
+        for destination, additions in (
+            (existing.renewed_hosts, digest.renewed_hosts),
+            (existing.overdue_hosts, digest.overdue_hosts),
+            (existing.shortened_hosts, digest.shortened_hosts),
+        ):
+            destination.extend(host for host in additions if host not in destination)
+        existing.host_expiry.update(digest.host_expiry)
+    return list(merged.values())
+
+
 def _build_digest_message(digest: RenewalDigest) -> str:
     expiry = digest.host_expiry
     lines = [
@@ -427,6 +456,7 @@ def send_renewal_digest(
     digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
     if not digests:
         return True
+    digests = _merge_owner_address_variants(digests)
 
     global_recipients_cf: set[str] = set()
     global_recipients_original: list[str] = []

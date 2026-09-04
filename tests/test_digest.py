@@ -447,6 +447,37 @@ class TestSendRenewalDigest:
         ]
         assert len(owner_msgs) == 1, "owner digest To header must use original casing"
 
+    def test_owner_digest_merges_case_variant_addresses(self, empty_db):
+        """One mailbox receives all of its hosts despite inconsistent casing."""
+        from cert_watch.alerts import AlertConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com", owner_email="Alice@Example.COM")
+        _add_host(db, "host-b.example.com", owner_email="alice@example.com")
+        _emit_renewal(db, "host-a.example.com")
+        _emit_renewal(db, "host-b.example.com")
+        config = AlertConfig(
+            smtp_host="smtp.example",
+            smtp_user="u",
+            smtp_password="p",
+            from_addr="a@b",
+            recipients=[],
+        )
+        smtp = MagicMock()
+        smtp.send_message.return_value = {}
+
+        with patch("cert_watch.digest.send_orphan_notice"), patch(
+            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        ):
+            assert send_renewal_digest(db, config, None, days=7) is True
+
+        smtp.send_message.assert_called_once()
+        message = smtp.send_message.call_args.args[0]
+        assert str(message["To"]) == "Alice@Example.COM"
+        body = message.get_content()
+        assert "host-a.example.com" in body
+        assert "host-b.example.com" in body
+
     def test_webhook_tried_when_smtp_fails(self, empty_db):
         """Webhook must be tried as a fallback when SMTP delivery fails.
 
