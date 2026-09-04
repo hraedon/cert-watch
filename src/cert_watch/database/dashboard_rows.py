@@ -1,12 +1,16 @@
 """Dashboard row building — rich dict construction from raw certificate rows."""
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect, _parse_iso, _row_to_cert
+from cert_watch.database.connection import (
+    _connect,
+    _parse_iso,
+    _row_to_cert,
+    parse_san_dns_names,
+)
 from cert_watch.database.dashboard_helpers import _SORT_COLUMNS_BARE, _safe_col, _safe_dir
 from cert_watch.database.schema import init_schema
 
@@ -19,7 +23,7 @@ def _build_dashboard_rows(
     from cert_watch.cert_chain import chain_status
 
     # anchor_rows come from trust_anchors, which lacks the certificate-only
-    # columns (is_leaf, source, notes) that _row_to_cert reads — default them.
+    # columns (is_leaf, source) that _row_to_cert reads — default them.
     anchors = [_row_to_cert({**dict(r), "is_leaf": 0}) for r in anchor_rows]
 
     leaf_rows: list[dict[str, Any]] = []
@@ -90,9 +94,8 @@ def _build_dashboard_rows(
                 ),
                 "chain_status": _chain_status,
                 "replaces_cert_id": leaf.get("replaces_cert_id"),
-                "notes": dict(leaf).get("notes", ""),
                 "fingerprint_sha256": leaf.get("fingerprint_sha256", ""),
-                "san_dns_names": json.loads(leaf.get("san_dns_names", "[]")),
+                "san_dns_names": parse_san_dns_names(leaf.get("san_dns_names")),
                 "tags": leaf.get("tags", ""),
                 "owner_name": "",
             }

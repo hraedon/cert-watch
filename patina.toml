@@ -1,0 +1,37 @@
+# cert-watch's adoption declaration for patina (see patina docs/adoption.md).
+#
+# CONSUMER-OWNED: patina's sync.sh never writes or rewrites this file. patina
+# defines what conformance means; this file records what cert-watch claims.
+# Checked by tests/test_patina_conformance.py.
+
+[patina]
+version = "0.5.0"
+accent  = "cert-watch"
+prefix  = "cw"
+static  = "src/cert_watch/static"
+
+[conformance.vendor]
+state = "enforced"
+
+[conformance.contract]
+state = "enforced"
+
+# Reviewed, not clean. UI-INVENTORY.md enumerates every concept, its one
+# editing control and its write endpoints, and names five open violations
+# (V1-V5). V1 was adjudicated by the owner on 2026-08-14 -- merge the two notes
+# fields to one host-scoped field -- and V1/V2 are implemented. The
+# facet is `reviewed` because a human has been through it and the gaps are
+# recorded, not because the model is currently free of duplicates.
+[conformance.content_model]
+state = "reviewed"
+reviewed_through = "c009509f562e71e8e48232337ce24772921884a8"
+note = "UI-INVENTORY.md; V1/V2 implemented (host notes; unmatched legacy notes retained); V3-V5 open"
+
+# The 055 redesign settled this app's landing page and dashboard grammar
+# against patina's archetypes, but produced no per-page surface briefs, so
+# there is nothing recording what each page is FOR in the form the standard
+# asks for.
+[conformance.structure]
+state = "deferred"
+why   = "no surface briefs written; the 055 redesign settled the landing page but did not produce them"
+until = "the queued modified-Option-A build, which touches every domain page anyway"

@@ -302,8 +302,12 @@ def test_api_report_inventory_requires_auth(reload_app):
     assert r.status_code == 200
 
 
-def test_api_patch_notes(tmp_path, reload_app, leaf_pem_file):
-    """FEAT-013: PATCH /api/certificates/{id}/notes should update notes."""
+def test_api_cert_notes_endpoints_removed(reload_app, tmp_path, leaf_pem_file):
+    """UI-INVENTORY V1: per-certificate notes were removed (host-scoped now).
+
+    PATCH /api/certificates/{id}/notes must not exist, and the GET response
+    must not carry a notes key. Host notes live at PATCH /api/hosts/{id}/notes.
+    """
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
@@ -317,57 +321,12 @@ def test_api_patch_notes(tmp_path, reload_app, leaf_pem_file):
             f"/api/certificates/{cert_id}/notes",
             json={"notes": "staging cert"},
         )
-    assert r.status_code == 200
-    data = r.json()
-    assert data["notes"] == "staging cert"
-
-    with TestClient(app_mod.app) as client:
-        r = client.get(f"/api/certificates/{cert_id}")
-    assert r.status_code == 200
-    assert r.json()["notes"] == "staging cert"
-
-
-def test_api_patch_notes_not_found(reload_app):
-    app_mod = reload_app()
-    with TestClient(app_mod.app) as client:
-        r = client.patch(
-            "/api/certificates/00000000-0000-0000-0000-000000000000/notes",
-            json={"notes": "test"},
-        )
     assert r.status_code == 404
 
-
-def test_api_patch_notes_too_long(tmp_path, reload_app, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
-
-    entry = upload_certificate(leaf_pem_file)
-    assert isinstance(entry, UploadedEntry)
-    cert_id = store_uploaded(entry, db)
-
-    with TestClient(app_mod.app) as client:
-        r = client.patch(
-            f"/api/certificates/{cert_id}/notes",
-            json={"notes": "x" * 10001},
-        )
-    assert r.status_code == 400
-
-
-def test_api_get_certificate_notes_field(tmp_path, reload_app, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    from cert_watch.upload import UploadedEntry, store_uploaded, upload_certificate
-
-    entry = upload_certificate(leaf_pem_file)
-    assert isinstance(entry, UploadedEntry)
-    cert_id = store_uploaded(entry, db)
-
     with TestClient(app_mod.app) as client:
         r = client.get(f"/api/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "notes" in r.json()
-    assert r.json()["notes"] == ""
+    assert "notes" not in r.json()
 
 
 def test_api_download_pem(tmp_path, reload_app, leaf_pem_file):

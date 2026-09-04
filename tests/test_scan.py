@@ -1258,8 +1258,9 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
     # on store_scan_posture will raise inside _stage_posture.
     from cert_watch.scan import _PostureEval
 
-    leaf_id = store_scanned(entry, db, _posture_eval=_PostureEval())
-    assert leaf_id == ""
+    # WI-142: store_scanned re-raises on rolled-back transactions.
+    with pytest.raises(Exception, match="posture boom"):
+        store_scanned(entry, db, _posture_eval=_PostureEval())
 
 
 def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_leaf):
@@ -1332,8 +1333,9 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
         lambda *a, **kw: "hist-id",
     )
 
-    leaf_id = store_scanned(entry, db)
-    assert leaf_id == ""
+    # WI-142: store_scanned re-raises on rolled-back transactions.
+    with pytest.raises(Exception, match="db locked"):
+        store_scanned(entry, db)
 
 
 def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_signed_leaf):
@@ -1358,8 +1360,9 @@ def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_sig
         lambda *a, **kw: "hist-id",
     )
 
-    leaf_id = store_scanned(entry, db)
-    assert leaf_id == ""
+    # WI-142: store_scanned re-raises on rolled-back transactions.
+    with pytest.raises(Exception, match="drift import fail"):
+        store_scanned(entry, db)
 
 
 def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed_leaf):
@@ -1388,8 +1391,9 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
         lambda *a, **kw: (_ for _ in ()).throw(Exception("history write fail")),
     )
 
-    leaf_id = store_scanned(entry, db)
-    assert leaf_id == ""
+    # WI-142: store_scanned re-raises on rolled-back transactions.
+    with pytest.raises(Exception, match="history write fail"):
+        store_scanned(entry, db)
 
 
 def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_signed_leaf):
@@ -1891,8 +1895,8 @@ def test_store_scanned_rolls_back_replace_when_posture_fails(
 
     from cert_watch.scan import _PostureEval
 
-    result = store_scanned(entry, db, _posture_eval=_PostureEval())
-    assert result == ""
+    with pytest.raises(Exception, match="posture boom"):
+        store_scanned(entry, db, _posture_eval=_PostureEval())
     certs = repo.list_all()
     assert len(certs) == 1
     assert certs[0].fingerprint_sha256 == initial_fp
@@ -1918,8 +1922,8 @@ def test_store_scanned_rolls_back_replace_and_posture_when_drift_fails(
         lambda *a, **kw: (_ for _ in ()).throw(Exception("drift boom")),
     )
 
-    result = store_scanned(entry, db)
-    assert result == ""
+    with pytest.raises(Exception, match="drift boom"):
+        store_scanned(entry, db)
     certs = repo.list_all()
     assert len(certs) == 1
     assert certs[0].fingerprint_sha256 == initial_fp
@@ -1948,8 +1952,8 @@ def test_store_scanned_rolls_back_prior_writes_when_history_fails(
         failing_record,
     )
 
-    result = store_scanned(entry, db)
-    assert result == ""
+    with pytest.raises(Exception, match="history boom"):
+        store_scanned(entry, db)
     certs = repo.list_all()
     assert len(certs) == 1
     assert certs[0].fingerprint_sha256 == initial_fp
@@ -1999,7 +2003,7 @@ def test_store_scanned_webhook_resolve_failure_does_not_roll_back(
     assert certs[0].fingerprint_sha256 == leaf.fingerprint_sha256
 
 
-def test_store_scanned_returns_empty_string_on_transaction_failure(
+def test_store_scanned_raises_on_transaction_failure(
     tmp_path, self_signed_leaf, monkeypatch,
 ):
     from cert_watch.database.schema import init_schema
@@ -2017,8 +2021,11 @@ def test_store_scanned_returns_empty_string_on_transaction_failure(
         lambda *a, **kw: (_ for _ in ()).throw(Exception("history boom")),
     )
 
-    result = store_scanned(entry, db)
-    assert result == ""
+    # WI-142: store_scanned re-raises on rolled-back transactions so callers
+    # (scheduler, route layer) record a failure rather than silently treating
+    # the empty-string return as a successful scan.
+    with pytest.raises(Exception, match="history boom"):
+        store_scanned(entry, db)
 
 
 def test_store_scanned_event_webhooks_deferred_until_commit(
@@ -2108,8 +2115,10 @@ def test_store_scanned_event_webhooks_not_fired_on_rollback(
     mock_pool = MagicMock()
     monkeypatch.setattr("cert_watch.events._get_pool", lambda: mock_pool)
 
-    result = store_scanned(entry, db)
-    assert result == ""
+    # WI-142: store_scanned re-raises on rollback. Event webhooks must not
+    # be submitted when the transaction failed.
+    with pytest.raises(Exception, match="history boom"):
+        store_scanned(entry, db)
     mock_pool.submit.assert_not_called()
 
 

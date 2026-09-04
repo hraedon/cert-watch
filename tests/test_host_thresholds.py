@@ -8,6 +8,7 @@ from cert_watch.database import (
     SqliteHostRepository,
     init_schema,
 )
+from cert_watch.database.connection import _connect
 
 
 @pytest.fixture
@@ -72,6 +73,24 @@ def test_evaluate_all_certs_default_threshold(tmp_path, expiring_soon_leaf):
     alert_repo = SqliteAlertRepository(db)
     alerts = evaluate_all_certs(db, alert_repo)
     assert len(alerts) > 0
+
+
+def test_evaluate_all_certs_recovers_malformed_san_shape(tmp_path, expiring_soon_leaf):
+    db = tmp_path / "bad_san.sqlite3"
+    init_schema(db)
+    cert = parse_certificate(expiring_soon_leaf.der)
+    assert isinstance(cert, Certificate)
+    cert_id = SqliteCertificateRepository(db).add(cert)
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificates SET san_dns_names = ? WHERE id = ?",
+            ('["valid", 3]', cert_id),
+        )
+        conn.commit()
+
+    alerts = evaluate_all_certs(db, SqliteAlertRepository(db))
+
+    assert any(alert.cert_id == cert_id for alert in alerts)
 
 
 def test_host_entry_threshold_roundtrip(tmp_path):

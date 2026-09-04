@@ -6,7 +6,7 @@ All-in-one observability for the **certificate lifecycle** — built for small a
 mid-sized businesses that need one self-hosted place to see every TLS
 certificate they depend on. Live host scanning **and** offline file upload feed a
 web dashboard, REST API, and alerting; signature-verified chain validation, TLS
-posture grading, and chain validation turn "is it
+posture grading, and revocation checks turn "is it
 expiring?" into "is the whole estate healthy?"
 
 Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), and multi-cert chain bundles.
@@ -21,12 +21,12 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
 - **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
-- **Insights** — expiration calendar plus fleet TLS-version and posture-grade trends over time
+- **Posture page** — fleet grade, TLS-version and grade trends, crypto inventory; the expiry calendar is a dashboard view
 - **Bulk import** — CSV upload for adding many hosts at once
 - **Prometheus metrics** — `/metrics` endpoint for monitoring integration (optionally bearer-token gated)
 - **Renewal tracking** — links renewed certificates to their predecessors
 - **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
-- **Audit log** — append-only record of mutations and logins, with configurable retention
+- **Audit log** — append-only record of mutations and logins (admin-only view), with configurable retention
 - **Compliance report** — one-click, point-in-time posture report for SOC 2 / ISO 27001 / PCI-DSS auditors (print-to-PDF HTML + signed JSON/CSV), with a `cert-watch verify-report` tamper-evidence check
 - **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
 
@@ -554,17 +554,20 @@ scrape_configs:
 
 ## Endpoints
 
-JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
+Most JSON endpoints are at `/api/`; list endpoints support `?page=` and
+`?limit=` pagination.
 
 ### Web pages (HTML)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/` | Dashboard |
-| `GET` | `/alerts` | Alerts view |
-| `GET` | `/scan-history` | Per-scan history |
-| `GET` | `/insights` | Expiration calendar + TLS/grade trends |
-| `GET` | `/audit` | Audit log |
+| `GET` | `/` | Home: attention queue and renewal horizon |
+| `GET` | `/browse` | Certificate inventory, calendar, and fleet views |
+| `GET` | `/activity` | Alerts, scans, and audit activity (audit is admin-only) |
+| `GET` | `/posture` | Fleet posture, cryptographic inventory, and trends |
+| `GET` | `/readiness` | SC-081 lifetime and renewal-readiness report |
+| `GET` | `/alerts`, `/scan-history`, `/audit` | Legacy activity links (audit is admin-only) |
+| `GET` | `/insights`, `/crypto`, `/team` | Legacy navigation redirects |
 | `GET` | `/reports/compliance` | Compliance report (print-to-PDF; `?tag=` to scope) |
 | `GET` | `/settings` | Settings (admin) |
 | `GET` | `/setup` | First-run setup wizard |
@@ -574,6 +577,7 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/healthz` | Health check (DB, scheduler, cert counts) |
+| `GET` | `/readyz` | Readiness check (`503` when the monitoring pipeline is degraded) |
 | `GET` | `/api/health` | Health check (JSON) |
 | `GET` | `/metrics` | Prometheus metrics (bearer-gated when `CERT_WATCH_METRICS_TOKEN` set) |
 | `GET` | `/api/certificates` | List certificates (paginated) |
@@ -583,6 +587,10 @@ JSON endpoints are at `/api/` and support `?page=` and `?limit=` pagination.
 | `PUT` | `/api/hosts/{id}/tags` | Set a host's tags |
 | `GET` | `/api/hosts` | List tracked hosts |
 | `GET` | `/api/alerts` | List alerts |
+| `GET` | `/api/events` | List lifecycle events |
+| `GET` | `/api/readiness.json` | SC-081 readiness report |
+| `GET` | `/api/renewal-analytics` | Fleet renewal analytics |
+| `GET` | `/api/policy` | Current posture policy configuration |
 | `GET` | `/caa-check/{domain}` | CAA record lookup |
 | `GET` | `/api/reports/compliance.json` | Signed compliance report (JSON; `?tag=` to scope) |
 | `GET` | `/api/reports/compliance.csv` | Signed compliance report (CSV) |
@@ -609,7 +617,7 @@ src/cert_watch/
   alerts.py            Email + webhook alerting
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
-  config.py            Environment-based settings
+  config/              Environment and persisted-GUI settings
   posture.py           TLS posture grading
   database/            SQLite persistence layer (repositories, queries, migrations)
   scan.py              TLS scanning
@@ -656,16 +664,19 @@ These boundaries are deliberate and documented so they don't look like bugs.
 
 - **Single-writer SQLite** — the database is a single SQLite file. The k8s
   deployment uses a `Recreate` rollout strategy; do not scale to multiple
-  writers. Postgres is on the roadmap (1.x) but not here.
-- **CAA not stored per scan** — the compliance report shows CAA as
-  "Not collected" because CAA lookup is an on-demand endpoint, not a scan
-  field. Per-scan CAA storage is planned for 1.1 (BC-121).
-- **HTTP client SSRF guard** — `http_client.ssrf_safe_urlopen` validates the
-  initial URL and every redirect hop, but `urllib` may re-resolve the hostname
-  on connect. This is a large improvement over unvalidated `urlopen`, not a
-  pinned-IP guarantee (documented in the module docstring).
+  writers. A Postgres backend is deliberately deferred until real scale data
+  justifies its permanent operational cost.
+- **Python 3.12 chain extraction needs `openssl` for full chains** — Python
+  3.13 exposes the peer-chain API directly. On 3.12, cert-watch uses
+  `openssl s_client`; without that executable a scan degrades to leaf-only
+  extraction and reports the degraded/incomplete state rather than guessing.
+- **No active estate discovery or renewal** — hosts and offline files are
+  operator-supplied. cert-watch observes renewal automation and can notify an
+  external renewal webhook, but it does not query cloud/CA inventories or act
+  as an ACME client.
 - **No native PDF export** — compliance reports are HTML (print-to-PDF) or
-  signed JSON/CSV. A native PDF renderer is a future optional extra.
+  signed JSON/CSV. A native renderer is intentionally outside the maintained
+  dependency surface.
 
 ## License
 

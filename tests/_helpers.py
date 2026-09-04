@@ -63,9 +63,9 @@ def seed_certificate(
             INSERT INTO certificates
             (id, subject, issuer, not_before, not_after, san_dns_names,
              fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, notes, tags,
+             parent_cert_id, chain_valid, replaces_cert_id, tags,
              created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 cert_id,
@@ -83,7 +83,6 @@ def seed_certificate(
                 None,
                 cv,
                 replaces_cert_id,
-                cert.notes,
                 tags,
                 now,
                 now,

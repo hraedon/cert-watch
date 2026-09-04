@@ -134,7 +134,8 @@ def test_init_schema_migrates_old_database_without_replaces_cert_id(tmp_path):
     with sqlite3.connect(str(db)) as conn:
         cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
         assert "replaces_cert_id" in cols
-        assert "notes" in cols
+        # 0030: certificates.notes is merged into hosts.notes and dropped.
+        assert "notes" not in cols
         idx = {r[1] for r in conn.execute("PRAGMA index_list('certificates')").fetchall()}
         assert "idx_cert_replaces" in idx
 
@@ -228,12 +229,7 @@ def test_update_notes(tmp_path, self_signed_leaf):
 
     loaded = repo.get_by_id(cert_id)
     assert loaded is not None
-    assert loaded.notes == ""
-
-    repo.update_notes(cert_id, "staging cert for renewal")
-    loaded = repo.get_by_id(cert_id)
-    assert loaded is not None
-    assert loaded.notes == "staging cert for renewal"
+    assert loaded.subject == cert.subject
 
 
 def test_list_unified_entries_scanned_pending_uploaded(tmp_path, self_signed_leaf):
@@ -657,3 +653,60 @@ def test_build_host_filter_accepts_whitelisted_columns():
     clause, params = _build_host_filter("renewal_method", ["acme"])
     assert "h.renewal_method" in clause
     assert params == ("acme",)
+
+
+def test_host_repository_rejects_invalid_hostname_before_persistence(tmp_path):
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    db = tmp_path / "invalid_host.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+
+    with pytest.raises(ValueError, match="hostname"):
+        repo.add("bad_name.example", 443)
+
+    assert repo.list_all() == []
+
+
+def test_row_to_cert_recovers_from_corrupted_san_json(tmp_path):
+    """B2: corrupted san_dns_names JSON (manual DB edit, disk error, partial
+    migration) must not crash every dashboard / detail / list call. The
+    fallback is an empty list so the rest of the row still renders.
+    """
+    from cert_watch.database.connection import _row_to_cert
+
+    # Minimal row shape — only the fields _row_to_cert reads.
+    row = {
+        "subject": "CN=test",
+        "issuer": "CN=ca",
+        "not_before": "2025-01-01T00:00:00+00:00",
+        "not_after": "2026-01-01T00:00:00+00:00",
+        "san_dns_names": "<<corrupted json",
+        "fingerprint_sha256": "fp",
+        "raw_der": b"",
+        "is_leaf": 1,
+    }
+    cert = _row_to_cert(row)
+    assert cert.san_dns_names == []
+    assert cert.subject == "CN=test"
+
+
+@pytest.mark.parametrize(
+    "san_json",
+    ["null", '"example.com"', '{"name": "example.com"}', '["ok", 3]'],
+)
+def test_row_to_cert_recovers_from_non_string_list_san_json(san_json):
+    from cert_watch.database.connection import _row_to_cert
+
+    row = {
+        "subject": "CN=test",
+        "issuer": "CN=ca",
+        "not_before": "2025-01-01T00:00:00+00:00",
+        "not_after": "2026-01-01T00:00:00+00:00",
+        "san_dns_names": san_json,
+        "fingerprint_sha256": "fp",
+        "raw_der": b"",
+        "is_leaf": 1,
+    }
+
+    assert _row_to_cert(row).san_dns_names == []

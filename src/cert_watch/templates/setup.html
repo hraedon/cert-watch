@@ -11,62 +11,61 @@
     } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
   </script>
   <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
 </head>
 <body>
-  <div class="cw-app">
-    <div class="cw-page cw-login-center">
-      <div class="cw-panel cw-form-panel">
-        <div class="cw-login-intro">
-          <div class="cw-mark cw-login-mark">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
-          </div>
-          <h2 class="cw-login-title" data-testid="setup-heading">Welcome to cert-watch</h2>
-          <p class="cw-muted">Create a local admin account to get started. This account will let you log in and manage certificates.</p>
+  <div class="cw-auth-center">
+    <div class="cw-panel cw-auth-panel">
+      <div class="cw-auth-intro">
+        <div class="cw-auth-mark">
+          <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
         </div>
+        <h1 data-testid="setup-heading">Welcome to cert-watch</h1>
+        <div class="cw-sub">Create a local admin account to get started. This account will let you log in and manage certificates.</div>
+      </div>
 
+      <div class="cw-form">
         {% if error %}
-          <div class="cw-login-error">
-            {{ error }}
-          </div>
+          <div class="cw-inline-flash t-crit">{{ error }}</div>
         {% endif %}
 
-        <form method="post" action="/setup">
+        <form method="post" action="/setup" class="cw-form">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
           <input type="hidden" name="step" value="1">
-          <div class="cw-field cw-mb-12">
+          <div class="cw-field">
             <label class="cw-label" for="username">Admin username</label>
             <input class="cw-input" type="text" id="username" name="username" required autofocus
                    placeholder="admin" minlength="3" autocomplete="username">
           </div>
-          <div class="cw-field cw-mb-12">
+          <div class="cw-field">
             <label class="cw-label" for="password">Password</label>
             <input class="cw-input" type="password" id="password" name="password" required
                    placeholder="at least 8 characters" minlength="8" autocomplete="new-password">
           </div>
-          <div class="cw-field cw-mb-16">
+          <div class="cw-field">
             <label class="cw-label" for="password_confirm">Confirm password</label>
             <input class="cw-input" type="password" id="password_confirm" name="password_confirm" required
                    placeholder="re-enter password" minlength="8" autocomplete="new-password">
           </div>
-          <div class="cw-field cw-mb-16">
+          <div class="cw-field">
             <label class="cw-label" for="allowed_subnets">Internal networks to allow scanning <span class="cw-muted">(optional)</span></label>
             <input class="cw-input" type="text" id="allowed_subnets" name="allowed_subnets"
                    placeholder="10.0.0.0/8, 192.168.0.0/16">
-            <div class="cw-muted cw-mt-8" style="font-size:0.8rem">
-              Comma-separated CIDR ranges that cert-watch may scan. Leave blank to
-              allow all private addresses (RFC 1918), or list only the internal
-              networks you intend to monitor — anything outside them (and outside
-              public hosts) is refused. Loopback and link-local (incl. cloud
-              metadata) are always blocked. You can change this later under
-              <strong>Settings</strong> or via the <code>CERT_WATCH_ALLOWED_SUBNETS</code>
-              environment variable.
+            <div class="cw-hint">
+              Comma-separated CIDR ranges cert-watch may scan (e.g. <code>10.0.0.0/8, 192.168.0.0/16</code>);
+              leave blank to allow all private (RFC 1918) addresses. You can change this later under
+              <strong>Settings</strong> or via the <code>CERT_WATCH_ALLOWED_SUBNETS</code> environment variable.
             </div>
           </div>
-          <button type="submit" class="cw-btn primary cw-btn--expand" data-testid="setup-submit-btn">Create admin &amp; continue</button>
+          <div class="cw-form-foot">
+            <button type="submit" class="cw-btn primary" data-testid="setup-submit-btn">Create admin &amp; continue</button>
+          </div>
         </form>
 
-        <div class="cw-muted cw-mt-16" style="font-size:0.85rem">
+        <div class="cw-hint">
           You can also configure authentication via environment variables
           (<code>AUTH_PROVIDER</code>, <code>CERT_WATCH_LOCAL_ADMIN_USER</code>,
           <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code>). See the runbook for details.

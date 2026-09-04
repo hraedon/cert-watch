@@ -1,0 +1,60 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Trust anchors</h2>
+    <span class="cw-hint">private root CAs for validating internal chains</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-note">
+      {{ icons.svg_icon('shield', 14) }}
+      <div>
+        Certificates issued by a private CA grade <b>incomplete</b> until the
+        root is uploaded here — then their chains validate as
+        <b>private root</b> and grade normally.
+      </div>
+    </div>
+  </div>
+  {% if may_write %}
+  <div class="cw-panel-body">
+    <form method="post" action="/trust-anchors" enctype="multipart/form-data" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <div class="cw-field">
+        <label class="cw-label" for="anchor-file">Root CA certificate</label>
+        <input class="cw-input" type="file" name="file" id="anchor-file" accept=".pem,.crt,.cer,.der" required data-testid="trust-anchor-file-input">
+        <div class="cw-hint">PEM · DER · CER · CRT — a single CA/root certificate.</div>
+      </div>
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary" data-testid="trust-anchor-upload-btn">{{ icons.svg_icon('upload', 14) }}Add trust anchor</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+  {% if trust_anchors %}
+  <div class="cw-table-clip">
+  <table class="cw-table">
+    <thead><tr><th>Subject</th><th>Added</th><th></th></tr></thead>
+    <tbody>
+      {% for a in trust_anchors %}
+      <tr>
+        <td class="mono">{{ a.subject }}</td>
+        <td class="mono">{{ a.created_at.strftime("%Y-%m-%d") }}</td>
+        <td>
+          {% if may_write %}
+          <form method="post" action="/trust-anchors/{{ a.id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this trust anchor? Certs chained to it will grade incomplete again.">
+            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="cw-btn danger sm" data-testid="delete-trust-anchor-btn">{{ icons.svg_icon('trash', 13) }}Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No trust anchors', 'Upload your private root CA above to validate internal chains.', icon='shield') }}
+  {% endif %}
+</div>
+{% endblock %}

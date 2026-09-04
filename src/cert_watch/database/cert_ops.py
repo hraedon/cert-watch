@@ -9,7 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso, get_write_lock
+from cert_watch.database.connection import (
+    _connect,
+    _iso,
+    _parse_iso,
+    get_write_lock,
+    parse_san_dns_names,
+)
 from cert_watch.database.schema import init_schema
 
 
@@ -94,9 +100,9 @@ def _do_replace(
         INSERT INTO certificates
         (id, subject, issuer, not_before, not_after, san_dns_names,
          fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-         parent_cert_id, chain_valid, replaces_cert_id, notes,
+         parent_cert_id, chain_valid, replaces_cert_id,
          created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             leaf_id,
@@ -114,7 +120,6 @@ def _do_replace(
             None,
             cv,
             replaces_id,
-            "",
             now,
             now,
         ),
@@ -127,9 +132,9 @@ def _do_replace(
             INSERT INTO certificates
             (id, subject, issuer, not_before, not_after, san_dns_names,
              fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-             parent_cert_id, chain_valid, replaces_cert_id, notes,
+             parent_cert_id, chain_valid, replaces_cert_id,
              created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 chain_id,
@@ -147,7 +152,6 @@ def _do_replace(
                 leaf_id,
                 None,
                 None,
-                "",
                 now,
                 now,
             ),
@@ -211,7 +215,7 @@ def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> lis
         days_added = (new_leaf.not_after - old_expiry).days
         if days_added > 0:
             changes.append(f"expiry extended by {days_added} days")
-    old_sans = set(json.loads(old_row["san_dns_names"]))
+    old_sans = set(parse_san_dns_names(old_row["san_dns_names"]))
     new_sans = set(new_leaf.san_dns_names)
     added = new_sans - old_sans
     removed = old_sans - new_sans
@@ -246,11 +250,29 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})", all_ids
         )
-        conn.execute(
-            f"DELETE FROM cert_history WHERE fingerprint_sha256 IN "
-            f"(SELECT fingerprint_sha256 FROM certificates WHERE id IN ({placeholders}))",
-            all_ids,
-        )
+        # Scope cert_history cleanup to the deleted cert's host:port + fingerprint.
+        # Deleting by fingerprint alone erased other hosts' history when the same
+        # cert (wildcard / load-balanced / shared corporate cert) is deployed
+        # across multiple host:port pairs — silently destroying their renewal
+        # analytics (lead time, cadence, automation classification).
+        leaf_row = conn.execute(
+            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
+        ).fetchone()
+        fps = [
+            r["fingerprint_sha256"]
+            for r in conn.execute(
+                f"SELECT DISTINCT fingerprint_sha256 FROM certificates "
+                f"WHERE id IN ({placeholders})",
+                all_ids,
+            ).fetchall()
+        ]
+        if leaf_row is not None and fps:
+            fp_placeholders = ",".join("?" * len(fps))
+            conn.execute(
+                f"DELETE FROM cert_history WHERE hostname = ? AND port = ? "
+                f"AND fingerprint_sha256 IN ({fp_placeholders})",
+                (leaf_row["hostname"], leaf_row["port"], *fps),
+            )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({placeholders})", all_ids
         )

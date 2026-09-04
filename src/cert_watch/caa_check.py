@@ -1,4 +1,13 @@
-"""DNS CAA record checking. See spec FEAT-010."""
+"""DNS CAA record checking. See spec FEAT-010.
+
+Note (B3): CAA lookups use the system resolver (`dns.resolver.resolve`) and
+do **not** honor ``CERT_WATCH_DNS_SERVERS`` — unlike the scan path's
+A/AAAA resolution (`scan_resolver._resolve_with_dns`). For public domains
+this is correct (CAA is a public-DNS record checked by public CAs). For
+internal hostnames whose CAA is only resolvable via configured DCs, this
+lookup will report "no records"; that is a known inconsistency with the
+scan resolver rather than a bug.
+"""
 
 from __future__ import annotations
 

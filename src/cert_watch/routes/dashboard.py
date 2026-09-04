@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import quote
 
@@ -10,16 +11,17 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
     SqliteAlertRepository,
-    SqliteTrustAnchorRepository,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
     get_write_lock,
+    list_calendar,
     list_dashboard_grouped_page,
     list_dashboard_page,
     list_fleet_pivot,
@@ -34,7 +36,6 @@ from cert_watch.middleware import (
     require_write,
     require_write_form,
 )
-from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 
@@ -45,7 +46,74 @@ router = APIRouter()
 templates = get_templates()
 
 
-@router.get("/", response_class=HTMLResponse)
+# Query params that belong to the inventory table (now at /browse). A request
+# for / carrying any of them is a legacy bookmark — redirect to /browse.
+_BROWSE_PARAMS = {"q", "urgency", "source", "sort_by", "sort_order", "page", "grouped", "view"}
+
+
+@router.get("/", response_model=None)
+def home(
+    request: Request,
+    error: str | None = None,
+    warning: str | None = None,
+    saved: str | None = None,
+) -> HTMLResponse | RedirectResponse:
+    if _BROWSE_PARAMS & set(request.query_params):
+        return RedirectResponse(url=f"/browse?{request.query_params}", status_code=307)
+
+    db = _db_path(request)
+    auth_ctx = getattr(request.state, "auth_context", None)
+    scope_tags = scope_tags_from_auth(auth_ctx)
+
+    items = build_attention_queue(db, scope_tags=scope_tags)
+    stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
+
+    # Next-12-weeks horizon with storm markers (same bucket query as the
+    # calendar view on /browse).
+    horizon = list_calendar(db, bucket="week", scope_tags=scope_tags)
+    _now = datetime.now(UTC)
+    _week_start = _now - timedelta(days=_now.weekday())
+    current_week_start = _week_start.strftime("%Y-%m-%d")
+    next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
+    horizon_end = (_week_start + timedelta(weeks=12)).strftime("%Y-%m-%d")
+    horizon = [
+        b for b in horizon if current_week_start <= b["bucket_start"] < horizon_end
+    ]
+    storms = 0
+    for b in horizon:
+        bs = b["bucket_start"]
+        if bs <= current_week_start:
+            b["tone"] = "t-crit"
+        elif bs <= next_week_start:
+            b["tone"] = "t-warn"
+        else:
+            b["tone"] = ""
+        if b.get("count", 0) >= 3:
+            storms += 1
+
+    csrf_ctx = get_csrf_context(request)
+    auth_ctx = get_auth_context(request)
+    return templates.TemplateResponse(
+        request=request,
+        name="home.html",
+        context={
+            "queue": items,
+            "stats": stats,
+            "horizon": horizon,
+            "current_week_start": current_week_start,
+            "horizon_storms": storms,
+            "version": __version__, "commit": __commit__,
+            "error": error,
+            "warning": warning,
+            "saved": saved,
+            **auth_ctx,
+            "active_page": "home",
+            **csrf_ctx,
+        },
+    )
+
+
+@router.get("/browse", response_class=HTMLResponse)
 def dashboard(
     request: Request,
     error: str | None = None,
@@ -72,11 +140,38 @@ def dashboard(
     if view in ("issuer", "owner", "renewal_method"):
         pivot_groups = list_fleet_pivot(db, view, scope_tags=scope_tags)
 
+    # Calendar view: weekly expiry buckets (absorbed from the old /insights)
+    calendar_data = None
+    current_week_start = ""
+    calendar_storms = 0
+    if view == "calendar":
+        calendar_data = list_calendar(db, bucket="week", scope_tags=scope_tags)
+        _now = datetime.now(UTC)
+        _week_start = _now - timedelta(days=_now.weekday())
+        current_week_start = _week_start.strftime("%Y-%m-%d")
+        next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
+        for b in calendar_data:
+            bs = b.get("bucket_start", "")
+            if bs <= current_week_start:
+                b["tone"] = "t-crit"
+            elif bs <= next_week_start:
+                b["tone"] = "t-warn"
+            else:
+                b["tone"] = ""
+            if b.get("count", 0) >= 3:
+                calendar_storms += 1
+
     per_page = 25
-    if pivot_groups:
+    page_entries: list[dict[str, Any]] = []
+    if calendar_data is not None:
+        total = sum(b.get("count", 0) for b in calendar_data)
+        total_pages = 1
+        # Same stats source as the inventory table, so the strip doesn't
+        # change numbers when the user switches to the calendar view.
+        pivot_stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
+    elif pivot_groups:
         # Pivot view: compute stats from SQL (no full inventory load)
         total = sum(g["count"] for g in pivot_groups)
-        page_entries: list[dict[str, Any]] = []
         total_pages = 1
         # Urgency distribution via targeted SQL (julianday-safe and tag-scoped to
         # match the grouped rows above; see pivot_urgency_stats for the rationale).
@@ -104,36 +199,17 @@ def dashboard(
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
 
-    if not pivot_groups:
+    if pivot_stats is None:
         pivot_stats = dashboard_urgency_stats(
             db, q=q, source=source, scope_tags=scope_tags
         )
 
-    anchors = SqliteTrustAnchorRepository(db).list_entries()
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
 
-    display_entries = [] if pivot_groups else page_entries
+    display_entries = [] if (pivot_groups or calendar_data is not None) else page_entries
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
     posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
-
-    # Fleet posture grade (worst-weighted across scanned certs)
-    fleet_grade = None
-    with _connect(db) as conn:
-        grade_rows = conn.execute(
-            "SELECT grade, COUNT(*) as cnt FROM scan_posture GROUP BY grade"
-        ).fetchall()
-    if grade_rows:
-        grade_order = GRADE_WORST_ORDER
-        counts = {}
-        worst = 0
-        for r in grade_rows:
-            g = r["grade"]
-            counts[g] = r["cnt"]
-            worst = max(worst, grade_order.get(g, 0))
-        _GRADE_BY_ORDINAL = {v: k for k, v in grade_order.items()}
-        fleet_g = _GRADE_BY_ORDINAL.get(worst, "F")
-        fleet_grade = {"grade": fleet_g, "counts": counts, "worst": worst}
 
     return templates.TemplateResponse(
         request=request,
@@ -143,13 +219,15 @@ def dashboard(
             "all_tags": distinct_tags(db),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
-            "pivot_view": view if pivot_groups else "",
-            "trust_anchors": anchors,
+            "pivot_view": view if (pivot_groups or calendar_data is not None) else "",
+            "calendar_data": calendar_data,
+            "current_week_start": current_week_start,
+            "calendar_storms": calendar_storms,
             "version": __version__, "commit": __commit__,
             "error": error,
             "warning": warning,
             **auth_ctx,
-            "active_page": "dashboard",
+            "active_page": "browse",
             "filter_q": q or "",
             "filter_urgency": urgency or "",
             "filter_source": source or "",
@@ -162,7 +240,6 @@ def dashboard(
             "has_next": page < total_pages,
             "grouped": grouped,
             "posture_grades": posture_grades,
-            "fleet_grade": fleet_grade,
             **csrf_ctx,
         },
     )

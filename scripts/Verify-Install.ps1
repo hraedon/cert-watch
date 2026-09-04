@@ -188,6 +188,39 @@ function Test-IisAvailable {
     return $false
 }
 
+function Get-AppInitState {
+    # warmup.dll alone is not proof that IIS has the role service enabled: IIS
+    # can have the file present while the native module remains unregistered.
+    $warmupDll = Join-Path $env:windir 'System32\inetsrv\warmup.dll'
+    $appHostConfig = Join-Path $env:windir 'System32\inetsrv\config\applicationHost.config'
+    $featureKnown = $false
+    $featureEnabled = $false
+    if (Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue) {
+        $feature = Get-WindowsFeature Web-AppInit -ErrorAction SilentlyContinue
+        if ($feature) {
+            $featureKnown = $true
+            $featureEnabled = [bool]$feature.Installed
+        }
+    } elseif (Get-Command Get-WindowsOptionalFeature -ErrorAction SilentlyContinue) {
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName IIS-ApplicationInit -ErrorAction SilentlyContinue
+        if ($feature) {
+            $featureKnown = $true
+            $featureEnabled = $feature.State -in @('Enabled', 'EnablePending')
+        }
+    }
+    if (-not $featureKnown) {
+        # Last-resort compatibility signal for older Windows images.
+        $featureEnabled = Test-Path $warmupDll
+    }
+    $moduleRegistered = (Test-Path $appHostConfig) -and
+        (Select-String -Path $appHostConfig -Pattern 'name="ApplicationInitializationModule"' -Quiet)
+    return [PSCustomObject]@{
+        FeatureEnabled = $featureEnabled
+        ModuleRegistered = $moduleRegistered
+        WarmupDll = (Test-Path $warmupDll)
+    }
+}
+
 # Resolve the real interpreter the venv points at (venv python is a symlink).
 function Get-VenvRealPython {
     param([string]$VenvPython)
@@ -385,6 +418,41 @@ Add-Check -Id 'IIS-003' -Title 'IIS site exists and has a binding' -Category 'ii
         return (New-Body 'warn' ('site not found: ' + $SiteName + ' (expected for the service / reverse-proxy model)') -Evidence $out)
     }
     return (New-Body 'pass' ('site present: ' + $SiteName) -Evidence (Limit-Text $out 1200))
+}
+
+Add-Check -Id 'IIS-004' -Title 'Application Initialization is installed and registered' -Category 'iis' -Severity 'high' -Remediation 'Install the IIS Application Initialization role service (Web-AppInit / IIS-ApplicationInit) and ensure ApplicationInitializationModule plus warmup.dll are present. preloadEnabled is inert without them.' -Test {
+    if (-not (Test-IisAvailable)) { return (New-Body 'skip' 'IIS not detected on this host') }
+    $state = Get-AppInitState
+    $missing = New-Object System.Collections.ArrayList
+    if (-not $state.FeatureEnabled) { [void]$missing.Add('Application Initialization feature disabled') }
+    if (-not $state.ModuleRegistered) { [void]$missing.Add('ApplicationInitializationModule not registered') }
+    if (-not $state.WarmupDll) { [void]$missing.Add('warmup.dll missing') }
+    $evidence = 'featureEnabled=' + $state.FeatureEnabled + '; moduleRegistered=' + $state.ModuleRegistered + '; warmupDll=' + $state.WarmupDll
+    if ($missing.Count -gt 0) {
+        return (New-Body 'fail' ($missing -join '; ') -Evidence $evidence)
+    }
+    return (New-Body 'pass' 'Application Initialization feature, module, and binary are present' -Evidence $evidence)
+}
+
+Add-Check -Id 'IIS-005' -Title 'IIS application preload is enabled' -Category 'iis' -Severity 'high' -Remediation 'Set applicationDefaults.preloadEnabled=true for the cert-watch IIS site. AlwaysRunning alone does not start HttpPlatformHandler until the first request.' -Test {
+    if (-not (Test-IisAvailable)) { return (New-Body 'skip' 'IIS not detected on this host') }
+    Import-Module WebAdministration -ErrorAction SilentlyContinue
+    $sitePath = 'IIS:\Sites\' + $SiteName
+    $site = Get-Item $sitePath -ErrorAction SilentlyContinue
+    if (-not $site) { return (New-Body 'skip' ('site not found: ' + $SiteName)) }
+    try {
+        $props = Get-ItemProperty $sitePath -Name 'applicationDefaults.preloadEnabled' -ErrorAction Stop
+        $value = $props.'applicationDefaults.preloadEnabled'
+    } catch {
+        return (New-Body 'fail' 'could not read applicationDefaults.preloadEnabled' -Evidence ($_ | Out-String))
+    }
+    $enabled = $false
+    if ($value -is [bool]) { $enabled = $value }
+    elseif ([string]::Equals([string]$value, 'true', [StringComparison]::OrdinalIgnoreCase)) { $enabled = $true }
+    if ($enabled) {
+        return (New-Body 'pass' 'applicationDefaults.preloadEnabled is true' -Evidence ('preloadEnabled=' + $value))
+    }
+    return (New-Body 'fail' 'applicationDefaults.preloadEnabled is not true' -Evidence ('preloadEnabled=' + $value))
 }
 
 # ---------------------------------------------------------------------------

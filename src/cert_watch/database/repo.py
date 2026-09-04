@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso
+from cert_watch.database.connection import _connect, _iso, _parse_iso, parse_san_dns_names
+from cert_watch.host_validation import hostname_is_valid
 
 # ---------- dataclasses ----------
 
@@ -118,9 +119,9 @@ class SqliteCertificateRepository(CertificateRepository):
                 INSERT INTO certificates
                 (id, subject, issuer, not_before, not_after, san_dns_names,
                  fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
-                 parent_cert_id, chain_valid, replaces_cert_id, notes,
+                 parent_cert_id, chain_valid, replaces_cert_id,
                  created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     cert_id,
@@ -138,7 +139,6 @@ class SqliteCertificateRepository(CertificateRepository):
                     self.parent_cert_id,
                     cv,
                     self.replaces_cert_id,
-                    cert.notes,
                     now,
                     now,
                 ),
@@ -183,15 +183,6 @@ class SqliteCertificateRepository(CertificateRepository):
         from cert_watch.database.cert_ops import delete_certificate_cascade
 
         delete_certificate_cascade(self.db_path, cert_id)
-
-    def update_notes(self, cert_id: str, notes: str) -> None:
-        now = _iso(datetime.now(UTC))
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE certificates SET notes = ?, updated_at = ? WHERE id = ?",
-                (notes, now, cert_id),
-            )
-            conn.commit()
 
     def get_tags(self, cert_id: str) -> str:
         """Return the cert's own (normalized) tag string, or '' if not found."""
@@ -541,11 +532,13 @@ class SqliteTrustAnchorRepository:
             conn.commit()
         return anchor_id
 
-    def list_all(self) -> list[Certificate]:
-        from cert_watch.database.connection import _row_to_cert
-        with _connect(self.db_path) as conn:
-            rows = conn.execute("SELECT * FROM trust_anchors ORDER BY created_at").fetchall()
-        return [_row_to_cert(r) for r in rows]
+    def list_all(self) -> list[TrustAnchorEntry]:
+        """List all trust anchors. Delegates to :meth:`list_entries`; the
+        previous implementation called ``_row_to_cert`` against the
+        ``trust_anchors`` table (which lacks certificate columns) and would
+        crash — it was also never called anywhere. Kept for interface parity
+        with the other repositories."""
+        return self.list_entries()
 
     def list_entries(
         self, *, conn: sqlite3.Connection | None = None
@@ -562,7 +555,7 @@ class SqliteTrustAnchorRepository:
                 issuer=r["issuer"],
                 not_before=_parse_iso(r["not_before"]),
                 not_after=_parse_iso(r["not_after"]),
-                san_dns_names=json.loads(r["san_dns_names"]),
+                san_dns_names=parse_san_dns_names(r["san_dns_names"]),
                 fingerprint_sha256=r["fingerprint_sha256"],
                 raw_der=bytes(r["raw_der"]),
                 created_at=_parse_iso(r["created_at"]),
@@ -601,6 +594,8 @@ class SqliteHostRepository:
         starttls_mode: str = "",
     ) -> str:
         import sqlite3
+        if not hostname_is_valid(hostname):
+            raise ValueError("hostname must be syntactically valid before persistence")
         host_id = str(uuid.uuid4())
         with _connect(self.db_path) as conn:
             try:

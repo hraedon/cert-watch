@@ -1,0 +1,115 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Certificate policy rules</h2>
+    <span class="cw-hint">compliance rules for certificate posture</span>
+  </div>
+  {% if policy_set %}
+  <div class="cw-panel-body">
+    <div class="cw-note">
+      {{ icons.svg_icon('shield', 14) }}
+      <div>
+        Violations of <b>critical</b> or <b>warning</b> rules generate alerts;
+        <b>info</b> rules are advisory only. Env vars always override GUI values.
+      </div>
+    </div>
+  </div>
+  <form method="post" action="/settings/policy">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="default_severity" value="{{ policy_set.default_severity }}">
+    <div class="cw-table-clip">
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Rule</th>
+          <th>Enabled</th>
+          <th>Severity</th>
+          <th>Parameters</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in policy_set.rules %}
+        <tr>
+          <td>
+            <input type="hidden" name="rule_id" value="{{ rule.rule_id }}">
+            <input type="hidden" name="category_{{ rule.rule_id }}" value="{{ rule.category }}">
+            <span class="cw-id">{{ rule.rule_id | humanize_label }}</span>
+            <div class="cw-sub">{{ rule.category }}</div>
+          </td>
+          <td>
+            <label class="cw-toggle">
+              <input type="checkbox" name="enabled_{{ rule.rule_id }}" value="1"
+                     {% if rule.enabled %}checked{% endif %}
+                     aria-label="Enable {{ rule.rule_id | humanize_label }}">
+              <span class="track"></span>
+            </label>
+          </td>
+          <td>
+            <select class="cw-select" name="severity_{{ rule.rule_id }}" aria-label="Severity for {{ rule.rule_id | humanize_label }}">
+              <option value="critical" {% if rule.severity == 'critical' %}selected{% endif %}>Critical</option>
+              <option value="warning" {% if rule.severity == 'warning' %}selected{% endif %}>Warning</option>
+              <option value="info" {% if rule.severity == 'info' %}selected{% endif %}>Info</option>
+            </select>
+          </td>
+          <td>
+            {% if rule.rule_id == 'key_size_rsa' %}
+              <div class="cw-field">
+                <label class="cw-label" for="min_rsa_{{ rule.rule_id }}">Min RSA bits</label>
+                <input class="cw-input" type="number" id="min_rsa_{{ rule.rule_id }}" name="min_rsa_{{ rule.rule_id }}"
+                       value="{{ rule.parameters.get('min_rsa', 2048) }}" min="1024" step="256">
+              </div>
+            {% elif rule.rule_id == 'key_size_ec' %}
+              <div class="cw-field">
+                <label class="cw-label" for="allowed_curves_{{ rule.rule_id }}">Allowed curves (comma-separated)</label>
+                <input class="cw-input mono" type="text" id="allowed_curves_{{ rule.rule_id }}" name="allowed_curves_{{ rule.rule_id }}"
+                       value="{{ rule.parameters.get('allowed_curves', []) | join(', ') }}"
+                       placeholder="secp256r1, secp384r1, secp521r1">
+              </div>
+            {% elif rule.rule_id == 'tls_version' %}
+              <div class="cw-field">
+                <label class="cw-label" for="min_tls_{{ rule.rule_id }}">Min TLS version</label>
+                <select class="cw-select" id="min_tls_{{ rule.rule_id }}" name="min_tls_{{ rule.rule_id }}">
+                  <option value="1.2" {% if rule.parameters.get('min_tls', '1.2') == '1.2' %}selected{% endif %}>TLS 1.2</option>
+                  <option value="1.3" {% if rule.parameters.get('min_tls') == '1.3' %}selected{% endif %}>TLS 1.3</option>
+                </select>
+              </div>
+            {% elif rule.rule_id == 'validity_max_days' %}
+              <div class="cw-field">
+                <label class="cw-label" for="max_days_{{ rule.rule_id }}">Max days</label>
+                <input class="cw-input" type="number" id="max_days_{{ rule.rule_id }}" name="max_days_{{ rule.rule_id }}"
+                       value="{{ rule.parameters.get('max_days', 398) }}" min="30" max="3650">
+              </div>
+            {% elif rule.rule_id == 'issuer_allowlist' %}
+              <div class="cw-field">
+                <label class="cw-label" for="allowed_issuers_{{ rule.rule_id }}">Allowed issuers (comma-separated)</label>
+                <input class="cw-input" type="text" id="allowed_issuers_{{ rule.rule_id }}" name="allowed_issuers_{{ rule.rule_id }}"
+                       value="{{ rule.parameters.get('allowed_issuers', []) | join(', ') }}"
+                       placeholder="Let's Encrypt Authority X3, DigiCert">
+              </div>
+            {% else %}
+              <span class="cw-muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    <div class="cw-panel-body">
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save policy settings</button>
+      </div>
+    </div>
+  </form>
+  {% else %}
+  {% call ui.empty('No policy rules configured', 'Initialize the defaults, then tune severities and parameters.', icon='shield') %}
+    <form method="post" action="/settings/policy">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="cw-btn primary">Initialize default policy</button>
+    </form>
+  {% endcall %}
+  {% endif %}
+</div>
+{% endblock %}

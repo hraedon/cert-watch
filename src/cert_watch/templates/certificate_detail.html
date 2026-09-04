@@ -2,666 +2,482 @@
 {% block title %}cert-watch — {{ subject_cn }}{% endblock %}
 
 {% import "macros/icons.html" as icons %}
-{% import "macros/urgency.html" as urgency_macros %}
+{% import "macros/ui.html" as ui %}
+
+{# One detail page for the whole asset: renders the certificate view when a
+   cert is stored, and degrades to the pending-host view when it isn't
+   (cert is none). Replaces the old certificate_detail + host_detail pair. #}
+
+{% macro detail_field(label, note='') %}
+  <div{% if note == 'wide' %} class="wide"{% endif %}>
+    <dt>{{ label }}</dt>
+    <dd>{{ caller() }}</dd>
+  </div>
+{% endmacro %}
 
 {% block content %}
-<div class="cw-page-wrap">
-  {# ---- Breadcrumb ---- #}
-  <div class="cw-breadcrumb">
-    <a href="/" class="cw-link">Certificates</a>
+<div class="cw-wrap">
+  <nav class="cw-crumbs" aria-label="Breadcrumb">
+    <a href="/browse">Browse</a>
     {{ icons.svg_icon('chevron-right', 13) }}
-    <span class="mono cw-text-text-2">{{ subject_cn }}</span>
-  </div>
+    <span class="mono">{{ subject_cn }}</span>
+  </nav>
 
   {# ---- Header ---- #}
-  <div class="cw-page-head cw-page-head--start cw-mb-20">
+  <div class="cw-page-head">
     <div>
-      <div class="cw-flex cw-items-center cw-gap-12">
-        <h1 class="mono cw-fz-22 cw-fw-600 cw-ls-dot-5 cw-mt-0 cw-mb-0" data-testid="cert-detail-heading">{{ subject_cn }}</h1>
-        {{ urgency_macros.urgency_pill(urgency) }}
-        {% if posture %}
-        <span class="cw-grade" style="color:{% if posture.grade in ('A+', 'A') %}var(--ok){% elif posture.grade == 'B' %}var(--accent){% elif posture.grade == 'C' %}var(--warn){% else %}var(--crit){% endif %}" title="TLS posture grade {{ posture.grade }}">{{ posture.grade }}</span>
-        {% endif %}
-        {% if chain_issue == 'incomplete' %}
-          <span class="cw-chip tone-warn">{{ icons.svg_icon('alert', 11, 1.8) }}Incomplete chain</span>
-        {% elif chain_issue == 'invalid' %}
-          <span class="cw-chip tone-crit">{{ icons.svg_icon('alert', 11, 1.8) }}Invalid chain</span>
+      <div class="cw-chiprow">
+        <h1 class="mono" data-testid="{{ 'cert-detail-heading' if cert else 'host-detail-heading' }}">{{ subject_cn }}</h1>
+        {% if cert %}
+          {{ ui.status(urgency) }}
+          {% if posture %}{{ ui.grade(posture.grade) }}{% endif %}
+          {% if chain_issue == 'incomplete' %}
+            <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.8) }}Incomplete chain</span>
+          {% elif chain_issue == 'invalid' %}
+            <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}Invalid chain</span>
+          {% endif %}
+        {% elif scan_status == 'failure' %}
+          {{ ui.status(label='Scan failed', tone='t-crit') }}
+        {% else %}
+          {{ ui.status(label='Pending', tone='t-muted') }}
         {% endif %}
       </div>
-      <div class="cw-flex cw-items-center cw-gap-10 cw-mt-9">
-        {% if cert.source == 'scanned' %}
+      <div class="cw-chiprow cw-metarow">
+        {% if not cert or cert.source == 'scanned' %}
           <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
         {% elif cert.source == 'uploaded' %}
           <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
         {% else %}
           <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
         {% endif %}
-        <span class="mono cw-fz-12-5 cw-text-text-3">
-          {% if cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}{% elif cert.source == 'uploaded' %}uploaded file{% endif %}
+        <span class="mono cw-muted">
+          {% if cert and cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}
+          {% elif cert and cert.source == 'uploaded' %}uploaded file
+          {% elif not cert %}
+            {% if scan_status == 'failure' %}last scan failed{% elif scan_at %}last scanned {{ scan_at[:16] | replace('T', ' ') }}{% else %}no scan recorded{% endif %}
+          {% endif %}
         </span>
       </div>
     </div>
-    <div class="cw-flex cw-gap-8">
+    <div class="cw-page-actions">
       {% if may_write and host_id %}
         <form method="post" action="/hosts/{{ host_id }}/scan" class="cw-inline">
           <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-          <button type="submit" class="cw-btn primary" data-testid="cert-scan-btn">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
+          <button type="submit" class="cw-btn primary" data-testid="{{ 'cert-scan-btn' if cert else 'host-scan-btn' }}">{{ icons.svg_icon('refresh', 14) }}Scan now</button>
         </form>
       {% endif %}
-      <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn" data-testid="cert-download-pem">{{ icons.svg_icon('download', 14) }}Download PEM</a>
-      {% if may_write %}
-      <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
-        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="cw-iconbtn" title="Delete" data-testid="cert-delete-btn">{{ icons.svg_icon('trash', 15) }}</button>
-      </form>
+      {% if cert %}
+        <a href="/api/certificates/{{ cert_id }}/pem" class="cw-btn" data-testid="cert-download-pem">{{ icons.svg_icon('download', 14) }}Download PEM</a>
+        {% if may_write %}
+        <form method="post" action="/certificates/{{ cert_id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this certificate?">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-iconbtn" title="Delete" data-testid="cert-delete-btn">{{ icons.svg_icon('trash', 15) }}</button>
+        </form>
+        {% endif %}
+      {% elif may_write %}
+        <form method="post" action="/hosts/{{ host_id }}/delete" class="cw-inline confirm-form" data-confirm="Remove this host?">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="cw-btn danger" data-testid="host-delete-btn">{{ icons.svg_icon('trash', 14) }}Remove</button>
+        </form>
       {% endif %}
     </div>
   </div>
 
-  {# ---- Two-column layout ---- #}
-  <div class="cw-layout-16-1">
-    {# ---- Left column ---- #}
+  {% if scan_error and not cert %}
+  <div class="cw-panel">
+    <div class="cw-panel-body">
+      <div class="cw-note t-crit">
+        {{ icons.svg_icon('alert', 16) }}
+        <div>
+          <b>Scan failed</b>
+          <div class="mono">{{ scan_error }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="{{ 'cw-cols' if cert else '' }}">
+    {# ================= Left column ================= #}
     <div>
-      {# Operational Summary #}
+      {% if cert %}
+      {# ---- Validity meter: the headline fact ---- #}
+      {% set _vtone = ui.tone_for(urgency) %}
+      <div class="cw-panel">
+        <div class="cw-panel-body">
+          <div class="cw-kv-label">Time remaining</div>
+          <div class="cw-hero">
+            <span class="mono {{ _vtone }} cw-hero-num">{% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}</span>
+            {% if days_remaining >= 0 %}<span class="cw-muted">days</span>{% endif %}
+          </div>
+          {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
+          {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
+          {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
+          <svg class="cw-bar thick {{ _vtone }}" role="img" aria-label="{{ pct }}% of validity elapsed" preserveAspectRatio="none">
+            <rect class="track" width="100%" height="100%"/>
+            <rect class="fill" width="{{ pct }}%" height="100%"/>
+            <rect class="mark" x="{{ pct }}%" width="2" height="100%"/>
+          </svg>
+          <div class="cw-validity-ends mono">
+            <span class="cw-muted">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
+            <span class="cw-muted">{{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }} · expires</span>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+
+      {# ---- Operational summary (shared: cert + pending host) ---- #}
       {% if host_info %}
-      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-14">
-          <span class="cw-fz-13-5 cw-fw-600">Operational summary</span>
-          <div class="cw-spacer"></div>
+      <div class="cw-panel">
+        <div class="cw-panel-head">
+          <h2>Operational summary</h2>
           {% if may_write and host_id %}
-          <button class="cw-btn ghost sm" type="button" data-action="toggle-owner" data-testid="owner-edit-btn">
-            {{ icons.svg_icon('key', 13) }}<span id="owner-btn-label">Edit</span>
-          </button>
-          {% endif %}
-        </div>
-        <div id="owner-view">
-          <div class="cw-grid-2-16-22">
-            <div>
-              <div class="cw-detail-label">Owner</div>
-              <div class="mono cw-fz-12-5 cw-text-text">{{ host_info.owner_name or '—' }}</div>
-              {% if host_info.owner_email %}
-              <div class="mono cw-fz-12-5 cw-muted">{{ host_info.owner_email }}</div>
-              {% endif %}
-            </div>
-            <div>
-              <div class="cw-detail-label">Renewal</div>
-              <div class="mono cw-fz-12-5 cw-text-text">
-                {{ renewal_method_label }}
-                {% if renewal_method_indicator %}
-                  <span class="cw-chip cw-chip-{{ 'renewed' if renewal_method_indicator == 'auto-renews' else 'incomplete' }}">{{ renewal_method_indicator }}</span>
-                {% endif %}
-              </div>
-            </div>
-            {% if host_info.runbook_url %}
-            <div class="cw-col-span-2">
-              <div class="cw-detail-label">Runbook</div>
-              <div class="mono cw-fz-12-5">
-                {% if host_info.runbook_url.startswith(('http://', 'https://')) %}
-                <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
-                {% else %}
-                {{ host_info.runbook_url }}
-                {% endif %}
-              </div>
-            </div>
-            {% endif %}
-            <div class="cw-col-span-2">
-              <div class="cw-detail-label">Chain status</div>
-              <div class="mono cw-fz-12-5 cw-text-text">
-                {% if chain_status == 'public' or chain_status == 'private' %}
-                  <span class="cw-chip cw-chip-public">Verified to trusted root</span>
-                {% elif chain_status == 'incomplete' %}
-                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">⚠</span> Incomplete — {% if cert.source == 'uploaded' %}missing intermediate(s) in uploaded file{% else %}server missing intermediate(s){% endif %}</span>
-                {% elif chain_status == 'self-signed' %}
-                  <span class="cw-chip">Self-signed</span>
-                {% elif chain_status == 'invalid' %}
-                  <span class="cw-chip cw-chip-incomplete"><span aria-hidden="true">✗</span> Chain validation failed</span>
-                {% else %}
-                  <span class="cw-chip cw-chip-muted">Issuer not uploaded</span>
-                {% endif %}
-                {% if posture and posture.get('chain_incomplete') %}
-                  <span class="cw-chip tone-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
-                {% endif %}
-              </div>
-            </div>
-          </div>
-        </div>
-        {% if may_write and host_id %}
-        <form method="post" action="/certificates/{{ cert_id }}/owner" class="cw-inline">
-          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-        </form>
-        <div id="host-notes-view" class="cw-mt-10">
-          <div class="cw-flex cw-items-center cw-gap-8 cw-mb-8">
-            <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
-            <div class="cw-spacer"></div>
-            <button class="cw-btn ghost sm" type="button" data-action="toggle-host-notes">
-              {{ icons.svg_icon('key', 13) }}<span id="host-notes-btn-label">Edit</span>
-            </button>
-          </div>
-          <div id="host-notes-display" class="cw-notes-pre">{{ host_info.notes or 'Add notes about this host (visible on every certificate on it)…' }}</div>
-        </div>
-        <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-inline">
-          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-          <textarea name="notes" class="cw-hidden" id="host-notes-hidden">{{ host_info.notes }}</textarea>
-        </form>
-        <div id="host-notes-edit" class="cw-hidden cw-mt-10">
-          <textarea id="host-notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ host_info.notes }}</textarea>
-          <div class="cw-flex cw-gap-8 cw-mt-8">
-            <button class="cw-btn sm" type="button" data-action="toggle-host-notes">Cancel</button>
-            <button class="cw-btn primary sm" type="button" data-action="save-host-notes">Save</button>
-          </div>
-        </div>
-        {% elif host_info.notes %}
-        <div class="cw-mt-10">
-          <div class="cw-detail-label">Host notes <span class="cw-muted cw-fz-11">— apply to all certificates on this host</span></div>
-          <div class="mono cw-fz-12-5 cw-text-text cw-notes-pre">{{ host_info.notes }}</div>
-        </div>
-        {% endif %}
-        <div id="owner-edit" class="cw-hidden">
-          <div class="cw-grid-2-16-22">
-            <div>
-              <label class="cw-detail-label">Owner name</label>
-              <input type="text" id="owner-name" name="owner_name" class="cw-input cw-fz-12-5" value="{{ host_info.owner_name or '' }}" placeholder="Team or individual">
-            </div>
-            <div>
-              <label class="cw-detail-label">Owner email</label>
-              <input type="text" id="owner-email" name="owner_email" class="cw-input cw-fz-12-5" value="{{ host_info.owner_email or '' }}" placeholder="ops@example.com">
-            </div>
-            {% if slack_configured %}
-            <div>
-              <label class="cw-detail-label">Slack channel</label>
-              <input type="text" id="owner-slack" name="owner_slack" class="cw-input cw-fz-12-5" value="{{ host_info.owner_slack or '' }}" placeholder="#alerts">
-            </div>
-            {% endif %}
-            <div>
-              <label class="cw-detail-label">Renewal method</label>
-              <select id="renewal-method" name="renewal_method" class="cw-input cw-fz-12-5">
-                <option value="" {% if not host_info.renewal_method %}selected{% endif %}>—</option>
-                <option value="acme" {% if host_info.renewal_method == 'acme' %}selected{% endif %}>ACME</option>
-                <option value="cert-manager" {% if host_info.renewal_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
-                <option value="manual" {% if host_info.renewal_method == 'manual' %}selected{% endif %}>Manual</option>
-              </select>
-            </div>
-            <div class="cw-col-span-2">
-              <label class="cw-detail-label">Runbook URL</label>
-              <input type="text" id="runbook-url" name="runbook_url" class="cw-input cw-fz-12-5" value="{{ host_info.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
-            </div>
-          </div>
-          <div class="cw-flex cw-gap-8 cw-mt-10">
-            <button class="cw-btn sm" type="button" data-action="toggle-owner">Cancel</button>
-            <button class="cw-btn primary sm" type="button" data-action="save-owner" data-testid="owner-save-btn">Save</button>
-          </div>
-        </div>
-      </div>
-      {% endif %}
-
-      {# Security posture #}
-      {% if posture %}
-      {% set pg = posture.grade %}
-      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-14">
-          {{ icons.svg_icon('shield', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Security posture</span>
-          <span class="cw-chip cw-chip-{{ 'ok' if pg in ('A', 'A+') else 'warn' if pg == 'B' else 'incomplete' if pg == 'C' else 'crit' }} cw-ml-auto">{{ pg }}</span>
-        </div>
-        <div class="cw-flex cw-flex-col cw-gap-6">
-          {% for f in posture.findings %}
-          {% if f.status == 'pass' %}
-          <div class="cw-flex cw-items-start cw-gap-8">
-            <span class="cw-fz-12 cw-text-text-ok cw-min-w-16">{{ icons.svg_icon('check', 13) }}</span>
-            <div>
-              <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
-            </div>
-          </div>
-          {% elif f.status == 'warn' %}
-          <div class="cw-flex cw-items-start cw-gap-8">
-            <span class="cw-fz-12 cw-text-text-warn cw-min-w-16">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
-            <div>
-              <span class="cw-fz-12-5 cw-text-text">{{ f.message }}</span>
-            </div>
-          </div>
-          {% elif f.status == 'fail' %}
-          <div class="cw-flex cw-items-start cw-gap-8">
-            <span class="cw-fz-12 cw-text-text-crit cw-min-w-16">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
-            <div>
-              <span class="cw-fz-12-5 cw-text-text cw-fw-600">{{ f.message }}</span>
-            </div>
-          </div>
-          {% elif f.status == 'info' %}
-          <div class="cw-flex cw-items-start cw-gap-8">
-            <span class="cw-fz-12 cw-text-text-3 cw-min-w-16">—</span>
-            <div>
-              <span class="cw-fz-12-5 cw-text-text-3">{{ f.message }}</span>
-            </div>
-          </div>
-          {% endif %}
-          {% endfor %}
-        </div>
-        {% if posture.protocol_version %}
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mt-10">
-          <span class="cw-fz-11 cw-text-text-3">TLS version:</span>
-          <span class="cw-chip">{{ posture.protocol_version }}</span>
-        </div>
-        {% endif %}
-        {% if may_write %}
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mt-10">
-          <button class="cw-btn ghost sm" type="button" data-action="check-revocation" data-cert-id="{{ cert_id }}">{{ icons.svg_icon('refresh', 13) }}Check revocation</button>
-          <span id="revocation-status" class="cw-fz-11 cw-text-text-3"></span>
-        </div>
-        <div id="revocation-results" class="cw-flex cw-flex-col cw-gap-6 cw-mt-10 cw-hidden"></div>
-        {% endif %}
-      </div>
-      {% endif %}
-
-      {# Validity meter #}
-      <div class="cw-panel cw-panel--p-16-18 cw-mb-16">
-        <div class="cw-flex cw-justify-between cw-items-end cw-mb-12">
-          <div>
-            <div class="mono cw-fz-11 cw-text-text-3 cw-fw-500 cw-mb-4 cw-ls-04em">TIME REMAINING</div>
-            <div class="cw-flex cw-items-baseline cw-gap-8">
-              {% set _tone = urgency | urgency_tone %}
-              <span class="cw-fz-30 cw-fw-600 cw-ls-04em cw-tone-text" style="--tone:{{ _tone }}">
-                {% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}
-              </span>
-              {% if days_remaining >= 0 %}<span class="cw-fz-14 cw-text-text-2">days</span>{% endif %}
-            </div>
-          </div>
-        </div>
-        {# Progress bar #}
-        {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
-        {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
-        {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
-        <div class="cw-validity-bar-track">
-          <div class="cw-urgency-bar-fill" style="width:{{ pct }}%;--tone:{{ _tone }}"></div>
-          <div class="cw-validity-now-marker" style="left:{{ pct }}%"></div>
-        </div>
-        <div class="cw-flex cw-justify-between cw-mt-8 cw-fz-11-5 mono">
-          <span class="cw-text-text-3">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
-          <span class="cw-text-text-3">{{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }} · expires</span>
-        </div>
-      </div>
-
-      {# SANs #}
-      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
-          {{ icons.svg_icon('globe', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Subject Alternative Names</span>
-          <span class="mono cw-fz-11-5 cw-text-text-3 cw-bg-inset cw-p-san-count">{{ cert.san_dns_names | length }}</span>
-        </div>
-        <div class="cw-flex cw-wrap cw-gap-7">
-          {% for san in cert.san_dns_names %}
-            <span class="cw-chip san cw-fz-12 cw-p-san-chip">
-              {{ icons.svg_icon('globe', 11, 1.5) }}{{ san }}
-            </span>
-          {% endfor %}
-          {% if not cert.san_dns_names %}
-            <span class="cw-sub">no SAN entries</span>
-          {% endif %}
-        </div>
-      </div>
-
-      {# Renewal history #}
-      <div class="cw-panel cw-panel--p-15-18 cw-mb-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
-          {{ icons.svg_icon('refresh', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Renewal history</span>
-        </div>
-        {% if renewal_history %}
-          {% for rh in renewal_history %}
-            <div class="cw-chain-node cw-mb-10">
-              <div class="cw-chain-dot {% if rh.is_current %}cw-border-accent{% else %}cw-border-text-2{% endif %}"></div>
-              {% if not loop.last %}<div class="cw-chain-line"></div>{% endif %}
-              <div class="cw-panel cw-panel--p-11-13">
-                <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
-                  <span class="cw-fz-12-5 mono cw-text-text">
-                    {{ rh.not_before[:10] if rh.not_before else '—' }}
-                    {% if rh.is_current %}<span class="cw-chip cw-chip-public">current</span>{% endif %}
-                  </span>
-                  <a href="/certificates/{{ rh.id }}" class="cw-chip">
-                    {{ rh.fingerprint_sha256[:8] if rh.fingerprint_sha256 else '—' }}…
-                  </a>
+          <details class="cw-editor">
+            <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <div class="cw-editor-body">
+              <form method="post" action="/certificates/{{ cert_id if cert else host_id }}/owner" class="cw-form">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <div class="cw-form-grid">
+                  <div class="cw-field">
+                    <label class="cw-label">Owner name</label>
+                    <input type="text" name="owner_name" class="cw-input" value="{{ host_info.owner_name or '' }}" placeholder="Team or individual">
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label">Owner email</label>
+                    <input type="text" name="owner_email" class="cw-input" value="{{ host_info.owner_email or '' }}" placeholder="ops@example.com">
+                  </div>
+                  {% if slack_configured %}
+                  <div class="cw-field">
+                    <label class="cw-label">Slack channel</label>
+                    <input type="text" name="owner_slack" class="cw-input" value="{{ host_info.owner_slack or '' }}" placeholder="#alerts">
+                  </div>
+                  {% endif %}
+                  <div class="cw-field">
+                    <label class="cw-label">Renewal method</label>
+                    <select name="renewal_method" class="cw-select">
+                      <option value="" {% if not host_info.renewal_method %}selected{% endif %}>—</option>
+                      <option value="acme" {% if host_info.renewal_method == 'acme' %}selected{% endif %}>ACME</option>
+                      <option value="cert-manager" {% if host_info.renewal_method == 'cert-manager' %}selected{% endif %}>cert-manager</option>
+                      <option value="manual" {% if host_info.renewal_method == 'manual' %}selected{% endif %}>Manual</option>
+                    </select>
+                  </div>
+                  <div class="cw-field wide">
+                    <label class="cw-label">Runbook URL</label>
+                    <input type="text" name="runbook_url" class="cw-input" value="{{ host_info.runbook_url or '' }}" placeholder="https://wiki.example.com/cert-renewal">
+                  </div>
                 </div>
-              </div>
-            </div>
-          {% endfor %}
-        {% else %}
-          <div class="cw-fz-12 cw-text-text-3">No renewal history</div>
-        {% endif %}
-      </div>
-
-      {# Certificate details #}
-      <div class="cw-panel cw-panel--p-16-18">
-        <div class="cw-fz-13-5 cw-fw-600 cw-mb-14">Certificate details</div>
-        <div class="cw-grid-2-16-22">
-          {# SUBJECT row intentionally omitted — it duplicates the mono CN in the H1
-             (design handoff 2026-06-02, plan 005 Ph6c). Full identity: H1 + SANs panel. #}
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">ISSUER</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5 cw-word-break">{{ cert.issuer }}</div>
-          </div>
-          <div>
-            <div class="cw-detail-label">KEY</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ key_type }}</div>
-          </div>
-          <div>
-            <div class="cw-detail-label">SIGNATURE</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ sig_alg }}</div>
-          </div>
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">SERIAL NUMBER</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ serial }}</div>
-          </div>
-          <div class="cw-col-span-2">
-            <div class="cw-detail-label">SHA-256 FINGERPRINT</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ fingerprint }}</div>
-          </div>
-          <div>
-            <div class="cw-detail-label">ISSUED</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}</div>
-          </div>
-          <div>
-            <div class="cw-detail-label">LAST SCANNED</div>
-            <div class="mono cw-fz-12-5 cw-text-text cw-leading-1-5">{{ last_scan[:10] if last_scan else '—' }}</div>
-          </div>
-        </div>
-      </div>
-
-      {# Drift events #}
-      {% if drift_events %}
-      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-13">
-          {{ icons.svg_icon('swap', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Configuration drift</span>
-          <div class="cw-spacer"></div>
-          <span class="cw-fz-11-5 cw-text-text-3">detected across re-scans</span>
-        </div>
-        <div class="cw-flex cw-flex-col cw-gap-9">
-          {% for d in drift_events %}
-            {% set high = d.sev == 'high' %}
-            <div class="cw-drift-card {% if high %}cw-drift-high{% else %}cw-bg-inset{% endif %}">
-              {{ icons.svg_icon('swap' if not high else 'alert', 14, 1.8) }}
-              <div style="min-width:0;flex:1">
-                <div class="cw-flex cw-items-center cw-gap-9 cw-wrap">
-                  <span class="cw-fz-12-5 cw-fw-600" style="color:{% if high %}var(--crit){% else %}var(--text){% endif %}">{{ d.field }}</span>
-                  {% if high %}<span class="cw-chip tone-crit">high</span>{% endif %}
-                  <span class="mono cw-fz-11 cw-text-text-3">{{ d.when }}</span>
+                <div class="cw-form-foot">
+                  <button class="cw-btn primary sm" type="submit" data-testid="{{ 'owner-save-btn' if cert else 'host-owner-save-btn' }}">Save</button>
+                  <span class="cw-hint">Owner and renewal apply to every certificate on this host.</span>
                 </div>
-                <div class="mono cw-fz-12 cw-text-text-2 cw-mt-4">{{ d.change }}</div>
-              </div>
+              </form>
             </div>
-          {% endfor %}
-        </div>
-      </div>
-      {% endif %}
-
-      {# Tags #}
-      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
-          {{ icons.svg_icon('tag', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Tags</span>
-          <span class="cw-muted cw-fz-11">— route alerts to teams (see Alerts settings)</span>
-          <div class="cw-spacer"></div>
-          {% if may_write %}
-          <details class="cw-inline-edit">
-            <summary class="cw-btn ghost sm">{{ icons.svg_icon('key', 13) }}Edit</summary>
-            <form method="post" action="/certificates/{{ cert_id }}/tags" class="cw-mt-8">
-              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-              <input class="cw-input" type="text" name="tags" value="{{ cert_tags | join(', ') }}"
-                     list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
-              <datalist id="cw-all-tags">
-                {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
-              </datalist>
-              <div class="cw-muted cw-fz-11 cw-mt-3">Edits this certificate's own tags. Host tags are inherited automatically.</div>
-              <button type="submit" class="cw-btn primary sm cw-mt-8">Save tags</button>
-            </form>
           </details>
           {% endif %}
         </div>
-        {% if effective_tags %}
-        <div class="cw-flex cw-gap-8 cw-wrap">
-          {% for t in effective_tags %}
-          <span class="cw-chip{% if t not in cert_tags %} tone-muted{% endif %}">{{ t }}{% if t not in cert_tags %} <span class="cw-muted cw-fz-11">(host)</span>{% endif %}</span>
-          {% endfor %}
+        <div class="cw-panel-body">
+          <dl class="cw-kv">
+            {% call detail_field('Owner') %}
+              {{ host_info.owner_name or '—' }}
+              {% if host_info.owner_email %}<div class="cw-muted">{{ host_info.owner_email }}</div>{% endif %}
+            {% endcall %}
+            {% call detail_field('Renewal') %}
+              {{ renewal_method_label or '—' }}
+              {% if renewal_method_indicator %}
+                <span class="cw-chip {{ 't-ok' if renewal_method_indicator == 'auto-renews' else 't-warn' }}">{{ renewal_method_indicator }}</span>
+              {% endif %}
+            {% endcall %}
+            {% if not cert %}
+            {% call detail_field('Alert threshold') %}{{ host_info.threshold_days or '14' }} days{% endcall %}
+            {% endif %}
+            {% if host_info.runbook_url %}
+            {% call detail_field('Runbook', 'wide') %}
+              {% if host_info.runbook_url.startswith(('http://', 'https://')) %}
+                <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
+              {% else %}{{ host_info.runbook_url }}{% endif %}
+            {% endcall %}
+            {% endif %}
+            {% if cert %}
+            {% call detail_field('Chain status', 'wide') %}
+              {% if chain_status in ('public', 'private') %}
+                <span class="cw-chip t-ok">Verified to trusted root</span>
+              {% elif chain_status == 'incomplete' %}
+                <span class="cw-chip t-warn">Incomplete — {% if cert.source == 'uploaded' %}missing intermediate(s) in uploaded file{% else %}server missing intermediate(s){% endif %}</span>
+              {% elif chain_status == 'self-signed' %}
+                <span class="cw-chip">Self-signed</span>
+              {% elif chain_status == 'invalid' %}
+                <span class="cw-chip t-crit">Chain validation failed</span>
+              {% else %}
+                <span class="cw-chip t-muted">Issuer not uploaded</span>
+              {% endif %}
+              {% if posture and posture.get('chain_incomplete') %}
+                <span class="cw-chip t-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
+              {% endif %}
+            {% endcall %}
+            {% endif %}
+          </dl>
         </div>
-        {% else %}
-        <div class="cw-muted cw-fz-12">No tags yet.</div>
-        {% endif %}
+        <div class="cw-panel-body">
+          <div class="cw-panel-head-inline">
+            <span class="cw-kv-label">Notes <span class="cw-muted">— operational notes for this host</span></span>
+            {% if may_write and host_id %}
+            <details class="cw-editor">
+              <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+              <div class="cw-editor-body">
+                <form method="post" action="/hosts/{{ host_id }}/notes" class="cw-form">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  <textarea name="notes" class="cw-textarea mono" spellcheck="false">{{ host_info.notes }}</textarea>
+                  <div class="cw-form-foot"><button class="cw-btn primary sm" type="submit">Save</button></div>
+                </form>
+              </div>
+            </details>
+            {% endif %}
+          </div>
+          <pre class="cw-notes-pre">{{ host_info.notes or 'Add operational notes for this host (visible on every certificate on it)…' }}</pre>
+        </div>
       </div>
+      {% endif %}
 
-      {# Notes #}
-      <div class="cw-panel cw-panel--p-15-18 cw-mt-16">
-        <div class="cw-flex cw-items-center cw-gap-8 cw-mb-12">
-          {{ icons.svg_icon('file', 15) }}
-          <span class="cw-fz-13-5 cw-fw-600">Certificate notes &amp; procedures</span>
-          <span class="cw-muted cw-fz-11">— this certificate only</span>
-          <div class="cw-spacer"></div>
+      {% if cert %}
+      {# ---- Security posture ---- #}
+      {% if posture %}
+      <div class="cw-panel">
+        <div class="cw-panel-head">
+          <h2>{{ icons.svg_icon('shield', 15) }} Security posture</h2>
+          {{ ui.grade(posture.grade) }}
+        </div>
+        <div class="cw-panel-body">
+          <div class="cw-findings">
+            {% for f in posture.findings %}
+              <div class="cw-finding">
+                {% if f.status == 'pass' %}<span class="t-ok">{{ icons.svg_icon('check', 13) }}</span>
+                {% elif f.status == 'warn' %}<span class="t-warn">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
+                {% elif f.status == 'fail' %}<span class="t-crit">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
+                {% else %}<span class="cw-muted">—</span>{% endif %}
+                <span class="{{ 'cw-muted' if f.status == 'info' }}{{ ' fail' if f.status == 'fail' }}">{{ f.message }}</span>
+              </div>
+            {% endfor %}
+          </div>
+          {% if posture.protocol_version %}
+          <div class="cw-chiprow cw-metarow">
+            <span class="cw-hint">TLS version:</span>
+            <span class="cw-chip">{{ posture.protocol_version }}</span>
+          </div>
+          {% endif %}
           {% if may_write %}
-          <form method="post" action="/certificates/{{ cert_id }}/notes" class="cw-inline">
-            <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
-            <textarea name="notes" class="cw-hidden" id="notes-hidden">{{ cert.notes }}</textarea>
-          </form>
-          <button class="cw-btn ghost sm" type="button" data-action="toggle-notes">
-            {{ icons.svg_icon('key', 13) }}<span id="notes-btn-label">Edit</span>
-          </button>
+          <div class="cw-chiprow cw-metarow">
+            <button class="cw-btn ghost sm" type="button" id="check-revocation" data-cert-id="{{ cert_id }}">{{ icons.svg_icon('refresh', 13) }}Check revocation</button>
+            <span id="revocation-status" class="cw-hint"></span>
+          </div>
+          <div id="revocation-results" class="cw-findings cw-hidden"></div>
           {% endif %}
         </div>
-        <div id="notes-view" {% if may_write %}data-action="toggle-notes"{% endif %} class="cw-notes-pre">{{ cert.notes or 'Add a renewal procedure, automation runbook, or owner…' }}</div>
-        {% if may_write %}
-        <div id="notes-edit" class="cw-hidden">
-          <textarea id="notes-textarea" class="cw-notes-textarea" spellcheck="false">{{ cert.notes }}</textarea>
-          <div class="cw-flex cw-gap-8 cw-mt-8">
-            <button class="cw-btn sm" type="button" data-action="toggle-notes">Cancel</button>
-            <button class="cw-btn primary sm" type="button" data-action="save-notes">Save</button>
+      </div>
+      {% endif %}
+
+      {# ---- SANs ---- #}
+      <div class="cw-panel">
+        <div class="cw-panel-head">
+          <h2>{{ icons.svg_icon('globe', 15) }} Subject Alternative Names</h2>
+          <span class="cw-chip inset">{{ cert.san_dns_names | length }}</span>
+        </div>
+        <div class="cw-panel-body">
+          <div class="cw-chiprow">
+            {% for san in cert.san_dns_names %}
+              <span class="cw-chip inset">{{ icons.svg_icon('globe', 11, 1.5) }}{{ san }}</span>
+            {% endfor %}
+            {% if not cert.san_dns_names %}<span class="cw-sub">no SAN entries</span>{% endif %}
           </div>
         </div>
-        {% endif %}
-        <div class="cw-flex cw-items-center cw-gap-6 cw-mt-9 cw-fz-11 cw-text-text-3">
-          {{ icons.svg_icon('clock', 11, 1.6) }}
-          <span>Markdown supported · saved to this certificate</span>
+      </div>
+
+      {# ---- Certificate details ---- #}
+      <div class="cw-panel">
+        <div class="cw-panel-head"><h2>Certificate details</h2></div>
+        <div class="cw-panel-body">
+          <dl class="cw-kv">
+            {# Subject omitted — it duplicates the mono CN in the H1 (plan 005 Ph6c). #}
+            {% call detail_field('Issuer', 'wide') %}{{ cert.issuer }}{% endcall %}
+            {% call detail_field('Key') %}{{ key_type }}{% endcall %}
+            {% call detail_field('Signature') %}{{ sig_alg }}{% endcall %}
+            {% call detail_field('Serial number', 'wide') %}{{ serial }}{% endcall %}
+            {% call detail_field('SHA-256 fingerprint', 'wide') %}{{ fingerprint }}{% endcall %}
+            {% call detail_field('Issued') %}{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}{% endcall %}
+            {% call detail_field('Last scanned') %}{{ last_scan[:10] if last_scan else '—' }}{% endcall %}
+          </dl>
         </div>
       </div>
+
+      {# ---- Renewal history ---- #}
+      <div class="cw-panel">
+        <div class="cw-panel-head"><h2>{{ icons.svg_icon('refresh', 15) }} Renewal history</h2></div>
+        <div class="cw-panel-body">
+          {% if renewal_history %}
+          <div class="cw-tl">
+            {% for rh in renewal_history %}
+            <div class="cw-tl-node {{ 't-accent' if rh.is_current else 't-neutral' }}">
+              <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
+              <div class="cw-chiprow">
+                <span class="mono">{{ rh.not_before[:10] if rh.not_before else '—' }}</span>
+                {% if rh.is_current %}<span class="cw-chip t-ok">current</span>{% endif %}
+                <a href="/certificates/{{ rh.id }}" class="cw-chip">{{ rh.fingerprint_sha256[:8] if rh.fingerprint_sha256 else '—' }}…</a>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <span class="cw-sub">No renewal history</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {# ---- Configuration drift ---- #}
+      {% if drift_events %}
+      <div class="cw-panel">
+        <div class="cw-panel-head">
+          <h2>{{ icons.svg_icon('swap', 15) }} Configuration drift</h2>
+          <span class="cw-hint">detected across re-scans</span>
+        </div>
+        <div class="cw-panel-body">
+          <div class="cw-findings">
+            {% for d in drift_events %}
+            <div class="cw-note {{ 't-crit' if d.sev == 'high' else '' }}">
+              {{ icons.svg_icon('alert' if d.sev == 'high' else 'swap', 14, 1.8) }}
+              <div>
+                <div class="cw-chiprow">
+                  <b>{{ d.field }}</b>
+                  {% if d.sev == 'high' %}<span class="cw-chip t-crit">high</span>{% endif %}
+                  <span class="mono cw-muted">{{ d.when }}</span>
+                </div>
+                <div class="mono">{{ d.change }}</div>
+              </div>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+      {% endif %}
+      {% endif %}
+
+      {# ---- Tags (shared) ---- #}
+      <div class="cw-panel">
+        <div class="cw-panel-head">
+          <h2>{{ icons.svg_icon('tag', 15) }} Tags</h2>
+          {% if may_write %}
+          <details class="cw-editor">
+            <summary class="cw-btn ghost sm">{{ icons.svg_icon('edit', 13) }}Edit</summary>
+            <div class="cw-editor-body">
+              <form method="post" action="{{ '/certificates/' ~ cert_id ~ '/tags' if cert else '/hosts/' ~ host_id ~ '/tags' }}" class="cw-form">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <input class="cw-input" type="text" name="tags" value="{{ cert_tags | join(', ') if cert else host_info.tags }}"
+                       list="cw-all-tags" placeholder="comma-separated, e.g. prod, payments">
+                <datalist id="cw-all-tags">
+                  {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
+                </datalist>
+                <div class="cw-hint">
+                  {% if cert %}Edits this certificate's own tags; host tags are inherited automatically.
+                  {% else %}Tags apply to every certificate on this host.{% endif %}
+                  Tags group the estate, scope team access, and route alerts.
+                </div>
+                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save tags</button></div>
+              </form>
+            </div>
+          </details>
+          {% endif %}
+        </div>
+        <div class="cw-panel-body">
+          {% set _shown_tags = effective_tags if cert else (host_info.tags.split(',') | map('trim') | select | list if host_info and host_info.tags else []) %}
+          {% if _shown_tags %}
+          <div class="cw-chiprow">
+            {% for t in _shown_tags %}
+              <span class="cw-chip{% if cert and t not in cert_tags %} t-muted{% endif %}">{{ t }}{% if cert and t not in cert_tags %} <span class="cw-muted">(host)</span>{% endif %}</span>
+            {% endfor %}
+          </div>
+          {% else %}
+          <span class="cw-sub">No tags yet.</span>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Note: per-certificate notes were removed (UI-INVENTORY V1). The single
+         notes surface is the host-scoped Notes panel in the Operational
+         summary section above. #}
+
+      {% if not cert %}
+      <div class="cw-panel">
+        <div class="cw-panel-body">
+          <div class="cw-note">
+            {{ icons.svg_icon('info', 14) }}
+            <div>
+              <b>Why is this host pending?</b>
+              <div>No certificate was successfully retrieved from this host/port during the last scan.
+              Common causes: wrong port, host temporarily offline, firewall blocking TLS, or expired/untrusted certificate.
+              Click <strong>Scan now</strong> to retry, or <strong>Remove</strong> if this host should not be monitored.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
 
-    {# ---- Right column — chain ---- #}
-    <div class="cw-panel cw-panel--p-16-18">
-      <div class="cw-flex cw-items-center cw-gap-8 cw-mb-16">
-        {{ icons.svg_icon('link', 15) }}
-        <span class="cw-fz-13-5 cw-fw-600">Certificate chain</span>
-      </div>
-
-      {# Leaf node #}
-      <div class="cw-chain-node cw-mb-14">
-        <div class="cw-chain-dot cw-border-accent"></div>
-        {% if chain %}<div class="cw-chain-line"></div>{% endif %}
-        <div class="cw-panel cw-panel--p-11-13">
-          <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
-            <span class="cw-host cw-fz-13">{{ subject_cn }}</span>
-            <span class="cw-label-leaf">Leaf · end-entity</span>
-          </div>
-          <div class="cw-flex cw-items-center cw-gap-10 cw-mt-8 cw-fz-11-5">
-            <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ key_type }}</span>
-            <span class="mono cw-text-text-3">exp {{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }}</span>
-            <div class="cw-spacer"></div>
-            <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ _tone }}">
-              <span class="cw-status-dot__mark"></span>
-              <span class="cw-fw-500">{% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}d{% endif %}</span>
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {# Chain intermediates/roots #}
-      {% for c in chain %}
-        {% set c_days = c.days_remaining %}
-        {% set c_urg = c_days | urgency %}
-        <div class="cw-mb-14 cw-chain-node">
-          <div class="cw-chain-dot cw-border-text-2"></div>
-          {% if not loop.last %}<div class="cw-chain-line"></div>{% endif %}
-          <div class="cw-panel cw-panel--p-11-13">
-            <div class="cw-flex cw-justify-between cw-items-center cw-gap-8">
-              <span class="cw-host cw-fz-13">{{ c.subject_cn }}</span>
-              <span class="cw-label-inter">Intermediate CA</span>
-            </div>
-            <div class="cw-flex cw-items-center cw-gap-10 cw-mt-8 cw-fz-11-5">
-              <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
-              <span class="mono cw-text-text-3">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
-              <div class="cw-spacer"></div>
-              {% set c_tone = c_urg | urgency_tone %}
-              <span class="cw-status-dot cw-dot-color" style="--dot-color:{{ c_tone }}">
-                <span class="cw-status-dot__mark"></span>
-                <span class="cw-fw-500">{% if c_days < 0 %}Expired{% else %}{{ c_days }}d{% endif %}</span>
-              </span>
+    {% if cert %}
+    {# ================= Right column — chain ================= #}
+    <div class="cw-panel">
+      <div class="cw-panel-head"><h2>{{ icons.svg_icon('link', 15) }} Certificate chain</h2></div>
+      <div class="cw-panel-body">
+        <div class="cw-tl">
+          <div class="cw-tl-node t-accent">
+            <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
+            <div class="cw-chaincard">
+              <div class="cw-chiprow between">
+                <span class="cw-id">{{ subject_cn }}</span>
+                <span class="cw-tl-role t-accent">Leaf · end-entity</span>
+              </div>
+              <div class="cw-chiprow cw-metarow">
+                <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ key_type }}</span>
+                <span class="mono cw-muted">exp {{ cert.not_after.strftime('%Y-%m-%d') if cert.not_after else '—' }}</span>
+                <span class="cw-spacer"></span>
+                {{ ui.status(urgency, label=('Expired' if days_remaining < 0 else days_remaining ~ 'd')) }}
+              </div>
             </div>
           </div>
+          {% for c in chain %}
+          <div class="cw-tl-node t-neutral">
+            <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
+            <div class="cw-chaincard">
+              <div class="cw-chiprow between">
+                <span class="cw-id">{{ c.subject_cn }}</span>
+                <span class="cw-tl-role">Intermediate CA</span>
+              </div>
+              <div class="cw-chiprow cw-metarow">
+                <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
+                <span class="mono cw-muted">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
+                <span class="cw-spacer"></span>
+                {% set c_urg = c.days_remaining | urgency %}
+                {{ ui.status(c_urg, label=('Expired' if c.days_remaining < 0 else c.days_remaining ~ 'd')) }}
+              </div>
+            </div>
+          </div>
+          {% endfor %}
         </div>
-      {% endfor %}
-
-      {# Chain status banner — 5-state #}
-      {% set _banner_map = {
-        'public': ('var(--panel-2)', 'var(--text-3)', 'link', 'public chain'),
-        'private': ('var(--accent-soft)', 'var(--accent)', 'shield', 'private root'),
-        'incomplete': ('var(--warn-soft)', 'var(--warn)', 'alert', 'chain incomplete'),
-        'self-signed': ('var(--panel-2)', 'var(--text-3)', 'key', 'self-signed'),
-        'invalid': ('var(--crit-soft)', 'var(--crit)', 'alert', 'chain invalid')
-      } %}
-      {% set _bg, _fg, _icon, _label = _banner_map.get(chain_status, ('var(--panel-2)', 'var(--text-3)', 'link', 'issuer not uploaded')) %}
-      <div class="cw-chain-banner cw-mt-4 cw-p-9-11 cw-banner-tone" style="--banner-bg:{{ _bg }};--banner-color:{{ _fg }}">
-        {{ icons.svg_icon(_icon, 14) }}
-        <span class="cw-fz-12 cw-fw-500">{{ _label }}</span>
+        {% set _chain_notes = {
+          'public': ('t-muted', 'link', 'public chain'),
+          'private': ('t-accent', 'shield', 'private root'),
+          'incomplete': ('t-warn', 'alert', 'chain incomplete'),
+          'self-signed': ('t-muted', 'key', 'self-signed'),
+          'invalid': ('t-crit', 'alert', 'chain invalid')
+        } %}
+        {% set _tone, _icon, _label = _chain_notes.get(chain_status, ('t-muted', 'link', 'issuer not uploaded')) %}
+        <div class="cw-note {{ _tone }} cw-metarow">{{ icons.svg_icon(_icon, 14) }}<b>{{ _label }}</b></div>
       </div>
     </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script nonce="{{ request.state.csp_nonce }}">
-function toggleNotes() {
-  var view = document.getElementById('notes-view');
-  var edit = document.getElementById('notes-edit');
-  var label = document.getElementById('notes-btn-label');
-  // notes-edit starts hidden via the `cw-hidden` class — see toggleOwner for
-  // why reading edit.style.display alone made the first click a no-op.
-  var hidden = edit.classList.contains('cw-hidden') ||
-               getComputedStyle(edit).display === 'none';
-  if (hidden) {
-    edit.classList.remove('cw-hidden');
-    edit.style.display = 'block';
-    view.style.display = 'none';
-    label.textContent = 'Cancel';
-    document.getElementById('notes-textarea').focus();
-  } else {
-    edit.classList.add('cw-hidden');
-    edit.style.display = 'none';
-    view.style.display = 'block';
-    label.textContent = 'Edit';
-  }
-}
-function saveNotes() {
-  var notes = document.getElementById('notes-textarea').value;
-  document.getElementById('notes-hidden').value = notes;
-  document.querySelector('#notes-hidden').closest('form').submit();
-}
-function toggleOwner() {
-  var view = document.getElementById('owner-view');
-  var edit = document.getElementById('owner-edit');
-  var label = document.getElementById('owner-btn-label');
-  // The edit panel starts hidden via the `cw-hidden` class, not an inline
-  // style, so the first click must read the class/computed display — checking
-  // edit.style.display alone made the first "Edit" click a no-op (it took two
-  // clicks to reveal the form, which read as "no way to set owner").
-  var hidden = edit.classList.contains('cw-hidden') ||
-               getComputedStyle(edit).display === 'none';
-  if (hidden) {
-    edit.classList.remove('cw-hidden');
-    edit.style.display = 'block';
-    view.style.display = 'none';
-    label.textContent = 'Cancel';
-  } else {
-    edit.classList.add('cw-hidden');
-    edit.style.display = 'none';
-    view.style.display = 'block';
-    label.textContent = 'Edit';
-  }
-}
-function saveOwner() {
-  var form = document.querySelector('form[action="/certificates/{{ cert_id }}/owner"]');
-  var fields = ['owner_name', 'owner_email', 'owner_slack', 'renewal_method', 'runbook_url'];
-  fields.forEach(function(id) {
-    var el = document.getElementById(id.replace('_', '-'));
-    if (el) {
-      var input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = id;
-      input.value = el.value;
-      form.appendChild(input);
-    }
-  });
-  form.submit();
-}
-function toggleHostNotes() {
-  var view = document.getElementById('host-notes-view');
-  var edit = document.getElementById('host-notes-edit');
-  var label = document.getElementById('host-notes-btn-label');
-  var hidden = edit.classList.contains('cw-hidden') ||
-               getComputedStyle(edit).display === 'none';
-  if (hidden) {
-    edit.classList.remove('cw-hidden');
-    edit.style.display = 'block';
-    view.style.display = 'none';
-    label.textContent = 'Cancel';
-    document.getElementById('host-notes-textarea').focus();
-  } else {
-    edit.classList.add('cw-hidden');
-    edit.style.display = 'none';
-    view.style.display = 'block';
-    label.textContent = 'Edit';
-  }
-}
-function saveHostNotes() {
-  var notes = document.getElementById('host-notes-textarea').value;
-  document.getElementById('host-notes-hidden').value = notes;
-  document.querySelector('#host-notes-hidden').closest('form').submit();
-}
-function checkRevocation(el) {
-  var certId = el.getAttribute('data-cert-id');
-  var status = document.getElementById('revocation-status');
-  var results = document.getElementById('revocation-results');
-  if (!certId || !status || !results) return;
-  status.textContent = 'Checking…';
-  fetch('/api/certificates/' + encodeURIComponent(certId) + '/revocation')
-    .then(function(r) {
-      if (!r.ok) throw new Error('status ' + r.status);
-      return r.json();
-    })
-    .then(function(data) {
-      status.textContent = '';
-      results.innerHTML = '';
-      results.style.display = 'block';
-      data.findings.forEach(function(f) {
-        var icon = f.status === 'pass' ? '{{ icons.svg_icon('check', 13) | replace("\n", "") }}' :
-          (f.status === 'warn' ? '{{ icons.svg_icon('alert', 13, 1.7) | replace("\n", "") }}' :
-          '{{ icons.svg_icon('swap', 13, 1.7) | replace("\n", "") }}');
-        var tone = f.status === 'pass' ? 'cw-text-text-ok' :
-          (f.status === 'warn' ? 'cw-text-text-warn' : 'cw-text-text-3');
-        var div = document.createElement('div');
-        div.className = 'cw-flex cw-items-start cw-gap-8';
-        var msgSpan = document.createElement('span');
-        msgSpan.className = 'cw-fz-12-5 cw-text-text';
-        msgSpan.textContent = f.message || '';
-        var iconSpan = document.createElement('span');
-        iconSpan.className = 'cw-fz-12 ' + tone + ' cw-min-w-16';
-        iconSpan.innerHTML = icon;
-        var msgDiv = document.createElement('div');
-        msgDiv.appendChild(msgSpan);
-        div.appendChild(iconSpan);
-        div.appendChild(msgDiv);
-        results.appendChild(div);
-      });
-    })
-    .catch(function(e) {
-      status.textContent = 'Failed to check revocation';
-      results.style.display = 'none';
-    });
-}
-</script>
+{% if cert and may_write and posture %}
+<script src="/static/js/detail.js" nonce="{{ request.state.csp_nonce }}"></script>
+{% endif %}
 {% endblock %}

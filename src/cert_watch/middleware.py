@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import hmac
 import ipaddress
@@ -150,6 +151,10 @@ _rate_locks: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(
 _rate_caches: list[dict[str, list[float]]] = [{} for _ in range(_RATE_SHARDS)]
 _RATE_CACHE_TTL = 10.0  # seconds before cache entry is considered stale
 _RATE_STALE_TTL = 600.0  # evict rows stale for 10 minutes
+# Guards the DB-backed rate_limits table against unbounded growth: cleanup is
+# throttled to once per _RATE_CACHE_TTL (not on every request), so the DELETE
+# query doesn't become part of the hot per-request path.
+_last_rate_cleanup = 0.0
 
 
 def _rate_shard(key: str) -> int:
@@ -185,13 +190,25 @@ def _extract_client_ip(request: Request) -> str:
     used for rate limiting. When trusted, the value is validated as a
     well-formed IP address to prevent garbage injection.
     """
+    peer = request.client.host if request.client else "unknown"
     if not _TRUST_PROXY:
-        return request.client.host if request.client else "unknown"
+        return peer
+
+    # A configured allowlist describes which immediate TCP peers may supply
+    # forwarding headers. Without this check, merely setting TRUSTED_PROXIES
+    # caused headers from every peer to be trusted (WI-144).
+    if _TRUSTED_PROXIES and peer not in _TRUSTED_PROXIES:
+        return peer
+
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         parts = [p.strip() for p in xff.split(",")]
         if _TRUSTED_PROXIES:
             for part in reversed(parts):
+                try:
+                    ipaddress.ip_address(part)
+                except ValueError:
+                    return peer
                 if part not in _TRUSTED_PROXIES:
                     return part
         elif len(parts) > 1:
@@ -205,7 +222,7 @@ def _extract_client_ip(request: Request) -> str:
                 pass
             else:
                 return real_ip
-    return request.client.host if request.client else "unknown"
+    return peer
 
 
 def _init_rate_db(db_path: Path | str) -> None:
@@ -278,6 +295,8 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
     now = datetime.now(UTC).timestamp()
     cutoff = now - window_seconds
 
+    global _last_rate_cleanup
+
     shard = _rate_shard(key)
     lock = _rate_locks[shard]
     cache = _rate_caches[shard]
@@ -299,31 +318,61 @@ def check_rate_limit(key: str, max_requests: int, window_seconds: int) -> bool:
                         init_schema(_rate_db_path)
                         _rate_db_initialized = True
             with _connect(_rate_db_path) as conn:
-                # Periodic cleanup of stale entries
-                cache_ts = cache.get(key)
-                if cache_ts is not None and now - min(cache_ts, default=now) < _RATE_CACHE_TTL:
-                    # Use cached timestamps (still valid within cache TTL)
-                    ts = [t for t in cache_ts if t >= cutoff]
-                else:
-                    ts = _load_timestamps(conn, key, cutoff)
+                # Periodic cleanup of stale entries (rows are keyed by client
+                # IP and never otherwise evicted — without this, the table
+                # grows without bound under rotating IPs / spoofed XFF).
+                if _last_rate_cleanup + _RATE_CACHE_TTL < now:
+                    _cleanup_stale(conn)
+                    conn.commit()
+                    _last_rate_cleanup = now
 
-                # Evict stale in-memory cache entries periodically
+                # Evict stale in-memory cache entries periodically. The cache now
+                # only mirrors state for get_rate_remaining() and the in-memory
+                # fallback path — the allow/deny decision always reads SQLite.
                 if len(cache) > max(16, 256 // _RATE_SHARDS):
                     stale = [k for k, v in cache.items() if not v or max(v) < cutoff]
                     for k in stale:
                         del cache[k]
 
-                if len(ts) >= max_requests:
+                # Serialize the read-modify-write across workers/processes so
+                # concurrent increments on the same key can't be lost, and always
+                # read the authoritative count from SQLite. Two correctness bugs
+                # this closes:
+                #  1. The per-process cache was served for up to _RATE_CACHE_TTL
+                #     without consulting SQLite, so under `uvicorn --workers N`
+                #     each worker counted independently → N×max_requests.
+                #  2. A deferred (default) transaction only locks at first write,
+                #     letting two workers read the same count and the later write
+                #     drop the earlier's append. BEGIN IMMEDIATE acquires the
+                #     write lock up front; busy_timeout makes contending workers
+                #     wait rather than collide.
+                try:
+                    # If a prior cleanup commit failed mid-transaction, the
+                    # cached connection could still hold an open txn; clear it
+                    # before acquiring the write lock so BEGIN IMMEDIATE can't
+                    # fail with "cannot start a transaction within a transaction"
+                    # (which would degrade this thread to fail-open in-memory).
+                    if conn.in_transaction:
+                        conn.rollback()
+                    conn.execute("BEGIN IMMEDIATE")
+                    ts = _load_timestamps(conn, key, cutoff)
+                    if len(ts) >= max_requests:
+                        cache[key] = ts
+                        _save_timestamps(conn, key, ts)
+                        conn.commit()
+                        return False
+
+                    ts.append(now)
                     cache[key] = ts
                     _save_timestamps(conn, key, ts)
                     conn.commit()
-                    return False
-
-                ts.append(now)
-                cache[key] = ts
-                _save_timestamps(conn, key, ts)
-                conn.commit()
-                return True
+                    return True
+                except sqlite3.Error:
+                    # Roll back so the cached connection is left clean (an open
+                    # txn here would make the next BEGIN IMMEDIATE fail).
+                    with contextlib.suppress(sqlite3.Error):
+                        conn.rollback()
+                    raise
         except (sqlite3.Error, OSError):
             # WARNING, not DEBUG (BC-078): a silent DB-error fallback degrades
             # rate limiting to per-process counters without anyone noticing.
@@ -676,15 +725,16 @@ def _build_csp(nonce: str) -> str:
     attributes have been fully converted to ``data-*`` + delegated
     ``addEventListener`` (BC-075).
 
-    ``style-src`` keeps ``'unsafe-inline'``: the UI binds dynamic CSS custom
-    properties via inline ``style=`` attributes, which nonces can't cover.
+    ``style-src`` is ``'self'`` only: the 2026-08 redesign removed every
+    inline ``style=`` attribute (dynamic values live in SVG geometry
+    attributes and tone classes), enforced by tests/test_no_inline_styles.py.
 
     ``report-uri`` is appended when ``CERT_WATCH_CSP_REPORT_URI`` is set.
     """
     policy = (
         "default-src 'self'; "
         f"script-src 'self' 'nonce-{nonce}'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
         "object-src 'none'; "
@@ -749,8 +799,8 @@ async def security_headers_middleware(
     The per-request CSP nonce is issued upstream by :class:`CSPNonceMiddleware`
     (``request.state.csp_nonce``) and consumed here by ``_build_csp(nonce)``: the
     emitted ``script-src`` is ``'self' 'nonce-{nonce}'`` with no ``'unsafe-inline'``
-    (BC-075 flip done). ``style-src`` intentionally retains ``'unsafe-inline'`` for
-    dynamic inline ``style=`` custom properties.
+    (BC-075 flip done) and ``style-src`` is ``'self'`` with no ``'unsafe-inline'``
+    (2026-08 redesign: zero inline style attributes remain).
 
     M7: wraps ``call_next`` in try/except so security headers are applied even
     when the handler raises (Starlette's ``ServerErrorMiddleware`` returns a 500
@@ -810,7 +860,10 @@ def _write_denied(request: Request, username: str) -> bool:
     role_map = getattr(settings, "role_map", {}) if settings else {}
     if role_map:
         auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-        return auth_ctx is None or not auth_ctx.may_write()
+        # Plan 053: a user whose only write grants are per-tag tiers passes
+        # this gate; the per-resource decision happens at the scope seam
+        # (routes/_scoped.py:scope_write_denied via may_write_tags).
+        return auth_ctx is None or not auth_ctx.may_write_any()
     return not _may_write(request, username)
 
 

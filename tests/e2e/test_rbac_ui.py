@@ -71,20 +71,20 @@ def test_viewer_sees_readonly_dashboard(
     page: Page, rbac_ui_server: str,
 ) -> None:
     _as_viewer(page, rbac_ui_server)
-    page.goto(rbac_ui_server)
+    page.goto(f"{rbac_ui_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     expect(page.get_by_test_id("add-host-btn")).to_have_count(0)
     expect(page.get_by_test_id("nav-settings")).to_have_count(0)
     expect(page.get_by_test_id("scan-now-btn")).to_have_count(0)
     expect(page.get_by_test_id("readonly-notice")).to_be_visible()
-    expect(page.get_by_test_id("nav-alerts")).to_be_visible()
+    expect(page.get_by_test_id("nav-activity")).to_be_visible()
 
 
 def test_operator_sees_write_but_no_settings(
     page: Page, rbac_ui_server: str,
 ) -> None:
     _as_operator(page, rbac_ui_server)
-    page.goto(rbac_ui_server)
+    page.goto(f"{rbac_ui_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     expect(page.get_by_test_id("add-host-btn")).to_be_visible()
     expect(page.get_by_test_id("nav-settings")).to_have_count(0)
@@ -95,7 +95,7 @@ def test_admin_sees_everything(
     page: Page, rbac_ui_server: str,
 ) -> None:
     _as_admin(page, rbac_ui_server)
-    page.goto(rbac_ui_server)
+    page.goto(f"{rbac_ui_server}/browse")
     expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
     expect(page.get_by_test_id("add-host-btn")).to_be_visible()
     expect(page.get_by_test_id("nav-settings")).to_be_visible()

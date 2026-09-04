@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from cert_watch.auth.local_admin import _scrypt_hash
 from cert_watch.auth.rbac import (
     AuthContext,
     Permission,
@@ -193,15 +194,46 @@ class TestUserRoleAssociation:
 
 
 class TestRoleSettingsForm:
-    def test_create_role_with_tier_and_scope(self, reload_app):
-        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+    @staticmethod
+    def _inject_admin_session(client, monkeypatch):
+        # Mint an authenticated admin session (WI-141 fix: the old
+        # CERT_WATCH_AUTH_PROVIDER="local" was a no-op, so these routes ran
+        # open). Local-admin auth is enabled by CERT_WATCH_LOCAL_ADMIN_USER +
+        # hash with AUTH_PROVIDER unset; _COOKIE_SECURE is patched because it
+        # is an import-time module constant the env var can't change.
+        import cert_watch.middleware as mw
+        import cert_watch.routes.auth as auth_routes
+
+        monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+        monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
+
+        from starlette.requests import Request as StRequest
+
+        from cert_watch.auth import SESSION_COOKIE, create_session
+        from cert_watch.middleware import _request_security
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "query_string": b"",
+            "headers": [],
+            "app": client.app,
+            "session": {},
+        }
+        req = StRequest(scope)
+        security = _request_security(req)
+        token = create_session("admin", security, version=0)
+        client.cookies.set(SESSION_COOKIE, token)
+        return client
+
+    def test_create_role_with_tier_and_scope(self, reload_app, monkeypatch):
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("a_great_password", n=2**4),
+        )
         with TestClient(app_mod.app) as client:
-            # Bootstrap an admin session
-            client.post("/settings/users", data={
-                "username": "admin", "password": "a_great_password",
-                "email": "admin@example.com", "role_id": "",
-            }, follow_redirects=False)
-            client.post("/login", data={"username": "admin", "password": "a_great_password"})
+            self._inject_admin_session(client, monkeypatch)
             r = client.post(
                 "/settings/roles",
                 data={
@@ -216,14 +248,13 @@ class TestRoleSettingsForm:
         assert r.status_code == 303
         assert "saved=1" in r.headers["location"]
 
-    def test_edit_role_updates_scope_tag(self, reload_app):
-        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+    def test_edit_role_updates_scope_tag(self, reload_app, monkeypatch):
+        app_mod = reload_app(
+            CERT_WATCH_LOCAL_ADMIN_USER="admin",
+            CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=_scrypt_hash("a_great_password", n=2**4),
+        )
         with TestClient(app_mod.app) as client:
-            client.post("/settings/users", data={
-                "username": "admin", "password": "a_great_password",
-                "email": "admin@example.com", "role_id": "",
-            }, follow_redirects=False)
-            client.post("/login", data={"username": "admin", "password": "a_great_password"})
+            self._inject_admin_session(client, monkeypatch)
             # First create role to fetch its id from DB
             client.post(
                 "/settings/roles",
@@ -255,3 +286,146 @@ class TestRoleSettingsForm:
         updated = role_repo.get(role.id)
         assert updated.permission_tier == "admin"
         assert updated.scope_tag == "new-tag"
+
+
+class TestParseTagTiers:
+    """_parse_tag_tiers form-field parsing (Plan 053 P3)."""
+
+    def _parse(self, raw, scope):
+        from cert_watch.routes.settings.roles import _parse_tag_tiers
+        return _parse_tag_tiers(raw, scope)
+
+    def test_empty_is_no_overrides(self):
+        assert self._parse("", "prod, edge") == ({}, None)
+        assert self._parse("   ", "prod") == ({}, None)
+
+    def test_valid_overrides_parse(self):
+        tiers, err = self._parse("prod=operator, edge=viewer", "prod, edge")
+        assert err is None
+        assert tiers == {"prod": "operator", "edge": "viewer"}
+
+    def test_tag_case_folds_to_scope_spelling(self):
+        tiers, err = self._parse("PROD=operator", "prod")
+        assert err is None
+        assert tiers == {"prod": "operator"}
+
+    def test_missing_equals_is_error(self):
+        tiers, err = self._parse("prod", "prod")
+        assert tiers == {}
+        assert err is not None and "tag=tier" in err
+
+    def test_unknown_tier_is_error(self):
+        tiers, err = self._parse("prod=root", "prod")
+        assert tiers == {}
+        assert err is not None and "root" in err
+
+    def test_out_of_scope_tag_is_error(self):
+        tiers, err = self._parse("staging=operator", "prod, edge")
+        assert tiers == {}
+        assert err is not None and "staging" in err
+
+    def test_trailing_commas_ignored(self):
+        tiers, err = self._parse("prod=operator, ", "prod")
+        assert err is None
+        assert tiers == {"prod": "operator"}
+
+
+class TestRoleTagTiersForm:
+    """POST round-trips for the per-tag tier field (Plan 053 P3)."""
+
+    def _admin_client(self, app_mod):
+        client = TestClient(app_mod.app)
+        client.post("/settings/users", data={
+            "username": "admin", "password": "a_great_password",
+            "email": "admin@example.com", "role_id": "",
+        }, follow_redirects=False)
+        client.post("/login", data={"username": "admin", "password": "a_great_password"})
+        return client
+
+    def test_create_role_persists_tag_tiers(self, reload_app):
+        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+        with self._admin_client(app_mod) as client:
+            r = client.post(
+                "/settings/roles",
+                data={
+                    "name": "platform", "email": "", "description": "",
+                    "permission_tier": "viewer", "scope_tag": "prod, edge",
+                    "tag_tiers": "prod=operator",
+                },
+                follow_redirects=False,
+            )
+        assert r.status_code == 303
+        assert "saved=1" in r.headers["location"]
+        from cert_watch.config import Settings
+        from cert_watch.database import SqliteRoleRepository
+        repo = SqliteRoleRepository(Settings.from_env().db_path)
+        role = repo.get_by_name("platform")
+        assert repo.list_tag_tiers(role.id) == {"prod": "operator"}
+
+    def test_create_role_rejects_bad_tag_tiers(self, reload_app):
+        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+        with self._admin_client(app_mod) as client:
+            r = client.post(
+                "/settings/roles",
+                data={
+                    "name": "broken", "permission_tier": "viewer",
+                    "scope_tag": "prod", "tag_tiers": "prod=root",
+                },
+                follow_redirects=False,
+            )
+        assert r.status_code == 303
+        assert "error=" in r.headers["location"]
+        from cert_watch.config import Settings
+        from cert_watch.database import SqliteRoleRepository
+        repo = SqliteRoleRepository(Settings.from_env().db_path)
+        assert repo.get_by_name("broken") is None
+
+    def test_update_role_replaces_tag_tiers(self, reload_app):
+        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+        with self._admin_client(app_mod) as client:
+            client.post(
+                "/settings/roles",
+                data={
+                    "name": "platform", "permission_tier": "viewer",
+                    "scope_tag": "prod, edge", "tag_tiers": "prod=operator",
+                },
+                follow_redirects=False,
+            )
+            from cert_watch.config import Settings
+            from cert_watch.database import SqliteRoleRepository
+            repo = SqliteRoleRepository(Settings.from_env().db_path)
+            role = repo.get_by_name("platform")
+            r = client.post(
+                f"/settings/roles/{role.id}",
+                data={
+                    "name": "platform", "permission_tier": "viewer",
+                    "scope_tag": "prod, edge", "tag_tiers": "edge=operator",
+                },
+                follow_redirects=False,
+            )
+        assert r.status_code == 303
+        assert repo.list_tag_tiers(role.id) == {"edge": "operator"}
+
+    def test_update_role_rejects_out_of_scope_override(self, reload_app):
+        app_mod = reload_app(CERT_WATCH_AUTH_PROVIDER="local")
+        with self._admin_client(app_mod) as client:
+            client.post(
+                "/settings/roles",
+                data={"name": "platform", "permission_tier": "viewer", "scope_tag": "prod"},
+                follow_redirects=False,
+            )
+            from cert_watch.config import Settings
+            from cert_watch.database import SqliteRoleRepository
+            repo = SqliteRoleRepository(Settings.from_env().db_path)
+            role = repo.get_by_name("platform")
+            r = client.post(
+                f"/settings/roles/{role.id}",
+                data={
+                    "name": "platform", "permission_tier": "viewer",
+                    "scope_tag": "prod", "tag_tiers": "staging=operator",
+                },
+                follow_redirects=False,
+            )
+        assert r.status_code == 303
+        assert "error=" in r.headers["location"]
+        assert repo.list_tag_tiers(role.id) == {}

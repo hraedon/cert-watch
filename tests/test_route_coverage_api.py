@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.upload import store_uploaded, upload_certificate
@@ -41,13 +42,37 @@ def test_api_certificates_pagination(tmp_path, reload_app):
     assert data["pagination"]["pages"] == 3
 
 
-def test_api_certificates_limit_clamped(reload_app):
+def test_api_certificates_limit_clamped(reload_app, tmp_path):
     app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteCertificateRepository, init_schema
+
+    init_schema(db)
+    now = datetime.now(UTC)
+    # Seed more than the 200-row cap to prove the SQL LIMIT is clamped before
+    # querying (regression: the raw client limit used to run as the SQL LIMIT,
+    # materializing the whole inventory into memory, then only the reported
+    # pagination metadata was clamped).
+    for i in range(205):
+        SqliteCertificateRepository(db, source="uploaded").add(
+            Certificate(
+                subject=f"cap{i}.example.com",
+                issuer="Test CA",
+                not_before=now - timedelta(days=1),
+                not_after=now + timedelta(days=365),
+            )
+        )
     with TestClient(app_mod.app) as client:
-        r = client.get("/api/certificates?limit=500")
+        r = client.get("/api/certificates?limit=50000")
     assert r.status_code == 200
     data = r.json()
     assert data["pagination"]["limit"] == 200
+    assert len(data["certificates"]) == 200
+    assert data["pagination"]["total"] == 205
+    assert data["pagination"]["pages"] == 2
 
 
 # ---------- API certificate history ----------
@@ -844,6 +869,67 @@ def test_add_host_invalid_port(reload_app):
     assert "port" in r.headers["location"]
 
 
+def test_add_host_hostname_too_long(reload_app):
+    """B6: an over-length hostname is rejected at the route layer (RFC 1035
+    caps FQDNs at 253 octets) rather than stored as a multi-MB blob.
+    """
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": "a" * 300, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+def test_add_host_hostname_idna_octets_too_long(reload_app):
+    app_mod = reload_app()
+    hostname = ("é." * 50) + "example"
+    assert len(hostname) <= 253
+    assert len(hostname.encode("idna")) > 253
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": hostname, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "octets" in r.headers["location"]
+
+
+@pytest.mark.parametrize(
+    "hostname",
+    [
+        "-bad.example",
+        "bad-.example",
+        "bad..example",
+        "bad_name.example",
+        "bad name.example",
+        "bad\x00name.example",
+        f"{'a' * 64}.example",
+    ],
+)
+def test_add_host_rejects_syntactically_invalid_hostname(reload_app, hostname):
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.post(
+            "/hosts",
+            data={"hostname": hostname, "port": "443"},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+@pytest.mark.parametrize("hostname", ["example.com", "münchen.example", "2001:db8::1"])
+def test_hostname_validation_accepts_dns_idna_and_ip_literals(hostname):
+    from cert_watch.routes.hosts import _hostname_within_octet_limit
+
+    assert _hostname_within_octet_limit(hostname) is True
+
+
 def test_add_host_invalid_threshold(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -970,6 +1056,34 @@ def test_import_hosts_port_out_of_range(reload_app, tmp_path):
     assert "port" in r.headers["location"]
 
 
+def test_import_hosts_hostname_too_long(reload_app, tmp_path):
+    """B6: an over-length hostname row is reported as an error, not stored."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        csv_content = f"hostname,port\n{'a' * 300},443\n"
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content.encode(), "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "hostname" in r.headers["location"]
+
+
+def test_import_hosts_hostname_idna_octets_too_long(reload_app, tmp_path):
+    app_mod = reload_app()
+    hostname = ("é." * 50) + "example"
+    with TestClient(app_mod.app) as client:
+        csv_content = f"hostname,port\n{hostname},443\n"
+        r = client.post(
+            "/hosts/import",
+            files={"file": ("hosts.csv", csv_content.encode(), "text/csv")},
+            follow_redirects=False,
+        )
+    assert r.status_code == 303
+    assert "octets" in r.headers["location"]
+
+
 def test_import_hosts_invalid_port(reload_app, tmp_path):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
@@ -994,19 +1108,6 @@ def test_import_hosts_invalid_interval(reload_app, tmp_path):
         )
     assert r.status_code == 303
     assert "scan_interval" in r.headers["location"]
-
-
-# ---------- Notes via API ----------
-
-
-def test_api_update_notes_not_string(reload_app, tmp_path, leaf_pem_file):
-    app_mod = reload_app()
-    db = tmp_path / "cert-watch.sqlite3"
-    cert_id = store_uploaded(upload_certificate(leaf_pem_file), db)
-    with TestClient(app_mod.app) as client:
-        r = client.patch(f"/api/certificates/{cert_id}/notes", json={"notes": 123})
-    assert r.status_code == 400
-    assert "string" in r.json()["error"]
 
 
 # ---------- PEM download encode error ----------
@@ -1085,10 +1186,12 @@ def test_settings_page_renders(reload_app, tmp_path):
 def test_settings_page_tabs(reload_app, tmp_path):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
-        for tab in ("auth", "smtp", "alerts"):
+        # Legacy ?tab= URLs 303 to the per-section pages (smtp + alerts
+        # merged into channels).
+        for tab, section in (("auth", "auth"), ("smtp", "channels"), ("alerts", "channels")):
             r = client.get(f"/settings?tab={tab}")
             assert r.status_code == 200
-            assert f"tab-{tab}" in r.text
+            assert str(r.url).endswith(f"/settings/{section}")
 
 
 def test_settings_save_smtp(reload_app, tmp_path):

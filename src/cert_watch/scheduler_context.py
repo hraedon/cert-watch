@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import logging
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,21 @@ from cert_watch.scheduler import run_scan_now
 
 logger = logging.getLogger("cert_watch.scheduler_context")
 
+_EXPIRY_DIGEST_WEEK_KEY = "_scheduler.expiry_digest_iso_week"
+_RENEWAL_DIGEST_WEEK_KEY = "_scheduler.renewal_digest_iso_week"
+
+
+def _decode_iso_week(value: str | None) -> tuple[int, int]:
+    if not value:
+        return (0, 0)
+    try:
+        year, week = (int(part) for part in value.split("-W", 1))
+    except (TypeError, ValueError):
+        return (0, 0)
+    if year < 1 or not 1 <= week <= 53:
+        return (0, 0)
+    return (year, week)
+
 
 @dataclass
 class SchedulerContext:
@@ -26,14 +43,31 @@ class SchedulerContext:
     alert_cfg: Any
     webhook_cfg: Any
     _expiry_digest_week: tuple[int, int] = field(default_factory=lambda: (0, 0))
-    _weekly_digest_day: int = 0
+    _renewal_digest_week: tuple[int, int] = field(default_factory=lambda: (0, 0))
+    _renewal_digest_inflight_week: tuple[int, int] | None = field(
+        default=None, init=False, repr=False
+    )
+    _digest_state_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
     _deferred_post_commit: list[DeferredPostCommit] = field(default_factory=list)
 
     def __post_init__(self) -> None:
-        now = _dt.datetime.now(_dt.UTC)
-        self._weekly_digest_day = now.weekday()
-        iso = now.isocalendar()
-        self._expiry_digest_week = (iso[0], iso[1])
+        from cert_watch.database.kv_store import kv_get
+
+        self._expiry_digest_week = _decode_iso_week(
+            kv_get(self.settings.db_path, _EXPIRY_DIGEST_WEEK_KEY)
+        )
+        self._renewal_digest_week = _decode_iso_week(
+            kv_get(self.settings.db_path, _RENEWAL_DIGEST_WEEK_KEY)
+        )
+
+    def _record_digest_week(
+        self, key: str, week: tuple[int, int]
+    ) -> tuple[bool, tuple[int, int]]:
+        from cert_watch.database.kv_store import kv_set_max_iso_week
+
+        return kv_set_max_iso_week(self.settings.db_path, key, week)
 
     def scan_all(self) -> dict[str, Any]:
         s = self.settings
@@ -113,11 +147,15 @@ class SchedulerContext:
             iso = _dt.datetime.now(_dt.UTC).isocalendar()
             this_week = (iso[0], iso[1])
             if this_week != self._expiry_digest_week:
-                self._expiry_digest_week = this_week
                 delivered = send_expiry_digest(
                     s.db_path, self.alert_cfg, webhook_config=self.webhook_cfg,
                     cadence_days=self._max_group_cadence(s.db_path),
                 )
+                if delivered:
+                    _, stored_week = self._record_digest_week(
+                        _EXPIRY_DIGEST_WEEK_KEY, this_week
+                    )
+                    self._expiry_digest_week = max(self._expiry_digest_week, stored_week)
                 result["sent"] = result.get("sent", 0) + (1 if delivered else 0)
                 result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
             return result
@@ -125,26 +163,96 @@ class SchedulerContext:
         evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
         return process_pending(repo, self.alert_cfg, webhook_config=self.webhook_cfg)
 
-    def _weekly_digest(self) -> None:
+    def _weekly_digest(
+        self, delivery_completion_callback: Callable[[bool], None] | None = None
+    ) -> bool | None:
         from cert_watch.digest import send_renewal_digest
 
         s = self.settings
-        send_renewal_digest(
+        return send_renewal_digest(
             s.db_path, self.alert_cfg, self.webhook_cfg,
             cadence_days=self._max_group_cadence(s.db_path, default=7),
+            delivery_completion_callback=delivery_completion_callback,
         )
 
     def maybe_run_weekly_digest(self) -> dict[str, Any]:
-        import datetime as _dt
+        iso = _dt.datetime.now(_dt.UTC).isocalendar()
+        this_week = (iso[0], iso[1])
+        with self._digest_state_lock:
+            if (
+                this_week == self._renewal_digest_week
+                or this_week == self._renewal_digest_inflight_week
+            ):
+                return {"sent": 0, "failed": 0}
+            self._renewal_digest_inflight_week = this_week
 
-        today = _dt.datetime.now(_dt.UTC).weekday()
-        if today != self._weekly_digest_day:
-            self._weekly_digest_day = today
-            try:
-                self._weekly_digest()
-            except Exception:
-                logger.exception("weekly renewal digest failed")
-        return {"sent": 0, "failed": 0}
+        callback_lock = threading.Lock()
+        callback_completed = False
+        callback_succeeded = False
+
+        def _complete_delivery(succeeded: bool) -> bool:
+            nonlocal callback_completed, callback_succeeded
+            with callback_lock:
+                if callback_completed:
+                    return callback_succeeded
+                now = _dt.datetime.now(_dt.UTC).isocalendar()
+                callback_week = (now[0], now[1])
+                with self._digest_state_lock:
+                    is_current = (
+                        callback_week == this_week
+                        and self._renewal_digest_inflight_week == this_week
+                    )
+                if not is_current:
+                    callback_completed = True
+                    with self._digest_state_lock:
+                        if self._renewal_digest_inflight_week == this_week:
+                            self._renewal_digest_inflight_week = None
+                    return False
+                if not succeeded:
+                    callback_completed = True
+                    with self._digest_state_lock:
+                        if self._renewal_digest_inflight_week == this_week:
+                            self._renewal_digest_inflight_week = None
+                    return False
+                try:
+                    _, stored_week = self._record_digest_week(
+                        _RENEWAL_DIGEST_WEEK_KEY, this_week
+                    )
+                except Exception:
+                    logger.exception("could not persist successful renewal digest week")
+                    callback_completed = True
+                    with self._digest_state_lock:
+                        if self._renewal_digest_inflight_week == this_week:
+                            self._renewal_digest_inflight_week = None
+                    return False
+                callback_completed = True
+                callback_succeeded = True
+            with self._digest_state_lock:
+                self._renewal_digest_week = max(self._renewal_digest_week, stored_week)
+                if self._renewal_digest_inflight_week == this_week:
+                    self._renewal_digest_inflight_week = None
+            return True
+
+        def _completion_callback(succeeded: bool) -> None:
+            _complete_delivery(succeeded)
+
+        try:
+            delivered = self._weekly_digest(_completion_callback)
+        except Exception:
+            _complete_delivery(False)
+            logger.exception("weekly renewal digest failed")
+            return {"sent": 0, "failed": 1}
+        if delivered is True:
+            # SMTP completes synchronously.  The callback may also have run
+            # already for inline webhook fallback; its idempotence prevents a
+            # second ledger write in that path.
+            if _complete_delivery(True):
+                return {"sent": 1, "failed": 0}
+            return {"sent": 0, "failed": 1}
+        if delivered is None:
+            return {"sent": 0, "failed": 0}
+        _complete_delivery(False)
+        return {"sent": 0, "failed": 1}
 
     def maintenance(self) -> None:
         from cert_watch.audit import purge_old_audit

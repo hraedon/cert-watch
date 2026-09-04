@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — posture{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+{% import "macros/ui.html" as ui %}
+
+{% set GRADE_SERIES = [('grade_a', 'A', 't-ok'), ('grade_b', 'B', 't-warn'), ('grade_c', 'C or worse', 't-crit')] %}
+{% set TLS_SERIES = [('tls_1_3', 'TLS 1.3', 't-ok'), ('tls_1_2', 'TLS 1.2', 't-warn'), ('tls_1_0', 'TLS 1.1 and older', 't-crit')] %}
+
+{% block content %}
+<div class="cw-wrap cw-vstack">
+  {% call ui.page_head('Posture', 'Fleet TLS health: grades, protocol adoption, and crypto inventory.', testid='insights-heading') %}
+    <div class="cw-menuwrap">
+      <button class="cw-btn" data-menu="reports-menu" aria-haspopup="true" aria-expanded="false">{{ icons.svg_icon('file', 14) }}Generate report{{ icons.svg_icon('chevron-down', 13) }}</button>
+      <div class="cw-menu cw-hidden" id="reports-menu" role="menu" aria-label="Reports">
+        <div class="cw-menu-label">Point-in-time report pages</div>
+        <a class="cw-menu-item" role="menuitem" href="/reports/compliance">{{ icons.svg_icon('shield', 14) }}Compliance report <span class="cw-hint">SOC 2 · ISO 27001 · PCI</span></a>
+        <a class="cw-menu-item" role="menuitem" href="/readiness">{{ icons.svg_icon('calendar', 14) }}SC-081 readiness <span class="cw-hint">47-day regime</span></a>
+      </div>
+    </div>
+  {% endcall %}
+
+  {# ---- Stat strip ---- #}
+  <div class="cw-stats">
+    {% if fleet_grade %}
+    {{ ui.stat('Fleet grade', fleet_grade.grade, 'worst-weighted across ' ~ fleet_grade.total ~ ' scanned cert' ~ ('s' if fleet_grade.total != 1 else ''),
+               tone=('t-ok' if fleet_grade.grade in ('A+', 'A') else 't-warn' if fleet_grade.grade == 'B' else 't-crit'), icon='shield') }}
+    {% else %}
+    {{ ui.stat('Fleet grade', '—', 'no scans graded yet', icon='shield') }}
+    {% endif %}
+    {{ ui.stat('Leaf certificates', posture.total, 'in crypto inventory', icon='shield', testid='crypto-total') }}
+    {{ ui.stat('Weak primitives', posture.weak_count, 'SHA-1 · RSA<2048 · weak curve', tone='t-warn', icon='alert', testid='crypto-weak-count') }}
+    {{ ui.stat('Key families', posture.families | length, 'algorithm families in use', icon='key') }}
+  </div>
+
+  {# ---- Trends ---- #}
+  <div class="cw-grid-2">
+    <div class="cw-panel">
+      <div class="cw-panel-head">
+        <h2>Posture grades over time</h2>
+        <span class="cw-hint">worst-weighted grade · monthly</span>
+      </div>
+      <div class="cw-panel-body">
+        {% if grade_trends %}
+          {{ ui.stack_chart(grade_trends, GRADE_SERIES, 'month', grade_max, 'Monthly posture grade distribution across ' ~ (grade_trends | length) ~ ' months') }}
+          {{ ui.chart_legend(GRADE_SERIES) }}
+        {% else %}
+          {{ ui.empty('Not enough history', 'Grade trends appear after a few scheduled scans.', icon='trend') }}
+        {% endif %}
+      </div>
+    </div>
+    <div class="cw-panel">
+      <div class="cw-panel-head">
+        <h2>TLS versions across the fleet</h2>
+        <span class="cw-hint">negotiated protocol · monthly</span>
+      </div>
+      <div class="cw-panel-body">
+        {% if tls_trends %}
+          {{ ui.stack_chart(tls_trends, TLS_SERIES, 'month', tls_max, 'Monthly negotiated TLS version distribution across ' ~ (tls_trends | length) ~ ' months') }}
+          {{ ui.chart_legend(TLS_SERIES) }}
+        {% else %}
+          {{ ui.empty('Not enough history', 'Protocol trends appear after a few scheduled scans.', icon='trend') }}
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ---- Grade distribution (current) ---- #}
+  {% if fleet_grade %}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Current grade distribution</h2>
+      <span class="cw-hint">latest scan per certificate</span>
+    </div>
+    <div class="cw-panel-body">
+      {% for g in ['A+', 'A', 'B', 'C', 'D', 'F'] %}
+        {% set cnt = fleet_grade.counts.get(g, 0) %}
+        {% if cnt or g in ('A', 'B') %}
+        <div class="cw-cal-row">
+          <div class="cw-cal-date">{{ ui.grade(g) }}</div>
+          <svg class="cw-bar {{ 't-ok' if g in ('A+', 'A') else 't-warn' if g == 'B' else 't-crit' }}" role="img" aria-label="{{ cnt }} certificates graded {{ g }}" preserveAspectRatio="none">
+            <rect class="track" width="100%" height="100%"/>
+            <rect class="fill" width="{{ ((cnt / fleet_grade.total * 100) | round | int) if fleet_grade.total else 0 }}%" height="100%"/>
+          </svg>
+          <span class="mono tnum cw-gradecount">{{ cnt }}</span>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {# ---- Crypto inventory ---- #}
+  {% if posture.total == 0 %}
+    <div class="cw-panel">
+      {{ ui.empty('No certificates scanned yet', 'The crypto inventory populates after the first scan.', icon='key') }}
+    </div>
+  {% else %}
+  {{ ui.section('Crypto inventory', 'Key algorithms, signature hashes, and weak-primitive offenders. Informational — does not affect grades.') }}
+  <div class="cw-invgrid">
+    <div class="cw-panel">
+      <div class="cw-panel-head"><h2>Key algorithms</h2></div>
+      <table class="cw-table">
+        <thead><tr><th>Algorithm</th><th class="num">Count</th></tr></thead>
+        <tbody>
+        {% for row in posture.key_algorithms %}
+          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="cw-panel">
+      <div class="cw-panel-head"><h2>Signature hashes</h2></div>
+      <table class="cw-table">
+        <thead><tr><th>Hash</th><th class="num">Count</th></tr></thead>
+        <tbody>
+        {% for row in posture.sig_hashes %}
+          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="cw-panel">
+      <div class="cw-panel-head"><h2>Families</h2></div>
+      <table class="cw-table">
+        <thead><tr><th>Family</th><th class="num">Count</th></tr></thead>
+        <tbody>
+        {% for row in posture.families %}
+          <tr><td class="mono">{{ row.label }}</td><td class="num">{{ row.count }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Weak primitives</h2>
+      {% if posture.weak_count %}<span class="cw-chip t-warn">{{ posture.weak_count }}</span>{% endif %}
+    </div>
+    {% if posture.weak_certs %}
+    <div class="cw-table-clip">
+    <table class="cw-table" data-testid="crypto-weak-table">
+      <thead><tr><th>Host</th><th>Subject</th><th>Key</th><th>Reason</th></tr></thead>
+      <tbody>
+      {% for c in posture.weak_certs %}
+        <tr>
+          <td class="mono">{{ c.hostname }}{% if c.port and c.port != 443 %}:{{ c.port }}{% endif %}</td>
+          <td>{{ c.subject }}</td>
+          <td class="mono">{{ c.key_label }}</td>
+          <td class="cw-sub">{{ c.reason }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}
+      {{ ui.empty('No weak primitives detected', 'Nothing in the fleet uses SHA-1, short RSA keys, or weak curves.', icon='check-circle', tone='t-ok') }}
+    {% endif %}
+  </div>
+
+  <div class="cw-panel">
+    <div class="cw-panel-body">
+      <div class="cw-note">
+        {{ icons.svg_icon('key', 14) }}
+        <div><b>Post-quantum readiness.</b> {{ posture.pqc_note }}</div>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

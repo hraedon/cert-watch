@@ -1,0 +1,236 @@
+{% extends "settings/_base.html" %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Identity provider</h2>
+    <span class="cw-hint">how operators sign in — LDAP / AD, OAuth / OIDC, or open access</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/auth" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+
+      <div class="cw-field">
+        <label class="cw-label" for="auth_provider">Authentication provider
+          {% if env_overrides.auth_provider %}<span class="cw-envbadge">set via env var</span>{% endif %}
+        </label>
+        <select class="cw-select" id="auth_provider" name="auth_provider">
+          <option value="" {% if not auth.auth_provider %}selected{% endif %}>None (open access)</option>
+          <option value="ldap" {% if auth.auth_provider == 'ldap' %}selected{% endif %}>LDAP / Active Directory</option>
+          <option value="oauth" {% if auth.auth_provider in ('oauth', 'entra', 'oidc') %}selected{% endif %}>OAuth / OIDC (Entra, Google)</option>
+        </select>
+      </div>
+
+      {# ---- LDAP ---- #}
+      <div id="ldap-section" class="cw-hidden">
+        <div class="cw-divider"></div>
+        <div class="cw-kv-label">LDAP / Active Directory</div>
+        <div class="cw-form">
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_server">Server URL(s)
+              {% if env_overrides.ldap_server %}<span class="cw-envbadge">env</span>{% endif %}
+            </label>
+            <input class="cw-input mono" type="text" id="ldap_server" name="ldap_server"
+                   value="{{ auth.ldap_server }}" placeholder="ldap://dc1.example.com,ldap://dc2.example.com">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_base_dn">Base DN
+              {% if env_overrides.ldap_base_dn %}<span class="cw-envbadge">env</span>{% endif %}
+            </label>
+            <input class="cw-input mono" type="text" id="ldap_base_dn" name="ldap_base_dn"
+                   value="{{ auth.ldap_base_dn }}" placeholder="DC=example,DC=com">
+          </div>
+          <div class="cw-form-grid">
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_dn">Bind DN (service account)
+                {% if env_overrides.ldap_bind_dn %}<span class="cw-envbadge">env</span>{% endif %}
+              </label>
+              <input class="cw-input mono" type="text" id="ldap_bind_dn" name="ldap_bind_dn"
+                     value="{{ auth.ldap_bind_dn }}" placeholder="CN=svc,OU=ServiceAccounts,DC=example,DC=com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_password">Bind password
+                {% if env_overrides.ldap_bind_password %}<span class="cw-envbadge">env</span>{% endif %}
+              </label>
+              <input class="cw-input" type="password" id="ldap_bind_password" name="ldap_bind_password"
+                     value="" placeholder="{% if auth.ldap_bind_password %}••••••••{% else %}password{% endif %}"
+                     autocomplete="new-password">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_user_filter">User search filter</label>
+              <input class="cw-input mono" type="text" id="ldap_user_filter" name="ldap_user_filter"
+                     value="{{ auth.ldap_user_filter }}" placeholder="(sAMAccountName={username})">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_connect_timeout">Connect timeout (seconds)</label>
+              <input class="cw-input" type="number" id="ldap_connect_timeout" name="ldap_connect_timeout"
+                     value="{{ auth.ldap_connect_timeout }}" min="1" max="30">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_required_groups">Required groups (semicolon-separated DNs)</label>
+              <input class="cw-input mono" type="text" id="ldap_required_groups" name="ldap_required_groups"
+                     value="{{ auth.ldap_required_groups }}" placeholder="CN=Admins,OU=Groups,DC=example,DC=com; CN=Users,OU=Groups,DC=example,DC=com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_start_tls">StartTLS</label>
+              <select class="cw-select" id="ldap_start_tls" name="ldap_start_tls">
+                <option value="0" {% if auth.ldap_start_tls != '1' %}selected{% endif %}>Disabled</option>
+                <option value="1" {% if auth.ldap_start_tls == '1' %}selected{% endif %}>Enabled</option>
+              </select>
+            </div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_ca_cert">CA certificate (PEM, for LDAPS/StartTLS)
+              {% if env_overrides.ldap_ca_cert %}<span class="cw-envbadge">env</span>{% endif %}
+            </label>
+            <textarea class="cw-textarea mono" id="ldap_ca_cert" name="ldap_ca_cert" rows="3"
+                      placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          </div>
+          <div class="cw-form-foot">
+            <button type="button" class="cw-btn" id="ldap-test-btn">Test Connection</button>
+            <span id="ldap-test-result" class="cw-testres"></span>
+          </div>
+
+          {# TOFU CA-pinning: shown by settings.js when the test endpoint
+             returns an unvalidated chain. #}
+          <div id="ldap-tofu-panel" class="cw-hidden">
+            <div class="cw-note t-warn">
+              {{ icons.svg_icon('alert', 14) }}
+              <div>
+                <b>Could not validate TLS — server presented this CA.</b>
+                Trust on first use — verify the fingerprint against a known good
+                source if your network may be hostile.
+              </div>
+            </div>
+            <div id="ldap-tofu-chain" class="cw-vstack"></div>
+            <div class="cw-form-foot">
+              <button type="button" class="cw-btn primary" id="ldap-pin-btn">Trust &amp; pin</button>
+              <button type="button" class="cw-btn" id="ldap-copy-btn">Copy PEM</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ---- OAuth ---- #}
+      <div id="oauth-section" class="cw-hidden">
+        <div class="cw-divider"></div>
+        <div class="cw-kv-label">OAuth / OIDC</div>
+        <div class="cw-form">
+          <div class="cw-form-grid">
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_id">Client ID
+                {% if env_overrides.oauth_client_id %}<span class="cw-envbadge">env</span>{% endif %}
+              </label>
+              <input class="cw-input mono" type="text" id="oauth_client_id" name="oauth_client_id"
+                     value="{{ auth.oauth_client_id }}" placeholder="00000000-0000-0000-0000-000000000000">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_secret">Client secret
+                {% if env_overrides.oauth_client_secret %}<span class="cw-envbadge">env</span>{% endif %}
+              </label>
+              <input class="cw-input" type="password" id="oauth_client_secret" name="oauth_client_secret"
+                     value="" placeholder="{% if auth.oauth_client_secret %}••••••••{% else %}secret{% endif %}"
+                     autocomplete="new-password">
+            </div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="oauth_issuer_url">Issuer URL
+              {% if env_overrides.oauth_issuer_url %}<span class="cw-envbadge">env</span>{% endif %}
+            </label>
+            <input class="cw-input mono" type="text" id="oauth_issuer_url" name="oauth_issuer_url"
+                   value="{{ auth.oauth_issuer_url }}" placeholder="https://login.microsoftonline.com/{tenant}/v2.0">
+            <div class="cw-hint">Endpoints are auto-discovered from this URL via OIDC.</div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="oauth_scope">Scopes</label>
+            <input class="cw-input mono" type="text" id="oauth_scope" name="oauth_scope"
+                   value="{{ auth.oauth_scope }}" placeholder="openid profile email">
+          </div>
+          <details class="cw-editor">
+            <summary class="cw-btn ghost sm">Advanced: override endpoints (skip OIDC discovery)</summary>
+            <div class="cw-editor-body">
+              <div class="cw-form">
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_authorization_endpoint">Authorization endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_authorization_endpoint"
+                         name="oauth_authorization_endpoint"
+                         value="{{ auth.oauth_authorization_endpoint }}" placeholder="(auto-discovered)">
+                </div>
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_token_endpoint">Token endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_token_endpoint" name="oauth_token_endpoint"
+                         value="{{ auth.oauth_token_endpoint }}" placeholder="(auto-discovered)">
+                </div>
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_userinfo_endpoint">UserInfo endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_userinfo_endpoint" name="oauth_userinfo_endpoint"
+                         value="{{ auth.oauth_userinfo_endpoint }}" placeholder="(auto-discovered)">
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save authentication settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% if local_admin_configured %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Local admin password</h2>
+    <span class="cw-hint">the built-in break-glass account</span>
+  </div>
+  <div class="cw-panel-body">
+    {% if env_hash_override %}
+      <div class="cw-note t-warn">
+        {{ icons.svg_icon('alert', 14) }}
+        <div>
+          <code>CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH</code> is set — the environment
+          variable always wins over the stored password. Rotate the env var and
+          restart to change the password.
+        </div>
+      </div>
+    {% else %}
+      {% if local_admin_autogenerated %}
+        <div class="cw-note t-warn">
+          {{ icons.svg_icon('alert', 14) }}
+          <div>The local admin password was auto-generated on first run. Rotate it now.</div>
+        </div>
+      {% endif %}
+      <form method="post" action="/settings/change-password" class="cw-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="cw-field">
+          <label class="cw-label" for="current_password">Current password</label>
+          <input class="cw-input" type="password" id="current_password" name="current_password"
+                 autocomplete="current-password" required>
+        </div>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label" for="new_password">New password</label>
+            <input class="cw-input" type="password" id="new_password" name="new_password"
+                   autocomplete="new-password" minlength="8" required>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="confirm_password">Confirm new password</label>
+            <input class="cw-input" type="password" id="confirm_password" name="confirm_password"
+                   autocomplete="new-password" minlength="8" required>
+          </div>
+        </div>
+        <div class="cw-form-foot">
+          <button type="submit" class="cw-btn primary">Rotate password</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/settings.js" nonce="{{ request.state.csp_nonce }}"></script>
+{% endblock %}

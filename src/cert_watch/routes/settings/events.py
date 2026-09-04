@@ -41,7 +41,7 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
     auth_ctx = get_auth_context(request)
     return templates.TemplateResponse(
         request=request,
-        name="settings_events.html",
+        name="settings/events.html",
         context={
             "version": __version__, "commit": __commit__,
             "config": replace(config, pagerduty_routing_key=""),

@@ -62,12 +62,13 @@ def pem_path_space(tmp_path: Path) -> Path:
 
 def _upload_cert(page: Page, base_url: str, pem: Path, cn: str) -> None:
     """Upload a PEM via the slide-over so a cert row exists on the dashboard."""
-    page.goto(base_url)
+    page.goto(f"{base_url}/browse")
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
     page.get_by_test_id("tab-upload-btn").click()
     page.get_by_test_id("upload-file-input").set_input_files(str(pem))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{base_url}/browse")
     expect(page.locator("body")).to_contain_text(cn)
 
 
@@ -78,7 +79,7 @@ def _upload_cert(page: Page, base_url: str, pem: Path, cn: str) -> None:
 def test_enter_activates_cert_row(page: Page, cert_watch_server: str, pem_path: Path) -> None:
     """Enter on a tabindex'd cert row (role=link) navigates to detail page."""
     _upload_cert(page, cert_watch_server, pem_path, "kb-test.example.com")
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     row = page.locator('[data-testid="cert-row"]').first
     expect(row).to_be_visible()
     row.focus()
@@ -90,7 +91,7 @@ def test_enter_activates_cert_row(page: Page, cert_watch_server: str, pem_path: 
 def test_space_activates_cert_row(page: Page, cert_watch_server: str, pem_path_space: Path) -> None:
     """Space on a tabindex'd cert row (role=link) navigates to detail page."""
     _upload_cert(page, cert_watch_server, pem_path_space, "kb-space.example.com")
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     row = page.locator('[data-testid="cert-row"]', has_text="kb-space.example.com")
     expect(row).to_be_visible()
     row.focus()
@@ -104,12 +105,12 @@ def test_space_activates_cert_row(page: Page, cert_watch_server: str, pem_path_s
 
 def test_escape_closes_slide_over(page: Page, cert_watch_server: str) -> None:
     """Escape closes the slide-over and returns focus to the trigger."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
     # Escape should close (the .on class is removed; panel slides off-screen)
     page.keyboard.press("Escape")
-    page.locator("#slide-panel.on").wait_for(state="hidden", timeout=3000)
+    page.locator("#add-drawer.on").wait_for(state="hidden", timeout=3000)
     # Focus should return to the trigger button
     expect(page.get_by_test_id("add-host-btn")).to_be_focused()
 
@@ -120,19 +121,19 @@ def test_escape_closes_slide_over(page: Page, cert_watch_server: str) -> None:
 
 def test_focus_trapped_in_slide_over(page: Page, cert_watch_server: str) -> None:
     """Tab cycles within the open dialog (focus trap), not escaping to the page."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
-    panel = page.locator("#slide-panel")
+    panel = page.locator("#add-drawer")
     panel.wait_for(state="visible")
     # Tab several times — focus should stay inside the panel
     for _ in range(15):
         page.keyboard.press("Tab")
         in_panel = page.evaluate(
             "document.activeElement"
-            " ? document.activeElement.closest('#slide-panel') !== null"
+            " ? document.activeElement.closest('#add-drawer') !== null"
             " : false"
         )
-        assert in_panel, "Focus escaped the slide-over dialog (trap broken)"
+        assert in_panel, "Focus escaped the drawer dialog (trap broken)"
 
 
 # ---------------------------------------------------------------------------
@@ -141,11 +142,11 @@ def test_focus_trapped_in_slide_over(page: Page, cert_watch_server: str) -> None
 
 def test_reports_menu_arrow_key_nav(page: Page, cert_watch_server: str) -> None:
     """Arrow Down moves focus between menuitems; Escape closes and restores focus."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("dashboard-heading").wait_for()
     btn = page.locator("#reports-btn")
     btn.click()
-    items = page.locator('#reports-menu-wrap [role="menuitem"]')
+    items = page.locator('#export-menu [role="menuitem"]')
     expect(items).to_have_count(3)
     # Menu open → first item should be focused (roving tabindex)
     expect(items.first).to_be_focused()
@@ -170,9 +171,9 @@ def test_reports_menu_arrow_key_nav(page: Page, cert_watch_server: str) -> None:
 
 def test_add_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -> None:
     """Arrow Right/Left switches tabs in the Add-certificates tablist."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
     scan_tab = page.get_by_test_id("tab-scan-btn")
     upload_tab = page.get_by_test_id("tab-upload-btn")
     bulk_tab = page.get_by_test_id("tab-bulk-btn")
@@ -197,24 +198,8 @@ def test_add_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -> Non
 # Insights page tablist: arrow-key switching (navigation-based tabs)
 # ---------------------------------------------------------------------------
 
-def test_insights_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -> None:
-    """Arrow Right/Left switches between Insights tabs via URL navigation."""
-    page.goto(f"{cert_watch_server}/insights?tab=calendar")
-    page.get_by_test_id("insights-heading").wait_for()
-    tabs = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]')
-    expect(tabs).to_have_count(2)
-    # Start on calendar tab (first tab, aria-selected=true)
-    expect(tabs.first).to_have_attribute("aria-selected", "true")
-    tabs.first.focus()
-    # Arrow Right → trends (navigates to ?tab=trends)
-    page.keyboard.press("ArrowRight")
-    page.wait_for_url("**/insights?tab=trends", timeout=5000)
-    trends_tab = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]').nth(1)
-    expect(trends_tab).to_have_attribute("aria-selected", "true")
-    # Arrow Left → back to calendar
-    trends_tab.focus()
-    page.keyboard.press("ArrowLeft")
-    page.wait_for_url("**/insights?tab=calendar", timeout=5000)
+# (Insights tablist tests removed: the page dissolved into /?view=calendar and
+#  /posture in the 2026-08 redesign; Activity/Posture use plain link tabs.)
 
 
 # ---------------------------------------------------------------------------
@@ -223,9 +208,9 @@ def test_insights_tabs_arrow_key_switching(page: Page, cert_watch_server: str) -
 
 def test_add_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None:
     """Home/End jumps to the first/last tab in the Add-certificates tablist."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("add-host-btn").click()
-    page.locator(".cw-slide.on").wait_for()
+    page.locator(".cw-drawer.on").wait_for()
     scan_tab = page.get_by_test_id("tab-scan-btn")
     bulk_tab = page.get_by_test_id("tab-bulk-btn")
     scan_tab.focus()
@@ -245,10 +230,10 @@ def test_add_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None
 
 def test_reports_menu_home_end_nav(page: Page, cert_watch_server: str) -> None:
     """Home/End jumps focus to the first/last menuitem in the reports menu."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     page.get_by_test_id("dashboard-heading").wait_for()
     page.locator("#reports-btn").click()
-    items = page.locator('#reports-menu-wrap [role="menuitem"]')
+    items = page.locator('#export-menu [role="menuitem"]')
     expect(items).to_have_count(3)
     expect(items.first).to_be_focused()
     page.keyboard.press("ArrowDown")
@@ -262,21 +247,3 @@ def test_reports_menu_home_end_nav(page: Page, cert_watch_server: str) -> None:
 # ---------------------------------------------------------------------------
 # Insights page tablist: Home / End switching
 # ---------------------------------------------------------------------------
-
-def test_insights_tabs_home_end_switching(page: Page, cert_watch_server: str) -> None:
-    """Home/End switches between Insights tabs via URL navigation."""
-    page.goto(f"{cert_watch_server}/insights?tab=trends")
-    page.get_by_test_id("insights-heading").wait_for()
-    tabs = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]')
-    expect(tabs).to_have_count(2)
-    trends_tab = tabs.nth(1)
-    trends_tab.focus()
-    expect(trends_tab).to_have_attribute("aria-selected", "true")
-    page.keyboard.press("Home")
-    page.wait_for_url("**/insights?tab=calendar", timeout=5000)
-    calendar_tab = page.locator('[role="tablist"][aria-label="Insights view"] [role="tab"]').first
-    calendar_tab.focus()
-    expect(calendar_tab).to_have_attribute("aria-selected", "true")
-    page.keyboard.press("End")
-    page.wait_for_url("**/insights?tab=trends", timeout=5000)
-    expect(tabs.nth(1)).to_have_attribute("aria-selected", "true")

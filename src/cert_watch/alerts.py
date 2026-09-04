@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import contextlib
-import json
+import hashlib
 import logging
 import math
+import re
 import smtplib
 import sqlite3
+import ssl
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
@@ -17,7 +20,12 @@ from typing import TYPE_CHECKING, Any
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert as Alert
 from cert_watch.database import AlertRepository
-from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen, validate_smtp_host
+from cert_watch.http_client import (
+    SSRFBlockedError,
+    resolve_smtp_host,
+    ssrf_safe_urlopen,
+    validate_smtp_host,
+)
 from cert_watch.retry import backoff_range as backoff_range
 
 if TYPE_CHECKING:
@@ -257,6 +265,7 @@ def evaluate_all_certs(
     alert-group recipients based on effective tags and manual assignment.
     """
     from cert_watch.database import _connect, _parse_iso
+    from cert_watch.database.connection import parse_san_dns_names
 
     host_thresholds, host_owners = _load_host_owner_maps(db_path)
 
@@ -281,11 +290,7 @@ def evaluate_all_certs(
             issuer=leaf_row["issuer"],
             not_before=_parse_iso(leaf_row["not_before"]),
             not_after=_parse_iso(leaf_row["not_after"]),
-            san_dns_names=(
-                json.loads(leaf_row["san_dns_names"])
-                if leaf_row["san_dns_names"]
-                else []
-            ),
+            san_dns_names=parse_san_dns_names(leaf_row["san_dns_names"]),
             fingerprint_sha256=leaf_row["fingerprint_sha256"],
             raw_der=b"",
             is_leaf=True,
@@ -549,13 +554,32 @@ def _format_message(
     return msg
 
 
+def _redact_secret(msg: str, secret: str) -> str:
+    """Redact a secret from a diagnostic message.
+
+    For secrets >= 4 chars, a plain substring replace is safe. For shorter
+    secrets (B4: the previous ``>= 4`` gate leaked 1-3 char passwords/routing
+    keys into ``alert.error_message`` and WARNING logs), use word-boundary
+    regex so a 1-char password like ``p`` redacts the standalone token ``p``
+    but does not corrupt common substrings like ``nope`` or ``smtp``.
+    """
+    if not secret:
+        return msg
+    if len(secret) >= 4:
+        return msg.replace(secret, "***")
+    return re.sub(rf"(?<!\w){re.escape(secret)}(?!\w)", "***", msg)
+
+
 def _sanitize_smtp_error(msg: str, config: AlertConfig | None) -> str:
     """Strip SMTP credentials from error messages to avoid logging secrets.
 
-    Only replaces passwords >= 4 chars to avoid false positives (e.g. 'p' in 'nope').
+    Passwords are always redacted regardless of length (B4). Usernames keep
+    the ``>= 4`` gate because short usernames like ``ops`` frequently appear
+    as substrings of diagnostic text and are not secret per SMTP logging
+    conventions.
     """
-    if config and config.smtp_password and len(config.smtp_password) >= 4:
-        msg = msg.replace(config.smtp_password, "***")
+    if config and config.smtp_password:
+        msg = _redact_secret(msg, config.smtp_password)
     if config and config.smtp_user and len(config.smtp_user) >= 4:
         msg = msg.replace(config.smtp_user, "***")
     return msg
@@ -597,18 +621,52 @@ def negotiate_starttls(s: smtplib.SMTP, port: int, has_credentials: bool) -> boo
     if port == 465:
         return True  # already TLS-wrapped via SMTP_SSL
     try:
-        s.starttls()
+        # smtplib's implicit default context does not verify certificates.
+        # Always supply the platform trust-store context so STARTTLS checks
+        # both the chain and the original relay hostname retained in _host.
+        s.starttls(context=ssl.create_default_context())
         return True
     except smtplib.SMTPNotSupportedError:
         return not has_credentials
 
 
+def connect_smtp_transport(
+    host: str,
+    pinned_ip: str,
+    port: int,
+    *,
+    timeout: int,
+) -> smtplib.SMTP | smtplib.SMTP_SSL:
+    """Connect to a validated IP while retaining *host* for TLS identity."""
+    if port == 465:
+        # SMTP_SSL's implicit context is intentionally unverified in the
+        # standard library. Use the default verifying context explicitly.
+        context = ssl.create_default_context()
+        smtp_ssl = smtplib.SMTP_SSL(timeout=timeout, context=context)
+        smtp_ssl._host = host  # type: ignore[attr-defined]
+        code, message = smtp_ssl.connect(pinned_ip, port)
+        if code != 220:
+            smtp_ssl.close()
+            raise smtplib.SMTPConnectError(code, message)
+        return smtp_ssl
+
+    smtp = smtplib.SMTP(pinned_ip, port, timeout=timeout)
+    smtp._host = host  # type: ignore[attr-defined]
+    return smtp
+
+
 def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
-    """Strip webhook URL, header values, and routing key from error messages."""
+    """Strip webhook URL, header values, and routing key from error messages.
+
+    The routing key (PagerDuty) is always redacted regardless of length (B4);
+    header values keep the ``>= 4`` gate because short values like ``yes`` /
+    ``true`` are common non-secret config flags that would corrupt diagnostic
+    text if treated as secrets.
+    """
     if config and config.url:
         msg = msg.replace(config.url, "***")
-    if config and config.routing_key and len(config.routing_key) >= 4:
-        msg = msg.replace(config.routing_key, "***")
+    if config and config.routing_key:
+        msg = _redact_secret(msg, config.routing_key)
     if config and config.headers:
         for val in config.headers.values():
             if len(val) >= 4:
@@ -1039,46 +1097,35 @@ def _build_digest_message(
 def _open_smtp_connection(
     config: AlertConfig, *, alert: Alert | None = None
 ) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
-    ssrf_err = _check_smtp_ssrf(config)
+    # Resolve and validate exactly once, then connect to that same address.
+    # Resolving once for validation and again for transport leaves a DNS-
+    # rebinding gap even when both individual operations look correct.
+    ssrf_err, pinned_ip = resolve_smtp_host(
+        config.smtp_host,
+        config.smtp_port,
+        allow_private=config.allow_private,
+        allowed_subnets=config.allowed_subnets,
+    )
     if ssrf_err is not None:
         logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
         if alert is not None:
             alert.error_message = "smtp host blocked by SSRF policy"
         return None
-    # Pin the resolved IP to close the DNS-rebinding TOCTOU window between
-    # validate_smtp_host (SSRF check) and smtplib's own getaddrinfo.  We connect
-    # to the pinned IP but override _host to the original hostname so TLS
-    # certificate verification (STARTTLS) uses the correct SNI.
-    import socket as _socket
-
-    pinned_ip: str | None = None
-    try:
-        infos = _socket.getaddrinfo(config.smtp_host, config.smtp_port, proto=_socket.IPPROTO_TCP)
-        for _fam, _type, _proto, _canon, sockaddr in infos:
-            pinned_ip = str(sockaddr[0])
-            break
-    except _socket.gaierror:
-        pass  # let smtplib fail naturally
+    if pinned_ip is None:
+        logger.warning("smtp host %s could not be resolved", config.smtp_host)
+        if alert is not None:
+            alert.error_message = "SMTP host could not be resolved"
+        return None
+    # Connect to the pinned IP but retain the original hostname for TLS SNI and
+    # certificate verification.
     s: smtplib.SMTP_SSL | smtplib.SMTP | None = None
     try:
-        if pinned_ip:
-            if config.smtp_port == 465:
-                # SMTP_SSL wraps TLS during connect(); we can't override _host
-                # after connect. Fall back to hostname-based connect for TLS
-                # correctness — the TOCTOU window is milliseconds for an
-                # admin-configured host.
-                s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
-            else:
-                # Connect to the pinned IP, then set _host to the original
-                # hostname so starttls() uses the correct server_hostname.
-                s = smtplib.SMTP(timeout=15)
-                s.connect(pinned_ip, config.smtp_port)
-                s._host = config.smtp_host  # type: ignore[attr-defined]
-        else:
-            if config.smtp_port == 465:
-                s = smtplib.SMTP_SSL(config.smtp_host, config.smtp_port, timeout=15)
-            else:
-                s = smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15)
+        s = connect_smtp_transport(
+            config.smtp_host,
+            pinned_ip,
+            config.smtp_port,
+            timeout=15,
+        )
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
             logger.warning(
                 "SMTP send aborted: STARTTLS not supported by %s:%s",
@@ -1133,8 +1180,8 @@ def _send_digest_smtp(
     msg = _build_digest_email(certs, recipients, config.from_addr, owner_name=owner_name)
     if _conn is not None:
         try:
-            _conn.send_message(msg)
-            return True
+            refused = _conn.send_message(msg)
+            return not refused
         except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
             logger.warning("digest email failed: %s", _sanitize_smtp_error(str(exc), config))
             return False
@@ -1144,8 +1191,9 @@ def _send_digest_smtp(
             if conn is None:
                 continue
             try:
-                conn.send_message(msg)
-                return True
+                refused = conn.send_message(msg)
+                if not refused:
+                    return True
             finally:
                 with contextlib.suppress(Exception):
                     conn.quit()
@@ -1154,9 +1202,109 @@ def _send_digest_smtp(
     return False
 
 
+def _send_claimed_digest_smtp(
+    db_path: str | Path,
+    digest_key: str,
+    recipients: list[str],
+    config: AlertConfig,
+    message_factory: Callable[[list[str]], EmailMessage],
+    *,
+    failure_label: str = "digest email",
+) -> tuple[dict[str, bool], bool]:
+    """Deliver a digest batch with per-recipient claims and refusal handling.
+
+    A successful ``send_message`` may still return a mapping of refused
+    recipients. Accepted recipients are committed immediately; refused ones
+    release their claims and are the only addresses retried. Claims are taken
+    (and renewed) immediately before each network attempt, never while waiting
+    behind earlier owner deliveries.
+
+    Returns ``(outcomes, busy)``. Outcome keys preserve input casing; ``busy``
+    means another process held at least one live recipient lease.
+    """
+    from cert_watch.database.digest_deliveries import (
+        claim_digest_delivery,
+        complete_digest_delivery,
+        renew_digest_delivery,
+    )
+
+    originals: dict[str, str] = {}
+    for recipient in recipients:
+        originals.setdefault(recipient.casefold(), recipient)
+    pending = list(originals)
+    outcomes: dict[str, bool] = {}
+    busy = False
+
+    for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+        if not pending:
+            break
+        acquired = []
+        attempt_recipients: list[str] = []
+        for target in pending:
+            claim = claim_digest_delivery(db_path, digest_key, "smtp", target)
+            if claim.state == "sent":
+                outcomes[target] = True
+            elif claim.state == "busy":
+                outcomes[target] = False
+                busy = True
+            else:
+                acquired.append(claim)
+                attempt_recipients.append(originals[target])
+        pending = []
+        if not acquired:
+            continue
+
+        # Renew as one tight pre-send step after all recipients have been
+        # claimed, so even a deliberately short test lease cannot expire while
+        # this batch was queued behind prior owner sends.
+        live_claims = []
+        live_recipients: list[str] = []
+        for claim, recipient in zip(acquired, attempt_recipients, strict=True):
+            if renew_digest_delivery(db_path, claim):
+                live_claims.append(claim)
+                live_recipients.append(recipient)
+            else:
+                outcomes[claim.target] = False
+                busy = True
+        if not live_claims:
+            continue
+
+        refused_targets: set[str] | None = None
+        conn = _open_smtp_connection(config)
+        if conn is not None:
+            try:
+                refused = conn.send_message(message_factory(live_recipients))
+                if isinstance(refused, Mapping):
+                    refused_targets = {str(address).casefold() for address in refused}
+                else:
+                    refused_targets = set()
+            except Exception as exc:  # noqa: BLE001 — SMTP is an external service
+                logger.warning(
+                    "%s failed: %s",
+                    failure_label,
+                    _sanitize_smtp_error(str(exc), config),
+                )
+            finally:
+                with contextlib.suppress(Exception):
+                    conn.quit()
+
+        for claim in live_claims:
+            succeeded = (
+                refused_targets is not None and claim.target not in refused_targets
+            )
+            recorded = complete_digest_delivery(db_path, claim, succeeded=succeeded)
+            outcomes[claim.target] = succeeded and recorded
+            if not outcomes[claim.target]:
+                pending.append(claim.target)
+
+    return ({originals[target]: outcomes.get(target, False) for target in originals}, busy)
+
+
 def _send_digest_webhook(
     certs: list[dict[str, Any]],
     webhook_config: WebhookConfig,
+    *,
+    idempotency_key: str,
 ) -> bool:
     """Dispatch expiry digest through the adapter registry.
 
@@ -1167,7 +1315,7 @@ def _send_digest_webhook(
 
     message, subject = _build_digest_message(certs)
     alert = Alert(
-        cert_id=f"digest:{len(certs)}",
+        cert_id=idempotency_key,
         alert_type="expiry_digest",
         status="pending",
         message=message,
@@ -1191,6 +1339,12 @@ def send_expiry_digest(
     deliveries succeeded; False on total or partial failure.
     """
     from cert_watch.database import _connect, _parse_iso
+    from cert_watch.database.digest_deliveries import (
+        claim_digest_delivery,
+        complete_digest_delivery,
+        digest_period_key,
+        renew_digest_delivery,
+    )
 
     if config is None and webhook_config is None:
         return False
@@ -1205,6 +1359,7 @@ def send_expiry_digest(
         ).fetchall()
 
     now = datetime.now(UTC)
+    digest_key = digest_period_key("expiry", cadence_days, now=now)
     expiring: list[dict[str, Any]] = []
     for r in rows:
         na = _parse_iso(r["not_after"])
@@ -1256,77 +1411,81 @@ def send_expiry_digest(
 
     any_smtp_success = False
     any_smtp_failure = False
+    smtp_busy = False
 
     if config is not None:
-        smtp_conn = _open_smtp_connection(config)
-        global_sent = False
-        sent_owners: set[str] = set()
+        if global_recipients_original:
+            outcomes, busy = _send_claimed_digest_smtp(
+                db_path,
+                digest_key,
+                global_recipients_original,
+                config,
+                lambda recipients: _build_digest_email(
+                    expiring, recipients, config.from_addr
+                ),
+                failure_label="global expiry digest",
+            )
+            smtp_busy |= busy
+            any_smtp_success |= any(outcomes.values())
+            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
 
-        if smtp_conn is not None:
-            conn_broken = False
-            try:
-                if global_recipients_cf:
-                    msg = _build_digest_email(
-                        expiring, global_recipients_original, config.from_addr,
-                    )
-                    try:
-                        smtp_conn.send_message(msg)
-                        any_smtp_success = True
-                        global_sent = True
-                    except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
-                        logger.warning(
-                            "global digest failed: %s",
-                            _sanitize_smtp_error(str(exc), config),
-                        )
-                        any_smtp_failure = True
-                        conn_broken = True
-                if not conn_broken:
-                    for cf_email, certs in owner_certs.items():
-                        original = original_emails.get(cf_email, cf_email)
-                        oname = owner_names.get(cf_email)
-                        msg = _build_digest_email(
-                            certs, [original], config.from_addr, owner_name=oname,
-                        )
-                        try:
-                            smtp_conn.send_message(msg)
-                            any_smtp_success = True
-                            sent_owners.add(cf_email)
-                        except Exception as exc:  # noqa: BLE001 — SMTP send, external service, AC-06
-                            logger.warning(
-                                "owner digest for %s failed: %s",
-                                original,
-                                _sanitize_smtp_error(str(exc), config),
-                            )
-                            any_smtp_failure = True
-                            conn_broken = True
-                            break
-            finally:
-                with contextlib.suppress(Exception):
-                    smtp_conn.quit()
-
-        if not global_sent and global_recipients_cf:
-            if _send_digest_smtp(
-                expiring, global_recipients_original, config,
-            ):
-                any_smtp_success = True
-            else:
-                any_smtp_failure = True
         for cf_email, certs in owner_certs.items():
-            if cf_email not in sent_owners:
-                original = original_emails.get(cf_email, cf_email)
-                oname = owner_names.get(cf_email)
-                if _send_digest_smtp(
-                    certs, [original], config, owner_name=oname,
-                ):
-                    any_smtp_success = True
-                else:
-                    any_smtp_failure = True
+            original = original_emails.get(cf_email, cf_email)
+
+            def _build_owner_email(
+                recipients: list[str],
+                current_certs: list[dict[str, Any]] = certs,
+                owner_email: str = cf_email,
+            ) -> EmailMessage:
+                return _build_digest_email(
+                    current_certs,
+                    recipients,
+                    config.from_addr,
+                    owner_name=owner_names.get(owner_email),
+                )
+
+            outcomes, busy = _send_claimed_digest_smtp(
+                db_path,
+                digest_key,
+                [original],
+                config,
+                _build_owner_email,
+                failure_label=f"owner expiry digest for {original}",
+            )
+            smtp_busy |= busy
+            any_smtp_success |= any(outcomes.values())
+            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
+
+        any_smtp_failure |= smtp_busy
 
     if any_smtp_success and not any_smtp_failure:
         return True
 
+    if smtp_busy:
+        return False
+
     if webhook_config is not None:
-        return _send_digest_webhook(expiring, webhook_config)
+        endpoint = (
+            webhook_config.routing_key
+            if webhook_config.kind == "pagerduty"
+            else webhook_config.url
+        )
+        endpoint_hash = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
+        channel = f"webhook:{webhook_config.kind}:{endpoint_hash}"
+        claim = claim_digest_delivery(db_path, digest_key, channel, "global")
+        if claim.state == "sent":
+            return True
+        if not claim.acquired:
+            return False
+        if not renew_digest_delivery(db_path, claim):
+            return False
+        delivered = _send_digest_webhook(
+            expiring,
+            webhook_config,
+            idempotency_key=claim.idempotency_key,
+        )
+        complete_digest_delivery(db_path, claim, succeeded=delivered)
+        return delivered
 
     return False
 

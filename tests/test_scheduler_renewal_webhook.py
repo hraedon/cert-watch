@@ -15,6 +15,7 @@ from cert_watch.scheduler import (
     _check_renewal_overdue,
     _flush_renewal_webhook_pool,
     _send_renewal_webhook_if_configured,
+    _shutdown_renewal_webhook_pool,
 )
 from tests._helpers import seed_certificate
 
@@ -96,6 +97,20 @@ def test_retry_exhausted_is_logged(seeded_db, monkeypatch, caplog):
     _flush_renewal_webhook_pool()
     assert send.call_count == 3  # three attempts: 0, +1s, +2s
     assert any("failed after retries" in r.message for r in caplog.records)
+
+
+def test_shutdown_rejects_new_renewal_webhook(seeded_db, monkeypatch):
+    db, parsed = seeded_db
+    monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
+    _shutdown_renewal_webhook_pool()
+    with patch("cert_watch.renewal_webhook.send_renewal_webhook") as send:
+        _send_renewal_webhook_if_configured(
+            _signal(fingerprint=parsed.fingerprint_sha256),
+            "host.example.com",
+            443,
+            db,
+        )
+    send.assert_not_called()
 
 
 def test_check_renewal_overdue_fires_webhook_once_and_dedupes(seeded_db, monkeypatch):

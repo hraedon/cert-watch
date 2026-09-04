@@ -63,16 +63,13 @@ def test_smtp_connection_is_offloaded(reload_app, monkeypatch):
         def __exit__(self, *args):
             return False
 
-        def starttls(self) -> None:
+        def starttls(self, *, context=None) -> None:
             pass
 
         def send_message(self, msg) -> None:
             pass
 
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-    monkeypatch.setattr(
-        "cert_watch.http_client.validate_smtp_host", lambda *args, **kwargs: None
-    )
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         submitted = _spy_to_thread(monkeypatch)

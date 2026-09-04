@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}cert-watch — home{% endblock %}
+
+{% import "macros/icons.html" as icons %}
+{% import "macros/ui.html" as ui %}
+
+{# Severity → display. The queue's whole job: what needs a human, when, and
+   who fixes it — ranked by time-to-impact. #}
+{% macro sev_pill(sev) %}
+  {% if sev == 'expired' %}{{ ui.status('expired', label='Expired') }}
+  {% elif sev == 'stalled' %}{{ ui.status('critical', label='Renewal stalled') }}
+  {% elif sev == 'critical' %}{{ ui.status('critical', label='Critical') }}
+  {% elif sev == 'failing' %}{{ ui.status('warning', label='Scan failing') }}
+  {% elif sev == 'warning' %}{{ ui.status('warning', label='Warning') }}
+  {% else %}{{ ui.status('gray', label='Info') }}{% endif %}
+{% endmacro %}
+
+{% block content %}
+<div class="cw-wrap">
+  {% call ui.page_head('Home', 'What needs a human, ranked by time-to-impact.', testid='home-heading') %}
+    <a href="/browse" class="cw-btn">{{ icons.svg_icon('search', 14) }}Browse inventory</a>
+  {% endcall %}
+
+  {% if saved %}
+  <div class="cw-flash t-ok"><span>{{ saved }}</span></div>
+  {% endif %}
+
+  {# ---- Stat strip: the cells deep-link into Browse filters ---- #}
+  <div class="cw-stats">
+    {{ ui.stat('Expiring < 30d', stats.critical + stats.warning, 'certificates', icon='clock',
+                href='/browse', tone='', testid='home-expiring-stat') }}
+    {{ ui.stat('Expired', stats.expired, 'needs attention' if stats.expired else 'none', tone='t-expired', icon='alert',
+                href='/browse?urgency=expired') }}
+    {{ ui.stat('Critical', stats.critical, '< 7 days' if stats.critical else 'none', tone='t-crit', icon='alert',
+                href='/browse?urgency=critical') }}
+    {{ ui.stat('Warning', stats.warning, '7–29 days' if stats.warning else 'none', tone='t-warn', icon='clock',
+                href='/browse?urgency=warning') }}
+    {{ ui.stat('Healthy', stats.healthy, 'expiry healthy' if stats.healthy else 'none', tone='t-ok', icon='check-circle',
+                href='/browse?urgency=healthy') }}
+  </div>
+
+  {# ---- Attention queue ---- #}
+  <div class="cw-panel" data-testid="attention-panel">
+    <div class="cw-panel-head">
+      <h2>{{ icons.svg_icon('alert', 15) }} Needs attention</h2>
+      {% if queue %}<span class="cw-hint">{{ queue | length }} item{{ 's' if queue | length != 1 }}</span>{% endif %}
+    </div>
+    <div class="cw-panel-body">
+      {% for it in queue %}
+      <div class="cw-att-row" data-testid="attention-item" data-severity="{{ it.severity }}">
+        <div class="cw-att-sev">{{ sev_pill(it.severity) }}</div>
+        <div class="cw-att-main">
+          <div class="cw-chiprow">
+            {% if it.detail_url %}
+              <a href="{{ it.detail_url }}" class="cw-id">{{ it.endpoint }}</a>
+            {% else %}<span class="cw-id">{{ it.endpoint }}</span>{% endif %}
+            {% if it.host_count > 1 %}<span class="cw-chip t-accent">{{ it.host_count }} hosts</span>{% endif %}
+          </div>
+          <div class="cw-sub">{{ it.reasons | join(' · ') }}</div>
+        </div>
+        <div class="cw-chiprow">
+          {% if it.owner_name %}<span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ it.owner_name }}</span>{% endif %}
+          {% if it.days_remaining is not none and it.host_id %}
+            <span class="cw-chip {{ 't-ok' if it.confidence == 'auto' else 't-muted' }}"
+                  title="Configured renewal method for this host">
+              {% if it.confidence == 'auto' %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% else %}{{ icons.svg_icon('user', 11, 1.6) }}{% endif %}
+              {{ it.confidence_label }}</span>
+          {% endif %}
+        </div>
+        <div class="cw-rowact">
+          {% if may_write and it.host_id %}
+            <form method="post" action="/hosts/{{ it.host_id }}/scan" class="cw-inline">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <button type="submit" title="Scan now" class="cw-iconbtn sm">{{ icons.svg_icon('refresh', 14) }}</button>
+            </form>
+          {% endif %}
+          {% if it.detail_url %}
+            <a href="{{ it.detail_url }}" title="Details" class="cw-iconbtn sm">{{ icons.svg_icon('chevron-right', 14) }}</a>
+          {% endif %}
+        </div>
+      </div>
+      {% else %}
+        {% if stats.healthy or stats.warning or stats.critical or stats.expired %}
+          {{ ui.empty('Nothing needs attention', 'No expiring, stalled, or failing endpoints right now. New problems land here first.',
+                      icon='check-circle', tone='t-ok', testid='queue-calm') }}
+        {% else %}
+          {% call ui.empty('No certificates yet', 'Scan a host, upload a certificate file, or import a list of hosts to start watching your estate.',
+                      icon='plus', tone='t-accent', testid='empty-onboarding') %}
+            {% if may_write %}<a href="/browse" class="cw-btn primary">{{ icons.svg_icon('plus', 15, 2) }}Add certificates</a>{% endif %}
+          {% endcall %}
+        {% endif %}
+      {% endfor %}
+    </div>
+  </div>
+
+  {# ---- Expiry horizon: the next 12 weeks at a glance ---- #}
+  <div class="cw-panel" data-testid="horizon-panel">
+    <div class="cw-panel-head">
+      <h2>{{ icons.svg_icon('calendar', 15) }} Expiry horizon</h2>
+      <div class="cw-chiprow">
+        {% if horizon_storms %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}{{ horizon_storms }} renewal storm{{ 's' if horizon_storms != 1 }}</span>{% endif %}
+        <a class="cw-hint cw-link" href="/browse?view=calendar">full calendar →</a>
+      </div>
+    </div>
+    <div class="cw-panel-body">
+      {% for b in horizon %}
+        <div class="cw-cal-row{% if b.count == 0 %} quiet{% endif %}">
+          <div class="cw-cal-date">
+            <span class="mono {{ 'cw-muted' if b.count == 0 }}">{{ b.bucket_start }}</span>
+            {% if b.bucket_start == current_week_start %}<div class="cw-cal-now">this week</div>{% endif %}
+          </div>
+          {% if b.count > 0 %}
+          <div class="cw-chiprow">
+            {% if b.count >= 3 %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
+            <span class="cw-chip {{ b.tone }}">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
+          </div>
+          {% endif %}
+        </div>
+      {% else %}
+        {{ ui.empty('No expirations in the next 12 weeks', 'Future expirations will appear here as they enter the horizon.', icon='calendar', tone='t-accent') }}
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

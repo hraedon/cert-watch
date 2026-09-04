@@ -192,17 +192,33 @@ def _parse_iso(s: str) -> datetime:
     return dt
 
 
+def parse_san_dns_names(raw: object) -> list[str]:
+    """Parse persisted SAN JSON, recovering malformed values to an empty list."""
+    if raw is None or raw == "":
+        return []
+    try:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list) or not all(isinstance(name, str) for name in parsed):
+        return []
+    return parsed
+
+
 def _row_to_cert(row: sqlite3.Row | dict[str, Any]) -> Certificate:
+    # B2: corrupted san_dns_names JSON (manual DB edit, disk error, partial
+    # migration) must not crash every dashboard / detail / list call — fall
+    # back to an empty list and let the rest of the row render.
+    san_dns = parse_san_dns_names(row["san_dns_names"])
     cert = Certificate(
         subject=row["subject"],
         issuer=row["issuer"],
         not_before=_parse_iso(row["not_before"]),
         not_after=_parse_iso(row["not_after"]),
-        san_dns_names=json.loads(row["san_dns_names"]),
+        san_dns_names=san_dns,
         fingerprint_sha256=row["fingerprint_sha256"],
         raw_der=bytes(row["raw_der"]),
         is_leaf=bool(row["is_leaf"]),
-        notes=dict(row).get("notes", ""),
         source=dict(row).get("source", "unknown"),
     )
     return cert

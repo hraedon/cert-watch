@@ -130,7 +130,7 @@ def test_settings_policy_page(reload_app):
     with TestClient(app_mod.app) as client:
         r = client.get("/settings?tab=policy")
     assert r.status_code == 200
-    assert 'id="tab-policy"' in r.text or 'name="policy_packs' in r.text
+    assert 'action="/settings/policy"' in r.text
 
 
 def test_settings_policy_save(reload_app):

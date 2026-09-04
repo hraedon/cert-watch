@@ -1,0 +1,158 @@
+{% extends "settings/_base.html" %}
+
+{# The alert-groups GET route doesn't thread ?saved=1 / ?error= (set by its
+   POST redirects) into the context — recover them here so feedback isn't
+   silently dropped. #}
+{% set saved = saved | default(request.query_params.get('saved'), true) %}
+{% set error = error | default(request.query_params.get('error'), true) %}
+
+{% macro group_fields(g=none, prefix='ag') %}
+  <div class="cw-field">
+    <label class="cw-label" for="{{ prefix }}_name">Name</label>
+    <input class="cw-input" type="text" id="{{ prefix }}_name" name="name"
+           value="{{ g.name if g else '' }}" placeholder="e.g., platform-team" required>
+  </div>
+  <div class="cw-field">
+    <label class="cw-label" for="{{ prefix }}_match_tags">Match tags</label>
+    <input class="cw-input mono" type="text" id="{{ prefix }}_match_tags" name="match_tags"
+           value="{{ g.match_tags | join(', ') if g else preview_match_tags | default('') }}"
+           placeholder="e.g., platform-team, prod">
+    <div class="cw-hint">Comma-separated. A cert routes to this group when any of its (cert or host) tags match.</div>
+  </div>
+  <div class="cw-field">
+    <label class="cw-label" for="{{ prefix }}_recipients">Recipients</label>
+    <input class="cw-input" type="text" id="{{ prefix }}_recipients" name="recipients"
+           value="{{ g.recipients | join(', ') if g else '' }}" placeholder="ops@example.com, lead@example.com">
+    <div class="cw-hint">Comma-separated email addresses for this team's alerts.</div>
+  </div>
+  <div class="cw-field">
+    <label class="cw-label" for="{{ prefix }}_webhook_url">Webhook URL <span class="cw-muted">(optional)</span></label>
+    <input class="cw-input mono" type="text" id="{{ prefix }}_webhook_url" name="webhook_url"
+           value="{{ g.webhook_url if g else '' }}" placeholder="https://hooks.slack.com/services/...">
+  </div>
+  <div class="cw-form-grid">
+    <div class="cw-field">
+      <label class="cw-label" for="{{ prefix }}_threshold_days">Alert threshold (days) <span class="cw-muted">(optional)</span></label>
+      <input class="cw-input" type="number" min="1" id="{{ prefix }}_threshold_days" name="threshold_days"
+             value="{{ g.threshold_days if g and g.threshold_days is not none else '' }}">
+      <div class="cw-hint">Days-to-expiry at which this team's alerts fire. Leave empty to use the global thresholds.</div>
+    </div>
+    <div class="cw-field">
+      <label class="cw-label" for="{{ prefix }}_digest_cadence_days">Digest cadence (days)</label>
+      <input class="cw-input" type="number" min="1" id="{{ prefix }}_digest_cadence_days" name="digest_cadence_days"
+             value="{{ g.digest_cadence_days if g else '7' }}">
+      <div class="cw-hint">How often this team's digest is sent, in days. Default 7.</div>
+    </div>
+  </div>
+{% endmacro %}
+
+{% block section %}
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Alert groups</h2>
+    <span class="cw-hint">per-team alert routing, matched by tag</span>
+  </div>
+  <div class="cw-panel-body">
+    <div class="cw-note">
+      {{ icons.svg_icon('bell', 14) }}
+      <div>
+        A group matches certificates by tag (a team's default tag) and routes
+        their alerts to that team's recipients/webhook, with an optional
+        per-team alert threshold and digest cadence. A cert with no matching
+        group falls back to the global alert settings.
+      </div>
+    </div>
+  </div>
+  <div class="cw-panel-body">
+    <details class="cw-editor">
+      <summary class="cw-btn primary">{{ icons.svg_icon('plus', 14) }}Add alert group</summary>
+      <div class="cw-editor-body">
+        <form method="post" action="/settings/alert-groups" class="cw-form">
+          <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+          {{ group_fields() }}
+          <div class="cw-form-foot"><button type="submit" class="cw-btn primary">Add alert group</button></div>
+        </form>
+      </div>
+    </details>
+  </div>
+  <div class="cw-panel-body">
+    <form method="get" action="/settings/alert-groups/preview" class="cw-form" data-testid="ag-preview-form">
+      <div class="cw-field">
+        <label class="cw-label" for="ag_preview_tags">Preview matches</label>
+        <input class="cw-input mono" type="text" id="ag_preview_tags" name="match_tags"
+               value="{{ preview_match_tags | default('') }}" placeholder="tag-a, tag-b">
+        <div class="cw-hint">Check how many certs carry a tag set before committing it (read-only, tag-based — manual cert assignments are not counted).</div>
+      </div>
+      <div class="cw-form-foot"><button type="submit" class="cw-btn ghost sm">Preview matching certs</button></div>
+    </form>
+    {% if preview_count is defined %}
+    <div class="cw-note {{ 't-accent' if preview_count else '' }}" data-testid="ag-preview-result">
+      {{ icons.svg_icon('search', 14) }}
+      <div>
+        <b>{{ preview_count }}</b> cert{{ 's' if preview_count != 1 else '' }} match{% if preview_match_tags %} <span class="mono">“{{ preview_match_tags }}”</span>{% endif %}
+        {% if preview_sample %}
+        <ul>
+          {% for s in preview_sample %}
+          <li>{{ s.hostname or '—' }}{% if s.subject %} <span class="cw-muted">({{ s.subject }})</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+        {% if preview_count > preview_sample | length %}<div class="cw-hint">…and {{ preview_count - preview_sample | length }} more.</div>{% endif %}
+        {% elif preview_count == 0 %}
+        <div class="cw-hint">No certs carry any of these tags.</div>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  {% if alert_groups %}
+  <div class="cw-table-clip">
+  <table class="cw-table" data-testid="alert-groups-table">
+    <thead>
+      <tr><th>Name</th><th>Match tags</th><th>Tag matches</th><th>Recipients</th><th>Threshold</th><th>Digest</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for g in alert_groups %}
+      <tr>
+        <td><span class="cw-id">{{ g.name }}</span></td>
+        <td>
+          {% if g.match_tags %}
+          <div class="cw-chiprow">
+            {% for t in g.match_tags %}<span class="cw-chip">{{ t }}</span>{% endfor %}
+          </div>
+          {% else %}<span class="cw-muted">—</span>{% endif %}
+        </td>
+        <td data-testid="ag-match-count-{{ g.id }}">
+          {% set n = alert_group_match_counts.get(g.id, 0) %}
+          <span class="cw-chip {{ 't-accent' if n else 't-muted' }}">{{ n }} cert{{ '' if n == 1 else 's' }}</span>
+        </td>
+        <td class="mono">{{ g.recipients | join(', ') or '—' }}</td>
+        <td>{{ g.threshold_days if g.threshold_days is not none else '—' }}</td>
+        <td>{{ g.digest_cadence_days }}d</td>
+        <td>
+          <div class="cw-chiprow">
+            <details class="cw-editor">
+              <summary class="cw-btn ghost sm">Edit</summary>
+              <div class="cw-editor-body">
+                <form method="post" action="/settings/alert-groups/{{ g.id }}" class="cw-form">
+                  <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                  {{ group_fields(g, prefix='edit_ag_' ~ g.id) }}
+                  <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm">Save changes</button></div>
+                </form>
+              </div>
+            </details>
+            <form method="post" action="/settings/alert-groups/{{ g.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this alert group? Its certs fall back to the global alert settings.">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="cw-btn danger sm">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+    {{ ui.empty('No alert groups yet', "Create one above to route a team's alerts by tag.", icon='bell') }}
+  {% endif %}
+</div>
+{% endblock %}

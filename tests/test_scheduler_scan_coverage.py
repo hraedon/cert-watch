@@ -140,6 +140,30 @@ def test_scheduler_runs_all_stages_in_order():
     assert ran == ["scan", "ct", "alert", "maint"]
 
 
+def test_scheduler_stop_during_scan_skips_remaining_stages():
+    import threading
+
+    from cert_watch.scheduler import _run_cycle
+
+    stopped = threading.Event()
+    ran = []
+
+    def scan():
+        ran.append("scan")
+        stopped.set()
+        return {}
+
+    _run_cycle(
+        scan,
+        lambda: ran.append("alert") or {},
+        ct_fn=lambda: ran.append("ct") or {},
+        digest_fn=lambda: ran.append("digest") or {},
+        maintenance_fn=lambda: ran.append("maintenance"),
+        stop_event=stopped,
+    )
+    assert ran == ["scan"]
+
+
 def test_scheduler_ct_fn_exception_does_not_block_alerts():
     from cert_watch.scheduler import _run_cycle
 
@@ -272,6 +296,7 @@ def test_run_scan_now_with_store_fn(tmp_path):
 
     def store_fn(result):
         stored.append(result)
+        return "leaf-id-1"  # contract: non-empty leaf id on success (WI-142)
 
     result = run_scan_now(
         scan_fn,
@@ -312,7 +337,11 @@ def test_run_scan_now_store_fn_exception(tmp_path):
         host_provider=lambda: hosts,
         store_fn=store_fn,
     )
-    assert result["scanned"] == 1
+    # A failed store is NOT a successful scan: the cert was never persisted.
+    # Regression (WI-142 sibling): scanned was incremented before store_fn ran,
+    # inflating the success count and hiding the failure.
+    assert result["scanned"] == 0
+    assert result["failures"] == 1
 
 
 def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
@@ -343,7 +372,7 @@ def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
         host_provider=lambda: hosts,
         store_fn=store_fn,
     )
-    assert result["scanned"] == 1
+    assert result["scanned"] == 0
 
     with _connect(db) as conn:
         rows = conn.execute(
@@ -355,10 +384,11 @@ def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
     assert rows[0][1] and "store failed" in rows[0][1]
 
 
-def test_run_scan_now_store_fn_returns_none_records_success(tmp_path):
-    """A store_fn that returns None (no leaf id) is NOT a failure — only a
-    raised exception is. Guards the loose store_fn contract used by tests and
-    ensures run_scan_now records "success" so fast-retry isn't falsely tripped.
+def test_run_scan_now_store_fn_returns_none_records_failure(tmp_path):
+    """A store_fn that returns an empty leaf id is a failure, not a silent
+    success (WI-142). store_scanned's contract is "return non-empty leaf id
+    on success, raise on failure"; the scheduler defends against a future
+    contract violation that silently returns "" by recording failure too.
     """
     from cert_watch.database import _connect, init_schema
     from cert_watch.scheduler import run_scan_now
@@ -378,15 +408,19 @@ def test_run_scan_now_store_fn_returns_none_records_success(tmp_path):
         return FakeResult(host=hostname, port=port)
 
     def store_fn(result):
-        return None  # explicit no-return; must not be treated as a failure
+        return None  # contract violation — empty leaf id
 
-    run_scan_now(
+    result = run_scan_now(
         scan_fn,
         lambda: {"sent": 0, "failed": 0},
         db_path=db,
         host_provider=lambda: hosts,
         store_fn=store_fn,
     )
+    # An empty leaf id is a failure: nothing was persisted, so the scan
+    # must not count as successful and must trigger fast-retry.
+    assert result["scanned"] == 0
+    assert result["failures"] == 1
 
     with _connect(db) as conn:
         rows = conn.execute(
@@ -394,7 +428,7 @@ def test_run_scan_now_store_fn_returns_none_records_success(tmp_path):
             (hosts[0][0], hosts[0][1]),
         ).fetchall()
     assert len(rows) == 1
-    assert rows[0][0] == "success"
+    assert rows[0][0] == "failure"
 
 
 def test_run_scan_now_alert_counts(tmp_path):

@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS certificates (
     parent_cert_id TEXT,
     chain_valid INTEGER,
     replaces_cert_id TEXT,
-    notes TEXT NOT NULL DEFAULT '',
     tags TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -172,6 +171,20 @@ CREATE TABLE IF NOT EXISTS session_versions (
     version INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS digest_deliveries (
+    digest_key TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    target TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('claimed', 'failed', 'sent')),
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    idempotency_key TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    sent_at TEXT,
+    PRIMARY KEY (digest_key, channel, target)
+);
 """
 
 _BASE_INDEXES = """
@@ -194,6 +207,10 @@ CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
     ON cert_history(hostname, port, scanned_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cert_history_fp
     ON cert_history(fingerprint_sha256);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_digest_deliveries_idempotency
+    ON digest_deliveries(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_digest_deliveries_lease
+    ON digest_deliveries(status, lease_expires_at);
 """
 
 # Maps resolved path → (st_ino, st_size, st_mtime) from the last successful
@@ -246,8 +263,8 @@ def ensure_base(db_path: str | Path) -> None:
             conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
         if "replaces_cert_id" not in cols:
             conn.execute("ALTER TABLE certificates ADD COLUMN replaces_cert_id TEXT")
-        if "notes" not in cols:
-            conn.execute("ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
+        # certificates.notes was removed by migration 0031 (merged into
+        # hosts.notes) — never re-add it here.
         host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
         if "threshold_days" not in host_cols:
             conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")

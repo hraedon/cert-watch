@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "allows": 0,
+  "undefined_classes": [],
+  "color_literals": [
+    {
+      "fp": "9b5d15c9f3d3693d",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-accent-fg: #0e0d0b;"
+    },
+    {
+      "fp": "0bc554c6c6284755",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-accent-fg: #ffffff;"
+    },
+    {
+      "fp": "5159d7fc42c417b7",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-backdrop: rgba(4, 3, 2, .55);"
+    },
+    {
+      "fp": "a18da71601f0c50e",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-backdrop: rgba(40, 32, 16, .35);"
+    },
+    {
+      "fp": "f23287e141c6b6fc",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-expired: #6d28d9;"
+    },
+    {
+      "fp": "0a35fe45db6ce8f3",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "--cw-expired: #a78bfa;"
+    },
+    {
+      "fp": "cf63084ff2e4ece3",
+      "n": 1,
+      "where": "cw.css",
+      "sample": ".cw-panel, .cw-stats { border-color: #ccc; box-shadow: none; break-ins"
+    },
+    {
+      "fp": "27c964624749e8ef",
+      "n": 2,
+      "where": "cw.css",
+      "sample": "body { background: #fff; color: #111; }"
+    },
+    {
+      "fp": "8f7aa2fcbc3c9ac0",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "border-radius: 50%; background: #fff; transition: transform .2s;"
+    },
+    {
+      "fp": "9e2c5d1855c9731e",
+      "n": 1,
+      "where": "cw.css",
+      "sample": "box-shadow: -16px 0 48px rgba(0,0,0,.4);"
+    }
+  ]
+}

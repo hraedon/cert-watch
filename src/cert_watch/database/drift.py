@@ -24,7 +24,10 @@ class DriftEvent:
 
 _GRADE_ORDER = {"A+": 5, "A": 4, "B": 3, "C": 2, "F": 1, "": 0}
 
-_TLS_ORDER = {"TLSv1.3": 3, "TLSv1.2": 2, "TLSv1.1": 1, "TLSv1.0": 0}
+_TLS_ORDER = {
+    "TLSv1.3": 3, "TLSv1.2": 2, "TLSv1.1": 1,
+    "TLSv1.0": 0, "TLSv1": 0,
+}
 
 
 def _grade_value(grade: str) -> int:
@@ -130,14 +133,20 @@ def _compute_drift_events(
         else:
             events.append(DriftEvent("posture_grade", old_grade, grade, "info"))
 
-    # Protocol version downgraded → high
+    # Protocol version downgrade → high. Compare by TLS level, not raw string:
+    # scan paths emit TLS 1.0 as both "TLSv1.0" and bare "TLSv1" (see
+    # posture.tls_version_meets_1_2) — a string-only compare treated the same
+    # version as a downgrade and fired a false high-severity drift alert.
     old_proto = old.get("protocol_version", "")
     proto = new_protocol_version
     if old_proto and proto and old_proto != proto:
-        if _tls_value(proto) < _tls_value(old_proto):
+        old_v = _tls_value(old_proto)
+        new_v = _tls_value(proto)
+        if new_v < old_v:
             events.append(DriftEvent("protocol_version", old_proto, proto, "high"))
-        else:
+        elif new_v > old_v or old_v < 0 or new_v < 0:
             events.append(DriftEvent("protocol_version", old_proto, proto, "info"))
+        # else: same known TLS level (e.g. "TLSv1.0" vs "TLSv1") — not drift.
 
     # SAN count changed → info
     old_san_count = old.get("san_count")

@@ -2,247 +2,208 @@
 {% block title %}cert-watch — SC-081 readiness report{% endblock %}
 
 {% import "macros/icons.html" as icons %}
+{% import "macros/ui.html" as ui %}
 
-{% block head %}
-<style>
-@media print {
-  .cw-topbar, .cw-page-head, .no-print { display: none !important; }
-  .cw-page { padding: 0 !important; }
-  body { background: #fff !important; color: #000 !important; }
-  .cw-panel { border: 1px solid #ccc !important; break-inside: avoid; }
-  .cw-chip { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-}
-.cw-section-hdr { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-.cw-milestone-box { min-width: 120px; }
-.cw-private-note { padding: 10px 16px; background: rgba(128,128,128,0.05); margin-bottom: 16px; }
-</style>
-{% endblock %}
+{# Renewal-automation classification chip. #}
+{% macro class_chip(classification) %}
+  {%- if classification == 'likely-automated' -%}
+    <span class="cw-chip t-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
+  {%- elif classification == 'manual' -%}
+    <span class="cw-chip t-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
+  {%- else -%}
+    <span class="cw-chip t-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
+  {%- endif -%}
+{% endmacro %}
 
-{% block content %}
-<div class="cw-page-wrap">
-  <div class="cw-page-head">
-    <div>
-      <h1 data-testid="readiness-heading">SC-081 Readiness Report</h1>
-      <div class="cw-page-head-sub">Milestone timeline and per-host readiness for shortened certificate lifetimes.</div>
-    </div>
-    <div class="cw-seg no-print">
-      <a href="/readiness" class="cw-btn cw-no-decoration cw-toolbtn">Refresh</a>
-      <a href="/api/readiness.json" class="cw-btn cw-no-decoration cw-toolbtn">JSON</a>
-      <button type="button" class="cw-btn cw-no-decoration cw-toolbtn" data-action="print">Print / PDF</button>
-    </div>
-  </div>
-
-  <div class="cw-mb-18">
-    <div class="cw-fz-15 cw-fw-600 cw-mb-4">Milestone timeline</div>
-    <div class="cw-fz-13 cw-text-text-3">Maximum public-trust certificate validity reducing over time. Generated {{ report.generated_at[:19]|replace('T', ' ') }} UTC</div>
-  </div>
-
-  <div class="cw-flex cw-gap-12 cw-wrap cw-mb-18">
-    {% for ms in report.milestones %}
-    <div class="cw-panel cw-p-14-16 cw-milestone-box">
-      <div class="mono cw-fz-18 cw-fw-700">{{ ms.label }}</div>
-      <div class="cw-fz-12 cw-text-text-3 cw-mt-2">Effective {{ ms.date }}</div>
-    </div>
-    {% endfor %}
-  </div>
-
-  <div class="cw-panel cw-p-16-18">
-    <div class="cw-stats cw-mb-0">
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-accent"></div>
-        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('server', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Total hosts</span></div>
-        <div class="cw-stat-val cw-stat-val-default">{{ report.total_hosts }}</div>
-      </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-ok"></div>
-        <div class="cw-stat-top cw-stat-top-ok">{{ icons.svg_icon('shield', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Public-trust</span></div>
-        <div class="cw-stat-val cw-stat-val-ok">{{ report.public_trust_hosts }}</div>
-      </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-accent"></div>
-        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('key', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Private-CA</span></div>
-        <div class="cw-stat-val cw-stat-val-default">{{ report.private_ca_hosts }}</div>
-      </div>
-      {% if report.unknown_hosts > 0 %}
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-warn"></div>
-        <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('info', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Unknown</span></div>
-        <div class="cw-stat-val cw-stat-val-warn">{{ report.unknown_hosts }}</div>
-      </div>
-      {% endif %}
-    </div>
-  </div>
-
-  {% if report.public_trust_hosts == 0 %}
-  <div class="cw-panel cw-p-16-18 cw-mt-16">
-    <div class="cw-private-note">
-      <span class="cw-fz-13">SC-081 applies to <strong>publicly trusted</strong> certificates only. No hosts with confirmed public-trust certificates were found{% if report.unknown_hosts > 0 %}, though {{ report.unknown_hosts }} host{{ '' if report.unknown_hosts == 1 else 's' }} with unclassified chain status may include public-trust certs{% endif %} &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong> until public-trust hosts are identified.</span>
-    </div>
-  </div>
-  {% endif %}
-
-  {% if report.workload_forecast and report.public_trust_hosts > 0 %}
-  <div class="cw-panel cw-p-16-18 cw-mt-16">
-    <div class="cw-fz-15 cw-fw-600 cw-mb-4">Workload Forecast</div>
-    <p class="cw-fz-13 cw-text-text-3 cw-mt-0 cw-mb-12">
-      Estimated renewal operations per month across your public-trust estate at each milestone.
-    </p>
-    <div class="cw-stats cw-mb-0">
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-accent"></div>
-        <div class="cw-stat-top cw-stat-top-accent">{{ icons.svg_icon('refresh', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">Current</span></div>
-        <div class="cw-stat-val cw-stat-val-default">{{ report.workload_forecast.current_renewals_per_month }}</div>
-        <div class="cw-stat-sub">per month</div>
-      </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-warn"></div>
-        <div class="cw-stat-top cw-stat-top-warn">{{ icons.svg_icon('clock', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">At 100-day max</span></div>
-        <div class="cw-stat-val cw-stat-val-warn">{{ report.workload_forecast.at_100d_renewals_per_month }}</div>
-        <div class="cw-stat-sub">per month</div>
-      </div>
-      <div class="cw-stat">
-        <div class="cw-stat-rail cw-stat-rail-crit"></div>
-        <div class="cw-stat-top cw-stat-top-crit">{{ icons.svg_icon('alert', 15, 1.8) }}<span class="cw-stat-label cw-stat-label-color">At 47-day max</span></div>
-        <div class="cw-stat-val cw-stat-val-crit">{{ report.workload_forecast.at_47d_renewals_per_month }}</div>
-        <div class="cw-stat-sub">per month</div>
-      </div>
-    </div>
-    {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
-      {% if host_list %}
-      <div class="cw-mt-8 cw-fz-12-5">
-        <strong>{{ ms_label }} risk:</strong> {{ host_list | join(', ') }}
-      </div>
-      {% endif %}
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  <div class="cw-panel cw-p-16-18 cw-mt-16">
-    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Public-Trust Host Readiness</div>
-    {% if report.hosts %}
-    <table class="cw-table">
-      <thead>
-        <tr>
-          <th>Host</th>
-          <th>Classification</th>
-          <th>Lead Time</th>
-          <th>Lifetime</th>
-          {% for ms in report.milestones %}
-          <th>{{ ms.label }} margin</th>
-          {% endfor %}
-        </tr>
-      </thead>
-      <tbody>
-        {% for h in report.hosts %}
-        <tr>
-          <td class="mono">{{ h.hostname }}</td>
-          <td>
-            {% if h.classification == 'likely-automated' %}
-            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
-            {% elif h.classification == 'manual' %}
-            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
-            {% else %}
-            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
-            {% endif %}
-          </td>
-          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
-          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+{# One host-readiness table; margin columns render only when
+   milestones are passed (the public-trust table).              #}
+{% macro host_table(hosts, milestones=[]) %}
+<div class="cw-table-clip">
+  <table class="cw-table">
+    <thead>
+      <tr>
+        <th>Host</th>
+        <th>Classification</th>
+        <th class="num">Lead Time</th>
+        <th class="num">Lifetime</th>
+        {% for ms in milestones %}
+        <th>{{ ms.label }} margin</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in hosts %}
+      <tr>
+        <td class="mono">{{ h.hostname }}</td>
+        <td>{{ class_chip(h.classification) }}</td>
+        <td class="num">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
+        <td class="num">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
+        {% if milestones %}
           {% for m in h.margins %}
           <td>
             {% if m.margin_days is not none %}
-              {% if m.renew_late %}
-              <span class="cw-chip tone-crit">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
-              {% else %}
-              <span class="cw-chip tone-ok">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
-              {% endif %}
+              <span class="cw-chip {{ 't-crit' if m.renew_late else 't-ok' }}">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
             {% elif m.renew_late %}
-              <span class="cw-chip tone-crit">At risk</span>
+              <span class="cw-chip t-crit">At risk</span>
             {% else %}
-              <span class="cw-chip cw-chip-muted">&mdash;</span>
+              <span class="cw-chip t-muted">&mdash;</span>
             {% endif %}
           </td>
           {% endfor %}
-        </tr>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="cw-wrap cw-vstack">
+  <nav class="cw-crumbs" aria-label="Breadcrumb">
+    <a href="/posture">Posture</a>
+    {{ icons.svg_icon('chevron-right', 13) }}
+    <span>SC-081 readiness</span>
+  </nav>
+
+  {% call ui.page_head('SC-081 Readiness Report',
+                       'Milestone timeline and per-host readiness for shortened certificate lifetimes. Generated ' ~ (report.generated_at[:16] | replace('T', ' ')) ~ ' UTC',
+                       testid='readiness-heading') %}
+    <a class="cw-btn" href="/readiness">{{ icons.svg_icon('refresh', 14) }}Refresh</a>
+    <a class="cw-btn" href="/api/readiness.json">{{ icons.svg_icon('download', 14) }}JSON</a>
+    <button type="button" class="cw-btn" data-print>{{ icons.svg_icon('file', 14) }}Print / PDF</button>
+  {% endcall %}
+
+  {# ---- Milestone timeline ---- #}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Milestone timeline</h2>
+      <span class="cw-hint">maximum public-trust certificate validity reducing over time</span>
+    </div>
+    <div class="cw-panel-body">
+      <div class="cw-tl">
+        {% for ms in report.milestones %}
+        <div class="cw-tl-node t-accent">
+          <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
+          <div class="cw-chiprow">
+            <span class="cw-tl-role">{{ ms.label }} maximum</span>
+            <span class="mono cw-sub">Effective {{ ms.date }}</span>
+          </div>
+        </div>
         {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <div class="cw-empty"><div class="cw-empty-sub">No public-trust hosts found. SC-081 requirements do not apply to your estate.</div></div>
+      </div>
+    </div>
+  </div>
+
+  {# ---- Host counts ---- #}
+  <div class="cw-stats">
+    {{ ui.stat('Total hosts', report.total_hosts, icon='server') }}
+    {{ ui.stat('Public-trust', report.public_trust_hosts, 'SC-081 applies', tone='t-ok', icon='shield') }}
+    {{ ui.stat('Private-CA', report.private_ca_hosts, 'not bound by SC-081', icon='key') }}
+    {% if report.unknown_hosts > 0 %}
+    {{ ui.stat('Unknown', report.unknown_hosts, 'chain status unclassified', tone='t-warn', icon='info') }}
     {% endif %}
   </div>
 
-  {% if report.unknown_hosts_list %}
-  <div class="cw-panel cw-p-16-18 cw-mt-16">
-    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Unclassified Hosts</div>
-    <div class="cw-private-note">
-      <span class="cw-fz-13">Chain status is unknown for these hosts &mdash; they may be public-trust or private-CA. Upload the root CA as a trust anchor or scan with a complete chain to classify them.</span>
+  {% if report.public_trust_hosts == 0 %}
+  <div class="cw-panel">
+    <div class="cw-panel-body">
+      <div class="cw-note">
+        {{ icons.svg_icon('info', 14) }}
+        <div>SC-081 applies to <strong>publicly trusted</strong> certificates only. No hosts with confirmed public-trust certificates were found{% if report.unknown_hosts > 0 %}, though {{ report.unknown_hosts }} host{{ '' if report.unknown_hosts == 1 else 's' }} with unclassified chain status may include public-trust certs{% endif %} &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong> until public-trust hosts are identified.</div>
+      </div>
     </div>
-    <table class="cw-table">
-      <thead>
-        <tr>
-          <th>Host</th>
-          <th>Classification</th>
-          <th>Lead Time</th>
-          <th>Lifetime</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for h in report.unknown_hosts_list %}
-        <tr>
-          <td class="mono">{{ h.hostname }}</td>
-          <td>
-            {% if h.classification == 'likely-automated' %}
-            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
-            {% elif h.classification == 'manual' %}
-            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
-            {% else %}
-            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
-            {% endif %}
-          </td>
-          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
-          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
   </div>
   {% endif %}
 
-  {% if report.private_hosts %}
-  <div class="cw-panel cw-p-16-18 cw-mt-16">
-    <div class="cw-fz-15 cw-fw-600 cw-mb-4 cw-section-hdr">Private-CA Hosts</div>
-    <div class="cw-private-note">
-      <span class="cw-fz-13">These hosts use private certificate authorities. SC-081 does not bind them, but they are listed for awareness.</span>
+  {# ---- Workload forecast ---- #}
+  {% if report.workload_forecast and report.public_trust_hosts > 0 %}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Workload forecast</h2>
+      <span class="cw-hint">estimated renewal operations per month across the public-trust estate</span>
     </div>
-    <table class="cw-table">
-      <thead>
-        <tr>
-          <th>Host</th>
-          <th>Classification</th>
-          <th>Lead Time</th>
-          <th>Lifetime</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for h in report.private_hosts %}
-        <tr>
-          <td class="mono">{{ h.hostname }}</td>
-          <td>
-            {% if h.classification == 'likely-automated' %}
-            <span class="cw-chip tone-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
-            {% elif h.classification == 'manual' %}
-            <span class="cw-chip tone-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
-            {% else %}
-            <span class="cw-chip cw-chip-muted">{{ icons.svg_icon('info', 11, 1.6) }}Unknown</span>
-            {% endif %}
-          </td>
-          <td class="mono">{% if h.current_lead_time is not none %}{{ h.current_lead_time }}d{% else %}&mdash;{% endif %}</td>
-          <td class="mono">{% if h.current_lifetime is not none %}{{ h.current_lifetime }}d{% else %}&mdash;{% endif %}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="cw-panel-body">
+      <div class="cw-stats">
+        {{ ui.stat('Current', report.workload_forecast.current_renewals_per_month, 'per month', icon='refresh') }}
+        {{ ui.stat('At 100-day max', report.workload_forecast.at_100d_renewals_per_month, 'per month', tone='t-warn', icon='clock') }}
+        {{ ui.stat('At 47-day max', report.workload_forecast.at_47d_renewals_per_month, 'per month', tone='t-crit', icon='alert') }}
+      </div>
+    </div>
+    {% set risk_ns = namespace(any=false) %}
+    {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
+      {% if host_list %}{% set risk_ns.any = true %}{% endif %}
+    {% endfor %}
+    {% if risk_ns.any %}
+    <div class="cw-panel-body">
+      {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
+        {% if host_list %}
+        <div class="cw-cal-row quiet">
+          <div class="cw-cal-date"><strong>{{ ms_label }} risk</strong></div>
+          <div class="cw-chiprow">
+            {% for hn in host_list %}<span class="cw-chip">{{ hn }}</span>{% endfor %}
+          </div>
+        </div>
+        {% endif %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ---- Public-trust hosts ---- #}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Public-Trust Host Readiness</h2>
+      {% if report.hosts %}<span class="cw-chip">{{ report.hosts | length }}</span>{% endif %}
+    </div>
+    {% if report.hosts %}
+      {{ host_table(report.hosts, milestones=report.milestones) }}
+    {% else %}
+      {{ ui.empty('No public-trust hosts found', 'SC-081 requirements do not apply to your estate.', icon='shield') }}
+    {% endif %}
+  </div>
+
+  {# ---- Unclassified hosts ---- #}
+  {% if report.unknown_hosts_list %}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Unclassified Hosts</h2>
+      <span class="cw-chip">{{ report.unknown_hosts_list | length }}</span>
+    </div>
+    <div class="cw-panel-body">
+      <div class="cw-note t-warn">
+        {{ icons.svg_icon('info', 14) }}
+        <div>Chain status is unknown for these hosts &mdash; they may be public-trust or private-CA. Upload the root CA as a trust anchor or scan with a complete chain to classify them.</div>
+      </div>
+    </div>
+    {{ host_table(report.unknown_hosts_list) }}
+  </div>
+  {% endif %}
+
+  {# ---- Private-CA hosts ---- #}
+  {% if report.private_hosts %}
+  <div class="cw-panel">
+    <div class="cw-panel-head">
+      <h2>Private-CA Hosts</h2>
+      <span class="cw-chip">{{ report.private_hosts | length }}</span>
+    </div>
+    <div class="cw-panel-body">
+      <div class="cw-note">
+        {{ icons.svg_icon('key', 14) }}
+        <div>These hosts use private certificate authorities. SC-081 does not bind them, but they are listed for awareness.</div>
+      </div>
+    </div>
+    {{ host_table(report.private_hosts) }}
   </div>
   {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-print]')) window.print();
+  });
+</script>
 {% endblock %}

@@ -105,6 +105,15 @@ from cert_watch.database.dashboard_unified import (
     list_unified_entries as list_unified_entries,
 )
 
+# Digest delivery claims
+from cert_watch.database.digest_deliveries import (
+    DigestDeliveryClaim,
+    claim_digest_delivery,
+    complete_digest_delivery,
+    digest_period_key,
+    renew_digest_delivery,
+)
+
 # Drift + cert_history
 from cert_watch.database.drift import (
     DriftEvent,
@@ -221,10 +230,6 @@ from cert_watch.database.session_versions import (
 )
 
 # Team dashboard
-from cert_watch.database.team import (
-    team_dashboard_data as team_dashboard_data,
-)
-
 # Users & Roles (Plan 040)
 from cert_watch.database.users_roles import (
     Role,
@@ -267,6 +272,12 @@ __all__ = [
     "replace_scanned",
     "delete_certificate_cascade",
     "get_renewal_history",
+    # digest delivery claims
+    "DigestDeliveryClaim",
+    "claim_digest_delivery",
+    "complete_digest_delivery",
+    "digest_period_key",
+    "renew_digest_delivery",
     # drift
     "DriftEvent",
     "detect_drift",
@@ -317,5 +328,4 @@ __all__ = [
     # calendar
     "list_calendar",
     # team
-    "team_dashboard_data",
 ]

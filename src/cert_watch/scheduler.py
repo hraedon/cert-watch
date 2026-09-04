@@ -126,20 +126,55 @@ _scheduler_stop = threading.Event()
 _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
 
-_renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="renewal-webhook",
+_renewal_webhook_pool: concurrent.futures.ThreadPoolExecutor | None = (
+    concurrent.futures.ThreadPoolExecutor(
+        max_workers=2, thread_name_prefix="renewal-webhook",
+    )
 )
 _renewal_webhook_pool_lock = threading.Lock()
 
 
 def _flush_renewal_webhook_pool() -> None:
-    """Wait for all pending renewal webhook tasks to finish (test helper)."""
+    """Drain pending tasks and explicitly reset the pool (test helper)."""
     global _renewal_webhook_pool
     with _renewal_webhook_pool_lock:
-        _renewal_webhook_pool.shutdown(wait=True)
-        _renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
-            max_workers=2, thread_name_prefix="renewal-webhook",
-        )
+        pool = _renewal_webhook_pool
+        _renewal_webhook_pool = None
+    if pool is not None:
+        pool.shutdown(wait=True)
+    _start_renewal_webhook_pool()
+
+
+def _start_renewal_webhook_pool() -> None:
+    global _renewal_webhook_pool
+    with _renewal_webhook_pool_lock:
+        if _renewal_webhook_pool is None:
+            _renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
+                max_workers=2, thread_name_prefix="renewal-webhook",
+            )
+
+
+def _shutdown_renewal_webhook_pool() -> None:
+    pool = _detach_renewal_webhook_pool()
+    if pool is not None:
+        pool.shutdown(wait=True)
+
+
+def _detach_renewal_webhook_pool() -> concurrent.futures.ThreadPoolExecutor | None:
+    """Close the submission gate immediately and return the pool to drain."""
+    global _renewal_webhook_pool
+    with _renewal_webhook_pool_lock:
+        pool = _renewal_webhook_pool
+        _renewal_webhook_pool = None
+    return pool
+
+
+def _submit_renewal_webhook(fn: Callable[[], None]) -> bool:
+    with _renewal_webhook_pool_lock:
+        if _renewal_webhook_pool is None:
+            return False
+        _renewal_webhook_pool.submit(fn)
+    return True
 
 
 def _run_cycle(
@@ -149,6 +184,7 @@ def _run_cycle(
     ct_fn: Callable[[], dict[str, Any]] | None = None,
     maintenance_fn: Callable[[], None] | None = None,
     digest_fn: Callable[[], dict[str, Any]] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     """Run one scan → CT → alert → digest → maintenance cycle.
 
@@ -162,23 +198,31 @@ def _run_cycle(
         logger.info("scheduled scan completed")
     except Exception:  # noqa: BLE001 — failure isolation: one stage failing must not stop the others
         logger.exception("scheduler scan_fn failed")
+    if stop_event is not None and stop_event.is_set():
+        return
     if ct_fn is not None:
         try:
             ct_fn()
             logger.info("scheduled CT check completed")
         except Exception:  # noqa: BLE001 — failure isolation
             logger.exception("scheduler ct_fn failed")
+    if stop_event is not None and stop_event.is_set():
+        return
     try:
         alert_fn()
         logger.info("scheduled alerts completed")
     except Exception:  # noqa: BLE001 — failure isolation
         logger.exception("scheduler alert_fn failed")
+    if stop_event is not None and stop_event.is_set():
+        return
     if digest_fn is not None:
         try:
             digest_fn()
             logger.info("scheduled digest completed")
         except Exception:  # noqa: BLE001 — failure isolation
             logger.exception("scheduler digest_fn failed")
+    if stop_event is not None and stop_event.is_set():
+        return
     if maintenance_fn is not None:
         try:
             maintenance_fn()
@@ -211,6 +255,11 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
+        from cert_watch.digest import start_digest_pool
+
+        _start_renewal_webhook_pool()
+        start_digest_pool()
+
         def _loop() -> None:
             while not _scheduler_stop.is_set():
                 wait = _seconds_until(hour, minute)
@@ -228,7 +277,7 @@ def start_scheduler(
                 try:
                     _run_cycle(
                         scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn,
-                        digest_fn=digest_fn,
+                        digest_fn=digest_fn, stop_event=_scheduler_stop,
                     )
                 finally:
                     _cycle_lock.release()
@@ -240,12 +289,18 @@ def start_scheduler(
 
 def stop_scheduler() -> None:
     _scheduler_stop.set()
+    # Close submission gates before waiting for a potentially long scan. The
+    # cycle checks the stop event between stages, and neither pool is recreated
+    # until the next explicit start_scheduler() call.
+    renewal_pool = _detach_renewal_webhook_pool()
+    from cert_watch.digest import _detach_digest_pool
+    digest_pool = _detach_digest_pool()
+    if renewal_pool is not None:
+        renewal_pool.shutdown(wait=True)
+    if digest_pool is not None:
+        digest_pool.shutdown(wait=True)
     if _scheduler_thread is not None:
         _scheduler_thread.join(timeout=30)
-    with _renewal_webhook_pool_lock:
-        _renewal_webhook_pool.shutdown(wait=True)
-    from cert_watch.digest import shutdown_digest_pool
-    shutdown_digest_pool()
 
 
 def run_scan_now(
@@ -324,8 +379,14 @@ def run_scan_now(
         scanned += 1
         if store_fn is not None:
             try:
-                store_fn(result)
+                new_id = store_fn(result)
             except Exception as exc:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
+                # Persistence failed: the scan produced a result but nothing was
+                # stored, so it must not count as a successful scan (WI-142
+                # sibling — success was previously bookkept before the store
+                # completed, inflating `scanned` and hiding the failure).
+                scanned -= 1
+                failures += 1
                 logger.exception("store_fn failed for %s:%s", hostname, port)
                 if db_path is not None:
                     try:
@@ -336,6 +397,35 @@ def run_scan_now(
                                 port=port,
                                 status="failure",
                                 error_message=str(exc),
+                            ),
+                        )
+                    except sqlite3.Error:
+                        logger.warning(
+                            "could not record scan failure for %s:%s",
+                            hostname, port, exc_info=True,
+                        )
+                continue
+            # WI-142 defense in depth: store_scanned's contract is "return a
+            # non-empty leaf id on success, raise on failure." The empty-
+            # return path was closed at scan.py (it now re-raises), but a
+            # future regression that silently returns "" must not be recorded
+            # as a successful scan — treat an empty leaf id as a failure too.
+            if not new_id:
+                scanned -= 1
+                failures += 1
+                logger.warning(
+                    "store_fn returned empty leaf id for %s:%s — treating as failure",
+                    hostname, port,
+                )
+                if db_path is not None:
+                    try:
+                        record_scan_history(
+                            db_path,
+                            ScanHistory(
+                                hostname=hostname,
+                                port=port,
+                                status="failure",
+                                error_message="store returned empty leaf id",
                             ),
                         )
                     except sqlite3.Error:
@@ -473,15 +563,19 @@ def _send_renewal_webhook_if_configured(
         )
 
     try:
-        with _renewal_webhook_pool_lock:
-            _renewal_webhook_pool.submit(_deliver_with_retry)
+        submitted = _submit_renewal_webhook(_deliver_with_retry)
     except Exception:
         logger.warning(
-            "renewal webhook pool submit failed for %s; delivering inline",
+            "renewal webhook pool submit failed for %s",
             signal.hostname,
             exc_info=True,
         )
-        _deliver_with_retry()
+        return
+    if not submitted:
+        logger.info(
+            "renewal webhook for %s not submitted because scheduler is stopped",
+            signal.hostname,
+        )
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:

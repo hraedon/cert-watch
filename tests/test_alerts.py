@@ -1,4 +1,5 @@
 import smtplib
+import ssl
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -307,7 +308,7 @@ def test_open_smtp_connection_ssrf_blocked_returns_none():
 
 
 def test_open_smtp_connection_port465_uses_ssl():
-    """Port 465 (implicit TLS) uses SMTP_SSL regardless of IP pinning."""
+    """Port 465 pins the validated IP while retaining hostname-based TLS SNI."""
     from cert_watch.alerts import _open_smtp_connection
 
     config = AlertConfig(
@@ -319,10 +320,109 @@ def test_open_smtp_connection_port465_uses_ssl():
         recipients=["c@d"],
     )
     ssl_mock = MagicMock()
-    with patch("cert_watch.alerts.smtplib.SMTP_SSL", return_value=ssl_mock):
+    ssl_mock.connect.return_value = (220, b"ready")
+    with (
+        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5")),
+        patch("cert_watch.alerts.smtplib.SMTP_SSL", return_value=ssl_mock) as smtp_ssl,
+    ):
         result = _open_smtp_connection(config)
     assert result is ssl_mock
+    smtp_ssl.assert_called_once()
+    tls_context = smtp_ssl.call_args.kwargs["context"]
+    assert tls_context.verify_mode == ssl.CERT_REQUIRED
+    assert tls_context.check_hostname is True
+    assert smtp_ssl.call_args.kwargs["timeout"] == 15
+    assert ssl_mock._host == "smtp.example"
+    ssl_mock.connect.assert_called_once_with("203.0.113.5", 465)
     ssl_mock.login.assert_called_once_with("u", "p")
+
+
+def test_negotiate_starttls_uses_verifying_default_context():
+    from cert_watch.alerts import negotiate_starttls
+
+    smtp = MagicMock()
+
+    assert negotiate_starttls(smtp, 587, has_credentials=True) is True
+
+    context = smtp.starttls.call_args.kwargs["context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
+def test_open_smtp_connection_rejects_invalid_relay_certificate():
+    from cert_watch.alerts import _open_smtp_connection
+
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_port=465,
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with (
+        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5")),
+        patch(
+            "cert_watch.alerts.connect_smtp_transport",
+            side_effect=ssl.SSLCertVerificationError("certificate verify failed"),
+        ),
+    ):
+        result = _open_smtp_connection(config, alert=alert)
+
+    assert result is None
+    assert alert.error_message is not None
+    assert "certificate verify failed" in alert.error_message
+
+
+def test_open_smtp_connection_uses_single_validated_resolution():
+    """Delivery consumes the resolver's pin and never resolves independently."""
+    from cert_watch.alerts import _open_smtp_connection
+
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_port=587,
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    smtp_mock = MagicMock()
+    with (
+        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5"))
+        as resolve,
+        patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock) as smtp,
+        patch("cert_watch.alerts.negotiate_starttls", return_value=True),
+    ):
+        result = _open_smtp_connection(config)
+    assert result is smtp_mock
+    resolve.assert_called_once_with(
+        "smtp.example", 587, allow_private=True, allowed_subnets=(),
+    )
+    smtp.assert_called_once_with("203.0.113.5", 587, timeout=15)
+    assert smtp_mock._host == "smtp.example"
+
+
+def test_open_smtp_connection_resolution_failure_does_not_retry_by_hostname():
+    from cert_watch.alerts import _open_smtp_connection
+
+    config = AlertConfig(
+        smtp_host="unresolved.example",
+        smtp_port=587,
+        smtp_user="",
+        smtp_password="",
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    with (
+        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, None)),
+        patch("cert_watch.alerts.smtplib.SMTP") as smtp,
+    ):
+        result = _open_smtp_connection(config, alert=alert)
+    assert result is None
+    smtp.assert_not_called()
+    assert alert.error_message == "SMTP host could not be resolved"
 
 
 def test_check_smtp_ssrf_blocks_metadata_address():
@@ -357,6 +457,25 @@ def test_sanitize_smtp_error_strips_credentials():
     assert "***" in sanitized
 
 
+def test_sanitize_smtp_error_redacts_short_password():
+    """B4: a 1-3 char SMTP password must still be redacted (the previous
+    ``>= 4`` gate leaked it into alert.error_message and WARNING logs).
+    """
+    from cert_watch.alerts import _sanitize_smtp_error
+
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_user="ops",
+        smtp_password="x",  # 1-char password — would have leaked under the old gate
+        from_addr="a@b",
+        recipients=["c@d"],
+    )
+    msg = "auth failed for password x"
+    sanitized = _sanitize_smtp_error(msg, config)
+    assert "password x" not in sanitized
+    assert "***" in sanitized
+
+
 def test_sanitize_webhook_error_strips_url_headers_and_routing_key():
     from cert_watch.alerts import _sanitize_webhook_error
 
@@ -374,6 +493,21 @@ def test_sanitize_webhook_error_strips_url_headers_and_routing_key():
     assert config.url not in sanitized
     assert "pagerduty-routing-key" not in sanitized
     assert "bearer-token-value" not in sanitized
+    assert "***" in sanitized
+
+
+def test_sanitize_webhook_error_redacts_short_routing_key():
+    """B4: a 1-3 char routing key must still be redacted."""
+    from cert_watch.alerts import _sanitize_webhook_error
+
+    config = WebhookConfig(
+        url="https://hooks.example.com/hook",
+        kind="pagerduty",
+        routing_key="ab",  # would have leaked under the old gate
+    )
+    msg = "routing key ab rejected"
+    sanitized = _sanitize_webhook_error(msg, config)
+    assert "key ab" not in sanitized
     assert "***" in sanitized
 
 
@@ -911,6 +1045,20 @@ def test_send_expiry_digest_sends_webhook_when_no_smtp(tmp_path):
         mock_urlopen.return_value = mock_resp
         result = send_expiry_digest(db, None, webhook)
     assert result is True
+
+
+def test_successful_expiry_webhook_is_not_resent_in_same_period(tmp_path):
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import WebhookConfig, send_expiry_digest
+
+    db = tmp_path / "cw.sqlite3"
+    _insert_cert(db, not_after=(datetime.now(UTC) + timedelta(days=5)).isoformat())
+    webhook = WebhookConfig(url="https://hooks.test/hook")
+    with patch("cert_watch.alerts.send_webhook", return_value=True) as send:
+        assert send_expiry_digest(db, None, webhook) is True
+        assert send_expiry_digest(db, None, webhook) is True
+    send.assert_called_once()
 
 
 def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):

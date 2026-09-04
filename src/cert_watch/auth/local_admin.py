@@ -27,14 +27,33 @@ _DUMMY_SALT = b"cert-watch-dummy"
 _DUMMY_N = 2**14
 _DUMMY_R = 8
 _DUMMY_P = 1
+# Passwords are capped before scrypt hashing. The cap MUST be applied at both
+# set-time (_scrypt_hash) and verify-time (verify_scrypt_hash): applying it only
+# at verify silently locks out a user who set a longer password (the hash was
+# computed over the full password, then never matches the truncated verify input).
+_MAX_PASSWORD_LEN = 1024
 
 
 def _scrypt_hash(
     password: str, *, n: int = 2**14, r: int = 8, p: int = 1, salt: bytes | None = None,
 ) -> str:
     salt = salt or os.urandom(16)
+    if len(password) > _MAX_PASSWORD_LEN:
+        password = password[:_MAX_PASSWORD_LEN]
     dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
     return f"scrypt${n}${r}${p}${base64.b64encode(salt).decode()}${base64.b64encode(dk).decode()}"
+
+
+def _scrypt_max_n_r_p() -> tuple[int, int, int]:
+    """Upper bound for scrypt cost params accepted from a stored hash.
+
+    A poisoned/compromised hash (e.g. n=2**24) would otherwise trigger a
+    multi-GB scrypt allocation on every login — a login-path DoS — and the
+    resulting MemoryError/ValueError would escape ``authenticate`` (which only
+    catches sqlite3 errors). This mirrors the floor check below and the guard
+    already present in ``_dummy_verify``.
+    """
+    return (2**18, 32, 16)
 
 
 def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
@@ -51,9 +70,16 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
         expected_dk = base64.b64decode(parts[5])
     except (ValueError, TypeError, binascii.Error):
         return False
+    max_n, max_r, max_p = _scrypt_max_n_r_p()
     if n < 2 or r < 1 or p < 1 or len(expected_dk) != 32:
         logger.warning(
             "Rejecting scrypt hash with invalid parameters: n=%s r=%s p=%s",
+            parts[1], parts[2], parts[3],
+        )
+        return False
+    if n > max_n or r > max_r or p > max_p:
+        logger.warning(
+            "Rejecting scrypt hash with excessive cost parameters: n=%s r=%s p=%s",
             parts[1], parts[2], parts[3],
         )
         return False
@@ -63,7 +89,16 @@ def verify_scrypt_hash(password: str, stored_hash: str) -> bool:
             "production should use n>=16384 r>=8",
             parts[1], parts[2], parts[3],
         )
-    dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    if len(password) > _MAX_PASSWORD_LEN:
+        password = password[:_MAX_PASSWORD_LEN]
+    try:
+        dk = hashlib.scrypt(password.encode(), salt=salt, n=n, r=r, p=p, dklen=32)
+    except (ValueError, MemoryError):
+        logger.warning(
+            "scrypt verification failed for stored hash (n=%s r=%s p=%s)",
+            parts[1], parts[2], parts[3],
+        )
+        return False
     return hmac.compare_digest(dk, expected_dk)
 
 

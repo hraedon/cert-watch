@@ -12,7 +12,9 @@ AC-5: Documented, tested restore procedure.
 from __future__ import annotations
 
 import contextlib
+import logging
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -329,6 +331,19 @@ def test_drop_ct_issuer_first_seen_idempotent(db_path: Path) -> None:
     assert "ct_issuer_first_seen" not in tables
 
 
+def test_digest_delivery_ledger_migration_is_idempotent(db_path: Path) -> None:
+    from cert_watch.migrations.m0029_digest_delivery_ledger import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        upgrade(conn)
+        upgrade(conn)
+        columns = {r[1] for r in conn.execute(
+            "PRAGMA table_info(digest_deliveries)"
+        ).fetchall()}
+    assert {"digest_key", "channel", "target", "lease_expires_at", "sent_at"} <= columns
+
+
 def test_backup_created_before_migration(tmp_path: Path) -> None:
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -516,6 +531,9 @@ def test_migration_from_v06x_baseline_with_data(db_path: Path) -> None:
     assert "hostname" in alerts_cols
     assert "subject" in alerts_cols
     assert "tags" in certs_cols
+    # 0031: certificates.notes is merged into hosts.notes and dropped.
+    assert "notes" not in certs_cols
+    assert "notes" in hosts_cols
     assert "expected_issuers" in hosts_cols
     assert "chain_incomplete" in posture_cols
     assert "chain_status" in posture_cols
@@ -631,3 +649,233 @@ def test_migration_0017_adds_caa_columns(tmp_path):
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "caa_present" in cols
     assert "caa_records" in cols
+
+
+# ── 0031: merge per-certificate notes into host notes (UI-INVENTORY V1) ──────
+
+
+def _mk_pre0031_db(db: Path, *, include_orphan: bool = True) -> None:
+    """Create a DB at the pre-0031 shape: ensure_base + re-add the column the
+    migration is responsible for dropping."""
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+        )
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, notes, added_at)"
+            " VALUES ('h1', 'a.example.com', 443, 'existing host note', '2026-01-01')"
+        )
+        certs = [
+            ("c1", "CN=a.example.com", "a.example.com", 443, "cert note one"),
+            ("c2", "CN=a.example.com", "a.example.com", 443, "cert note two"),
+        ]
+        if include_orphan:
+            certs.append(
+                ("c3", "CN=orphan.example.com", None, None, "orphan uploaded note")
+            )
+        for cid, subject, hostname, port, notes in certs:
+            conn.execute(
+                "INSERT INTO certificates (id, subject, issuer, not_before, not_after,"
+                " san_dns_names, fingerprint_sha256, raw_der, source, hostname, port,"
+                " is_leaf, notes, created_at, updated_at)"
+                " VALUES (?, ?, 'CN=Test CA', '2025-01-01', '2026-01-01', '[]',"
+                " ?, X'00', 'scan', ?, ?, 1, ?, '2025-01-01', '2025-01-01')",
+                (cid, subject, "ab" * 32, hostname, port, notes),
+            )
+        conn.commit()
+
+
+def test_migration_0031_merges_notes_and_drops_column(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "test.db"
+    _mk_pre0031_db(db, include_orphan=False)
+    with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        certs_cols = _table_columns(conn, "certificates")
+        merged = conn.execute(
+            "SELECT notes FROM hosts WHERE hostname = 'a.example.com'"
+        ).fetchone()[0]
+    assert "notes" not in certs_cols
+    assert "existing host note" in merged
+    assert "cert note one" in merged
+    assert "cert note two" in merged
+
+
+def test_migration_0031_does_not_treat_substring_as_duplicate(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "substring.db"
+    _mk_pre0031_db(db, include_orphan=False)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "UPDATE hosts SET notes = 'context around cert note one' WHERE id = 'h1'"
+        )
+        conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
+    assert merged == "context around cert note one\n\ncert note one"
+
+
+def test_migration_0031_skips_normalized_exact_duplicate(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "exact-duplicate.db"
+    _mk_pre0031_db(db, include_orphan=False)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE hosts SET notes = '  cert note one  ' WHERE id = 'h1'")
+        conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
+    assert merged == "  cert note one  "
+
+
+def test_migration_0031_warns_on_orphan_notes(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Startup preserves orphan notes while moving matched notes to hosts."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database.repo import SqliteCertificateRepository
+
+    db = tmp_path / "test.db"
+    _mk_pre0031_db(db)
+    _stamp_feature_branch_migrations(
+        db, tuple(f"{number:04d}" for number in range(1, 31))
+    )
+    with caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0031"):
+        init_schema(db)
+
+    with sqlite3.connect(str(db)) as conn:
+        certs_cols = _table_columns(conn, "certificates")
+        legacy_notes = dict(
+            conn.execute("SELECT id, notes FROM certificates ORDER BY id").fetchall()
+        )
+        host_notes = conn.execute(
+            "SELECT notes FROM hosts WHERE id = 'h1'"
+        ).fetchone()[0]
+    assert "notes" in certs_cols
+    assert legacy_notes == {"c1": "", "c2": "", "c3": "orphan uploaded note"}
+    assert "cert note one" in host_notes
+    assert "cert note two" in host_notes
+    assert any(
+        "preserving" in record.message and "c3" in record.message
+        for record in caplog.records
+    )
+
+    # Current repository inserts omit the deprecated column and rely on its
+    # non-null empty-string default while an orphan keeps the column alive.
+    new_id = SqliteCertificateRepository(db, source="upload").add(
+        Certificate(
+            subject="CN=new.example.com",
+            issuer="CN=Test CA",
+            not_before=datetime(2026, 1, 1, tzinfo=UTC),
+            not_after=datetime(2027, 1, 1, tzinfo=UTC),
+            fingerprint_sha256="cd" * 32,
+            raw_der=b"new",
+        )
+    )
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute(
+            "SELECT notes FROM certificates WHERE id = ?", (new_id,)
+        ).fetchone()[0] == ""
+
+
+def test_migration_0031_noop_without_column(tmp_path: Path) -> None:
+    """Idempotent on fresh DBs where the column never existed."""
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "test.db"
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)  # must not raise
+        cols = _table_columns(conn, "certificates")
+    assert "notes" not in cols
+
+
+def _stamp_feature_branch_migrations(
+    db: Path, ids: tuple[str, ...]
+) -> None:
+    """Record old feature-branch ids without assuming their descriptions."""
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "CREATE TABLE schema_version ("
+            "id TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)"
+        )
+        conn.executemany(
+            "INSERT INTO schema_version (id, description, applied_at) "
+            "VALUES (?, 'feature branch migration', '2026-08-30')",
+            ((mid,) for mid in ids),
+        )
+        conn.commit()
+
+
+def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) -> None:
+    """Old UI ids 0029/0030 must not suppress the canonical digest table.
+
+    The UI branch used 0029 for role tiers and 0030 for note merging.  Once
+    those ids mean digest and role tiers, id-only migration tracking would
+    otherwise skip both canonical functions on a database that ran that branch.
+    """
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.m0030_role_tag_tiers import upgrade as add_role_tiers
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "old-ui-feature.sqlite3"
+    ensure_base(db)
+    with sqlite3.connect(str(db)) as conn:
+        # Reproduce the UI branch's resulting schema: role tiers exist and the
+        # notes column is already gone, but the digest ledger did not exist.
+        add_role_tiers(conn)
+        conn.execute("DROP TABLE digest_deliveries")
+        conn.commit()
+    _stamp_feature_branch_migrations(
+        db, tuple(f"{number:04d}" for number in range(1, 31))
+    )
+
+    assert run_pending_migrations(db, backup=False) == ["0031"]
+
+    with sqlite3.connect(str(db)) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+        applied = {
+            row[0] for row in conn.execute("SELECT id FROM schema_version")
+        }
+    assert {"digest_deliveries", "role_tag_tiers"} <= tables
+    assert "0031" in applied
+
+
+def test_reconciled_migrations_upgrade_old_review_feature_database(
+    tmp_path: Path,
+) -> None:
+    """A review-branch DB with canonical 0029 receives role tiers and 0031."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "old-review-feature.sqlite3"
+    ensure_base(db)
+    _stamp_feature_branch_migrations(
+        db, tuple(f"{number:04d}" for number in range(1, 30))
+    )
+
+    assert run_pending_migrations(db, backup=False) == ["0030", "0031"]
+
+    with sqlite3.connect(str(db)) as conn:
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        }
+    assert {"digest_deliveries", "role_tag_tiers"} <= tables

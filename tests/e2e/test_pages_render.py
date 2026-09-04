@@ -28,6 +28,28 @@ def test_settings_page_renders(page: Page, cert_watch_server: str) -> None:
     expect(page.get_by_test_id("settings-heading")).to_be_visible()
 
 
+def test_secondary_page_copy_meets_normal_text_contrast(
+    page: Page, cert_watch_server: str
+) -> None:
+    page.goto(cert_watch_server)
+    contrast = page.locator(".cw-page-head-sub").evaluate(
+        """el => {
+          const parse = value => value.match(/[\\d.]+/g).slice(0, 3).map(Number);
+          const lum = value => {
+            const rgb = parse(value).map(v => {
+              v /= 255;
+              return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4;
+            });
+            return .2126 * rgb[0] + .7152 * rgb[1] + .0722 * rgb[2];
+          };
+          const fg = lum(getComputedStyle(el).color);
+          const bg = lum(getComputedStyle(document.body).backgroundColor);
+          return (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05);
+        }"""
+    )
+    assert contrast >= 4.5
+
+
 def test_compliance_report_renders(page: Page, cert_watch_server: str) -> None:
     """The compliance report page (linked from Insights) renders + offers exports."""
     page.goto(f"{cert_watch_server}/reports/compliance")
@@ -35,13 +57,59 @@ def test_compliance_report_renders(page: Page, cert_watch_server: str) -> None:
 
 
 def test_dashboard_search_box_present(page: Page, cert_watch_server: str) -> None:
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.get_by_test_id("dashboard-search")).to_be_visible()
+
+
+def test_mobile_dashboard_layout_does_not_overlap_or_clip_chrome(
+    page: Page, cert_watch_server: str
+) -> None:
+    """The wrapped mobile header and five-stat strip retain usable geometry."""
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{cert_watch_server}/browse")
+    expect(page.get_by_test_id("dashboard-heading")).to_be_visible()
+
+    expect(page.locator("#cw-health")).to_be_visible()
+    nav_box = page.locator(".cw-nav").bounding_box()
+    banner_box = page.locator("#cw-health").bounding_box()
+    assert nav_box is not None and banner_box is not None
+    assert nav_box["y"] + nav_box["height"] <= banner_box["y"]
+
+    column_count = page.locator(".cw-stats").evaluate(
+        "el => getComputedStyle(el).gridTemplateColumns.split(' ').length"
+    )
+    assert column_count == 2
+    assert page.evaluate("document.documentElement.scrollWidth === window.innerWidth")
+
+
+def test_attention_actions_reveal_on_hover(
+    page: Page, cert_watch_server: str
+) -> None:
+    """Attention-row actions use their own hover selector outside a table."""
+    page.set_content(
+        f'<link rel="stylesheet" href="{cert_watch_server}/static/css/cw.css">'
+        '<div class="cw-att-row"><a class="cw-rowact" href="#">Details</a></div>'
+    )
+    row = page.locator(".cw-att-row")
+    action = page.locator(".cw-rowact")
+    row.hover()
+    expect(action).to_have_css("opacity", "1")
+
+
+def test_mobile_closed_drawer_has_no_shadow_and_filters_scroll(
+    page: Page, cert_watch_server: str
+) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.goto(f"{cert_watch_server}/browse")
+    expect(page.locator(".cw-drawer")).to_have_css("box-shadow", "none")
+    mode_picker = page.locator('.cw-filterbar .cw-seg[aria-label="Group certificates"]')
+    expect(mode_picker).to_have_css("overflow-x", "auto")
+    assert mode_picker.evaluate("el => el.scrollWidth > el.clientWidth")
 
 
 def test_add_slide_tabs_switch(page: Page, cert_watch_server: str) -> None:
     """The Add-host slide-over opens and its tabs switch (scan/upload/bulk)."""
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     open_add_slide(page)
     switch_add_tab(page, "upload")
     expect(page.get_by_test_id("upload-file-input")).to_be_attached()
@@ -110,14 +178,25 @@ def test_cert_detail_page_renders(
     p = tmp_path / "detail.pem"
     p.write_bytes(cert.public_bytes(Encoding.PEM))
 
-    page.goto(cert_watch_server)
+    page.goto(f"{cert_watch_server}/browse")
     open_add_slide(page)
     switch_add_tab(page, "upload")
     page.get_by_test_id("upload-file-input").set_input_files(str(p))
     page.get_by_test_id("upload-submit-btn").click()
+    page.goto(f"{cert_watch_server}/browse")
     expect(page.locator("body")).to_contain_text(cn)
 
     page.get_by_test_id("cert-row").filter(has_text=cn).click()
     page.wait_for_url("**/certificates/*")
     expect(page.get_by_test_id("cert-detail-heading")).to_be_visible()
     expect(page.get_by_test_id("cert-download-pem")).to_be_visible()
+
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.reload()
+    panels = page.locator(".cw-cols .cw-panel")
+    expect(panels.first).to_be_visible()
+    for bounds in panels.evaluate_all(
+        "els => els.map(el => el.getBoundingClientRect().toJSON())"
+    ):
+        assert bounds["left"] >= 0
+        assert bounds["right"] <= 390

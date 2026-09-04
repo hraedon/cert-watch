@@ -5,7 +5,7 @@ UPGRADING.md). This guards that contract: `tests/fixtures/cw_v090_dump.sql` is
 a `.dump` of an actual database built by the **v0.9.0 tag's** code (schema
 stamped through migration 0023, with representative rows). The test replays it,
 runs the app's real startup upgrade path (`init_schema` = ensure_base +
-run_pending_migrations), and asserts the m0024–m0028 delta applies, the data
+run_pending_migrations), and asserts the post-0023 delta applies, the data
 survives, and the post-0.9.0 schema changes land.
 
 Regenerate the fixture only from a genuine v0.9.0 checkout — do not hand-edit it,
@@ -65,7 +65,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     # The exact path the app runs on startup.
     init_schema(v090_db)
 
-    # Every registered migration is now recorded, and 0024–0028 were the delta.
+    # Every registered migration is now recorded, and 0024–0031 were the delta.
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
     from cert_watch.migrations.runner import get_migrations
 
@@ -73,7 +73,9 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     with sqlite3.connect(str(v090_db)) as conn:
         applied = [r[0] for r in conn.execute("SELECT id FROM schema_version ORDER BY id")]
     assert applied == expected_ids
-    assert [i for i in applied if i > "0023"] == ["0024", "0025", "0026", "0027", "0028"]
+    assert [i for i in applied if i > "0023"] == [
+        "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031",
+    ]
 
     # No data lost.
     assert _counts(v090_db) == before

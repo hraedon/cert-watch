@@ -274,17 +274,19 @@ def validate_webhook_url(
     return None
 
 
-def validate_smtp_host(
+def resolve_smtp_host(
     host: str,
+    port: int = 0,
     *,
     allow_private: bool = True,
     allowed_subnets: tuple[str, ...] = (),
-) -> str | None:
-    """Validate an SMTP host for SSRF safety (BC-116 SMTP parity).
+) -> tuple[str | None, str | None]:
+    """Resolve and validate an SMTP host, returning ``(error, pinned_ip)``.
 
-    Resolves *host* and validates every returned IP against the scan
-    blocklist. Returns an error message string if a resolved IP is blocked,
-    or None if valid.
+    Every returned address is checked against the scan blocklist.  On success,
+    the first allowed address is returned so the SMTP transport can connect to
+    exactly the address that was validated (rather than resolving the hostname
+    a second time and reopening a DNS-rebinding window).
 
     Unlike :func:`validate_webhook_url`, a *resolution failure* is **not**
     treated as a block: when the host cannot be resolved no blocked IP is
@@ -301,20 +303,43 @@ def validate_smtp_host(
     try:
         ip = ipaddress.ip_address(host)
         if _is_blocked_ip(ip, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            return f"blocked IP: {ip}"
-        return None
+            return f"blocked IP: {ip}", None
+        return None, str(ip)
     except ValueError:
         pass
     # Hostname — resolve and validate; resolution failure is not a block
     try:
-        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+        infos = socket.getaddrinfo(host, port or None, proto=socket.IPPROTO_TCP)
     except socket.gaierror:
-        return None
+        return None, None
+    first_allowed: str | None = None
     for _fam, _type, _proto, _canon, sockaddr in infos:
         try:
             resolved = ipaddress.ip_address(sockaddr[0])
         except ValueError:
             continue
         if _is_blocked_ip(resolved, allow_private=allow_private, allowed_subnets=allowed_subnets):
-            return f"blocked resolved IP: {resolved} for hostname {host}"
-    return None
+            return f"blocked resolved IP: {resolved} for hostname {host}", None
+        if first_allowed is None:
+            first_allowed = str(resolved)
+    return None, first_allowed
+
+
+def validate_smtp_host(
+    host: str,
+    *,
+    allow_private: bool = True,
+    allowed_subnets: tuple[str, ...] = (),
+) -> str | None:
+    """Validate an SMTP host for SSRF safety (BC-116 SMTP parity).
+
+    This compatibility wrapper keeps the original validator API for settings
+    checks. SMTP delivery uses :func:`resolve_smtp_host` directly so validation
+    and connection share one DNS answer.
+    """
+    error, _pinned_ip = resolve_smtp_host(
+        host,
+        allow_private=allow_private,
+        allowed_subnets=allowed_subnets,
+    )
+    return error

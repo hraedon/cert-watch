@@ -12,7 +12,7 @@ import urllib.error
 
 import pytest
 
-from cert_watch.http_client import ssrf_safe_urlopen, validate_smtp_host
+from cert_watch.http_client import resolve_smtp_host, ssrf_safe_urlopen, validate_smtp_host
 
 # ---------------------------------------------------------------------------
 # Literal IPs (no DNS resolution needed)
@@ -149,6 +149,18 @@ def test_validate_smtp_host_resolution_failure_is_not_a_block():
     """
     err = validate_smtp_host("nonexistent.invalid.example", allow_private=True)
     assert err is None
+
+
+def test_resolve_smtp_host_returns_the_validated_pin(monkeypatch):
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 587)),
+        ],
+    )
+    error, pinned_ip = resolve_smtp_host("relay.example", 587, allow_private=False)
+    assert error is None
+    assert pinned_ip == "8.8.8.8"
 
 
 def test_validate_smtp_host_allowed_subnets_permits_private(monkeypatch):

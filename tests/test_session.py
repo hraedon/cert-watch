@@ -289,6 +289,21 @@ def test_validate_session_6_part_with_groups_and_roles():
     assert validate_session(token) == "alice"
 
 
+def test_decode_session_email_with_colon():
+    """An email containing a colon (rare RFC 5321 quoted local-part) must not
+    break token decode. Regression: the 7-part parser required *exactly* 7
+    colon-separated parts, so a colon in the email yielded 8+ and the session
+    could never be validated (permanent login loop for that user)."""
+    set_signing_key("test-key-colon-email")
+    email = '"a:b"@example.com'
+    token = create_session("alice", version=0, groups=["g"], roles=["r"], email=email)
+    info = decode_session(token)
+    assert info is not None
+    assert info.username == "alice"
+    assert info.email == email
+    assert validate_session(token) == "alice"
+
+
 def test_validate_session_3_part_rejected_even_when_signed():
     """A genuine 3-part signed token (old format) is rejected (WI-088)."""
     set_signing_key("test-key-old")
