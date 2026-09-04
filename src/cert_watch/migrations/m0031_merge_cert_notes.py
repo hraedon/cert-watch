@@ -61,7 +61,7 @@ def upgrade(conn: sqlite3.Connection) -> None:
             continue
         existing = host[1] or ""
         note = notes.strip()
-        if note and note not in existing:
+        if note and existing.strip() != note:
             combined = f"{existing.rstrip()}\n\n{note}" if existing.strip() else note
             conn.execute("UPDATE hosts SET notes = ? WHERE id = ?", (combined, host[0]))
         # Leave only notes that could not be represented in the host model in

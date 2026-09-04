@@ -705,6 +705,38 @@ def test_migration_0031_merges_notes_and_drops_column(tmp_path: Path) -> None:
     assert "cert note two" in merged
 
 
+def test_migration_0031_does_not_treat_substring_as_duplicate(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "substring.db"
+    _mk_pre0031_db(db, include_orphan=False)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "UPDATE hosts SET notes = 'context around cert note one' WHERE id = 'h1'"
+        )
+        conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
+    assert merged == "context around cert note one\n\ncert note one"
+
+
+def test_migration_0031_skips_normalized_exact_duplicate(tmp_path: Path) -> None:
+    from cert_watch.migrations.m0031_merge_cert_notes import upgrade
+
+    db = tmp_path / "exact-duplicate.db"
+    _mk_pre0031_db(db, include_orphan=False)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE hosts SET notes = '  cert note one  ' WHERE id = 'h1'")
+        conn.execute("UPDATE certificates SET notes = '' WHERE id = 'c2'")
+        upgrade(conn)
+
+    with sqlite3.connect(str(db)) as conn:
+        merged = conn.execute("SELECT notes FROM hosts WHERE id = 'h1'").fetchone()[0]
+    assert merged == "  cert note one  "
+
+
 def test_migration_0031_warns_on_orphan_notes(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
