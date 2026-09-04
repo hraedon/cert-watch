@@ -46,7 +46,7 @@
       </span>
       {% endif %}
       {% if auth_user %}
-        <div class="cw-user" data-testid="user-info">
+        <div class="cw-user" data-testid="user-info" title="Signed in as {{ auth_user }}">
           <span data-testid="auth-user">{{ auth_user }}</span>
           <form method="post" action="/auth/logout" class="cw-inline">
             <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">

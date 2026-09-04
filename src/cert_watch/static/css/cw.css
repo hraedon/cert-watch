@@ -688,8 +688,20 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child::before { display: none; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:last-child { position: absolute; right: 14px; top: 12px; }
+  .cw-inventory-table .cw-expiry { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: end; gap: 3px 8px; }
+  .cw-inventory-table .cw-expiry-track { grid-column: 1 / -1; width: 100%; min-width: 88px; }
   .cw-inventory-table .cw-rowact { opacity: 1; }
   .cw-inventory-table .cw-subrow > td { display: block; }
+
+  .cw-att-row { align-items: flex-start; flex-wrap: wrap; }
+  .cw-att-sev { min-width: 0; }
+  .cw-att-main { flex-basis: calc(100% - 130px); }
+  .cw-att-row > .cw-chiprow { flex: 1 1 auto; }
+  .cw-att-row > .cw-rowact { margin-left: auto; opacity: 1; }
+
+  .cw-user > [data-testid="auth-user"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .cw-scope { max-width: 56px; overflow: hidden; text-overflow: ellipsis; }
+  .cw-topbar:has(.cw-user) .cw-name { display: none; }
 }
 
 /* ---------- DETAIL LAYOUT ---------- */
