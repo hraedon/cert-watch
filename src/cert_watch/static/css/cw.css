@@ -687,6 +687,7 @@ details.cw-editor[open] .when-open { display: inline; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child { grid-column: 1 / -1; display: block; padding-right: 36px; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td::before { content: attr(data-label); margin-right: auto; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-2); }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:first-child::before { display: none; }
+  .cw-inventory-table tbody > tr:not(.cw-subrow) > td[data-label="Expires"] { grid-column: 1 / -1; }
   .cw-inventory-table tbody > tr:not(.cw-subrow) > td:last-child { position: absolute; right: 14px; top: 12px; }
   .cw-inventory-table .cw-expiry { display: grid; grid-template-columns: auto auto; align-items: center; justify-items: end; gap: 3px 8px; }
   .cw-inventory-table .cw-expiry-track { grid-column: 1 / -1; width: 100%; min-width: 88px; }
