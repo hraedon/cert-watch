@@ -85,7 +85,7 @@
 
 {% block content %}
 <div class="cw-wrap">
-  {% call ui.page_head('Certificates', 'All tracked certificates from scanned hosts and uploaded files.', testid='dashboard-heading') %}
+  {% call ui.page_head('Certificates', 'Status covers expiry and chain trust. Grades describe the last TLS scan.', testid='dashboard-heading') %}
     <div class="cw-menuwrap">
       <button class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">{{ icons.svg_icon('download', 14) }}Export{{ icons.svg_icon('chevron-down', 13) }}</button>
       <div class="cw-menu cw-hidden" id="export-menu" role="menu" aria-label="Export data">
