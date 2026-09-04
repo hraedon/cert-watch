@@ -6,9 +6,9 @@ All notable changes to cert-watch are documented in this file.
 
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
-  host-scoped concept. Migration 0030 concatenates every non-empty
+  host-scoped concept. Migration 0031 concatenates every non-empty
   `certificates.notes` value into the matching `hosts.notes` row and drops the
-  column. Endpoints removed: `POST /certificates/{id}/notes`,
+  column only when no unmatched notes remain. Endpoints removed: `POST /certificates/{id}/notes`,
   `PATCH /api/certificates/{id}/notes`; the `notes` key was also removed from
   `GET /api/certificates/{id}` responses. The three dashboard inline note
   editors were removed — the dashboard shows a read-only note indicator; the
@@ -16,9 +16,16 @@ All notable changes to cert-watch are documented in this file.
   (`POST /hosts/{id}/notes`, JSON: `PATCH /api/hosts/{id}/notes`).
   **Caveat:** notes attached to uploaded certificates with no matching host
   row cannot be merged; they are listed in a WARNING log at migration time and
-  survive in the pre-migration database backup.
+  remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **UI review and branch reconciliation.** Bound Home's horizon to twelve
+  calendar weeks, correct expiry summaries, reveal attention-row actions,
+  remove closed-drawer shadows, make mobile Browse modes scrollable, stack
+  mobile certificate-detail panels, and increase essential secondary-text
+  contrast using existing tokens. Reconcile competing migration IDs through
+  0031; preserve unmatched notes and distinct note fragments during upgrades.
+  Repair the real LDAP test harness and CI's design-provenance checkout.
 - **Complete owner renewal digests with case-variant addresses.** Hosts whose
   stored owner emails differ only by letter case are now combined before SMTP
   or webhook delivery. Previously the shared case-insensitive delivery claim
@@ -49,7 +56,7 @@ All notable changes to cert-watch are documented in this file.
   deuteranopia (dE76 2.7) and onto `--crit` under tritanopia (dE76 2.7) —
   exactly the pair an operator must not confuse on a triage page. `--expired`
   is now violet in both themes (dark `#a78bfa` / light `#6d28d9`), keeping
-  a measured minimum dE76 of 43.4 from every status colour under normal vision
+  a measured minimum dE76 of 35.1 against the reconciled Patina palette from every status colour under normal vision
   and all three dichromacy simulations. A new ratchet test
   (`tests/test_color_separation.py`) parses `tokens.css` and asserts the
   floors so a future palette refresh can't silently collapse the separation.

@@ -19,13 +19,13 @@ state = "enforced"
 # Reviewed, not clean. UI-INVENTORY.md enumerates every concept, its one
 # editing control and its write endpoints, and names five open violations
 # (V1-V5). V1 was adjudicated by the owner on 2026-08-14 -- merge the two notes
-# fields to one host-scoped field -- and its implementation is queued. The
+# fields to one host-scoped field -- and V1/V2 are implemented. The
 # facet is `reviewed` because a human has been through it and the gaps are
 # recorded, not because the model is currently free of duplicates.
 [conformance.content_model]
 state = "reviewed"
 reviewed_through = "c009509f562e71e8e48232337ce24772921884a8"
-note = "UI-INVENTORY.md; V1 decided (notes merge), implementation queued; V2-V5 open"
+note = "UI-INVENTORY.md; V1/V2 implemented (host notes; unmatched legacy notes retained); V3-V5 open"
 
 # The 055 redesign settled this app's landing page and dashboard grammar
 # against patina's archetypes, but produced no per-page surface briefs, so
