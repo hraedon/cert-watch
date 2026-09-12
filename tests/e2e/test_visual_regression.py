@@ -81,7 +81,8 @@ _VISUAL_PAGES = {
     "audit": ("/audit", "audit-heading"),
     "settings": ("/settings/auth", "settings-heading"),
     "api-keys": ("/settings/api-keys", "api-keys-heading"),
-    "login": ("/login", None),
+    # This server explicitly disables auth: /login redirects to Home.
+    "login": ("/login", "home-heading"),
 }
 
 

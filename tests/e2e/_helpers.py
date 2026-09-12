@@ -10,6 +10,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from pathlib import Path
@@ -42,7 +43,8 @@ def boot_server(
     """Start a uvicorn subprocess and poll healthz until ready.
 
     Returns ``(proc, base_url)``. The caller is responsible for terminating
-    *proc* (typically in a fixture teardown).
+    *proc* (typically in a fixture teardown). Output is retained in
+    ``data_dir/server.log`` and included in startup failures.
     """
     port = _free_port()
     env = {
@@ -52,22 +54,36 @@ def boot_server(
         "CERT_WATCH_PORT": str(port),
         **(env_extra or {}),
     }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", host, "--port", str(port)],
-        env=env,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    log_path = data_dir / "server.log"
+    with log_path.open("wb") as log_file:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "cert_watch", "--host", host, "--port", str(port)],
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+        )
     base = f"http://{host}:{port}"
-    for _ in range(80):
+    deadline = time.monotonic() + 8
+    startup_wait = threading.Event()
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            break
         try:
             with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
                 if r.status == 200:
                     return proc, base
         except Exception:
-            time.sleep(0.1)
-    proc.kill()
-    raise RuntimeError("cert-watch server did not become ready (see stderr above)")
+            # Unit-test fixtures patch time.sleep globally to remove retry
+            # backoff. Startup still needs a real wait in function fixtures.
+            startup_wait.wait(0.1)
+    if proc.poll() is None:
+        proc.kill()
+    proc.wait(timeout=5)
+    output = log_path.read_text(encoding="utf-8", errors="replace")
+    raise RuntimeError(
+        f"cert-watch server did not become ready (exit {proc.returncode}; log: {log_path}):\n"
+        f"{output[-8192:]}"
+    )
 
 
 def login(page: Page, base_url: str, username: str, password: str) -> None:

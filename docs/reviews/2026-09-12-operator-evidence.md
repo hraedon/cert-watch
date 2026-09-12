@@ -68,6 +68,29 @@ caught by the editor round-trip test. New transport evidence is also checked wit
 local TLS/AUTH SMTP and HTTP receivers. Final full-suite and exact-head hosted
 results belong in the pull request qualification record.
 
+The first hosted source qualification at `777b7df` passed 2,926 unit tests
+(one optional Patina-checkout skip), all nine module coverage floors and 24
+transport receipt cases, with 91.69% Linux coverage. Local Windows qualification
+passed 2,925 unit tests before the final API compatibility case, then that case
+and its focused suite; local functional Chromium passed 81 cases. Windows total
+coverage was 91.63%; its platform-specific LDAP/scan values did not meet the
+Linux module floors, which were verified by the hosted Linux gate.
+
+Ubuntu screenshots from e2e run `34703583382` were reviewed before adopting the
+exact artifact bytes for Home, populated Home and the unauthenticated login
+redirect. All three changes are the added Scan coverage panel. The login case
+now explicitly asserts its Home destination; it is not a login-form baseline.
+Final browser and deployment qualification is recorded on PR #27 at its final
+revision rather than inferred from this first run.
+
+The first Linux browser run exposed a test-harness race: a function-scoped unit
+fixture replaces `time.sleep`, so the new endpoint fixture exhausted the shared
+startup helper's polling loop before its subprocess could start. A fresh Linux
+checkout reproduced both failures. The helper now uses a monotonic deadline and
+an independent event wait, retaining startup logs and reaping failed children.
+Endpoint editing and the other shared-helper access-control cases then passed
+on Linux with the same dev/e2e extras as CI.
+
 Interactive views use synthetic loopback fixtures with scheduling disabled in
 the preview process. This work does not establish production deployment, real
 directory authentication on the user's estate or production recipient receipt.
