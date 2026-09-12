@@ -22,6 +22,9 @@ Failed attempts are retried no sooner than one hour later. A host without any
 attempt is eligible when a cycle runs and is discovered by the hourly recheck.
 Manual endpoint scans bypass this cadence policy.
 
+The UI's observation deadline uses the same cadence calculation, independently
+of failed-attempt retry backoff. An attempted retry is not a successful scan.
+
 Saving monitoring or delivery settings must refresh the running scheduler and
 wake it to recalculate its next run. Each job uses one complete settings and
 transport snapshot; an update during a job takes effect on subsequent jobs.
