@@ -176,6 +176,14 @@ def _merge_kv_settings(
     sched_min = _kv_int(
         base.sched_min, "sched_min", "CERT_WATCH_SCHED_MIN"
     )
+    # Match the env parser's clock bounds. Legacy/invalid saved values must
+    # not terminate the scheduler when settings are applied without a restart.
+    if not 0 <= sched_hour <= 23:
+        logger.warning("Invalid saved schedule hour; using the environment/default hour")
+        sched_hour = base.sched_hour
+    if not 0 <= sched_min <= 59:
+        logger.warning("Invalid saved schedule minute; using the environment/default minute")
+        sched_min = base.sched_min
 
     import json
     import os

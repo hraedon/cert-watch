@@ -166,7 +166,7 @@ class Settings:
         renewal_window_days = _parse_int(
             os.environ.get("CERT_WATCH_RENEWAL_WINDOW_DAYS", "30"), 30,
             "CERT_WATCH_RENEWAL_WINDOW_DAYS",
-            min_value=1, max_value=365,
+            min_value=0, max_value=365,
         )
         history_retention_days = _parse_int(
             os.environ.get("CERT_WATCH_HISTORY_RETENTION_DAYS", "365"), 365,

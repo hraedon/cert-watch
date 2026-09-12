@@ -55,6 +55,7 @@ async def _scan_and_store(
     result = await scan_host_async(
         hostname,
         port,
+        verify=settings.tls_verify,
         timeout=settings.scan_timeout,
         retries=settings.scan_retries,
         allow_private=settings.allow_private,
@@ -85,6 +86,7 @@ async def _scan_and_store(
         leaf_id = await store_scanned_async(
             result,
             db,
+            drift_alerts=settings.drift_alerts,
             check_revocation=settings.check_revocation,
             allow_private=settings.allow_private,
             allowed_subnets=settings.allowed_subnets,

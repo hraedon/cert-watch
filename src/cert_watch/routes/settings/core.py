@@ -32,6 +32,9 @@ def _rebuild_settings(request: Request, db_path: Path) -> None:
     """Rebuild Settings from env + kv_store and update app.state."""
     enc_key = _get_encryption_key(request)
     s = Settings.from_env_with_kv(db_path, encryption_key=enc_key)
+    context = getattr(request.app.state, "scheduler_context", None)
+    if context is not None:
+        context.update_settings(s)
     request.app.state.settings = s
 
 

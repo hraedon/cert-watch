@@ -6,6 +6,7 @@ import concurrent.futures
 import logging
 import sqlite3
 import threading
+import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -50,12 +51,16 @@ def record_scan_history(db_path: str | Path, entry: ScanHistory) -> str:
     return entry_id
 
 
-def _seconds_until(hour: int, minute: int) -> float:
-    now = datetime.now(UTC)
+def _next_daily_time(hour: int, minute: int, now: datetime) -> datetime:
     target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if target <= now:
         target += timedelta(days=1)
-    return (target - now).total_seconds()
+    return target
+
+
+def _seconds_until(hour: int, minute: int) -> float:
+    now = datetime.now(UTC)
+    return (_next_daily_time(hour, minute, now) - now).total_seconds()
 
 
 FAST_RETRY_INTERVAL = 3600  # 1 hour
@@ -80,51 +85,81 @@ def _has_pending_hosts(db_path: str | Path) -> bool:
     return row is not None
 
 
-def get_hosts_due_for_scan(db_path: str | Path) -> list[tuple[str, int]]:
-    """Return hosts that are due for scanning based on per-host intervals.
+def _host_scan_deadlines(
+    db_path: str | Path, hour: int, minute: int, now: datetime,
+) -> list[tuple[str, int, datetime, bool]]:
+    """One cadence policy for host selection and scheduler wakeups.
 
-    A host is due if:
-    - It has a scan_interval_hours set AND enough time has passed since last scan
-    - OR it has no scan_interval_hours (uses default daily cycle, always due)
-    - OR it has never been scanned (always due)
+    Custom intervals start at the last success. Default hosts use the next
+    configured daily UTC boundary after their last success. Failed attempts
+    delay retries by an hour, without moving a successful host's cadence.
     """
     from cert_watch.database import _connect
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
             SELECT h.hostname, h.port, h.scan_interval_hours,
-                   MAX(sh.scanned_at) as last_scan
+                   MAX(CASE WHEN sh.status = 'success' THEN sh.scanned_at END) as last_scan,
+                   MAX(sh.scanned_at) as last_attempt
             FROM hosts h
             LEFT JOIN scan_history sh
-                ON sh.hostname = h.hostname AND sh.port = h.port AND sh.status = 'success'
+                ON sh.hostname = h.hostname AND sh.port = h.port
             GROUP BY h.hostname, h.port
             """
         ).fetchall()
 
-    now = datetime.now(UTC)
-    due: list[tuple[str, int]] = []
+    def timestamp(value: str) -> datetime:
+        parsed = datetime.fromisoformat(value)
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+
+    deadlines: list[tuple[str, int, datetime, bool]] = []
     for r in rows:
-        if r["scan_interval_hours"] is None:
-            # Default: always include in daily cycle
-            due.append((r["hostname"], r["port"]))
-            continue
-        if r["last_scan"] is None:
-            # Never scanned — always due
-            due.append((r["hostname"], r["port"]))
-            continue
-        last = datetime.fromisoformat(r["last_scan"])
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=UTC)
-        hours_since = (now - last).total_seconds() / 3600
-        if hours_since >= r["scan_interval_hours"]:
-            due.append((r["hostname"], r["port"]))
-    return due
+        last = timestamp(r["last_scan"]) if r["last_scan"] else None
+        attempt = timestamp(r["last_attempt"]) if r["last_attempt"] else None
+        if last is None:
+            deadline = now
+        elif r["scan_interval_hours"] is not None and r["scan_interval_hours"] > 0:
+            deadline = last + timedelta(hours=r["scan_interval_hours"])
+        else:
+            deadline = last.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if deadline <= last:
+                deadline += timedelta(days=1)
+        if attempt is not None and (last is None or attempt > last):
+            deadline = max(deadline, attempt + timedelta(seconds=FAST_RETRY_INTERVAL))
+        deadlines.append((r["hostname"], r["port"], deadline, attempt is None))
+    return deadlines
+
+
+def get_hosts_due_for_scan(
+    db_path: str | Path, *, hour: int = 6, minute: int = 0,
+) -> list[tuple[str, int]]:
+    """Return only hosts due under the shared daily/interval/retry policy."""
+    now = datetime.now(UTC)
+    return [
+        (host, port) for host, port, deadline, _ in _host_scan_deadlines(db_path, hour, minute, now)
+        if deadline <= now
+    ]
+
+
+def _seconds_until_next_scan(db_path: str | Path, hour: int, minute: int) -> float:
+    now = datetime.now(UTC)
+    deadlines = _host_scan_deadlines(db_path, hour, minute, now)
+    # Never-attempted hosts remain eligible in any cycle, but retain the initial
+    # hourly retry wakeup rather than triggering unsolicited scans at startup.
+    return min((FAST_RETRY_INTERVAL if unattempted else max(0.0, (deadline - now).total_seconds())
+                for _, _, deadline, unattempted in deadlines), default=float("inf"))
 
 
 _scheduler_thread: threading.Thread | None = None
 _scheduler_stop = threading.Event()
+_scheduler_wake = threading.Event()
 _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
+
+
+def wake_scheduler() -> None:
+    """Interrupt the timer so it rereads effective settings and host cadence."""
+    _scheduler_wake.set()
 
 _renewal_webhook_pool: concurrent.futures.ThreadPoolExecutor | None = (
     concurrent.futures.ThreadPoolExecutor(
@@ -240,15 +275,15 @@ def start_scheduler(
     hour: int = 6,
     minute: int = 0,
     db_path: str | Path | None = None,
+    schedule_provider: Callable[[], tuple[int, int]] | None = None,
 ) -> None:
-    """Start a daemon thread that runs scan_fn + ct_fn + alert_fn once per day.
+    """Run the daily cycle and additional cycles when individual hosts are due.
 
     ``maintenance_fn`` (optional) runs at the end of each daily cycle for
     housekeeping such as audit-log retention; failures are logged, never raised.
 
-    When db_path is provided and there are hosts with no successful scan yet,
-    the scheduler retries every FAST_RETRY_INTERVAL (1 hour) instead of waiting
-    for the next daily cycle.  See AC-01.
+    Settings saves wake the timer; each job captures its own complete config.
+    An hourly recheck discovers inventory changes even without a settings save.
     """
     global _scheduler_thread
     with _scheduler_lock:
@@ -261,18 +296,42 @@ def start_scheduler(
         start_digest_pool()
 
         def _loop() -> None:
+            next_cycle_allowed = 0.0
             while not _scheduler_stop.is_set():
-                wait = _seconds_until(hour, minute)
-                if db_path is not None and _has_pending_hosts(db_path):
-                    fast_wait = min(wait, FAST_RETRY_INTERVAL)
-                    logger.debug("pending hosts found, retrying in %ds", fast_wait)
-                    if _scheduler_stop.wait(timeout=fast_wait):
-                        return
-                else:
-                    if _scheduler_stop.wait(timeout=wait):
-                        return
+                # Clear before reading settings so an update during calculation
+                # remains signalled and cannot leave the old timer asleep.
+                _scheduler_wake.clear()
+                if _scheduler_stop.is_set():
+                    return
+                current_hour, current_minute = (
+                    schedule_provider() if schedule_provider else (hour, minute)
+                )
+                now = datetime.now(UTC)
+                daily_deadline = _next_daily_time(current_hour, current_minute, now)
+                cycle_wait = (daily_deadline - now).total_seconds()
+                if db_path is not None:
+                    try:
+                        cycle_wait = min(cycle_wait, _seconds_until_next_scan(
+                            db_path, current_hour, current_minute,
+                        ))
+                    except Exception:
+                        logger.exception("could not calculate host scan cadence")
+                # An unexpected scan/storage failure must not create a hot loop
+                # when no attempt could be recorded. Normal retries remain hourly.
+                cycle_wait = max(cycle_wait, next_cycle_allowed - time.monotonic())
+                wait = min(cycle_wait, FAST_RETRY_INTERVAL)
+                if _scheduler_wake.wait(timeout=wait):
+                    continue
+                if _scheduler_stop.is_set():
+                    return
+                # A delayed hourly recheck can cross the daily deadline. Keep
+                # that absolute target until after the wait; recomputing it
+                # first would silently move an elapsed run to tomorrow.
+                if cycle_wait > FAST_RETRY_INTERVAL and datetime.now(UTC) < daily_deadline:
+                    continue
                 if not _cycle_lock.acquire(blocking=False):
                     logger.warning("skipping scheduled cycle; previous cycle still running")
+                    next_cycle_allowed = time.monotonic() + 60
                     continue
                 try:
                     _run_cycle(
@@ -281,6 +340,7 @@ def start_scheduler(
                     )
                 finally:
                     _cycle_lock.release()
+                    next_cycle_allowed = time.monotonic() + 60
 
         _scheduler_stop.clear()
         _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
@@ -289,6 +349,7 @@ def start_scheduler(
 
 def stop_scheduler() -> None:
     _scheduler_stop.set()
+    _scheduler_wake.set()
     # Close submission gates before waiting for a potentially long scan. The
     # cycle checks the stop event between stages, and neither pool is recreated
     # until the next explicit start_scheduler() call.
