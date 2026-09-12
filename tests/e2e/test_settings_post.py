@@ -49,12 +49,16 @@ def _start_server(
         "CERT_WATCH_PORT": str(port),
         **(extra_env or {}),
     }
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    log_path = data_dir / "server.log"
+    # An undrained PIPE fills on Windows and blocks the server's access logger.
+    # The child retains its inherited file handle after the parent closes it.
+    with log_path.open("wb") as server_log:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "cert_watch", "--host", "127.0.0.1", "--port", str(port)],
+            env=env,
+            stdout=server_log,
+            stderr=subprocess.STDOUT,
+        )
     base = f"http://127.0.0.1:{port}"
     for _ in range(80):
         try:
@@ -64,8 +68,9 @@ def _start_server(
         except Exception:
             time.sleep(0.1)
     proc.kill()
-    out = proc.stdout.read().decode() if proc.stdout else ""
-    raise RuntimeError(f"cert-watch server did not become ready:\n{out}")
+    proc.wait(timeout=5)
+    out = log_path.read_text(encoding="utf-8", errors="replace")
+    raise RuntimeError(f"cert-watch server did not become ready (log: {log_path}):\n{out}")
 
 
 def _login(
@@ -111,6 +116,7 @@ def _terminate(proc: subprocess.Popen) -> None:
         proc.wait(timeout=5)
     except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait(timeout=5)
 
 
 @pytest.fixture(scope="module")
