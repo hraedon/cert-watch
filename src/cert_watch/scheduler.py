@@ -95,6 +95,7 @@ def _host_scan_deadlines(
     delay retries by an hour, without moving a successful host's cadence.
     """
     from cert_watch.database import _connect
+    from cert_watch.scan_freshness import cadence_due_at
     with _connect(db_path) as conn:
         rows = conn.execute(
             """
@@ -118,12 +119,8 @@ def _host_scan_deadlines(
         attempt = timestamp(r["last_attempt"]) if r["last_attempt"] else None
         if last is None:
             deadline = now
-        elif r["scan_interval_hours"] is not None and r["scan_interval_hours"] > 0:
-            deadline = last + timedelta(hours=r["scan_interval_hours"])
         else:
-            deadline = last.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if deadline <= last:
-                deadline += timedelta(days=1)
+            deadline = cadence_due_at(last, r["scan_interval_hours"], hour, minute)
         if attempt is not None and (last is None or attempt > last):
             deadline = max(deadline, attempt + timedelta(seconds=FAST_RETRY_INTERVAL))
         deadlines.append((r["hostname"], r["port"], deadline, attempt is None))

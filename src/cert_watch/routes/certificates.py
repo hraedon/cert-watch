@@ -45,13 +45,15 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
-from cert_watch.routes._deps import IdParam, _db_path, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
     scope_write_denied,
     tags_with_scope,
 )
+from cert_watch.routes.hosts import endpoint_settings_writable
+from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
@@ -62,6 +64,15 @@ router = APIRouter()
 templates = get_templates()
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _detail_scan_evidence(request: Request, host_id: str) -> ScanEvidence | None:
+    if not host_id:
+        return None
+    settings = _get_settings(request)
+    return load_scan_evidence(
+        _db_path(request), host_id=host_id, hour=settings.sched_hour, minute=settings.sched_min,
+    ).get(host_id)
 
 
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
@@ -122,6 +133,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                         "notes": host.notes or "",
                         "tags": host.tags or "",
                         "threshold_days": host.threshold_days,
+                        "scan_interval_hours": host.scan_interval_hours,
+                        "renewal_status": host.renewal_status,
+                        "expected_issuers": host.expected_issuers,
+                        "settings_writable": endpoint_settings_writable(request, db, host.id),
                     },
                     "renewal_method_label": rm_label,
                     "renewal_method_indicator": rm_indicator,
@@ -129,6 +144,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                     "scan_status": scan_row["status"] if scan_row else None,
                     "scan_error": scan_row["error_message"] if scan_row else None,
                     "scan_at": scan_row["scanned_at"] if scan_row else None,
+                    "scan_evidence": _detail_scan_evidence(request, host.id),
                     **auth_ctx,
                     **csrf_ctx,
                     "active_page": "browse",
@@ -245,19 +261,6 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             hostname = host_row["hostname"] or ""
             port = host_row["port"] or 443
 
-    # Get last scan time
-    last_scan = None
-    if hostname:
-        with _connect(db) as conn:
-            scan_row = conn.execute(
-                "SELECT scanned_at FROM scan_history "
-                "WHERE hostname = ? AND port = ? "
-                "ORDER BY scanned_at DESC LIMIT 1",
-                (hostname, port),
-            ).fetchone()
-            if scan_row:
-                last_scan = scan_row["scanned_at"]
-
     # Get host info for operation summary
     host_info = None
     host_id = ""
@@ -281,6 +284,10 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
                 "runbook_url": h.get("runbook_url") or None,
                 "notes": h.get("notes", ""),
                 "tags": h.get("tags", ""),
+                "threshold_days": h.get("threshold_days"),
+                "scan_interval_hours": h.get("scan_interval_hours"),
+                "expected_issuers": h.get("expected_issuers", ""),
+                "settings_writable": endpoint_settings_writable(request, db, host_id),
             }
             rm = h.get("renewal_method", "")
             if rm == "acme":
@@ -429,7 +436,9 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "hostname": hostname,
             "port": port,
             "host_id": host_id,
-            "last_scan": last_scan,
+            "scan_evidence": (
+                _detail_scan_evidence(request, host_id) if cert.source == "scanned" else None
+            ),
             "host_info": host_info,
             "cert_tags": parse_tags(repo.get_tags(cert_id)),
             "effective_tags": repo.effective_tags(cert_id),

@@ -21,6 +21,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from cert_watch.scan_freshness import ScanEvidence
+
 _AUTO_METHODS = {"acme", "cert-manager"}
 
 _SEV_RANK = {"expired": 0, "stalled": 1, "critical": 2, "failing": 3, "warning": 4, "info": 5}
@@ -59,6 +61,7 @@ def build_attention_queue(
     *,
     scope_tags: list[str] | tuple[str, ...] | None = None,
     window_days: int = 30,
+    scan_evidence: dict[str, ScanEvidence] | None = None,
 ) -> list[dict[str, Any]]:
     """Assemble the ranked attention queue over the whole (scoped) estate.
 
@@ -178,6 +181,17 @@ def build_attention_queue(
                         ],
                     }
                 )
+
+            evidence = (scan_evidence or {}).get(e.get("host_id", ""))
+            if evidence and evidence.state != "current" and not failing:
+                if severity is not None:
+                    reasons.append(evidence.label)
+                else:
+                    items.append({
+                        **base, "severity": "warning", "kind": "scan_evidence",
+                        "reasons": [evidence.label,
+                                    "scan again to confirm the certificate currently served"],
+                    })
 
     def _key(item: dict[str, Any]) -> tuple[int, int, int, str]:
         conf_boost = 0 if item["confidence"] != "auto" else 1

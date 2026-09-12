@@ -39,6 +39,26 @@
                 href='/browse?urgency=healthy&grouped=0') }}
   </div>
 
+  <div class="cw-panel" data-testid="scan-coverage">
+    <div class="cw-panel-body">
+      <div class="cw-chiprow">
+        <b>Scan coverage</b>
+        {% if scan_coverage.total %}
+        <span>{{ scan_coverage.current }} of {{ scan_coverage.total }} monitored endpoints have current observations</span>
+        {% else %}<span class="cw-muted">No monitored endpoints</span>{% endif %}
+      </div>
+      <p class="cw-hint">Current means a successful scan within its configured cadence, with no later incomplete attempt. Uploaded files are excluded.</p>
+      {% if scan_coverage.total %}
+      <div class="cw-chiprow">
+        <span class="cw-chip {{ 't-warn' if scan_coverage.overdue else 't-muted' }}">{{ scan_coverage.overdue }} overdue</span>
+        <span class="cw-chip t-muted">{{ scan_coverage.unobserved }} without a successful scan</span>
+        <span class="cw-chip {{ 't-warn' if scan_coverage.failed else 't-muted' }}">{{ scan_coverage.failed }} incomplete within cadence</span>
+        {% if scan_coverage.unknown %}<span class="cw-chip t-warn">{{ scan_coverage.unknown }} with unknown timing</span>{% endif %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
   {# ---- Attention queue ---- #}
   <div class="cw-panel" data-testid="attention-panel">
     <div class="cw-panel-head">

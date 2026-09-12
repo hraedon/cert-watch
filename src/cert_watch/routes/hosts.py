@@ -21,6 +21,7 @@ from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
+    get_auth_context,
     require_admin_write_form,
     require_auth,
     require_write_form,
@@ -141,6 +142,90 @@ COMMON_TLS_PORTS = (443, 8443, 993, 995, 465, 636, 5061, 6443)
 def _hostname_within_octet_limit(hostname: str) -> bool:
     """Backward-compatible route-local alias for the shared validator."""
     return hostname_is_valid(hostname)
+
+
+def endpoint_settings_writable(request: Request, db: str | Path, host_id: str) -> bool:
+    """Match the form's write gate, including per-tag operator permissions."""
+    auth = getattr(request.state, "auth_context", None)
+    may_write = auth.may_write_any() if auth is not None else get_auth_context(request)["may_write"]
+    return bool(may_write and scope_write_denied(request, db, host_id=host_id) is None)
+
+
+@router.post("/hosts/{host_id}/settings")
+async def update_host_settings(
+    request: Request,
+    host_id: IdParam,
+    scan_interval_hours: str = Form(""),
+    threshold_days: str = Form(""),
+    renewal_status: str = Form("pending"),
+) -> RedirectResponse:
+    """Edit cadence, expiry thresholds, and the operator's renewal report."""
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    db = _db_path(request)
+    denied = scope_write_denied(request, db, host_id=host_id)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
+    repo = SqliteHostRepository(db)
+    host = repo.get(host_id)
+    if host is None:
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        leaf = conn.execute(
+            "SELECT id FROM certificates WHERE hostname = ? AND port = ? "
+            "AND source = 'scanned' AND is_leaf = 1 ORDER BY created_at DESC LIMIT 1",
+            (host.hostname, host.port),
+        ).fetchone()
+    back = f"/certificates/{leaf['id'] if leaf else host_id}"
+
+    def invalid(message: str) -> RedirectResponse:
+        return RedirectResponse(
+            url=f"{back}?endpoint_error={quote(message)}#endpoint-settings", status_code=303,
+        )
+
+    if not check_rate_limit(f"host_settings:{_extract_client_ip(request)}", 30, 60):
+        return invalid("Too many requests; try again shortly.")
+    form = await request.form()
+    if not {"scan_interval_hours", "threshold_days", "renewal_status"}.issubset(form):
+        return invalid("Submit all endpoint settings; use blank numeric fields for defaults.")
+    try:
+        interval = int(scan_interval_hours.strip()) if scan_interval_hours.strip() else None
+    except ValueError:
+        return invalid("Scan interval must be a whole number of hours, or blank for daily.")
+    # Old creation/import paths accepted arbitrary integers. Preserve unchanged
+    # legacy values; new overrides are bounded to one hour through one year.
+    if interval is not None and interval != host.scan_interval_hours and not 1 <= interval <= 8760:
+        return invalid("Scan interval must be between 1 and 8760 hours, or blank for daily.")
+    try:
+        threshold = int(threshold_days.strip()) if threshold_days.strip() else None
+    except ValueError:
+        return invalid("Alert threshold must be a positive whole number of days, or blank.")
+    if threshold is not None and not 1 <= threshold <= 9223372036854775807:
+        return invalid("Alert threshold must be a positive whole number within the stored range.")
+    if renewal_status not in {"pending", "in_progress", "renewed"}:
+        return invalid("Choose a valid operator-reported renewal status.")
+    with get_write_lock():
+        updated = repo.update_settings(
+            host_id, scan_interval_hours=interval,
+            threshold_days=threshold, renewal_status=renewal_status,
+        )
+    if not updated:
+        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    record_audit(
+        db, actor=resolve_actor(request), action="host.update_settings",
+        target_type="host", target_id=host_id,
+        detail={"scan_interval_hours": interval, "threshold_days": threshold,
+                "renewal_status": renewal_status},
+        source_ip=resolve_source_ip(request),
+    )
+    from cert_watch.scheduler import wake_scheduler
+
+    wake_scheduler()
+    return RedirectResponse(url=f"{back}?endpoint_saved=1#endpoint-settings", status_code=303)
 
 
 @router.post("/hosts")
