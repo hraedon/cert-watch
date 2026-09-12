@@ -4,6 +4,16 @@ All notable changes to cert-watch are documented in this file.
 
 ## [Unreleased]
 
+### Added
+- **Offline alert-routing inspection.** `cert-watch routing-report <snapshot>`
+  lists group coverage, specific recipients, orphans and multiple matches from a
+  completed database backup. It reuses delivery's routing resolver, does not send
+  alerts or load credentials, and refuses incomplete or incompatible snapshots.
+- **Alert delivery receipt tests.** Local TLS/AUTH SMTP and HTTP receivers verify
+  recipient unions, negative destinations, fallback and durable retry behavior.
+  The receipt suite runs explicitly in CI, including TLS certificate and hostname
+  refusal checks, rather than being silently excluded by integration markers.
+
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
   host-scoped concept. Migration 0031 concatenates every non-empty
@@ -19,6 +29,9 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Development dependency audit.** Raise the test-only HTTPX2 floor to 2.12.0
+  and lock its matching httpcore2 transport at 2.12.0 to clear newly published
+  dependency advisories. Application runtime dependencies are unchanged.
 - **Release correctness review.** Align inventory counts, row status, and detail
   status; keep expiry-only Home counts separate from chain trust. Show attention
   for each affected deployment of a shared certificate, including unknown and

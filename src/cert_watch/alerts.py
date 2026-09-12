@@ -923,6 +923,8 @@ def evaluate_policy_alerts(
 
 def _resolve_group_config(
     db_path: str | Path,
+    *,
+    matched_groups: dict[str, list[str]] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, int | None]]:
     """Single-pass resolution of alert-group recipients and threshold overrides.
 
@@ -939,6 +941,10 @@ def _resolve_group_config(
     a linked ``alert_group_id`` also route alerts for certs whose effective
     tags intersect the role's scope tags.  The linked alert_group's
     recipients and threshold are included as if the group had matched.
+
+    When supplied, matched_groups records the groups selected by these same
+    branches, including empty-recipient groups. This lets the offline routing
+    report explain matches without implementing another matching algorithm.
     """
     from cert_watch.database.connection import _connect
     from cert_watch.tags import merge_tags, parse_tags, tags_match
@@ -1004,6 +1010,8 @@ def _resolve_group_config(
         manual_ids = manual_map.get(cert_id, set())
         for g in groups:
             if g["id"] in manual_ids or tags_match(effective, g["match_tags"]):
+                if matched_groups is not None:
+                    matched_groups.setdefault(cert_id, []).append(g["id"])
                 for r in g["recipients"]:
                     rc = r.casefold()
                     if rc not in seen:
@@ -1022,6 +1030,10 @@ def _resolve_group_config(
                 lg = group_by_id.get(rl["alert_group_id"])
                 if lg is None:
                     continue
+                if matched_groups is not None:
+                    selected = matched_groups.setdefault(cert_id, [])
+                    if lg["id"] not in selected:
+                        selected.append(lg["id"])
                 for r in lg["recipients"]:
                     rc = r.casefold()
                     if rc not in seen:
