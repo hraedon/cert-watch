@@ -12,7 +12,7 @@ import sqlite3
 import ssl
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from functools import partial
 from pathlib import Path
@@ -1548,6 +1548,23 @@ def send_expiry_digest(
     return False
 
 
+ALERT_EVIDENCE_DEFER_WINDOW = timedelta(hours=24)
+"""How long an alert may stay pending because its evidence store is unwritable.
+
+Long enough to ride out a transient lock or a short outage; short enough that a
+persistent fault surfaces as a failed alert while the certificate it warns about
+is still in its warning window.
+"""
+
+
+def _within_evidence_defer_window(alert: Alert) -> bool:
+    """True while the alert may still be deferred rather than failed."""
+    created = alert.created_at
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    return bool(datetime.now(UTC) - created <= ALERT_EVIDENCE_DEFER_WINDOW)
+
+
 def process_pending(
     alert_repo: AlertRepository,
     config: AlertConfig | None,
@@ -1558,55 +1575,89 @@ def process_pending(
     Failed deliveries are retried up to ALERT_MAX_RETRIES times with a short delay.
     """
     if config is None and webhook_config is None:
-        return {"sent": 0, "failed": 0}
-    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
+        return {"sent": 0, "failed": 0, "deferred": 0}
+    from cert_watch.alert_delivery import (
+        REFUSED_NO_EVIDENCE,
+        DeliveryEvidenceUnavailable,
+        attempt_delivery,
+    )
 
     repository_path = getattr(alert_repo, "db_path", None)
     evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
     sent = 0
     failed = 0
+    deferred = 0
     for alert in alert_repo.list_pending():
         delivered = False
         last_error = ""
-        try:
-            for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
-                if config is not None:
+        # Did any channel actually reach a transport? A refusal happens BEFORE
+        # the send, so if this stays False nothing was ever dispatched and the
+        # alert is still deliverable.
+        transport_attempted = False
+        for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+            if config is not None:
+                try:
                     delivered = attempt_delivery(
                         evidence_db, alert, "smtp", partial(send_alert, alert, config),
                         recipients=_smtp_recipients(alert, config),
                         global_recipients=config.recipients,
                     )
-                if not delivered and webhook_config is not None:
-                    kind = webhook_config.kind
-                    channel = (
-                        kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
-                        else "webhook"
-                    )
+                    transport_attempted = True
+                except DeliveryEvidenceUnavailable:
+                    # Guard this call only. A begin_attempt failure is
+                    # per-statement -- typically a transient SQLITE_BUSY from a
+                    # concurrent scan write -- so the webhook fallback below,
+                    # and the remaining retries, may well succeed.
+                    delivered = False
+            if not delivered and webhook_config is not None:
+                kind = webhook_config.kind
+                channel = (
+                    kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
+                    else "webhook"
+                )
+                try:
                     delivered = attempt_delivery(
                         evidence_db, alert, channel,
                         partial(send_webhook, alert, webhook_config),
                     )
-                if delivered:
-                    break
-                last_error = alert.error_message or "unknown"
-        except DeliveryEvidenceUnavailable:
-            # The database was unavailable, not the destination: nothing was
-            # sent and the alert is still deliverable. Leave it pending so the
-            # next cycle retries it once the database recovers. Marking it
-            # failed here would spend the retry budget on an outage that never
-            # touched a transport, and the alert would never be sent at all.
-            logger.warning(
-                "Alert %s deferred: delivery evidence unavailable, leaving it pending",
-                alert.id,
-            )
-            continue
+                    transport_attempted = True
+                except DeliveryEvidenceUnavailable:
+                    delivered = False
+            if delivered:
+                break
+            last_error = alert.error_message or "unknown"
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1
-        else:
+        elif transport_attempted:
             alert_repo.mark_failed(
                 alert.id, f"{last_error} (after {ALERT_MAX_RETRIES} attempts)"
             )
             failed += 1
-    return {"sent": sent, "failed": failed}
+        elif _within_evidence_defer_window(alert):
+            # No transport was ever touched: the database was unavailable, not
+            # the destination. Leave the alert pending so a later cycle sends it
+            # once the database recovers.
+            logger.warning(
+                "Alert %s deferred: delivery evidence unavailable, leaving it pending",
+                alert.id,
+            )
+            deferred += 1
+        else:
+            # Bounded. A persistent cause -- a full disk, a read-only volume, a
+            # missing evidence table after a partial migration -- would defer
+            # every cycle forever: never sent, never failed, indistinguishable
+            # from a fresh alert, and eventually deleted unsent by
+            # purge_old_alerts, which selects on created_at regardless of
+            # status. Terminating visibly is the lesser harm.
+            logger.error(
+                "Alert %s giving up: delivery evidence unavailable for over %s",
+                alert.id, ALERT_EVIDENCE_DEFER_WINDOW,
+            )
+            alert_repo.mark_failed(
+                alert.id,
+                f"{REFUSED_NO_EVIDENCE} for over {ALERT_EVIDENCE_DEFER_WINDOW}",
+            )
+            failed += 1
+    return {"sent": sent, "failed": failed, "deferred": deferred}

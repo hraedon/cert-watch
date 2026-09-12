@@ -19,6 +19,9 @@ from cert_watch.database.delivery_evidence import begin_attempt, complete_attemp
 logger = logging.getLogger("cert_watch.alert_delivery")
 
 
+REFUSED_NO_EVIDENCE = "Delivery attempt evidence could not be recorded"
+
+
 class DeliveryEvidenceUnavailable(Exception):
     """The attempt could not be recorded, so nothing was sent.
 
@@ -139,9 +142,14 @@ def attempt_delivery(
 ) -> bool:
     """Record before sending; a missing completion remains explicitly unknown.
 
-    Non-SQLite repository adapters retain their existing behavior. A database
-    write failure before a production send refuses that attempt. A completion
+    Non-SQLite repository adapters retain their existing behavior. A completion
     write failure cannot undo acceptance and must not provoke an extra send.
+
+    Raises:
+        DeliveryEvidenceUnavailable: the attempt could not be recorded, so no
+            transport was touched. This is NOT a delivery failure and must not
+            spend a retry -- see ``alerts.process_pending``, which keeps such an
+            alert pending and still tries the other channel.
     """
     if db_path is None:
         return send()
@@ -160,9 +168,12 @@ def attempt_delivery(
     try:
         attempt_id = begin_attempt(db_path, alert.id, channel, details)
     except Exception as exc:
+        # Deliberately does not set alert.error_message: the caller leaves the
+        # alert pending and persists nothing, so an assignment here would only
+        # suggest the reason was recorded somewhere. The caller owns the
+        # operator-visible wording.
         logger.warning("Delivery refused because its attempt record could not be persisted")
-        alert.error_message = "Delivery attempt evidence could not be recorded"
-        raise DeliveryEvidenceUnavailable(alert.id) from exc
+        raise DeliveryEvidenceUnavailable(REFUSED_NO_EVIDENCE) from exc
 
     observation = _Observation()
     token = _active.set(observation)

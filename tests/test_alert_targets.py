@@ -169,7 +169,7 @@ def test_recorded_smtp_acceptance_matches_real_receiver(tmp_path, monkeypatch, m
         allow_loopback_transport(monkeypatch),
         smtp_target(tmp_path, monkeypatch, mode=mode) as target,
     ):
-        assert process_pending(repo, _config(target)) == {"sent": 1, "failed": 0}
+        assert process_pending(repo, _config(target)) == {"sent": 1, "failed": 0, "deferred": 0}
         [receipt] = target.messages
         [attempt] = list_attempts(db, [alert.id])[alert.id]
         assert attempt["routing"]["recipients"] == list(receipt.recipients)
@@ -192,7 +192,7 @@ def test_recorded_smtp_failure_and_webhook_success_match_receivers(tmp_path, mon
         assert process_pending(
             repo, _config(smtp, smtp_password="wrong-test-password"),
             WebhookConfig(url=http.url("/fallback"), allow_private=True),
-        ) == {"sent": 1, "failed": 0}
+        ) == {"sent": 1, "failed": 0, "deferred": 0}
         assert smtp.messages == []
         assert smtp.auth_attempts and not smtp.auth_attempts[0].success
         assert len(http.received("/fallback")) == 1

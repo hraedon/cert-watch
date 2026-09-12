@@ -361,9 +361,16 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
     )
     sent = result["sent"]
     failed = result["failed"]
-    if failed > 0:
+    deferred = result.get("deferred", 0)
+    if failed > 0 or deferred > 0:
+        # A deferral is not a clean no-op: nothing was sent because the evidence
+        # store was unwritable. Reporting "0 alert(s) sent" as success would
+        # describe an outage as a successful flush.
+        detail = f"Flushed {sent} alert(s), {failed} failed"
+        if deferred:
+            detail += f", {deferred} deferred (delivery evidence unavailable)"
         return RedirectResponse(
-            url=f"/alerts?warning={quote(f'Flushed {sent} alert(s), {failed} failed')}",
+            url=f"/alerts?warning={quote(detail)}",
             status_code=303,
         )
     return RedirectResponse(
