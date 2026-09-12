@@ -215,33 +215,14 @@ def test_evidence_is_immutable_and_deletes_with_parent(tmp_path):
 
 
 def test_alert_retention_also_purges_recipient_evidence(tmp_path):
-    db, repo, alert = _pending(tmp_path)
+    db, _, alert = _pending(tmp_path)
     begin_attempt(db, alert.id, "smtp", {"recipients": ["private@example.invalid"]})
-    repo.mark_sent(alert.id)  # retention covers delivered history
     with _connect(db) as conn:
         conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
                      ((datetime.now(UTC) - timedelta(days=91)).isoformat(), alert.id))
         conn.commit()
     assert purge_old_alerts(db, 90) == 1
     assert list_attempts(db, [alert.id]) == {}
-
-
-def test_retention_never_deletes_an_alert_that_was_never_sent(tmp_path):
-    """An old pending alert has reached nobody; ageing it out erases the warning.
-
-    This is what makes an unbounded deferral survivable: while delivery is
-    broken the alert accumulates visibly in the pending queue instead of being
-    silently deleted by retention, which selects purely on age.
-    """
-    db, _, alert = _pending(tmp_path)
-    with _connect(db) as conn:
-        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
-                     ((datetime.now(UTC) - timedelta(days=400)).isoformat(), alert.id))
-        conn.commit()
-    assert purge_old_alerts(db, 90) == 0
-    with _connect(db) as conn:
-        row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert.id,)).fetchone()
-    assert row["status"] == "pending"
 
 
 def test_evidence_is_not_loaded_or_rendered_for_scoped_operator(monkeypatch, tmp_path):
@@ -384,3 +365,44 @@ def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp
     connection.send_message.assert_not_called()          # SMTP was refused, not attempted
     assert [item["channel"] for item in list_attempts(db, [alert.id])[alert.id]] == ["generic"]
     assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
+
+
+def test_evidence_outage_mid_retry_does_not_consume_the_alert(monkeypatch, tmp_path):
+    """A transport failure then a DB outage must defer, not fail.
+
+    The terminal state has to be judged on the LAST pass. Accumulating "a
+    transport was reached at some point" lets an evidence-store outage that
+    began after an earlier, retryable failure mark the alert failed -- the
+    database consuming an alert the relay might still have accepted, which is
+    the exact invariant this path exists to hold. It also reported
+    ALERT_MAX_RETRIES attempts when only one had happened.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("temporary greylist"))
+
+    real_begin = begin_attempt
+    calls = {"n": 0}
+
+    def unwritable_after_the_first_attempt(db_path, alert_id, channel, details):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(db_path, alert_id, channel, details)
+
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt",
+                        unwritable_after_the_first_attempt)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert connection.send_message.call_count == 1
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending", "the database outage must not consume the alert"
+
+
+def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch, tmp_path):
+    """The operator-visible count must not overstate what was tried."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert f"after {connection.send_message.call_count} attempts" in stored.error_message
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES

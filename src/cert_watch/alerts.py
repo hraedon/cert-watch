@@ -1569,10 +1569,13 @@ def process_pending(
     for alert in alert_repo.list_pending():
         delivered = False
         last_error = ""
-        # Did any channel actually reach a transport? A refusal happens BEFORE
-        # the send, so if this stays False nothing was ever dispatched and the
-        # alert is still deliverable.
-        transport_attempted = False
+        # Whether the FINAL pass reached a transport, and how many passes did.
+        # This must be judged per pass, not accumulated: an earlier pass may
+        # have reached the relay and failed, and if the evidence store then
+        # becomes unwritable a stale "yes" would let a database outage fail an
+        # alert the relay might still accept.
+        reached_transport_this_pass = False
+        attempts_made = 0
         for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
             reached_transport_this_pass = False
             if config is not None:
@@ -1582,8 +1585,8 @@ def process_pending(
                         recipients=_smtp_recipients(alert, config),
                         global_recipients=config.recipients,
                     )
-                    transport_attempted = True
                     reached_transport_this_pass = True
+                    attempts_made += 1
                 except DeliveryEvidenceUnavailable:
                     # Guard this call only. A begin_attempt failure is
                     # per-statement -- typically a transient SQLITE_BUSY from a
@@ -1601,8 +1604,8 @@ def process_pending(
                         evidence_db, alert, channel,
                         partial(send_webhook, alert, webhook_config),
                     )
-                    transport_attempted = True
                     reached_transport_this_pass = True
+                    attempts_made += 1
                 except DeliveryEvidenceUnavailable:
                     delivered = False
             if delivered:
@@ -1619,9 +1622,11 @@ def process_pending(
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1
-        elif transport_attempted:
+        elif reached_transport_this_pass:
+            # The last thing that happened was a real delivery failure.
+            plural = "attempt" if attempts_made == 1 else "attempts"
             alert_repo.mark_failed(
-                alert.id, f"{last_error} (after {ALERT_MAX_RETRIES} attempts)"
+                alert.id, f"{last_error} (after {attempts_made} {plural})"
             )
             failed += 1
         else:

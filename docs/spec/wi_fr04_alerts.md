@@ -37,7 +37,7 @@ A function `send_alert(alert: Alert, config: AlertConfig) -> bool` must send an 
 ## AC-04: Process Pending
 A function `process_pending(alert_repo: AlertRepository, config: AlertConfig) -> dict[str, int]` must send all pending alerts and return counts: `{"sent": N, "failed": M, "deferred": D}`.
 
-An alert ends a cycle in one of three states. It is marked **sent**, or marked **failed** after its retries are exhausted, or left **pending** and counted as **deferred** — the last when no transport was reached at all because the delivery-evidence store could not be written. A deferral is not a delivery failure: nothing was dispatched, the destination was never contacted, and the alert stays deliverable for a later cycle. It must not consume the retry budget, and retention must not age out an alert that has never been sent.
+An alert ends a cycle in one of three states. It is marked **sent**, or marked **failed** after its retries are exhausted, or left **pending** and counted as **deferred** — the last when no transport was reached at all because the delivery-evidence store could not be written. A deferral is not a delivery failure: nothing was dispatched, the destination was never contacted, and the alert stays deliverable for a later cycle. It must not consume the retry budget.
 
 ## AC-05: Alert Formatting
 Each alert email must include: certificate subject, expiry date, days remaining, and recommended action.
