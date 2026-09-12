@@ -25,7 +25,7 @@ state = "enforced"
 [conformance.content_model]
 state = "reviewed"
 reviewed_through = "c009509f562e71e8e48232337ce24772921884a8"
-note = "UI-INVENTORY.md; V1/V2 implemented (host notes; unmatched legacy notes retained); V3-V5 open"
+note = "UI-INVENTORY.md; V1/V2 implemented (host notes; unmatched legacy notes retained); inactive group-webhook control removed for V3; V4/V5 open"
 
 # The 055 redesign settled this app's landing page and dashboard grammar
 # against patina's archetypes, but produced no per-page surface briefs, so

@@ -29,11 +29,26 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Settings reach scheduled work.** Refresh scheduled transport and scan
+  configuration after saving settings, honor per-host scan intervals, and
+  pass configured TLS verification and drift options to manual scans.
+- **Readiness uses observed evidence.** Include unscanned monitored endpoints
+  as unknown; use the current scanned leaf's actual validity and trust instead
+  of treating its first observation as its issuance date. Historical analytics
+  no longer invents missing lifetimes or infers automation from incomplete
+  validity evidence; partial days round up when compared with validity caps.
+- **Consistent investigation.** Home and Browse share expiry-and-trust status
+  counts. Inventory links preserve encoded search terms, source, ordering,
+  and grouping; fleet views state their population and filters can be cleared.
+- **Truthful operational controls.** Home renewal attention follows the
+  current renewal condition independently of notification delivery. Remove
+  inactive group-webhook inputs while preserving stored values, and describe
+  revocation checks as endpoint reachability rather than certificate status.
 - **Development dependency audit.** Raise the test-only HTTPX2 floor to 2.12.0
   and lock its matching httpcore2 transport at 2.12.0 to clear newly published
   dependency advisories. Application runtime dependencies are unchanged.
 - **Release correctness review.** Align inventory counts, row status, and detail
-  status; keep expiry-only Home counts separate from chain trust. Show attention
+  status. Show attention
   for each affected deployment of a shared certificate, including unknown and
   self-signed chains. Distinguish configured automation from observed renewal.
 - **Endpoint renewal and readiness analytics.** Preserve port identity, rollback
