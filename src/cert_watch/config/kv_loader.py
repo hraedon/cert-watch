@@ -184,6 +184,15 @@ def _merge_kv_settings(
     if not 0 <= sched_min <= 59:
         logger.warning("Invalid saved schedule minute; using the environment/default minute")
         sched_min = base.sched_min
+    # Same reason, same bounds as from_env: the settings UI writes these through
+    # kv, which had no range check, so a saved value could put every leaf inside
+    # the renewal window and alert on the whole estate.
+    if not 0 <= renewal_window_days <= 365:
+        logger.warning("Invalid saved renewal window; using the environment/default window")
+        renewal_window_days = base.renewal_window_days
+    if not 0 <= alert_retention_days <= 3650:
+        logger.warning("Invalid saved alert retention; using the environment/default retention")
+        alert_retention_days = base.alert_retention_days
 
     import json
     import os
@@ -212,7 +221,7 @@ def _merge_kv_settings(
         )
 
     return base.__class__(
-        db_path=base.db_path,
+        db_path=db_path,
         data_dir=base.data_dir,
         sched_hour=sched_hour,
         sched_min=sched_min,
