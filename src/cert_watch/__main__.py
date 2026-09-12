@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> None:
             print(f"routing-report: {exc}", file=sys.stderr)
             raise SystemExit(2) from None
         if args.format == "json":
-            print(json.dumps(routing_report, ensure_ascii=False, sort_keys=True, indent=2))
+            print(json.dumps(routing_report, ensure_ascii=True, sort_keys=True, indent=2))
         else:
             print(render_routing_report(routing_report), end="")
         return

@@ -174,7 +174,10 @@ def _inspect_routing(scratch: Path) -> dict[str, Any]:
             "recipients; global SMTP recipients may still receive them. Global configuration is "
             "not loaded. Delivery tries SMTP first, then one global webhook on failure/absence; "
             "stored group webhook URLs do not dispatch here. Invalid addresses are rejected at "
-            "send time. Thresholds, renewal state and digest eligibility are not evaluated."
+            "send time. Thresholds, renewal state and digest eligibility are not evaluated. "
+            "Recipients shown route expiry alerts only: renewal-stalled alerts and weekly "
+            "digests carry the owner address alone, without alert-group or role-member "
+            "addresses."
         ),
     }
 
@@ -223,7 +226,7 @@ def build_routing_report(snapshot: Path) -> dict[str, Any]:
 def render_routing_report(report: dict[str, Any]) -> str:
     """Human-readable inventory; quote DB text so controls cannot affect a terminal."""
     def display(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
     counts = report["counts"]
     lines = [

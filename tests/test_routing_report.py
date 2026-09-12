@@ -483,3 +483,44 @@ def test_failure_cleans_scratch_and_does_not_change_source(estate: Estate, monke
     assert scratch_paths, "The cleanup guard must observe disposable scratch storage"
     assert all(not path.exists() for path in scratch_paths)
     assert _tree_bytes(estate.path.parent) == before
+
+
+def test_report_output_is_ascii_only_so_a_legacy_console_cannot_fail() -> None:
+    """Both output paths must survive a non-UTF-8 console (Windows default cp1252).
+
+    The suite cannot catch this through ``capsys``, which captures as UTF-8, so
+    assert the property directly: rendered text and JSON are pure ASCII. This
+    also escapes Unicode bidi/format characters, which is what makes
+    ``render_routing_report``'s terminal-safety promise true for DB-sourced text.
+    """
+    hostile = "CN=東京.example ‮EVIL"
+    report = {
+        "snapshot_sha256": "abc",
+        "schema_version": 31,
+        "counts": {"leaf_certificates": 1, "orphans": 0, "multi_match": 0},
+        "groups": [
+            {"name": hostile, "group_id": "g1", "matched_count": 1, "cert_ids": [1]}
+        ],
+        "certificates": [
+            {
+                "cert_id": 1,
+                "hostname": hostile,
+                "port": 443,
+                "subject": hostile,
+                "recipients": ["é@example.com"],
+                "orphan": False,
+                "multi_match": False,
+                "invalid_recipients": [hostile],
+                "group_ids": ["g1"],
+            }
+        ],
+        "scope": "scope text",
+    }
+
+    rendered = render_routing_report(report)
+    rendered.encode("ascii")  # raises UnicodeEncodeError on regression
+    assert "‮" not in rendered, "bidi controls must be escaped, not passed through"
+    assert "\\u202e" in rendered
+
+    as_json = json.dumps(report, ensure_ascii=True, sort_keys=True, indent=2)
+    as_json.encode("cp1252")  # the Windows console default
