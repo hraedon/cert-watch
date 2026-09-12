@@ -1,6 +1,8 @@
 # Plan 050 — Alert-system E2E: routing-matrix coverage + real-estate dry-run
 
-**Status:** proposed 2026-06-18
+**Status:** implementation completed 2026-09-12 for local receipt tests, explicit
+CI enrollment and an offline snapshot diagnostic. Real-estate acquisition and
+human review remain outstanding. See [the qualification record](../docs/alert-routing-evidence.md).
 **Author:** Opus 4.8 (session with user)
 **Strategic role:** Close the gap the 2026-06-17 reflection named as the biggest
 unknown — *nothing validates alert **routing** against a realistic estate.* Every
@@ -8,6 +10,27 @@ routing/tag test today uses synthetic, well-formed tags. Build the hermetic
 in-CI coverage that proves the routing matrix (which cert → which group → which
 recipient/channel, including the negatives), and add a read-only dry-run that can
 answer the same question against the *real* estate without delivering anything.
+
+## Current implementation boundaries (2026-09-12)
+
+The detailed proposal below is historical. Inspection found that recipient
+resolution and orphan notices had shipped, while its receipt harness and dry-run
+command had not. The implemented matrix follows the actual delivery contract:
+global SMTP recipients join specific group/owner/role recipients on every send;
+delivery tries SMTP first, then one global webhook on failure or absence.
+Stored per-group webhook URLs do not produce independent deliveries in this path.
+An orphan still uses global SMTP recipients when configured; it is not dropped
+merely because it lacks a specific route. Group-address dedup is casefolded;
+owner/role/global additions retain the existing exact-string semantics.
+
+The diagnostic is `cert-watch routing-report <snapshot> [--format json]`. It uses
+the actual routing branches and labels unmatched groups, orphan recipients and
+multiple group matches separately. It accepts only completed, standalone backups
+of the current schema and does not load live settings, credentials or startup
+logic. It does not evaluate threshold, renewal or digest eligibility.
+
+CI runs the receipt modules explicitly with `-m integration`; merely marking
+root-level tests as integration would leave them out of both existing jobs.
 
 ## Ground truth at time of writing
 

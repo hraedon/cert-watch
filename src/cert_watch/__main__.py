@@ -5,7 +5,8 @@ Provides ``cert-watch`` (web server), ``cert-watch backup <path>``
 (generate scrypt password hash for CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH),
 ``cert-watch re-encrypt <old_key>`` (re-encrypt kv_store secrets after
 signing key rotation), and ``cert-watch verify-report <file>`` (verify
-HMAC signature of a compliance report).
+HMAC signature of a compliance report), and ``cert-watch routing-report <snapshot>``
+(inspect routing in an offline backup without delivery).
 """
 
 from __future__ import annotations
@@ -51,6 +52,13 @@ def main(argv: list[str] | None = None) -> None:
         help="Path to the compliance report JSON file to verify",
     )
 
+    routing_parser = sub.add_parser(
+        "routing-report",
+        help="Inspect alert routing in an offline database backup without sending alerts",
+    )
+    routing_parser.add_argument("snapshot", help="Completed standalone database backup")
+    routing_parser.add_argument("--format", choices=("text", "json"), default="text")
+
     # Server bind options (default command). These are the *single source of
     # truth* for the bind address: __main__ normalizes CERT_WATCH_HOST to the
     # resolved host before launching uvicorn, so the BC-083 secure-by-default
@@ -69,6 +77,28 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     args = parser.parse_args(argv)
+
+    if args.command == "routing-report":
+        import json
+        import sys
+        from pathlib import Path
+
+        from cert_watch.routing_report import (
+            RoutingReportError,
+            build_routing_report,
+            render_routing_report,
+        )
+
+        try:
+            routing_report = build_routing_report(Path(args.snapshot))
+        except RoutingReportError as exc:
+            print(f"routing-report: {exc}", file=sys.stderr)
+            raise SystemExit(2) from None
+        if args.format == "json":
+            print(json.dumps(routing_report, ensure_ascii=True, sort_keys=True, indent=2))
+        else:
+            print(render_routing_report(routing_report), end="")
+        return
 
     if args.command == "backup":
         from cert_watch.config import Settings

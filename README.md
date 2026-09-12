@@ -464,7 +464,25 @@ cert-watch backup <path>    # Create a WAL-safe SQLite backup
 cert-watch hash-password    # Generate a scrypt password hash (interactive)
 cert-watch re-encrypt <key> # Re-encrypt kv_store after .auth_secret rotation
 cert-watch verify-report <file.json>  # Verify a signed compliance report
+cert-watch routing-report <snapshot.sqlite3>  # Inspect offline alert routing
 ```
+
+### `cert-watch routing-report <snapshot.sqlite3>`
+
+Inspect a completed, standalone database backup without sending alerts or loading
+SMTP credentials. The report lists group coverage, specific recipient addresses,
+certificates matching multiple groups, and orphans with no specific recipient.
+Use `--format json` for machine-readable output, including the input SHA-256.
+
+The snapshot must match this build's schema and have no WAL, SHM or journal
+companions. Inspection requires SQLite 3.37 or newer. Create a proper backup
+separately; a raw copy of a running WAL
+database may omit committed data. The command never migrates or repairs its input.
+
+These are routing results, not a delivery forecast: global recipients are not
+loaded, and expiry thresholds and digest eligibility are not evaluated. Normal
+delivery tries SMTP first and the single global webhook on failure or absence.
+See [the routing evidence guide](docs/alert-routing-evidence.md) for scope and checks.
 
 ### `cert-watch backup <path>`
 
