@@ -138,16 +138,24 @@ class TestQueueAssembly:
         item = build_attention_queue(db)[0]
         assert item["confidence_label"] == "automation configured"
 
-    def test_uploaded_expiry_has_replacement_guidance(self, db: Path):
+    @pytest.mark.parametrize("days,severity", [(5, "critical"), (20, "warning")])
+    def test_uploaded_expiry_has_replacement_guidance(self, db: Path, days: int, severity: str):
+        from cert_watch.alerts import evaluate_renewal_window
         from cert_watch.attention import build_attention_queue
 
-        SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", 20))
+        cert_id = SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", days))
+        # Preserve alert-engine compatibility while Home distinguishes a static
+        # uploaded file from a monitored endpoint inside its renewal window.
+        alerts = evaluate_renewal_window(db, SqliteAlertRepository(db))
+        assert [alert.cert_id for alert in alerts] == [cert_id]
 
-        item = build_attention_queue(db, window_days=0)[0]
+        item = build_attention_queue(db)[0]
         assert item["kind"] == "expiry"
+        assert item["severity"] == severity
         assert item["host_id"] is None
         assert item["reasons"][-1] == "upload replacement certificate"
         assert "renewal unknown" not in item["reasons"]
+        assert not any("renewal window" in reason for reason in item["reasons"])
 
     def test_deployment_endpoint_prefers_host_over_certificate_name(
         self, db: Path, monkeypatch

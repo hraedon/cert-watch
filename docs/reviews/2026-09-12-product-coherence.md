@@ -79,6 +79,9 @@ Home and alert evaluation now share a read-only renewal-window predicate:
 current leaf, within the configured window, no successor, and no recorded
 renewal resolution. Alert evaluation owns notification creation and
 deduplication; Home does not write alerts or interpret delivery as resolution.
+Home additionally requires a monitored endpoint before calling a renewal
+stalled. A static uploaded file retains its expiry status and replacement
+guidance; an uploaded artifact alone cannot establish a renewal-process state.
 
 ### Summary cards and their destinations disagreed
 

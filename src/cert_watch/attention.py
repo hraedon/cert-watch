@@ -9,8 +9,9 @@ that automation is working.
 Renewal confidence comes from the per-host renewal method
 (``acme``/``cert-manager`` ⇒ automated, ``manual`` ⇒ manual, unset ⇒
 unknown). Renewal-stall detection shares the alert pipeline's current
-certificate/host predicate. Sending a notification does not resolve the
-underlying condition.
+certificate/host predicate and requires a monitored endpoint. Static uploads
+receive expiry guidance. Sending a notification does not resolve the underlying
+condition on a monitored endpoint.
 
 Scope tags (RBAC) are honored by assembling only scoped grouped-page entries.
 """
@@ -138,7 +139,7 @@ def build_attention_queue(
                 if days < 0:
                     severity, item_kind = "expired", "expired"
                     reasons.append(f"expired {-days} day{'s' if -days != 1 else ''} ago")
-                elif cert_id in stalled_ids:
+                elif e.get("host_id") and cert_id in stalled_ids:
                     severity, item_kind = "stalled", "renewal_stalled"
                     reasons.append("inside its renewal window with no successor cert yet")
                 elif days < 7:
