@@ -137,15 +137,53 @@ def test_missing_configuration_does_not_fabricate_attempts(tmp_path):
 
 
 def test_start_persistence_failure_refuses_send(monkeypatch, tmp_path):
+    """Refuse the send, and leave the alert deliverable.
+
+    The database was unavailable, not the destination. Previously this counted
+    as a failed delivery, which spent the retry budget on an outage that never
+    touched a transport and left the alert permanently `failed` — an expiry
+    alert the transport would have accepted, silently dropped.
+    """
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
         side_effect=sqlite3.OperationalError("synthetic-password"),
     ))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0}
     connection.send_message.assert_not_called()
     assert list_attempts(db, [alert.id]) == {}
-    assert "synthetic-password" not in repo.list_for_cert(alert.cert_id)[0].error_message
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending", "a database outage must not consume the alert"
+    # The alert is untouched, so no error text is persisted at all — which
+    # also means the driver message (and its secret) cannot leak into it.
+    assert "synthetic-password" not in (stored.error_message or "")
+
+
+def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
+    """The deferred alert is still there to send on the next cycle."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    broken = Mock(side_effect=sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", broken)
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0}
+    connection.send_message.assert_not_called()
+
+    monkeypatch.undo()                      # database recovers
+    connection = _smtp(monkeypatch)
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0}
+    connection.send_message.assert_called_once()
+    assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
+    assert len(list_attempts(db, [alert.id])[alert.id]) == 1
+
+
+def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
+    """Guard the other half: deferral must not swallow genuine delivery failures."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    connection.send_message.side_effect = smtplib.SMTPException("mailbox unavailable")
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1}
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES
+    assert repo.list_for_cert(alert.cert_id)[0].status == "failed"
 
 
 def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path):

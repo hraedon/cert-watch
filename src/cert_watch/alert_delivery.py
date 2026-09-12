@@ -18,6 +18,16 @@ from cert_watch.database.delivery_evidence import begin_attempt, complete_attemp
 
 logger = logging.getLogger("cert_watch.alert_delivery")
 
+
+class DeliveryEvidenceUnavailable(Exception):
+    """The attempt could not be recorded, so nothing was sent.
+
+    Distinct from a delivery that was attempted and failed: no transport was
+    touched, the destination never saw a connection, and the alert is still
+    deliverable. Callers must leave such an alert pending rather than spend a
+    retry on it — the database, not the destination, was unavailable.
+    """
+
 FAILURE_LABELS = {
     "blocked": "Blocked by the destination policy before sending",
     "dns": "The SMTP destination could not be resolved",
@@ -149,10 +159,10 @@ def attempt_delivery(
     }
     try:
         attempt_id = begin_attempt(db_path, alert.id, channel, details)
-    except Exception:
+    except Exception as exc:
         logger.warning("Delivery refused because its attempt record could not be persisted")
         alert.error_message = "Delivery attempt evidence could not be recorded"
-        return False
+        raise DeliveryEvidenceUnavailable(alert.id) from exc
 
     observation = _Observation()
     token = _active.set(observation)

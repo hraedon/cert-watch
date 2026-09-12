@@ -1559,7 +1559,7 @@ def process_pending(
     """
     if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0}
-    from cert_watch.alert_delivery import attempt_delivery
+    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
 
     repository_path = getattr(alert_repo, "db_path", None)
     evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
@@ -1568,25 +1568,38 @@ def process_pending(
     for alert in alert_repo.list_pending():
         delivered = False
         last_error = ""
-        for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
-            if config is not None:
-                delivered = attempt_delivery(
-                    evidence_db, alert, "smtp", partial(send_alert, alert, config),
-                    recipients=_smtp_recipients(alert, config), global_recipients=config.recipients,
-                )
-            if not delivered and webhook_config is not None:
-                kind = webhook_config.kind
-                channel = (
-                    kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
-                    else "webhook"
-                )
-                delivered = attempt_delivery(
-                    evidence_db, alert, channel,
-                    partial(send_webhook, alert, webhook_config),
-                )
-            if delivered:
-                break
-            last_error = alert.error_message or "unknown"
+        try:
+            for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+                if config is not None:
+                    delivered = attempt_delivery(
+                        evidence_db, alert, "smtp", partial(send_alert, alert, config),
+                        recipients=_smtp_recipients(alert, config),
+                        global_recipients=config.recipients,
+                    )
+                if not delivered and webhook_config is not None:
+                    kind = webhook_config.kind
+                    channel = (
+                        kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
+                        else "webhook"
+                    )
+                    delivered = attempt_delivery(
+                        evidence_db, alert, channel,
+                        partial(send_webhook, alert, webhook_config),
+                    )
+                if delivered:
+                    break
+                last_error = alert.error_message or "unknown"
+        except DeliveryEvidenceUnavailable:
+            # The database was unavailable, not the destination: nothing was
+            # sent and the alert is still deliverable. Leave it pending so the
+            # next cycle retries it once the database recovers. Marking it
+            # failed here would spend the retry budget on an outage that never
+            # touched a transport, and the alert would never be sent at all.
+            logger.warning(
+                "Alert %s deferred: delivery evidence unavailable, leaving it pending",
+                alert.id,
+            )
+            continue
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
