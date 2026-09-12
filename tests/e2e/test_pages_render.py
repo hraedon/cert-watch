@@ -102,7 +102,7 @@ def test_mobile_closed_drawer_has_no_shadow_and_filters_scroll(
     page.set_viewport_size({"width": 390, "height": 844})
     page.goto(f"{cert_watch_server}/browse")
     expect(page.locator(".cw-drawer")).to_have_css("box-shadow", "none")
-    mode_picker = page.locator('.cw-filterbar .cw-seg[aria-label="Group certificates"]')
+    mode_picker = page.get_by_role("navigation", name="Inventory views")
     expect(mode_picker).to_have_css("overflow-x", "auto")
     assert mode_picker.evaluate("el => el.scrollWidth > el.clientWidth")
 

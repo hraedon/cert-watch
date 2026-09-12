@@ -1,4 +1,4 @@
-/* Certificate detail — on-demand revocation check. */
+/* Certificate detail — on-demand OCSP/CRL endpoint reachability. */
 (function () {
   'use strict';
   var btn = document.getElementById('check-revocation');
@@ -29,7 +29,7 @@
         });
       })
       .catch(function () {
-        status.textContent = 'Failed to check revocation';
+        status.textContent = 'Failed to check endpoint reachability';
         results.classList.add('cw-hidden');
       });
   });

@@ -2,18 +2,17 @@
 
 First-principles IA: the landing page answers "what needs a human, and when?",
 not "show me an inventory table". Each work item is one concrete problem on
-one endpoint, ranked by time-to-impact, with renewal confidence adjusting the
-rank: an expiring cert with working automation outranks nothing, while the
-same cert with manual/unknown renewal is a genuine to-do.
+one endpoint, ranked by severity and time-to-impact. The configured renewal
+method breaks ties between otherwise equally urgent items; it does not prove
+that automation is working.
 
 Renewal confidence comes from the per-host renewal method
 (``acme``/``cert-manager`` ⇒ automated, ``manual`` ⇒ manual, unset ⇒
-unknown). Renewal-stall detection reuses the alert pipeline's own signal
-(pending ``renewal_stalled`` alerts) so the queue cannot disagree with what
-alerting would fire.
+unknown). Renewal-stall detection shares the alert pipeline's current
+certificate/host predicate. Sending a notification does not resolve the
+underlying condition.
 
-Scope tags (RBAC) are honored by feeding scoped grouped-page entries and the
-scoped pending-alert list into assembly.
+Scope tags (RBAC) are honored by assembling only scoped grouped-page entries.
 """
 
 from __future__ import annotations
@@ -58,6 +57,7 @@ def build_attention_queue(
     db_path: str | Path,
     *,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    window_days: int = 30,
 ) -> list[dict[str, Any]]:
     """Assemble the ranked attention queue over the whole (scoped) estate.
 
@@ -70,15 +70,11 @@ def build_attention_queue(
     expiry with automated renewal sorts after the same item with manual or
     unknown renewal.
     """
+    from cert_watch.alerts import renewal_window_candidates
     from cert_watch.database import list_dashboard_grouped_page
-    from cert_watch.database.repo import SqliteAlertRepository
 
     entries, _total = list_dashboard_grouped_page(db_path, per_page=100_000, scope_tags=scope_tags)
-    stalled_ids = {
-        a.cert_id
-        for a in SqliteAlertRepository(db_path).list_pending_scoped(scope_tags or [])
-        if a.alert_type == "renewal_stalled"
-    }
+    stalled_ids = {candidate["id"] for candidate in renewal_window_candidates(db_path, window_days)}
 
     items: list[dict[str, Any]] = []
     for grouped_entry in entries:

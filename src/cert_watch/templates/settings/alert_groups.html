@@ -25,11 +25,10 @@
            value="{{ g.recipients | join(', ') if g else '' }}" placeholder="ops@example.com, lead@example.com">
     <div class="cw-hint">Comma-separated email addresses for this team's alerts.</div>
   </div>
-  <div class="cw-field">
-    <label class="cw-label" for="{{ prefix }}_webhook_url">Webhook URL <span class="cw-muted">(optional)</span></label>
-    <input class="cw-input mono" type="text" id="{{ prefix }}_webhook_url" name="webhook_url"
-           value="{{ g.webhook_url if g else '' }}" placeholder="https://hooks.slack.com/services/...">
-  </div>
+  {% if g and g.webhook_url %}
+  <div class="cw-note">A legacy webhook value is stored for this group; delivery does not use it.
+    Configure the global webhook in <a class="cw-link" href="/settings/channels">Channels</a>.</div>
+  {% endif %}
   <div class="cw-form-grid">
     <div class="cw-field">
       <label class="cw-label" for="{{ prefix }}_threshold_days">Alert threshold (days) <span class="cw-muted">(optional)</span></label>
@@ -56,10 +55,11 @@
     <div class="cw-note">
       {{ icons.svg_icon('bell', 14) }}
       <div>
-        A group matches certificates by tag (a team's default tag) and routes
-        their alerts to that team's recipients/webhook, with an optional
-        per-team alert threshold and a shared weekly digest window. A cert with no matching
-        group falls back to the global alert settings.
+        Matching groups add their email recipients in addition to global SMTP recipients
+        and the certificate's owner/team contacts. A certificate matching several groups
+        produces one alert with their combined recipients. Groups can also set an alert
+        threshold and a shared weekly digest window. Group webhooks are not used for delivery;
+        configure the global webhook in <a class="cw-link" href="/settings/channels">Channels</a>.
       </div>
     </div>
   </div>

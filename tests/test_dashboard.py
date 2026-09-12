@@ -160,6 +160,8 @@ def test_dashboard_stat_cards_are_urgency_filters(
 ):
     """Stat cards link to urgency filters and reflect the active state."""
     import re
+    from html import unescape
+    from urllib.parse import parse_qs, urlsplit
 
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
@@ -172,10 +174,16 @@ def test_dashboard_stat_cards_are_urgency_filters(
         r = client.get("/browse")
     assert r.status_code == 200
     assert '<a href="/browse?' in r.text and 'class="cw-stat"' in r.text  # linked stat cells
-    assert 'href="/browse?urgency=expired"' in r.text
-    assert 'href="/browse?urgency=critical"' in r.text
-    assert 'href="/browse?urgency=warning"' in r.text
-    assert 'href="/browse?urgency=healthy"' in r.text
+    linked_filters = {
+        parse_qs(urlsplit(unescape(href)).query).get("urgency", [""])[0]
+        for href in re.findall(r'<a href="([^"]+)" class="cw-stat[^\"]*"', r.text)
+    }
+    assert linked_filters == {"", "expired", "critical", "warning", "healthy"}
+
+    def _active_filter(text: str) -> str:
+        active = re.findall(r'<a href="([^"]+)" class="cw-stat active"', text)
+        assert len(active) == 1
+        return parse_qs(urlsplit(unescape(active[0])).query).get("urgency", [""])[0]
 
     def _stat_value(text: str, label: str) -> int:
         pattern = (
@@ -197,13 +205,13 @@ def test_dashboard_stat_cards_are_urgency_filters(
 
     assert r.text.count('class="cw-stat active"') == 1
     # unfiltered: the Tracked cell is active
-    assert 'href="/browse?" class="cw-stat active"' in r.text
+    assert _active_filter(r.text) == ""
 
     with TestClient(app_mod.app) as client:
         r = client.get("/browse?urgency=expired")
     assert r.status_code == 200
     assert r.text.count('class="cw-stat active"') == 1
-    assert 'href="/browse?urgency=expired" class="cw-stat active"' in r.text
+    assert _active_filter(r.text) == "expired"
     assert "expired.example.com" in r.text
     assert "leaf.example.com" not in r.text
 

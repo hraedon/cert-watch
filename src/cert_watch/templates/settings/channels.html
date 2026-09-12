@@ -39,9 +39,10 @@
                  value="{{ smtp.alert_from }}" placeholder="cert-watch@example.com">
         </div>
         <div class="cw-field">
-          <label class="cw-label" for="alert_recipients">Recipients (comma-separated)</label>
+          <label class="cw-label" for="alert_recipients">Global SMTP recipients (comma-separated)</label>
           <input class="cw-input" type="text" id="alert_recipients" name="alert_recipients"
                  value="{{ smtp.alert_recipients }}" placeholder="ops@example.com, security@example.com">
+          <div class="cw-hint">Receive per-certificate alerts alongside matching group and owner/team recipients.</div>
         </div>
       </div>
       <div class="cw-form-foot">
@@ -65,6 +66,8 @@
       <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
 
       <div class="cw-kv-label">Webhook</div>
+      <p class="cw-hint">For individual alerts, this global webhook is used when SMTP fails or is not configured.
+        Weekly digests can use both SMTP and this webhook. Event streaming has its own configuration.</p>
       <div class="cw-field">
         <label class="cw-label" for="webhook_preset">Webhook preset</label>
         <select class="cw-select" id="webhook_preset" name="webhook_preset">
@@ -155,14 +158,14 @@
           <div class="cw-hint">When the daily scan + alert cycle runs, in UTC. Default 06:00.</div>
         </div>
         <div class="cw-field">
-          <label class="cw-label" for="check_revocation">OCSP/CRL revocation checks
+          <label class="cw-label" for="check_revocation">OCSP/CRL endpoint reachability
             {% if env_overrides.check_revocation %}<span class="cw-envbadge">env</span>{% endif %}
           </label>
           <select class="cw-select" id="check_revocation" name="check_revocation">
             <option value="0" {% if alert.check_revocation != '1' %}selected{% endif %}>Off</option>
             <option value="1" {% if alert.check_revocation == '1' %}selected{% endif %}>On</option>
           </select>
-          <div class="cw-hint">Probe OCSP/CRL during posture evaluation to flag revoked certificates. Off by default (adds outbound network calls per scan).</div>
+          <div class="cw-hint">Probe OCSP/CRL endpoints during posture evaluation. This checks reachability and does not determine whether a certificate is revoked. Off by default (adds outbound network calls per scan).</div>
         </div>
       </div>
 

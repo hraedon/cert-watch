@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -17,7 +17,6 @@ from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
     SqliteAlertRepository,
-    dashboard_expiry_stats,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -66,8 +65,11 @@ def home(
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
 
-    items = build_attention_queue(db, scope_tags=scope_tags)
-    stats = dashboard_expiry_stats(db, scope_tags=scope_tags)
+    items = build_attention_queue(
+        db, scope_tags=scope_tags, window_days=_get_settings(request).renewal_window_days,
+    )
+    stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
+    _, tracked_total = list_dashboard_page(db, per_page=1, scope_tags=scope_tags)
 
     # Next-12-weeks horizon with storm markers (same bucket query as the
     # calendar view on /browse).
@@ -100,6 +102,7 @@ def home(
         context={
             "queue": items,
             "stats": stats,
+            "tracked_total": tracked_total,
             "horizon": horizon,
             "current_week_start": current_week_start,
             "horizon_storms": storms,
@@ -134,6 +137,24 @@ def dashboard(
     # tags include one of their scope tags. Admins with an empty scope see all.
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
+
+    # Aggregated views cover the whole permitted population, not the table's
+    # search/status/source selection. Do not display filters they do not use.
+    if view in ("issuer", "owner", "renewal_method", "calendar"):
+        q = urgency = source = None
+    grouped = int(bool(grouped))
+    browse_state = {
+        "q": q, "urgency": urgency, "source": source,
+        "sort_by": sort_by, "sort_order": sort_order, "grouped": grouped,
+    }
+
+    def browse_url(**changes: Any) -> str:
+        """Build inventory links from only the supported table controls."""
+        params = {**browse_state}
+        params.update({key: value for key, value in changes.items() if key in browse_state})
+        return "/browse?" + urlencode({
+            key: value for key, value in params.items() if value is not None and value != ""
+        })
 
     # Pivot views use SQL-level aggregation (BC-048)
     pivot_groups = None
@@ -170,7 +191,7 @@ def dashboard(
         # Same stats source as the inventory table, so the strip doesn't
         # change numbers when the user switches to the calendar view.
         pivot_stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
-    elif pivot_groups:
+    elif pivot_groups is not None:
         # Pivot view: compute stats from SQL (no full inventory load)
         total = sum(g["count"] for g in pivot_groups)
         total_pages = 1
@@ -205,10 +226,21 @@ def dashboard(
             db, q=q, source=source, scope_tags=scope_tags
         )
 
+    if pivot_groups is not None:
+        tracked_total = total
+    else:
+        # Summary counts describe the selected search/source population even
+        # when an urgency filter narrows the paginated rows. Count endpoints
+        # and files, including hosts awaiting their first certificate.
+        _, tracked_total = list_dashboard_page(
+            db, q=q, source=source, per_page=1, scope_tags=scope_tags,
+        )
+
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
 
-    display_entries = [] if (pivot_groups or calendar_data is not None) else page_entries
+    is_global_view = pivot_groups is not None or calendar_data is not None
+    display_entries = [] if is_global_view else page_entries
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
     posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
 
@@ -220,7 +252,7 @@ def dashboard(
             "all_tags": distinct_tags(db, scope_tags=scope_tags),
             "pivot_groups": pivot_groups,
             "pivot_stats": pivot_stats,
-            "pivot_view": view if (pivot_groups or calendar_data is not None) else "",
+            "pivot_view": view if is_global_view else "",
             "calendar_data": calendar_data,
             "current_week_start": current_week_start,
             "calendar_storms": calendar_storms,
@@ -237,6 +269,8 @@ def dashboard(
             "page": page,
             "total_pages": total_pages,
             "total_entries": total,
+            "tracked_total": tracked_total,
+            "browse_url": browse_url,
             "has_prev": page > 1,
             "has_next": page < total_pages,
             "grouped": grouped,

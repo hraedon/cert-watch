@@ -268,9 +268,10 @@
           {% endif %}
           {% if may_write %}
           <div class="cw-chiprow cw-metarow">
-            <button class="cw-btn ghost sm" type="button" id="check-revocation" data-cert-id="{{ cert_id }}">{{ icons.svg_icon('refresh', 13) }}Check revocation</button>
+            <button class="cw-btn ghost sm" type="button" id="check-revocation" data-cert-id="{{ cert_id }}">{{ icons.svg_icon('refresh', 13) }}Check endpoint reachability</button>
             <span id="revocation-status" class="cw-hint"></span>
           </div>
+          <p class="cw-hint">Checks OCSP/CRL endpoint reachability; this does not determine whether this certificate is revoked.</p>
           <div id="revocation-results" class="cw-findings cw-hidden"></div>
           {% endif %}
         </div>
