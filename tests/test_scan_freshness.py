@@ -101,13 +101,23 @@ def test_invalid_or_future_scan_is_unknown(tmp_path, timestamp):
     assert scan.due_at is None
 
 
-def test_home_browse_and_detail_expose_overdue_scans(reload_app, tmp_path, chain_triplet):
+def test_home_browse_and_detail_expose_overdue_scans(
+    reload_app, tmp_path, chain_triplet, monkeypatch
+):
     from fastapi.testclient import TestClient
 
+    import cert_watch.app as app_module
     from cert_watch.certificate_model import _from_x509
     from tests._helpers import seed_scanned
 
     application = reload_app().app
+    # The seeded host is deliberately overdue, so a live scheduler scans it on
+    # startup, DNS fails, and the resulting `failure` row makes attention.py
+    # suppress the overdue reason (it is gated on `not failing`). That race made
+    # this test fail roughly one full-suite run in three. Assert the rendering,
+    # not the scheduler.
+    monkeypatch.setattr(app_module, "start_scheduler", lambda **kwargs: None)
+    monkeypatch.setattr(app_module, "stop_scheduler", lambda: None)
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     SqliteHostRepository(db).add("old.example.test", 443, scan_interval_hours=4)

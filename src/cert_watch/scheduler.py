@@ -589,9 +589,19 @@ def _check_renewal_overdue(
                     db_path,
                 )
                 already_emitted.add((signal.hostname, port, signal.cert_fingerprint))
-                _send_renewal_webhook_if_configured(
-                    signal, hostname, port, db_path, settings=settings,
-                )
+                # Per-endpoint guard: build_renewal_payload raises on an
+                # out-of-range or conflicting port, and this loop's only `try`
+                # wraps the whole sweep — so one legacy host row would silently
+                # cost every later host its renewal webhook.
+                try:
+                    _send_renewal_webhook_if_configured(
+                        signal, hostname, port, db_path, settings=settings,
+                    )
+                except Exception:
+                    logger.exception(
+                        "renewal webhook failed for %s:%s — continuing sweep",
+                        hostname, port,
+                    )
     except Exception:  # noqa: BLE001 — best-effort overdue check; must not crash scan cycle
         logger.exception("renewal overdue check failed")
 
