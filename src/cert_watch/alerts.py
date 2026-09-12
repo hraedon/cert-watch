@@ -1640,9 +1640,13 @@ def process_pending(
             # clock, because evaluate_all_certs resets a failed alert to pending
             # while keeping its original created_at, so one transient lock on an
             # old alert would look like a day-long outage. And the give-up write
-            # would itself go to the database that just refused a write. See the
-            # follow-up issue; purge_old_alerts no longer deletes un-sent alerts,
-            # which removes the harm that a bound was reaching for.
+            # would itself go to the database that just refused a write. See #38.
+            #
+            # Caveat, and it is a real one: purge_old_alerts still deletes by age
+            # alone, so a deferral that outlives alert_retention_days is removed
+            # while still pending. evaluate_all_certs recreates the alert while
+            # the threshold is crossed, which limits the damage, but the pending
+            # queue is NOT a durable parking place. See #39.
             logger.warning(
                 "Alert %s deferred: delivery evidence unavailable, leaving it pending",
                 alert.id,
