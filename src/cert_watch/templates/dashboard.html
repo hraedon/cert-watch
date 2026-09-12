@@ -42,7 +42,7 @@
 {% macro source_cell(e, grouped=false) %}
   <div class="cw-chiprow">
     {% if grouped or e.source == 'scanned' %}
-      <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
+      <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}{{ 'Monitored' if e.kind == 'pending' else 'Scanned' }}</span>
     {% elif e.source == 'uploaded' %}
       <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
     {% else %}
@@ -80,6 +80,20 @@
 {% macro grade_cell(e) %}
   {% set pg = posture_grades.get(e.id) if posture_grades else None %}
   {% if pg %}{{ ui.grade(pg) }}{% else %}<span class="cw-muted">—</span>{% endif %}
+{% endmacro %}
+
+{% macro freshness_cell(e) %}
+  {% if e.kind == 'grouped' %}
+    {% set coverage = namespace(current=0, total=0) %}
+    {% for h in e.hosts %}
+      {% set scan = scan_evidence.get(h.host_id) %}
+      {% if scan %}{% set coverage.total = coverage.total + 1 %}{% if scan.state == 'current' %}{% set coverage.current = coverage.current + 1 %}{% endif %}{% endif %}
+    {% endfor %}
+    <div class="cw-sub {{ 't-warn' if coverage.current < coverage.total else 'cw-muted' }}">{{ coverage.current }}/{{ coverage.total }} current scans</div>
+  {% elif e.host_id and scan_evidence.get(e.host_id) %}
+    {% set scan = scan_evidence[e.host_id] %}
+    <div class="cw-sub {{ 'cw-muted' if scan.state == 'current' else 't-warn' }}">{{ scan.label }}</div>
+  {% endif %}
 {% endmacro %}
 
 {% block content %}
@@ -239,7 +253,7 @@
             <td data-label="Tags">{{ tags_cell(e) }}</td>
             <td data-label="Source">{{ source_cell(e, grouped=true) }}</td>
             <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ ui.status(urg) }}</td>
+            <td data-label="Status">{{ ui.status(urg) }}{{ freshness_cell(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
               <div class="cw-rowact">
@@ -254,6 +268,7 @@
                 <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
                 {% set h_urg = h.urgency if h.urgency else (h.days_remaining | urgency if h.days_remaining is not none else 'gray') %}
                 {{ ui.status(h_urg) }}
+                {{ freshness_cell(h) }}
                 {% if h.scan_status == 'failure' %}
                   <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
                 {% elif h.last_scanned_at %}
@@ -295,7 +310,7 @@
             <td data-label="Tags">{{ tags_cell(e) }}</td>
             <td data-label="Source">{{ source_cell(e) }}</td>
             <td data-label="Expires">{{ expires_cell(e, urg) }}</td>
-            <td data-label="Status">{{ ui.status(urg) }}</td>
+            <td data-label="Status">{{ ui.status(urg) }}{{ freshness_cell(e) }}</td>
             <td data-label="Grade">{{ grade_cell(e) }}</td>
             <td data-label="Action">
               <div class="cw-rowact">

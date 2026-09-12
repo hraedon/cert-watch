@@ -39,7 +39,7 @@ visible population, with the scope stated on the selected view.
 | Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` (routes/hosts.py:139, no drawer field) and CSV `notes` column (:296) | `POST /hosts/{id}/notes` (routes/hosts.py:364); `PATCH /api/hosts/{id}/notes` (routes/api/hosts.py:191) (no UI caller — JSON API path); `POST /hosts` (:130); CSV `POST /hosts/import` (:231) | Detail-page Notes panel — **resolved (V1/V2)** |
 | Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also add-host route param (routes/hosts.py:136, **no drawer field**) and CSV `tags` column (:295) | `POST /hosts/{id}/tags` (routes/hosts.py:397); `PUT /api/hosts/{id}/tags` (routes/api/hosts.py:226) (no UI caller); `POST /hosts`; `POST /hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds, label them as such |
 | Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` (routes/hosts.py:130) | Create-only by design — OK |
-| Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts`; `POST /hosts/import` | No post-creation edit control exists (displayed read-only, `certificate_detail.html:191`) — see "Latent / unsurfaced fields" |
+| Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts`; `POST /hosts/import` | Endpoint settings now owns post-creation edits via `POST /hosts/{id}/settings`; see below |
 | Lifecycle (delete, scan) | row | `certificate_detail.html:78` (delete), :64 (scan) | `POST /hosts/{id}/delete` (routes/hosts.py:476); `POST /hosts/{id}/scan` (:561) | As-is |
 
 ## Tags (cross-cutting registry)
@@ -110,11 +110,37 @@ visible population, with the scope stated on the selected view.
   docs (`dashboard.html:401,405`) document only `hostname,port,threshold_days`.
   Decide: surface the fields, or drop them from the route/docs mismatch.
 
-## Latent / unsurfaced fields
+## Endpoint settings and scan evidence (2026-09-12)
+
+The detail page's **Edit endpoint settings** form owns post-creation edits to
+`scan_interval_hours`, `threshold_days`, and `renewal_status`, through
+`POST /hosts/{host_id}/settings`. It is available to permitted endpoint writers,
+uses CSRF protection, records `host.update_settings`, and wakes the scheduler.
+Blank cadence uses the configured daily UTC schedule; blank threshold uses
+automatic thresholds. Existing owner/contact/method/runbook editing stays in
+its existing form. The two forms do not overwrite each other's fields.
+
+Renewal status is explicitly an operator report: in-progress suppresses new
+stalled notices; complete also suppresses new expiry notices until the next
+successful scan resets it. Existing queued notifications are unaffected. This
+control is not proof of certificate replacement.
+
+Home's **Scan coverage** panel counts the visible registered endpoints, excluding
+uploads. Browse shows per-endpoint scan evidence, including grouped deployments.
+The detail **Scan evidence** panel distinguishes last success, latest attempt,
+observation due time and retry eligibility. It replaces the ambiguous old
+“Last scanned” field. These are read-only views.
+
+Activity's **Why and delivery details** disclosure shows the recorded trigger;
+administrators can inspect durable transport attempts and routing inputs at the
+attempt. Existing alerts without evidence say so. Configured-channel and current
+group chips were removed because they did not establish historical delivery.
+
+## Legacy and creation-only fields
 
 | Column | Write path(s) | UI surface |
 |---|---|---|
-| `hosts.expected_issuers` (schema.py:79) | `POST /hosts/{id}/expected-issuers` (routes/hosts.py:439, admin-gated form endpoint); `PUT /api/hosts/{id}/issuers` (routes/api/hosts.py:285) | **None.** No template or JS references either endpoint — a form endpoint with no form. |
-| `hosts.renewal_status` (schema.py:75) | `PATCH /api/hosts/{id}/owner` only (routes/api/hosts.py:85,100-106) | **None** editable; rendered indirectly via renewal chips only. |
-| `hosts.scan_interval_hours` (schema.py:71) | `POST /hosts` (:137) and CSV (:297) — API/CSV only | **None** (no drawer field, no post-creation editor). |
-| `hosts.threshold_days` post-creation | none | Create-only (drawer/CSV); displayed read-only at `certificate_detail.html:191`. No edit endpoint exists. |
+| `hosts.expected_issuers` | Existing admin form/API write paths retained for compatibility | Read-only legacy value on details for admins, explicitly not monitored after CT removal. No new policy editor. |
+| `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; explicitly operator-reported with suppression/reset help. |
+| `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Endpoint settings editor; no creation drawer field. |
+| `hosts.threshold_days` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Creation drawer and endpoint settings editor. |

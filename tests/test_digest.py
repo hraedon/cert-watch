@@ -36,7 +36,7 @@ def _emit_renewal(db: Path, hostname: str, cert_id: str = "c1"):
         Event(
             event_type="cert_renewed",
             timestamp=datetime.now(UTC),
-            payload={"hostname": hostname, "cert_id": cert_id},
+            payload={"hostname": hostname, "port": 443, "cert_id": cert_id},
             source="scan",
         ),
         db,
@@ -50,6 +50,7 @@ def _emit_overdue(db: Path, hostname: str, cert_id: str = "c1"):
             timestamp=datetime.now(UTC),
             payload={
                 "hostname": hostname,
+                "port": 443,
                 "cert_fingerprint": "aa" * 32,
                 "days_remaining": 3,
                 "expected_renewal_at_days": 7,
@@ -135,23 +136,21 @@ class TestDigestExpiry:
         from cert_watch.certificate_model import Certificate
         from cert_watch.database import record_cert_history
         from cert_watch.digest import _build_digest_message
+        from tests._helpers import seed_certificate
 
         db = empty_db
         _add_host(db, "host-renewed.example.com")
         _add_host(db, "host-overdue.example.com")
 
         def _seed(hostname: str, not_after: datetime, fp: str) -> None:
+            cert = Certificate(
+                subject=f"CN={hostname}", issuer="CN=CA",
+                not_before=datetime(2026, 1, 1, tzinfo=UTC), not_after=not_after,
+                san_dns_names=[hostname], fingerprint_sha256=fp, raw_der=b"", is_leaf=True,
+            )
+            seed_certificate(db, cert, hostname=hostname, port=443)
             record_cert_history(
-                db, hostname, 443,
-                Certificate(
-                    subject=f"CN={hostname}",
-                    issuer="CN=CA",
-                    not_before=datetime(2026, 1, 1, tzinfo=UTC),
-                    not_after=not_after,
-                    san_dns_names=[hostname],
-                    fingerprint_sha256=fp,
-                    raw_der=b"",
-                ),
+                db, hostname, 443, cert,
                 scanned_at=datetime.now(UTC).isoformat(),
             )
 

@@ -55,7 +55,10 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
-                       a.read, c.subject AS subject
+                       a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
+                                        NULLIF(a.hostname, ''),
+                                        '(unknown certificate)') AS subject,
+                       (c.id IS NULL) AS historical_cert
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
                 LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
@@ -70,7 +73,10 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
-                       a.read, c.subject AS subject
+                       a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
+                                        NULLIF(a.hostname, ''),
+                                        '(unknown certificate)') AS subject,
+                       (c.id IS NULL) AS historical_cert
                 FROM alerts a
                 LEFT JOIN certificates c ON c.id = a.cert_id
                 LEFT JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port

@@ -5,6 +5,15 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Scan freshness and coverage.** Home counts current observations across the
+  visible monitored fleet; Browse and endpoint details distinguish overdue,
+  incomplete and unobserved scans. Daily/custom cadence shares the scheduler's
+  policy, and retry attempts cannot refresh the last successful observation.
+- **Endpoint settings.** Edit cadence, alert threshold and operator-reported
+  renewal status on the detail page, with explicit suppression/reset guidance.
+- **Per-alert delivery evidence.** Record transport attempts and sanitized
+  routing/outcome observations for administrator inspection in Activity.
+  Historical alerts remain explicitly without delivery evidence.
 - **Offline alert-routing inspection.** `cert-watch routing-report <snapshot>`
   lists group coverage, specific recipients, orphans and multiple matches from a
   completed database backup. It reuses delivery's routing resolver, does not send
@@ -29,6 +38,9 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Renewal notifications preserve ports.** Digests and webhook enrichment use
+  exact endpoints for ownership and certificate evidence. Ambiguous legacy
+  events do not borrow another endpoint's owner, expiry or renewal history.
 - **Settings reach scheduled work.** Refresh scheduled transport and scan
   configuration after saving settings, honor per-host scan intervals, and
   pass configured TLS verification and drift options to manual scans.

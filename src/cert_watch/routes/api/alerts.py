@@ -40,6 +40,8 @@ def api_list_alerts(
     total = _total_alerts(db, scope_tags=scope_tags)
     page, limit, pages, _offset = _normalize_pagination(page, limit, total)
     rows = list_alerts_with_subject(db, page=page, limit=limit, scope_tags=scope_tags)
+    for row in rows:
+        row.pop("historical_cert", None)  # Internal Activity presentation, not an API field.
     return JSONResponse(
         content={
             "alerts": rows,

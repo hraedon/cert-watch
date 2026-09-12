@@ -840,7 +840,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0031"]
+    assert run_pending_migrations(db, backup=False) == ["0031", "0032"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
@@ -869,7 +869,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         db, tuple(f"{number:04d}" for number in range(1, 30))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0030", "0031"]
+    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {

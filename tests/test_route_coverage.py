@@ -1765,15 +1765,8 @@ def test_viewer_alerts_no_alert_settings_link(reload_app, tmp_path):
     assert "Alert settings" in html2
 
 
-def test_alerts_template_renders_when_alert_channels_omitted():
-    """WI-104: alerts.html must not raise if a route omits alert_channels.
-
-    The ``|default([])`` guard at the top of the content block makes the
-    membership/boolean tests on alert_channels safe. Rendered under
-    StrictUndefined (the strictest mode) with alert_channels deliberately
-    omitted — without the guard the ``in`` test on the omitted key raises
-    UndefinedError.
-    """
+def test_alerts_template_renders_without_optional_delivery_evidence():
+    """Missing evidence stays unavailable, including under StrictUndefined."""
     import pathlib
 
     from jinja2 import Environment, FileSystemLoader, StrictUndefined
@@ -1790,8 +1783,7 @@ def test_alerts_template_renders_when_alert_channels_omitted():
 
     _req = type("R", (), {"state": type("S", (), {"csp_nonce": "n"})()})()
     _counts = {"all": 1, "unread": 1, "critical": 0, "warning": 1}
-    # The channel chips render inside the per-alert loop, so at least one alert
-    # is needed for them to appear.
+    # Include a historical alert without optional evidence fields.
     _alert = {
         "id": "1",
         "alert_type": "expiry_warning",
@@ -1803,9 +1795,7 @@ def test_alerts_template_renders_when_alert_channels_omitted():
         "created_at": "2026-01-01T00:00:00",
     }
 
-    # Context covering every var base.html / alerts.html reference at the top
-    # level, EXCEPT alert_channels (deliberately omitted to exercise the
-    # default([]) guard).
+    # Deliberately omit delivery mappings to exercise their default guards.
     base_ctx = dict(
         is_admin=False,
         auth_user="viewer",
@@ -1832,11 +1822,12 @@ def test_alerts_template_renders_when_alert_channels_omitted():
 
     tpl = env.get_template("activity.html")
 
-    # alert_channels deliberately omitted: must render the "no channels" fallback.
+    # Non-admin viewers receive no recipient details.
     html = tpl.render(**base_ctx)
-    assert html.count("No channels configured") == 1
+    assert "Recipient and delivery evidence is available to administrators" in html
+    assert "Recorded: pending" in html
 
-    # When channels are configured, the Email/Webhook chips render instead.
+    # A stale configured-channel context never turns into historical evidence.
     html2 = tpl.render(alert_channels=["email", "webhook"], **base_ctx)
     assert "No channels configured" not in html2
-    assert "Email" in html2 and "Webhook" in html2  # email + webhook chips
+    assert "Email (SMTP)" not in html2 and "Transport accepted" not in html2

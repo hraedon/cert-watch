@@ -520,7 +520,11 @@ class TestScopedFlushFullContract:
         monkeypatch.setattr(alerts_mod, "send_alert", _fake_send)
 
         repo = ScopedAlertRepository(db, ("team-a",))
-        result = alerts_mod.process_pending(repo, config=object(), webhook_config=None)
+        config = alerts_mod.AlertConfig(
+            smtp_host="relay.example.invalid", smtp_user="", smtp_password="",
+            from_addr="watch@example.invalid", recipients=["team@example.invalid"],
+        )
+        result = alerts_mod.process_pending(repo, config=config, webhook_config=None)
 
         assert sent_ids == ["alert-a"]
         assert result == {"sent": 1, "failed": 0}
@@ -529,6 +533,11 @@ class TestScopedFlushFullContract:
             statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())
         assert statuses["alert-a"] == "sent"
         assert statuses["alert-b"] == "pending"
+        with _connect(db) as conn:
+            recorded = conn.execute(
+                "SELECT DISTINCT alert_id FROM alert_delivery_events"
+            ).fetchall()
+        assert [row[0] for row in recorded] == ["alert-a"]
 
 
 # ── Scope filtering in exports and alert counts ────────────────────────────

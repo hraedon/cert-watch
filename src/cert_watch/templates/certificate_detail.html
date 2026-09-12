@@ -15,6 +15,8 @@
   </div>
 {% endmacro %}
 
+{% macro scan_time(value) %}{{ value.strftime('%Y-%m-%d %H:%M:%S UTC') if value else 'Not recorded' }}{% endmacro %}
+
 {% block content %}
 <div class="cw-wrap">
   <nav class="cw-crumbs" aria-label="Breadcrumb">
@@ -44,7 +46,7 @@
       </div>
       <div class="cw-chiprow cw-metarow">
         {% if not cert or cert.source == 'scanned' %}
-          <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}Scanned</span>
+          <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}{{ 'Scanned' if cert else 'Monitored' }}</span>
         {% elif cert.source == 'uploaded' %}
           <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
         {% else %}
@@ -126,6 +128,27 @@
       </div>
       {% endif %}
 
+      {% if scan_evidence %}
+      <div class="cw-panel" data-testid="scan-evidence">
+        <div class="cw-panel-head">
+          <h2>Scan evidence</h2>
+          <span class="cw-chip {{ 't-muted' if scan_evidence.state == 'current' else 't-warn' }}">{{ scan_evidence.label }}</span>
+        </div>
+        <div class="cw-panel-body">
+          <dl class="cw-kv">
+            {% call detail_field('Last successful scan') %}{{ scan_time(scan_evidence.last_success) }}{% endcall %}
+            {% call detail_field('Latest attempt') %}{{ scan_time(scan_evidence.last_attempt) }}{% if scan_evidence.attempt_status %}<div class="cw-muted">{{ scan_evidence.attempt_status | humanize_label }}</div>{% endif %}{% endcall %}
+            {% call detail_field('Observation due') %}{{ scan_time(scan_evidence.due_at) if scan_evidence.due_at else ('Timing unavailable' if scan_evidence.state == 'unknown' else 'Awaiting a successful scan') }}{% endcall %}
+            {% call detail_field('Next eligible attempt') %}{{ scan_time(scan_evidence.next_attempt_at) if scan_evidence.next_attempt_at else ('Timing unavailable' if scan_evidence.state == 'unknown' else 'Checked during the next scan cycle') }}{% endcall %}
+          </dl>
+          {% if scan_evidence.state != 'current' %}<p class="cw-note t-warn">{% if cert %}The stored certificate and grade describe earlier evidence.{% else %}No successful certificate observation is recorded.{% endif %} Scan again to confirm what this endpoint currently serves.</p>{% endif %}
+          <p class="cw-hint">Cadence uses the last successful scan. Incomplete attempts do not refresh it. Times show eligibility; a running job can delay the next attempt.</p>
+        </div>
+      </div>
+      {% elif cert and cert.source == 'uploaded' %}
+      <div class="cw-panel"><div class="cw-panel-body"><p class="cw-hint">Uploaded file — this is static certificate evidence, with no endpoint scan cadence.</p></div></div>
+      {% endif %}
+
       {# ---- Operational summary (shared: cert + pending host) ---- #}
       {% if host_info %}
       <div class="cw-panel">
@@ -187,9 +210,12 @@
                 <span class="cw-chip t-neutral">{{ renewal_method_indicator }}</span>
               {% endif %}
             {% endcall %}
-            {% if not cert %}
-            {% call detail_field('Alert threshold') %}{{ host_info.threshold_days or '14' }} days{% endcall %}
-            {% endif %}
+            {% call detail_field('Scan cadence') %}{% if host_info.scan_interval_hours and host_info.scan_interval_hours > 0 %}Every {{ host_info.scan_interval_hours }} hours{% else %}Daily schedule{% endif %}{% endcall %}
+            {% call detail_field('Alert threshold') %}{% if host_info.threshold_days is not none %}{{ host_info.threshold_days }} days{% else %}Automatic thresholds{% endif %}{% endcall %}
+            {% call detail_field('Renewal report', 'wide') %}
+              {{ {'pending': 'No completion reported', 'in_progress': 'In progress — operator reported', 'renewed': 'Complete — operator reported'}.get(host_info.renewal_status, host_info.renewal_status) }}
+              <div class="cw-hint">Operator report, not proof of renewal.</div>
+            {% endcall %}
             {% if host_info.runbook_url %}
             {% call detail_field('Runbook', 'wide') %}
               {% if host_info.runbook_url.startswith(('http://', 'https://')) %}
@@ -206,6 +232,50 @@
             {% endcall %}
             {% endif %}
           </dl>
+        </div>
+        <div class="cw-panel-body" id="endpoint-settings">
+          {% if request.query_params.get('endpoint_saved') %}<p class="cw-hint" role="status" data-testid="endpoint-settings-saved">Endpoint settings saved.</p>{% endif %}
+          {% if request.query_params.get('endpoint_error') %}<p class="cw-hint t-crit" role="alert" data-testid="endpoint-settings-error">{{ request.query_params.get('endpoint_error') }}</p>{% endif %}
+          {% if host_info.settings_writable and host_id %}
+          <details class="cw-editor" {% if request.query_params.get('endpoint_error') %}open{% endif %}>
+            <summary class="cw-btn ghost sm" data-testid="endpoint-settings-edit">{{ icons.svg_icon('edit', 13) }}<span class="when-closed">Edit endpoint settings</span><span class="when-open">Cancel editing</span></summary>
+            <div class="cw-editor-body">
+              <form method="post" action="/hosts/{{ host_id }}/settings" class="cw-form">
+                <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+                <div class="cw-form-grid">
+                  {% set legacy_interval = host_info.scan_interval_hours is not none and (host_info.scan_interval_hours < 1 or host_info.scan_interval_hours > 8760) %}
+                  <div class="cw-field">
+                    <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
+                    <input id="endpoint-scan-interval" type="number" name="scan_interval_hours" class="cw-input" step="1" {% if not legacy_interval %}min="1" max="8760"{% endif %} value="{{ host_info.scan_interval_hours if host_info.scan_interval_hours is not none else '' }}" placeholder="Daily schedule" aria-describedby="endpoint-scan-help">
+                    <p class="cw-hint" id="endpoint-scan-help">Blank uses the configured daily UTC schedule. A custom interval is 1–8760 hours after the last successful scan. Failed scans retry after at least one hour.</p>
+                    {% if legacy_interval %}<p class="cw-hint">Legacy cadence: {{ host_info.scan_interval_hours }} hours. Keeping this value preserves it; new values must be 1–8760, or blank for daily.</p>{% endif %}
+                  </div>
+                  <div class="cw-field">
+                    <label class="cw-label" for="endpoint-threshold">Alert threshold (days)</label>
+                    <input id="endpoint-threshold" type="number" name="threshold_days" class="cw-input" min="1" step="1" value="{{ host_info.threshold_days if host_info.threshold_days is not none else '' }}" placeholder="Automatic thresholds" aria-describedby="endpoint-threshold-help">
+                    <p class="cw-hint" id="endpoint-threshold-help">Blank uses automatic expiry thresholds. A custom value alerts at this many days, half, one quarter, and one day. Matching alert-group thresholds take precedence.</p>
+                  </div>
+                  <div class="cw-field wide">
+                    <label class="cw-label" for="endpoint-renewal-status">Renewal status reported by operator</label>
+                    <select id="endpoint-renewal-status" name="renewal_status" class="cw-select" aria-describedby="endpoint-renewal-help">
+                      <option value="pending" {% if host_info.renewal_status == 'pending' %}selected{% endif %}>No completion reported</option>
+                      <option value="in_progress" {% if host_info.renewal_status == 'in_progress' %}selected{% endif %}>In progress — operator reported</option>
+                      <option value="renewed" {% if host_info.renewal_status == 'renewed' %}selected{% endif %}>Complete — operator reported</option>
+                    </select>
+                    <div class="cw-hint" id="endpoint-renewal-help">
+                      <p>In progress suppresses new renewal-stalled notices and the Home stalled status until you change this report.</p>
+                      <p>Complete also suppresses new expiry alerts until the next successful scan resets the report. It does not prove a replacement certificate is deployed. Existing queued notifications are unchanged.</p>
+                    </div>
+                  </div>
+                </div>
+                <div class="cw-form-foot"><button type="submit" class="cw-btn primary sm" data-testid="endpoint-settings-save">Save endpoint settings</button></div>
+              </form>
+            </div>
+          </details>
+          {% endif %}
+          {% if is_admin and host_info.expected_issuers %}
+          <p class="cw-hint">Legacy expected issuers: {{ host_info.expected_issuers }}. Stored for compatibility, not monitored; CT monitoring was removed.</p>
+          {% endif %}
         </div>
         <div class="cw-panel-body">
           <div class="cw-panel-head-inline">
@@ -306,7 +376,6 @@
             {% call detail_field('Serial number', 'wide') %}{{ serial }}{% endcall %}
             {% call detail_field('SHA-256 fingerprint', 'wide') %}{{ fingerprint }}{% endcall %}
             {% call detail_field('Issued') %}{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }}{% endcall %}
-            {% call detail_field('Last scanned') %}{{ last_scan[:10] if last_scan else '—' }}{% endcall %}
           </dl>
         </div>
       </div>
@@ -413,9 +482,9 @@
             {{ icons.svg_icon('info', 14) }}
             <div>
               <b>Why is this host pending?</b>
-              <div>No certificate was successfully retrieved from this host/port during the last scan.
-              Common causes: wrong port, host temporarily offline, firewall blocking TLS, or expired/untrusted certificate.
-              Click <strong>Scan now</strong> to retry, or <strong>Remove</strong> if this host should not be monitored.</div>
+              <div>{% if not scan_at %}This endpoint has no recorded scan attempt yet. It will be checked during a scheduled cycle.
+              {% else %}No certificate is currently stored for this endpoint. Review its latest scan result and connection settings.
+              {% endif %}Click <strong>Scan now</strong> to check it, or <strong>Remove</strong> if this host should not be monitored.</div>
             </div>
           </div>
         </div>

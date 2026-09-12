@@ -6,14 +6,13 @@ import hashlib
 import json
 import logging
 import sqlite3
-import statistics
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.alerts import _validate_email
 from cert_watch.database.connection import _connect, _parse_iso
@@ -97,42 +96,42 @@ class RenewalDigest:
 
 def _parse_event_payload(payload_raw: str) -> dict[str, Any]:
     try:
-        return cast(dict[str, Any], json.loads(payload_raw))
+        payload = json.loads(payload_raw)
+        return payload if isinstance(payload, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
 
 
-def _lifetime_trend_decreasing(entries: list[dict[str, Any]]) -> bool:
-    if len(entries) < 2:
-        return False
-    lifetimes: list[int] = []
-    for entry in entries:
-        not_after = entry.get("not_after")
-        not_before = entry.get("not_before")
-        if not_after and not_before:
-            try:
-                na = _parse_iso(not_after)
-                nb = _parse_iso(not_before)
-                lifetimes.append((na - nb).days)
-            except (ValueError, TypeError):
-                pass
-    if len(lifetimes) < 2:
-        return False
-    mid = len(lifetimes) // 2
-    first_half = lifetimes[:mid] if mid else lifetimes[:1]
-    second_half = lifetimes[mid:] if mid else lifetimes[-1:]
-    avg_first = statistics.mean(first_half)
-    avg_second = statistics.mean(second_half)
-    threshold = max(avg_first * 0.05, 1)
-    return avg_second < avg_first - threshold
+_Endpoint = tuple[str, int | None]
+
+
+def _event_endpoint(payload: dict[str, Any]) -> _Endpoint | None:
+    hostname = payload.get("hostname")
+    if not isinstance(hostname, str) or not hostname.strip():
+        return None
+    port = payload.get("port")
+    if type(port) is not int or not 1 <= port <= 65535:
+        port = None
+    return hostname, port
+
+
+def _endpoint_label(endpoint: _Endpoint) -> str:
+    hostname, port = endpoint
+    if port is None:
+        return f"{hostname} (port unknown)"
+    if port == 443:
+        return hostname
+    return f"[{hostname}]:{port}" if ":" in hostname else f"{hostname}:{port}"
 
 
 def build_renewal_digest(
     db_path: str | Path, days: int = 7, *, cadence_days: int | None = None,
 ) -> list[RenewalDigest]:
     """Query event_log for cert_renewed and renewal_overdue events from the
-    last *days* days, group by owner, and produce per-owner RenewalDigest objects.
-    Zero-activity periods produce an empty list (no empty noise).
+    last *days* days, group exact endpoints by their current owner, and produce
+    per-owner RenewalDigest objects. Unknown legacy ports stay unowned and
+    receive no inferred certificate or historical context. Zero-activity
+    periods produce an empty list (no empty noise).
     """
     effective_days = cadence_days if cadence_days is not None else days
     init_schema(db_path)
@@ -152,54 +151,48 @@ def build_renewal_digest(
             (cutoff,),
         ).fetchall()
 
-    renewed_by_host: dict[str, int] = {}
-    renewed_hosts_set: set[str] = set()
+    renewed_by_endpoint: dict[_Endpoint, int] = {}
     for row in renewed_rows:
-        payload = _parse_event_payload(row["payload"])
-        hostname = payload.get("hostname", "")
-        if hostname:
-            renewed_by_host[hostname] = renewed_by_host.get(hostname, 0) + 1
-            renewed_hosts_set.add(hostname)
+        endpoint = _event_endpoint(_parse_event_payload(row["payload"]))
+        if endpoint is not None:
+            renewed_by_endpoint[endpoint] = renewed_by_endpoint.get(endpoint, 0) + 1
 
-    overdue_by_host: dict[str, int] = {}
-    overdue_hosts_set: set[str] = set()
+    overdue_by_endpoint: dict[_Endpoint, int] = {}
     for row in overdue_rows:
-        payload = _parse_event_payload(row["payload"])
-        hostname = payload.get("hostname", "")
-        if hostname:
-            overdue_by_host[hostname] = overdue_by_host.get(hostname, 0) + 1
-            overdue_hosts_set.add(hostname)
+        endpoint = _event_endpoint(_parse_event_payload(row["payload"]))
+        if endpoint is not None:
+            overdue_by_endpoint[endpoint] = overdue_by_endpoint.get(endpoint, 0) + 1
 
-    if not renewed_hosts_set and not overdue_hosts_set:
+    endpoints = renewed_by_endpoint.keys() | overdue_by_endpoint.keys()
+    if not endpoints:
         return []
 
-    host_owners: dict[str, str] = {}
-    host_entries: dict[str, list[dict[str, Any]]] = {}
+    host_owners: dict[_Endpoint, str] = {}
+    current_expiry: dict[_Endpoint, str | None] = {}
     with _connect(db_path) as conn:
-        for row in conn.execute("SELECT hostname, owner_email FROM hosts").fetchall():
-            host_owners[row["hostname"]] = row["owner_email"] or ""
-        all_hosts = sorted(renewed_hosts_set | overdue_hosts_set)
-        for hostname in all_hosts:
-            cert_rows = conn.execute(
-                """SELECT not_after, not_before
-                   FROM cert_history
-                   WHERE hostname = ?
-                   ORDER BY scanned_at DESC
-                   LIMIT 10""",
-                (hostname,),
-            ).fetchall()
-            host_entries[hostname] = [dict(r) for r in cert_rows]
+        for row in conn.execute("SELECT hostname, port, owner_email FROM hosts").fetchall():
+            host_owners[(row["hostname"], row["port"])] = row["owner_email"] or ""
+        for endpoint in endpoints:
+            hostname, port = endpoint
+            if port is None:
+                current_expiry[endpoint] = None
+                continue
+            row = conn.execute(
+                """SELECT not_after FROM certificates
+                   WHERE hostname = ? AND port = ? AND is_leaf = 1 AND source = 'scanned'
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""", (hostname, port),
+            ).fetchone()
+            current_expiry[endpoint] = row["not_after"] if row is not None else None
 
-    shortened_hosts = set()
-    for hostname, entries in host_entries.items():
-        if _lifetime_trend_decreasing(entries):
-            shortened_hosts.add(hostname)
+    from cert_watch.renewal_analytics import compute_host_analytics
 
-    # Latest known cert expiry per host (most recent scan wins). cert_history is
-    # ordered scanned_at DESC, so the first row is the newest observation.
-    latest_expiry: dict[str, str | None] = {}
-    for hostname, entries in host_entries.items():
-        latest_expiry[hostname] = entries[0]["not_after"] if entries else None
+    shortened_endpoints = {
+        endpoint for endpoint in endpoints
+        if endpoint[1] is not None
+        and compute_host_analytics(
+            db_path, endpoint[0], port=endpoint[1],
+        ).lifetime_trend == "decreasing"
+    }
 
     by_owner: dict[str, RenewalDigest] = {}
 
@@ -217,30 +210,30 @@ def build_renewal_digest(
             )
         return by_owner[email]
 
-    for hostname, count in renewed_by_host.items():
-        owner = host_owners.get(hostname, "")
+    for endpoint, count in renewed_by_endpoint.items():
+        owner = host_owners.get(endpoint, "") if endpoint[1] is not None else ""
         d = _ensure_owner(owner)
         d.renewed_count += count
-        if hostname not in d.renewed_hosts:
-            d.renewed_hosts.append(hostname)
+        d.renewed_hosts.append(_endpoint_label(endpoint))
 
-    for hostname, count in overdue_by_host.items():
-        owner = host_owners.get(hostname, "")
+    for endpoint, count in overdue_by_endpoint.items():
+        owner = host_owners.get(endpoint, "") if endpoint[1] is not None else ""
         d = _ensure_owner(owner)
         d.overdue_count += count
-        if hostname not in d.overdue_hosts:
-            d.overdue_hosts.append(hostname)
+        d.overdue_hosts.append(_endpoint_label(endpoint))
 
-    for hostname in shortened_hosts:
-        owner = host_owners.get(hostname, "")
+    for endpoint in sorted(shortened_endpoints, key=lambda value: (value[0], value[1] or 0)):
+        owner = host_owners.get(endpoint, "")
         d = _ensure_owner(owner)
         d.shortened_count += 1
-        if hostname not in d.shortened_hosts:
-            d.shortened_hosts.append(hostname)
+        d.shortened_hosts.append(_endpoint_label(endpoint))
 
+    expiry_by_label = {
+        _endpoint_label(endpoint): value for endpoint, value in current_expiry.items()
+    }
     for d in by_owner.values():
         d.host_expiry = {
-            h: latest_expiry.get(h)
+            h: expiry_by_label.get(h)
             for h in (*d.renewed_hosts, *d.overdue_hosts, *d.shortened_hosts)
         }
 

@@ -148,7 +148,7 @@ def estate(snapshot: Path) -> Estate:
 def test_empty_current_snapshot_has_no_routes(snapshot: Path):
     report = build_routing_report(snapshot)
     assert report["format_version"] == 1
-    assert report["schema_version"] == "0031"
+    assert report["schema_version"] == "0032"
     assert report["snapshot_sha256"] == hashlib.sha256(snapshot.read_bytes()).hexdigest()
     assert report["counts"] == {"leaf_certificates": 0, "orphans": 0, "multi_match": 0}
     assert report["certificates"] == []

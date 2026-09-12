@@ -38,6 +38,7 @@ from cert_watch.middleware import (
 )
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -65,8 +66,13 @@ def home(
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
 
+    settings = _get_settings(request)
+    scan_evidence = load_scan_evidence(
+        db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
+    )
     items = build_attention_queue(
-        db, scope_tags=scope_tags, window_days=_get_settings(request).renewal_window_days,
+        db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
+        scan_evidence=scan_evidence,
     )
     stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
     _, tracked_total = list_dashboard_page(db, per_page=1, scope_tags=scope_tags)
@@ -103,6 +109,7 @@ def home(
             "queue": items,
             "stats": stats,
             "tracked_total": tracked_total,
+            "scan_coverage": summarize_scan_evidence(scan_evidence),
             "horizon": horizon,
             "current_week_start": current_week_start,
             "horizon_storms": storms,
@@ -243,6 +250,10 @@ def dashboard(
     display_entries = [] if is_global_view else page_entries
     cert_ids = [e["id"] for e in display_entries if e.get("id")]
     posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
+    settings = _get_settings(request)
+    scan_evidence = load_scan_evidence(
+        db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
+    ) if display_entries else {}
 
     return templates.TemplateResponse(
         request=request,
@@ -275,6 +286,7 @@ def dashboard(
             "has_next": page < total_pages,
             "grouped": grouped,
             "posture_grades": posture_grades,
+            "scan_evidence": scan_evidence,
             **csrf_ctx,
         },
     )

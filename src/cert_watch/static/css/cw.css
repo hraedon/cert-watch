@@ -78,6 +78,8 @@ a.cw-link, .cw-link { color: var(--accent); cursor: pointer; text-decoration: no
 .cw-link:hover { text-decoration: underline; }
 .cw-muted { color: var(--text-2); }
 .cw-sub { font-size: var(--fs-sm); color: var(--text-2); margin-top: 3px; }
+.cw-delivery-details { min-width: 0; overflow-wrap: anywhere; }
+.cw-delivery-details > summary { white-space: normal; }
 .cw-divider { height: 1px; background: var(--border); border: none; margin: var(--space-4) 0; }
 .cw-hidden { display: none !important; }
 form.cw-inline { display: inline; }

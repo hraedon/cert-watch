@@ -39,17 +39,19 @@ class RenewalWebhookConfig:
 
 
 def _resolve_cert_details(
-    db_path: str | Path, hostname: str, fingerprint: str
+    db_path: str | Path, hostname: str, port: int, fingerprint: str,
 ) -> dict[str, Any]:
     with _connect(db_path) as conn:
         row = conn.execute(
             """SELECT id, subject AS subject_cn, san_dns_names AS san_names,
                       issuer AS issuer_cn, not_after
                FROM certificates
-               WHERE hostname = ? AND is_leaf = 1 AND fingerprint_sha256 = ?
-               ORDER BY created_at DESC
-               LIMIT 1""",
-            (hostname, fingerprint),
+               WHERE id = (
+                   SELECT id FROM certificates
+                   WHERE hostname = ? AND port = ? AND is_leaf = 1 AND source = 'scanned'
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1
+               ) AND fingerprint_sha256 = ?""",
+            (hostname, port, fingerprint),
         ).fetchone()
     if row is None:
         return {}
@@ -57,12 +59,12 @@ def _resolve_cert_details(
 
 
 def _resolve_automation_hint(
-    db_path: str | Path, hostname: str
+    db_path: str | Path, hostname: str, port: int,
 ) -> str:
     from cert_watch.renewal_analytics import compute_host_analytics
 
     try:
-        analytics = compute_host_analytics(db_path, hostname)
+        analytics = compute_host_analytics(db_path, hostname, port=port)
         return analytics.automation_classification
     except Exception:
         logger.debug("automation hint lookup failed for %s", hostname, exc_info=True)
@@ -73,18 +75,25 @@ def build_renewal_payload(
     signal: RenewalOverdueSignal,
     db_path: str | Path,
     *,
-    port: int = 443,
+    port: int | None = None,
     base_url: str = "",
 ) -> dict[str, Any]:
-    cert = _resolve_cert_details(db_path, signal.hostname, signal.cert_fingerprint)
-    automation = _resolve_automation_hint(db_path, signal.hostname)
+    """Enrich one endpoint; retain the legacy 443 default only when unspecified."""
+    for value in (port, signal.port):
+        if value is not None and (type(value) is not int or not 1 <= value <= 65535):
+            raise ValueError("renewal webhook port must be an integer from 1 to 65535")
+    if port is not None and signal.port is not None and port != signal.port:
+        raise ValueError("renewal webhook port conflicts with the overdue signal")
+    effective_port = port if port is not None else signal.port if signal.port is not None else 443
+    cert = _resolve_cert_details(db_path, signal.hostname, effective_port, signal.cert_fingerprint)
+    automation = _resolve_automation_hint(db_path, signal.hostname, effective_port)
 
     san_list = parse_san_dns_names(cert.get("san_names"))
 
     payload: dict[str, Any] = {
         "event": "renewal_needed",
         "hostname": signal.hostname,
-        "port": port,
+        "port": effective_port,
         "cert_fingerprint": signal.cert_fingerprint,
         "subject_cn": cert.get("subject_cn", ""),
         "san_names": san_list,

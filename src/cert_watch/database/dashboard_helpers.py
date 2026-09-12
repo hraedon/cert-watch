@@ -105,36 +105,15 @@ def _add_grouped_effective_tag_filter(
     params: list[Any],
     scope_tags: list[str] | tuple[str, ...],
 ) -> tuple[str, list[Any]]:
-    """Append effective-tag filter for grouped fingerprint rows (WI-051).
+    """Restrict each leaf before fingerprint grouping (WI-051).
 
-    A fingerprint group is kept when at least one of its scanned leaf certs
-    has a matching cert tag or its host has a matching host tag.  LIKE
-    wildcards in tags are escaped (BC-051).
+    A shared fingerprint does not grant access to another deployment. Use
+    this same per-certificate/endpoint condition when materialising children.
     """
     if not scope_tags:
         return sql, params
-    conditions: list[str] = []
-    new_params: list[Any] = []
-    seen: set[str] = set()
-    for tag in scope_tags:
-        tag = tag.strip()
-        if not tag or tag.casefold() in seen:
-            continue
-        seen.add(tag.casefold())
-        like = f"%,{_escape_like(tag)},%"
-        conditions.append(
-            "EXISTS ("
-            "SELECT 1 FROM certificates c2 "
-            "LEFT JOIN hosts h ON h.hostname = c2.hostname AND h.port = c2.port "
-            "WHERE c2.fingerprint_sha256 = c.fingerprint_sha256 "
-            "AND c2.is_leaf = 1 AND c2.source = 'scanned' "
-            "AND (cw_casefold(',' || COALESCE(c2.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\' "
-            "OR cw_casefold(',' || COALESCE(h.tags, '') || ',') LIKE cw_casefold(?) ESCAPE '\\'))"
-        )
-        new_params.extend([like, like])
-    if not conditions:
-        return sql, params
-    return f"{sql} AND ({' OR '.join(conditions)})", params + new_params
+    clause, scope_params = build_scope_tag_clause(scope_tags, cert_table="c")
+    return f"{sql} AND {clause}", params + scope_params
 
 
 def _safe_col(col: str, allowed: frozenset[str]) -> str:

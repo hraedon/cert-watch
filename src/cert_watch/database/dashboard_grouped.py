@@ -130,11 +130,14 @@ def list_dashboard_grouped_page(
         chain_rows: list[Any] = []
         if fingerprints:
             ph = ",".join("?" * len(fingerprints))
-            cert_rows = conn.execute(
+            leaves_sql, leaves_params = _add_grouped_effective_tag_filter(
                 f"SELECT * FROM certificates c"
                 f" WHERE c.fingerprint_sha256 IN ({ph}) AND c.is_leaf = 1"
-                f" ORDER BY c.hostname, c.port",
-                fingerprints,
+                " AND c.source = 'scanned'",
+                list(fingerprints), scope_tags or (),
+            )
+            cert_rows = conn.execute(
+                leaves_sql + " ORDER BY c.hostname, c.port", leaves_params,
             ).fetchall()
             leaf_ids = [r["id"] for r in cert_rows]
             if leaf_ids:

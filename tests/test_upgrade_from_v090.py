@@ -65,7 +65,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     # The exact path the app runs on startup.
     init_schema(v090_db)
 
-    # Every registered migration is now recorded, and 0024–0031 were the delta.
+    # Every registered migration is now recorded, and 0024–0032 were the delta.
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
     from cert_watch.migrations.runner import get_migrations
 
@@ -74,7 +74,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
         applied = [r[0] for r in conn.execute("SELECT id FROM schema_version ORDER BY id")]
     assert applied == expected_ids
     assert [i for i in applied if i > "0023"] == [
-        "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031",
+        "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032",
     ]
 
     # No data lost.

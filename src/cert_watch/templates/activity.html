@@ -55,10 +55,9 @@
 
   {% if tab == 'alerts' %}
   {# ================= ALERTS ================= #}
-  {# WI-104: default to [] so membership/boolean tests below don't raise if a
-     route ever omits the key. Works under both the lenient default Undefined
-     and StrictUndefined. #}
-  {% set alert_channels = alert_channels|default([]) %}
+  {% set delivery_attempts = delivery_attempts|default({}) %}
+  {% set delivery_outcomes = delivery_outcomes|default({}) %}
+  {% set delivery_failure_labels = delivery_failure_labels|default({}) %}
 
   {% if saved %}
   <div class="cw-note t-ok">{{ icons.svg_icon('check-circle', 14) }}{{ saved }}</div>
@@ -82,10 +81,10 @@
           <div class="cw-chiprow">
             {{ ui.status(label=type_labels.get(a.alert_type, a.alert_type | humanize_label), tone=sev_tone) }}
             <span class="cw-id">{{ a.subject or "(deleted)" }}</span>
-            {% if not a.read %}<span class="cw-badge-new">NEW</span>{% endif %}
-            {% if a.group_name %}
-            <span class="cw-chip" title="Routed to alert group {{ a.group_name }}">{{ icons.svg_icon('users', 11, 1.6) }}{{ a.group_name }}</span>
+            {% if a.historical_cert|default(false) %}
+            <span class="cw-chip">Historical certificate — no longer in inventory</span>
             {% endif %}
+            {% if not a.read %}<span class="cw-badge-new">NEW</span>{% endif %}
             <span class="cw-spacer"></span>
             {% if not a.read %}
             <button type="button" class="cw-btn ghost sm" data-mark-read="{{ a.id }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('check', 11) }}Mark read</button>
@@ -93,20 +92,72 @@
           </div>
           <div class="cw-sub">{{ a.message }}</div>
           <div class="cw-chiprow cw-metarow" data-testid="alert-channels">
-            {% set st_tone = 't-ok' if a.status == 'sent' else 't-warn' if a.status == 'pending' else 't-crit' %}
-            {{ ui.status(label=a.status, tone=st_tone) }}
-            {% if 'email' in alert_channels %}
-            <span class="cw-chip">{{ icons.svg_icon('bell', 10) }}Email</span>
-            {% endif %}
-            {% if 'webhook' in alert_channels %}
-            <span class="cw-chip">{{ icons.svg_icon('link', 10) }}Webhook</span>
-            {% endif %}
-            {% if not alert_channels %}
-            <span class="cw-chip t-muted" title="Configure delivery channels in Settings → Alerts">{{ icons.svg_icon('alert', 10) }}No channels configured</span>
+            {% set outcome = delivery_outcomes.get(a.id) %}
+            {% if outcome %}
+              {% set outcome_labels = {'accepted': 'Transport accepted', 'partial': 'Partial acceptance', 'failed': 'Attempt failed', 'unknown': 'Delivery outcome unknown'} %}
+              {{ ui.status(label=outcome_labels.get(outcome, 'Delivery outcome unknown'), tone='t-ok' if outcome == 'accepted' else 't-warn' if outcome == 'partial' else 't-crit' if outcome == 'failed' else 't-muted') }}
+              <span class="cw-sub">Recorded state: {{ a.status }}</span>
+            {% else %}
+              {{ ui.status(label='Recorded: ' ~ a.status, tone='t-muted') }}
             {% endif %}
             <span class="cw-spacer"></span>
             <span class="cw-sub mono tnum">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</span>
           </div>
+          <details class="cw-delivery-details" data-testid="notification-details">
+            <summary class="cw-btn ghost sm">Why and delivery details</summary>
+            <div class="cw-panel-body">
+              <h3>Why this notification</h3>
+              <p>{{ a.message }}</p>
+              {% set recorded_threshold = a.threshold_days|default(none) %}
+              {% if recorded_threshold is not none %}
+              <p class="cw-sub">Threshold recorded with this notification: {{ recorded_threshold }} days.</p>
+              {% endif %}
+              {% if is_admin %}
+                {% set attempts = delivery_attempts.get(a.id, []) %}
+                <h3>Recorded delivery attempts</h3>
+                {% if attempts %}
+                <p class="cw-sub">Most recent 20 attempts. SMTP acceptance means the relay accepted the message, not that a mailbox received it.</p>
+                <p class="cw-sub">Email addresses combine global recipients at the attempt with recipients saved when this notification was queued. Group matches describe configuration at the attempt; they do not prove which group supplied a queued address.</p>
+                {% for attempt in attempts %}
+                  {% set result = attempt.result %}
+                  {% set channel_names = {'smtp': 'Email (SMTP)', 'generic': 'Webhook', 'slack': 'Slack webhook', 'discord': 'Discord webhook', 'teams': 'Teams webhook', 'pagerduty': 'PagerDuty webhook'} %}
+                  <div class="cw-panel-body" data-testid="delivery-attempt">
+                    <div class="cw-chiprow">
+                      <strong>{{ channel_names.get(attempt.channel, 'Webhook') }}</strong>
+                      {% if result %}
+                        {{ ui.status(label=result.outcome, tone='t-ok' if result.outcome == 'accepted' else 't-warn' if result.outcome == 'partial' else 't-crit') }}
+                      {% else %}
+                        {{ ui.status(label='Outcome unknown', tone='t-muted') }}
+                      {% endif %}
+                    </div>
+                    <p class="cw-sub">Started {{ attempt.started_at[:19] | replace('T', ' ') }} UTC{% if attempt.completed_at %}<br>Completed {{ attempt.completed_at[:19] | replace('T', ' ') }} UTC{% endif %}</p>
+                    {% if not result %}
+                      <p>Completion was not recorded. The attempt may still be running or may have been interrupted; acceptance cannot be confirmed.</p>
+                    {% elif result.reason %}
+                      <p>{{ delivery_failure_labels.get(result.reason, 'No further safe diagnostic details were recorded') }}.</p>
+                    {% endif %}
+                    {% if result and result.http_status is not none %}<p>HTTP status: {{ result.http_status }}.</p>{% endif %}
+                    {% if attempt.channel == 'smtp' %}
+                      <p>Attempted recipients: {{ attempt.routing.recipients | join(', ') or 'None' }}</p>
+                      <p class="cw-sub">Global addresses at attempt: {{ attempt.routing.global_recipients | join(', ') or 'None' }}<br>Addresses saved on queued notification: {{ attempt.routing.queued_recipients | join(', ') or 'None' }}</p>
+                      {% if result and result.accepted %}<p>Accepted by relay: {{ result.accepted | join(', ') }}</p>{% endif %}
+                      {% if result and result.refused %}<p>Refused by relay: {{ result.refused | join(', ') }}</p>{% endif %}
+                    {% endif %}
+                    <p class="cw-sub">Groups matching when the attempt started:
+                      {% if not attempt.routing.groups_available %}Unavailable.
+                      {% elif attempt.routing.groups %}{{ attempt.routing.groups | map(attribute='name') | join(', ') }}.
+                      {% else %}None.{% endif %}
+                    </p>
+                  </div>
+                {% endfor %}
+                {% else %}
+                  <p>Delivery evidence unavailable. No attempt record exists for this notification; current settings cannot establish its past delivery route.</p>
+                {% endif %}
+              {% else %}
+                <p class="cw-sub">Recipient and delivery evidence is available to administrators.</p>
+              {% endif %}
+            </div>
+          </details>
         </div>
       {% endfor %}
     {% else %}

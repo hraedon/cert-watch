@@ -467,6 +467,7 @@ class ScopedAlertRepository(AlertRepository):
 
     def __init__(self, db_path: str | Path, scope_tags: tuple[str, ...]) -> None:
         self._repo = SqliteAlertRepository(db_path)
+        self.db_path = self._repo.db_path
         self._scope_tags = scope_tags
 
     def list_pending(self) -> list[Alert]:
@@ -859,6 +860,24 @@ class SqliteHostRepository:
             return []
         raw = row["expected_issuers"] or ""
         return [i.strip() for i in raw.split(",") if i.strip()]
+
+    def update_settings(
+        self,
+        host_id: str,
+        *,
+        scan_interval_hours: int | None,
+        threshold_days: int | None,
+        renewal_status: str,
+    ) -> bool:
+        """Atomically update endpoint controls; None restores numeric defaults."""
+        with _connect(self.db_path) as conn:
+            cur = conn.execute(
+                "UPDATE hosts SET scan_interval_hours = ?, threshold_days = ?, "
+                "renewal_status = ? WHERE id = ?",
+                (scan_interval_hours, threshold_days, renewal_status, host_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
 
     def set_expected_issuers(self, host_id: str, issuers: str) -> bool:
         """Set the expected-issuer CN allowlist for a host. Returns False if no such host."""

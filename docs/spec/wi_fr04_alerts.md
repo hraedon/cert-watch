@@ -42,3 +42,25 @@ Each alert email must include: certificate subject, expiry date, days remaining,
 
 ## AC-06: Graceful SMTP Failure
 If SMTP connection fails, `send_alert` must catch the exception, store the error message in the alert record, and return `False` — not raise.
+
+## AC-07: Delivery Evidence
+SQLite-backed pending-alert processing records a durable start before each
+transport invocation and a separate completion afterward. Failure to persist a
+start refuses that attempt; failure to persist its outcome remains unknown and
+must not itself provoke a duplicate send. Record only attempted envelope
+recipients, allowlisted outcomes/failure categories, HTTP status and group
+configuration at the attempt. Do not store transport credentials, URLs, response
+bodies or raw exception text in this evidence.
+
+Activity distinguishes recorded alert state from actual transport outcomes,
+including partial SMTP refusal and unknown completion. Recipients and matching
+groups are administrator-only; non-admin viewers receive safe outcome summaries
+only for alerts already within their scope. Current group matches do not prove
+which group supplied addresses saved when the alert was originally queued.
+SMTP acceptance means relay acceptance, not mailbox receipt.
+
+Finished sent/failed notifications with delivery evidence survive routine
+certificate replacement, preserving their original historical certificate
+reference. Obsolete pending notifications retain the existing discard behavior.
+Alert retention/deletion also deletes that alert's delivery evidence. Historical
+records without attempt observations must not invent a route or outcome.
