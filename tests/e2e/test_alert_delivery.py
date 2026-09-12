@@ -23,7 +23,7 @@ def test_delivery_details_expand_and_wrap(page, monkeypatch, tmp_path, reload_ap
     config = _config()
     config.recipients = [address]
     _smtp(monkeypatch, refused={"queued@example.invalid": (550, b"refused")})
-    assert process_pending(repo, config) == {"sent": 1, "failed": 0}
+    assert process_pending(repo, config) == {"sent": 1, "failed": 0, "deferred": 0}
     # Include the crash/in-progress state independently of the completed row.
     unknown = repo.list_for_cert(alert.cert_id)[0]
     unknown.id = "unknown-attempt-alert"

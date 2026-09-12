@@ -12,7 +12,7 @@ import sqlite3
 import ssl
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from functools import partial
 from pathlib import Path
@@ -1548,23 +1548,6 @@ def send_expiry_digest(
     return False
 
 
-ALERT_EVIDENCE_DEFER_WINDOW = timedelta(hours=24)
-"""How long an alert may stay pending because its evidence store is unwritable.
-
-Long enough to ride out a transient lock or a short outage; short enough that a
-persistent fault surfaces as a failed alert while the certificate it warns about
-is still in its warning window.
-"""
-
-
-def _within_evidence_defer_window(alert: Alert) -> bool:
-    """True while the alert may still be deferred rather than failed."""
-    created = alert.created_at
-    if created.tzinfo is None:
-        created = created.replace(tzinfo=UTC)
-    return bool(datetime.now(UTC) - created <= ALERT_EVIDENCE_DEFER_WINDOW)
-
-
 def process_pending(
     alert_repo: AlertRepository,
     config: AlertConfig | None,
@@ -1576,11 +1559,7 @@ def process_pending(
     """
     if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0, "deferred": 0}
-    from cert_watch.alert_delivery import (
-        REFUSED_NO_EVIDENCE,
-        DeliveryEvidenceUnavailable,
-        attempt_delivery,
-    )
+    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
 
     repository_path = getattr(alert_repo, "db_path", None)
     evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
@@ -1595,6 +1574,7 @@ def process_pending(
         # alert is still deliverable.
         transport_attempted = False
         for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+            reached_transport_this_pass = False
             if config is not None:
                 try:
                     delivered = attempt_delivery(
@@ -1603,11 +1583,12 @@ def process_pending(
                         global_recipients=config.recipients,
                     )
                     transport_attempted = True
+                    reached_transport_this_pass = True
                 except DeliveryEvidenceUnavailable:
                     # Guard this call only. A begin_attempt failure is
                     # per-statement -- typically a transient SQLITE_BUSY from a
-                    # concurrent scan write -- so the webhook fallback below,
-                    # and the remaining retries, may well succeed.
+                    # concurrent scan write -- so the webhook fallback below may
+                    # well succeed.
                     delivered = False
             if not delivered and webhook_config is not None:
                 kind = webhook_config.kind
@@ -1621,11 +1602,19 @@ def process_pending(
                         partial(send_webhook, alert, webhook_config),
                     )
                     transport_attempted = True
+                    reached_transport_this_pass = True
                 except DeliveryEvidenceUnavailable:
                     delivered = False
             if delivered:
                 break
             last_error = alert.error_message or "unknown"
+            if not reached_transport_this_pass:
+                # Every configured channel refused BEFORE sending, so the
+                # backoff sleeps cannot help: there is nothing to back off
+                # from. Stop now rather than sleeping the whole budget, which
+                # a deferred alert would otherwise re-pay every cycle -- and
+                # which blocks the event loop during a manual flush.
+                break
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
@@ -1635,29 +1624,23 @@ def process_pending(
                 alert.id, f"{last_error} (after {ALERT_MAX_RETRIES} attempts)"
             )
             failed += 1
-        elif _within_evidence_defer_window(alert):
-            # No transport was ever touched: the database was unavailable, not
-            # the destination. Leave the alert pending so a later cycle sends it
-            # once the database recovers.
+        else:
+            # No transport was ever reached: the database was unavailable, not
+            # the destination. Leave the alert pending so a later cycle sends
+            # it once the database recovers.
+            #
+            # Deliberately NOT bounded here. Bounding needs an epoch for "how
+            # long has evidence been unwritable", which is per-alert persisted
+            # state this schema does not carry -- alert.created_at is the wrong
+            # clock, because evaluate_all_certs resets a failed alert to pending
+            # while keeping its original created_at, so one transient lock on an
+            # old alert would look like a day-long outage. And the give-up write
+            # would itself go to the database that just refused a write. See the
+            # follow-up issue; purge_old_alerts no longer deletes un-sent alerts,
+            # which removes the harm that a bound was reaching for.
             logger.warning(
                 "Alert %s deferred: delivery evidence unavailable, leaving it pending",
                 alert.id,
             )
             deferred += 1
-        else:
-            # Bounded. A persistent cause -- a full disk, a read-only volume, a
-            # missing evidence table after a partial migration -- would defer
-            # every cycle forever: never sent, never failed, indistinguishable
-            # from a fresh alert, and eventually deleted unsent by
-            # purge_old_alerts, which selects on created_at regardless of
-            # status. Terminating visibly is the lesser harm.
-            logger.error(
-                "Alert %s giving up: delivery evidence unavailable for over %s",
-                alert.id, ALERT_EVIDENCE_DEFER_WINDOW,
-            )
-            alert_repo.mark_failed(
-                alert.id,
-                f"{REFUSED_NO_EVIDENCE} for over {ALERT_EVIDENCE_DEFER_WINDOW}",
-            )
-            failed += 1
     return {"sent": sent, "failed": failed, "deferred": deferred}

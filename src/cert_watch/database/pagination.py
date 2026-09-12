@@ -301,7 +301,14 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
     try:
         init_schema(db_path)
         with _connect(db_path) as conn:
-            cur = conn.execute("DELETE FROM alerts WHERE created_at < ?", (cutoff,))
+            # Retention deletes delivered history, not undelivered alerts. A
+            # pending alert older than the window has never reached anyone, so
+            # purging it by age would erase the very warning it exists to give
+            # -- silently, and precisely when delivery is broken.
+            cur = conn.execute(
+                "DELETE FROM alerts WHERE created_at < ? AND status != 'pending'",
+                (cutoff,),
+            )
             deleted = cur.rowcount
             conn.commit()
         if deleted:

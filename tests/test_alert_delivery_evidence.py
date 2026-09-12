@@ -11,14 +11,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from cert_watch.alert_delivery import REFUSED_NO_EVIDENCE
-from cert_watch.alerts import (
-    ALERT_EVIDENCE_DEFER_WINDOW,
-    ALERT_MAX_RETRIES,
-    AlertConfig,
-    WebhookConfig,
-    process_pending,
-)
+from cert_watch.alerts import ALERT_MAX_RETRIES, AlertConfig, WebhookConfig, process_pending
 from cert_watch.database import (
     Alert,
     SqliteAlertRepository,
@@ -222,14 +215,33 @@ def test_evidence_is_immutable_and_deletes_with_parent(tmp_path):
 
 
 def test_alert_retention_also_purges_recipient_evidence(tmp_path):
-    db, _, alert = _pending(tmp_path)
+    db, repo, alert = _pending(tmp_path)
     begin_attempt(db, alert.id, "smtp", {"recipients": ["private@example.invalid"]})
+    repo.mark_sent(alert.id)  # retention covers delivered history
     with _connect(db) as conn:
         conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
                      ((datetime.now(UTC) - timedelta(days=91)).isoformat(), alert.id))
         conn.commit()
     assert purge_old_alerts(db, 90) == 1
     assert list_attempts(db, [alert.id]) == {}
+
+
+def test_retention_never_deletes_an_alert_that_was_never_sent(tmp_path):
+    """An old pending alert has reached nobody; ageing it out erases the warning.
+
+    This is what makes an unbounded deferral survivable: while delivery is
+    broken the alert accumulates visibly in the pending queue instead of being
+    silently deleted by retention, which selects purely on age.
+    """
+    db, _, alert = _pending(tmp_path)
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
+                     ((datetime.now(UTC) - timedelta(days=400)).isoformat(), alert.id))
+        conn.commit()
+    assert purge_old_alerts(db, 90) == 0
+    with _connect(db) as conn:
+        row = conn.execute("SELECT status FROM alerts WHERE id = ?", (alert.id,)).fetchone()
+    assert row["status"] == "pending"
 
 
 def test_evidence_is_not_loaded_or_rendered_for_scoped_operator(monkeypatch, tmp_path):
@@ -372,27 +384,3 @@ def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp
     connection.send_message.assert_not_called()          # SMTP was refused, not attempted
     assert [item["channel"] for item in list_attempts(db, [alert.id])[alert.id]] == ["generic"]
     assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
-
-
-def test_deferral_is_bounded_so_a_persistent_fault_fails_visibly(monkeypatch, tmp_path):
-    """A permanently unwritable evidence store must not defer forever.
-
-    Deferring indefinitely would leave the alert pending, never failed and
-    indistinguishable from a fresh one, until purge_old_alerts deleted it
-    unsent -- it selects on created_at regardless of status. Terminating in a
-    visible `failed` state is the lesser harm.
-    """
-    db, repo, alert = _pending(tmp_path)
-    _smtp(monkeypatch)
-    stale = datetime.now(UTC) - ALERT_EVIDENCE_DEFER_WINDOW - timedelta(minutes=1)
-    with _connect(db) as conn:
-        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?", (stale.isoformat(), alert.id))
-        conn.commit()
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
-        side_effect=sqlite3.OperationalError("attempt to write a readonly database"),
-    ))
-
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
-    stored = repo.list_for_cert(alert.cert_id)[0]
-    assert stored.status == "failed"
-    assert REFUSED_NO_EVIDENCE in stored.error_message
