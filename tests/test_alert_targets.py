@@ -6,8 +6,9 @@ import json
 
 import pytest
 
-from cert_watch.alerts import AlertConfig, WebhookConfig, send_alert, send_webhook
-from cert_watch.database import Alert
+from cert_watch.alerts import AlertConfig, WebhookConfig, process_pending, send_alert, send_webhook
+from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+from cert_watch.database.delivery_evidence import list_attempts
 from tests._integration_servers import allow_loopback_transport
 from tests._mock_targets import capturing_http_target, smtp_target
 
@@ -155,3 +156,48 @@ def test_http_receiver_captures_rejected_delivery(monkeypatch):
         )) is False
         assert len(target.received("/reject")) == 1
         assert target.received("/never") == []
+
+
+@pytest.mark.parametrize("mode", ["starttls", "implicit"])
+def test_recorded_smtp_acceptance_matches_real_receiver(tmp_path, monkeypatch, mode):
+    db = tmp_path / "evidence.sqlite3"
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+    alert = _alert()
+    alert.id = repo.create(alert)
+    with (
+        allow_loopback_transport(monkeypatch),
+        smtp_target(tmp_path, monkeypatch, mode=mode) as target,
+    ):
+        assert process_pending(repo, _config(target)) == {"sent": 1, "failed": 0}
+        [receipt] = target.messages
+        [attempt] = list_attempts(db, [alert.id])[alert.id]
+        assert attempt["routing"]["recipients"] == list(receipt.recipients)
+        assert attempt["result"]["accepted"] == list(receipt.recipients)
+        assert attempt["result"]["outcome"] == "accepted"
+        assert receipt.tls and receipt.authenticated
+
+
+def test_recorded_smtp_failure_and_webhook_success_match_receivers(tmp_path, monkeypatch):
+    db = tmp_path / "evidence.sqlite3"
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+    alert = _alert()
+    alert.id = repo.create(alert)
+    with (
+        allow_loopback_transport(monkeypatch),
+        smtp_target(tmp_path, monkeypatch) as smtp,
+        capturing_http_target("/fallback") as http,
+    ):
+        assert process_pending(
+            repo, _config(smtp, smtp_password="wrong-test-password"),
+            WebhookConfig(url=http.url("/fallback"), allow_private=True),
+        ) == {"sent": 1, "failed": 0}
+        assert smtp.messages == []
+        assert smtp.auth_attempts and not smtp.auth_attempts[0].success
+        assert len(http.received("/fallback")) == 1
+        attempts = list_attempts(db, [alert.id])[alert.id]
+        assert [item["channel"] for item in attempts] == ["generic", "smtp"]
+        assert attempts[0]["result"]["outcome"] == "accepted"
+        assert attempts[0]["result"]["http_status"] == 200
+        assert attempts[1]["result"]["reason"] == "authentication"

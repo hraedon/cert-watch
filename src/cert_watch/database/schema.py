@@ -15,6 +15,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from cert_watch.database.delivery_evidence import DELIVERY_EVENTS_DDL
+
 _BASE_TABLES = """
 CREATE TABLE IF NOT EXISTS certificates (
     id TEXT PRIMARY KEY,
@@ -186,6 +188,8 @@ CREATE TABLE IF NOT EXISTS digest_deliveries (
     PRIMARY KEY (digest_key, channel, target)
 );
 """
+
+_BASE_TABLES += DELIVERY_EVENTS_DDL
 
 _BASE_INDEXES = """
 CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);

@@ -14,6 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from email.message import EmailMessage
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -689,21 +690,29 @@ def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
     return msg
 
 
-def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
-    """Send via SMTP. See AC-03/AC-06."""
-    if config is None:
-        return False
-    msg = EmailMessage()
-    msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
-    msg["From"] = config.from_addr
+def _smtp_recipients(alert: Alert, config: AlertConfig) -> list[str]:
     all_recipients = [r for r in config.recipients if _validate_email(r)]
     for r in alert.extra_recipients:
         if r not in all_recipients and _validate_email(r):
             all_recipients.append(r)
         elif r not in config.recipients and not _validate_email(r):
             logger.warning("skipping invalid email recipient: %r", r)
+    return all_recipients
+
+
+def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
+    """Send via SMTP. See AC-03/AC-06."""
+    from cert_watch.alert_delivery import observe_exception, observe_failure, observe_smtp
+
+    if config is None:
+        return False
+    msg = EmailMessage()
+    msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
+    msg["From"] = config.from_addr
+    all_recipients = _smtp_recipients(alert, config)
     if not all_recipients:
         logger.warning("no valid recipients for alert %s", alert.id)
+        observe_failure("no_recipients")
         return False
     msg["To"] = ", ".join(all_recipients)
     msg.set_content(alert.message)
@@ -711,10 +720,14 @@ def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
     if conn is None:
         return False
     try:
-        conn.send_message(msg)
+        refused = conn.send_message(msg)
+        observe_smtp(all_recipients, refused if isinstance(refused, dict) else {})
         return True
     except Exception as exc:  # noqa: BLE001 — AC-06: never raise; SMTP is an external service with unpredictable failure modes
         alert.error_message = _sanitize_smtp_error(str(exc), config)
+        if isinstance(exc, smtplib.SMTPRecipientsRefused):
+            observe_smtp(all_recipients, exc.recipients)
+        observe_exception(exc)
         return False
     finally:
         with contextlib.suppress(Exception):
@@ -729,6 +742,7 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
     all other providers return 2xx.
     """
     from cert_watch.alert_adapters import get_adapter
+    from cert_watch.alert_delivery import observe_exception, observe_failure, observe_http
 
     if config is None:
         return False
@@ -745,14 +759,18 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
             allowed_subnets=config.allowed_subnets,
         )
         with resp:
-            if config.kind == "pagerduty":
-                return resp.status == 202
-            return 200 <= resp.status < 300
+            delivered = (
+                resp.status == 202 if config.kind == "pagerduty" else 200 <= resp.status < 300
+            )
+            observe_http(resp.status, delivered=delivered)
+            return delivered
     except SSRFBlockedError as exc:
         alert.error_message = f"webhook URL blocked by SSRF policy: {exc}"
+        observe_failure("blocked")
         return False
     except Exception as exc:  # noqa: BLE001 — webhook is an external service with unpredictable failure modes
         alert.error_message = _sanitize_webhook_error(str(exc), config)
+        observe_exception(exc)
         return False
 
 
@@ -940,6 +958,7 @@ def _resolve_group_config(
     db_path: str | Path,
     *,
     matched_groups: dict[str, list[str]] | None = None,
+    cert_ids: tuple[str, ...] | None = None,
 ) -> tuple[dict[str, list[str]], dict[str, int | None]]:
     """Single-pass resolution of alert-group recipients and threshold overrides.
 
@@ -964,6 +983,12 @@ def _resolve_group_config(
     from cert_watch.database.connection import _connect
     from cert_watch.tags import merge_tags, parse_tags, tags_match
 
+    if cert_ids == ():
+        return {}, {}
+    placeholders = ",".join("?" for _ in cert_ids) if cert_ids is not None else ""
+    cert_filter = f" AND c.id IN ({placeholders})" if cert_ids is not None else ""
+    assignment_filter = f" WHERE cert_id IN ({placeholders})" if cert_ids is not None else ""
+    params = cert_ids or ()
     with _connect(db_path) as conn:
         groups = [
             {
@@ -983,7 +1008,7 @@ def _resolve_group_config(
             """SELECT c.id, c.tags, h.tags AS host_tags
                FROM certificates c
                LEFT JOIN hosts h ON c.hostname = h.hostname AND c.port = h.port
-               WHERE c.is_leaf = 1"""
+               WHERE c.is_leaf = 1""" + cert_filter, params,
         ).fetchall()
         cert_tags = {
             row["id"]: merge_tags(row["tags"], row["host_tags"])
@@ -991,7 +1016,7 @@ def _resolve_group_config(
         }
 
         manual_rows = conn.execute(
-            "SELECT cert_id, group_id FROM alert_group_certs"
+            "SELECT cert_id, group_id FROM alert_group_certs" + assignment_filter, params,
         ).fetchall()
         manual_map: dict[str, set[str]] = {}
         for row in manual_rows:
@@ -1124,6 +1149,8 @@ def _build_digest_message(
 def _open_smtp_connection(
     config: AlertConfig, *, alert: Alert | None = None
 ) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
+    from cert_watch.alert_delivery import observe_exception, observe_failure
+
     # Resolve and validate exactly once, then connect to that same address.
     # Resolving once for validation and again for transport leaves a DNS-
     # rebinding gap even when both individual operations look correct.
@@ -1134,11 +1161,13 @@ def _open_smtp_connection(
         allowed_subnets=config.allowed_subnets,
     )
     if ssrf_err is not None:
+        observe_failure("blocked")
         logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
         if alert is not None:
             alert.error_message = "smtp host blocked by SSRF policy"
         return None
     if pinned_ip is None:
+        observe_failure("dns")
         logger.warning("smtp host %s could not be resolved", config.smtp_host)
         if alert is not None:
             alert.error_message = "SMTP host could not be resolved"
@@ -1154,6 +1183,7 @@ def _open_smtp_connection(
             timeout=15,
         )
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
+            observe_failure("tls")
             logger.warning(
                 "SMTP send aborted: STARTTLS not supported by %s:%s",
                 config.smtp_host, config.smtp_port,
@@ -1171,6 +1201,7 @@ def _open_smtp_connection(
         return s
     except Exception as exc:  # noqa: BLE001 — SMTP is an external service with unpredictable failure modes
         sanitized = _sanitize_smtp_error(str(exc), config)
+        observe_exception(exc)
         logger.warning("SMTP connect failed: %s", sanitized)
         if alert is not None:
             alert.error_message = sanitized
@@ -1528,6 +1559,10 @@ def process_pending(
     """
     if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0}
+    from cert_watch.alert_delivery import attempt_delivery
+
+    repository_path = getattr(alert_repo, "db_path", None)
+    evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
     sent = 0
     failed = 0
     for alert in alert_repo.list_pending():
@@ -1535,9 +1570,20 @@ def process_pending(
         last_error = ""
         for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
             if config is not None:
-                delivered = send_alert(alert, config)
+                delivered = attempt_delivery(
+                    evidence_db, alert, "smtp", partial(send_alert, alert, config),
+                    recipients=_smtp_recipients(alert, config), global_recipients=config.recipients,
+                )
             if not delivered and webhook_config is not None:
-                delivered = send_webhook(alert, webhook_config)
+                kind = webhook_config.kind
+                channel = (
+                    kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
+                    else "webhook"
+                )
+                delivered = attempt_delivery(
+                    evidence_db, alert, channel,
+                    partial(send_webhook, alert, webhook_config),
+                )
             if delivered:
                 break
             last_error = alert.error_message or "unknown"

@@ -91,8 +91,16 @@ def _do_replace(
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({ph})", old_all_ids
         )
+        # Sent/failed observations belong to the original certificate, even
+        # after a routine rescan replaces its inventory row. Keep those alert
+        # IDs (and the cascading delivery ledger) until normal alert retention.
+        # Obsolete pending alerts must still disappear so they cannot be sent.
         conn.execute(
-            f"DELETE FROM alerts WHERE cert_id IN ({ph})", old_all_ids
+            f"""DELETE FROM alerts WHERE cert_id IN ({ph})
+                AND NOT (status IN ('sent', 'failed') AND EXISTS (
+                    SELECT 1 FROM alert_delivery_events e WHERE e.alert_id = alerts.id
+                ))""",
+            old_all_ids,
         )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",

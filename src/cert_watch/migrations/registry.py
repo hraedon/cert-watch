@@ -78,6 +78,9 @@ from cert_watch.migrations.m0030_role_tag_tiers import (
 from cert_watch.migrations.m0031_merge_cert_notes import (
     upgrade as merge_cert_notes_upgrade,
 )
+from cert_watch.migrations.m0032_alert_delivery_evidence import (
+    upgrade as alert_delivery_evidence_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -178,4 +181,7 @@ runner.register(
 runner.register(
     "0031", "merge certificates.notes into hosts.notes, drop column (UI-INVENTORY V1)",
     merge_cert_notes_upgrade,
+)
+runner.register(
+    "0032", "add append-only alert delivery evidence", alert_delivery_evidence_upgrade,
 )

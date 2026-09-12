@@ -8,16 +8,15 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.alert_delivery import FAILURE_LABELS
 from cert_watch.database import (
-    SqliteAlertGroupRepository,
-    SqliteCertificateRepository,
     _count_alerts_by_filter,
     list_alerts_with_subject,
 )
+from cert_watch.database.delivery_evidence import latest_outcomes, list_attempts
 from cert_watch.middleware import get_auth_context, get_csrf_context
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
-from cert_watch.tags import tags_match
 
 logger = logging.getLogger("cert_watch.routes.alerts_view")
 
@@ -53,46 +52,22 @@ def alerts_view(
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
 
-    # Resolve alert-group routing names for each alert's cert
-    group_repo = SqliteAlertGroupRepository(db)
-    cert_repo = SqliteCertificateRepository(db)
-    all_groups = group_repo.list_all()
-    _group_cache: dict[str, str | None] = {}
-
-    for a in rows:
-        cert_id = a.get("cert_id") or ""
-        if not cert_id:
-            a["group_name"] = None
-            continue
-        if cert_id not in _group_cache:
-            effective = cert_repo.effective_tags(cert_id)
-            manual_ids = set(group_repo.groups_for_cert_manual(cert_id))
-            matched = None
-            for g in all_groups:
-                if g.id in manual_ids or tags_match(effective, g.match_tags):
-                    matched = g.name
-                    break
-            _group_cache[cert_id] = matched
-        a["group_name"] = _group_cache.get(cert_id)
-
-    # BC-130: reflect the channels that are actually configured rather than
-    # hardcoding Email + Webhook chips on every alert.
-    settings = getattr(request.app.state, "settings", None)
-    alert_channels: list[str] = []
-    if settings is not None:
-        if settings.smtp_host and settings.alert_from and settings.alert_recipients:
-            alert_channels.append("email")
-        if settings.webhook_url:
-            alert_channels.append("webhook")
+    auth = get_auth_context(request)
+    # Recipient evidence is admin-only, and IDs come exclusively from the
+    # existing scope-filtered page. Do not preload this data for other viewers.
+    attempts = list_attempts(db, [row["id"] for row in rows]) if auth["is_admin"] else {}
+    outcomes = latest_outcomes(db, [row["id"] for row in rows])
 
     return templates.TemplateResponse(
         request=request,
         name="activity.html",
         context={
             "alerts": rows,
-            "alert_channels": alert_channels,
+            "delivery_attempts": attempts,
+            "delivery_outcomes": outcomes,
+            "delivery_failure_labels": FAILURE_LABELS,
             "version": __version__, "commit": __commit__,
-            **get_auth_context(request),
+            **auth,
             **get_csrf_context(request),
             "active_page": "activity",
             "tab": "alerts",
