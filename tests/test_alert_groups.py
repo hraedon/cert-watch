@@ -638,7 +638,7 @@ class TestDigestCadence:
             conn.execute(
                 "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
                 "VALUES ('cert_renewed', ?, '', ?, ?)",
-                (event_ts, '{"hostname": "h.example.com"}', event_ts),
+                (event_ts, '{"hostname": "h.example.com", "port": 443}', event_ts),
             )
 
         # With cadence_days=14, the event 10 days ago is inside the window
@@ -661,7 +661,7 @@ class TestDigestCadence:
             conn.execute(
                 "INSERT INTO event_log (event_type, timestamp, source, payload, created_at) "
                 "VALUES ('cert_renewed', ?, '', ?, ?)",
-                (event_ts, '{"hostname": "h2.example.com"}', event_ts),
+                (event_ts, '{"hostname": "h2.example.com", "port": 443}', event_ts),
             )
 
         result = build_renewal_digest(db)
