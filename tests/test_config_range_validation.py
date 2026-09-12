@@ -124,9 +124,14 @@ def test_history_retention_days_zero_ok(monkeypatch, tmp_path):
     assert s.history_retention_days == 0
 
 
-def test_renewal_window_zero_raises(monkeypatch, tmp_path):
-    with pytest.raises(ValueError, match="RENEWAL_WINDOW_DAYS=0 is below minimum 1"):
-        _from_env(monkeypatch, tmp_path, CERT_WATCH_RENEWAL_WINDOW_DAYS="0")
+def test_renewal_window_zero_disables(monkeypatch, tmp_path):
+    settings = _from_env(monkeypatch, tmp_path, CERT_WATCH_RENEWAL_WINDOW_DAYS="0")
+    assert settings.renewal_window_days == 0
+
+
+def test_renewal_window_negative_raises(monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match="RENEWAL_WINDOW_DAYS=-1 is below minimum 0"):
+        _from_env(monkeypatch, tmp_path, CERT_WATCH_RENEWAL_WINDOW_DAYS="-1")
 
 
 def test_scan_retries_negative_raises(monkeypatch, tmp_path):

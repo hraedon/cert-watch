@@ -286,10 +286,14 @@ def test_scheduler_wakes_when_hourly_host_becomes_due(monkeypatch, tmp_path):
     assert scanned == [("hourly.example.invalid", 443)]
 
 
-def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(monkeypatch, tmp_path):
+@pytest.mark.parametrize("settings_wakeup", [False, True])
+def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(
+    monkeypatch, tmp_path, settings_wakeup,
+):
     _freeze(monkeypatch)
     _Clock.current = datetime(2026, 9, 12, 11, 59, 59, 999999, tzinfo=UTC)
     settings = _settings(tmp_path, sched_hour=13)
+    context = SchedulerContext(settings, None, None)
 
     def on_wait(number, timeout, stop):
         if number == 1:
@@ -297,27 +301,86 @@ def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(monkeypatch, tmp
             # OS scheduling need only overshoot by a millisecond to cross the
             # daily boundary. This matters even with no live-scanned hosts.
             _Clock.current += timedelta(seconds=timeout, milliseconds=1)
+            if settings_wakeup:
+                context.update_settings(replace(settings, renewal_window_days=17))
+        elif number == 2 and settings_wakeup:
+            assert timeout == 0
         else:
-            assert number == 2
+            assert number == (3 if settings_wakeup else 2)
             stop.set()
 
     scan = Mock(return_value={})
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan)
+    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan,
+                 schedule_provider=context.schedule_time)
     scan.assert_called_once()
 
 
-def test_settings_save_interrupts_timer_and_reads_new_schedule(monkeypatch, tmp_path):
+@pytest.mark.parametrize("old_time,new_time,old_wait,new_wait", [
+    ((20, 0), (12, 15), 3600, 900), ((12, 15), (20, 0), 900, 3600),
+])
+def test_settings_save_interrupts_timer_and_reads_new_schedule(
+    monkeypatch, tmp_path, old_time, new_time, old_wait, new_wait,
+):
     _freeze(monkeypatch)
-    settings = _settings(tmp_path, sched_hour=20)
+    settings = _settings(tmp_path, sched_hour=old_time[0], sched_min=old_time[1])
     context = SchedulerContext(settings, None, None)
 
     def on_wait(number, timeout, stop):
         if number == 1:
-            assert timeout == 3600
-            context.update_settings(replace(settings, sched_hour=12, sched_min=15))
+            assert timeout == old_wait
+            context.update_settings(replace(
+                settings, sched_hour=new_time[0], sched_min=new_time[1],
+            ))
         else:
             assert number == 2
-            assert timeout == 900
+            assert timeout == new_wait
+            stop.set()
+
+    scan = Mock(return_value={})
+    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan,
+                 schedule_provider=context.schedule_time)
+    scan.assert_not_called()
+
+
+def test_early_interval_cycle_preserves_future_daily_cycle(monkeypatch, tmp_path):
+    _freeze(monkeypatch)
+    settings = _settings(tmp_path, sched_hour=13)
+    SqliteHostRepository(settings.db_path).add("hourly.example.invalid", 443,
+                                            scan_interval_hours=1)
+    _history(settings, "hourly.example.invalid", age=timedelta(minutes=30))
+    cycles = []
+
+    def on_wait(number, timeout, stop):
+        if number < 3:
+            assert timeout == 1800
+            _Clock.current += timedelta(seconds=timeout)
+        else:
+            assert number == 3
+            stop.set()
+
+    def scan():
+        due = scheduler.get_hosts_due_for_scan(settings.db_path, hour=13)
+        cycles.append(due)
+        for hostname, _ in due:
+            _history(settings, hostname)
+        return {}
+
+    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan)
+    assert cycles == [[("hourly.example.invalid", 443)], []]
+
+
+def test_actual_schedule_change_replaces_elapsed_daily_target(monkeypatch, tmp_path):
+    _freeze(monkeypatch)
+    settings = _settings(tmp_path, sched_hour=13)
+    context = SchedulerContext(settings, None, None)
+
+    def on_wait(number, timeout, stop):
+        if number == 1:
+            _Clock.current += timedelta(seconds=timeout, milliseconds=1)
+            context.update_settings(replace(settings, sched_hour=14))
+        else:
+            assert number == 2
+            assert 3500 < timeout < 3600
             stop.set()
 
     scan = Mock(return_value={})

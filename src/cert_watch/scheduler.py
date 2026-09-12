@@ -297,6 +297,8 @@ def start_scheduler(
 
         def _loop() -> None:
             next_cycle_allowed = 0.0
+            daily_deadline: datetime | None = None
+            daily_schedule: tuple[int, int] | None = None
             while not _scheduler_stop.is_set():
                 # Clear before reading settings so an update during calculation
                 # remains signalled and cannot leave the old timer asleep.
@@ -307,8 +309,10 @@ def start_scheduler(
                     schedule_provider() if schedule_provider else (hour, minute)
                 )
                 now = datetime.now(UTC)
-                daily_deadline = _next_daily_time(current_hour, current_minute, now)
-                cycle_wait = (daily_deadline - now).total_seconds()
+                if daily_deadline is None or daily_schedule != (current_hour, current_minute):
+                    daily_deadline = _next_daily_time(current_hour, current_minute, now)
+                    daily_schedule = (current_hour, current_minute)
+                cycle_wait = max(0.0, (daily_deadline - now).total_seconds())
                 if db_path is not None:
                     try:
                         cycle_wait = min(cycle_wait, _seconds_until_next_scan(
@@ -341,6 +345,9 @@ def start_scheduler(
                 finally:
                     _cycle_lock.release()
                     next_cycle_allowed = time.monotonic() + 60
+                    now = datetime.now(UTC)
+                    if daily_deadline <= now:
+                        daily_deadline = _next_daily_time(current_hour, current_minute, now)
 
         _scheduler_stop.clear()
         _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
