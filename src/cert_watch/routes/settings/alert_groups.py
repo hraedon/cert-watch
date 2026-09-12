@@ -253,7 +253,8 @@ async def update_alert_group(group_id: IdParam, request: Request) -> RedirectRes
     if repo.get(group_id) is None:
         return _redirect_err("alert group not found")
 
-    values, err = _parse_form(await request.form())
+    form = await request.form()
+    values, err = _parse_form(form)
     if err:
         return _redirect_err(err)
     assert values is not None  # err is None here, so _parse_form returned values
@@ -265,7 +266,10 @@ async def update_alert_group(group_id: IdParam, request: Request) -> RedirectRes
     with get_write_lock():
         repo.update(
             group_id, name=values["name"], recipients=values["recipients"],
-            match_tags=values["match_tags"], webhook_url=values["webhook_url"],
+            match_tags=values["match_tags"],
+            # The UI no longer offers this inert control. Preserve a legacy
+            # value on omission; explicit submissions retain existing behavior.
+            webhook_url=values["webhook_url"] if "webhook_url" in form else None,
             threshold_days=values["threshold_days"],
             digest_cadence_days=values["digest_cadence_days"],
         )

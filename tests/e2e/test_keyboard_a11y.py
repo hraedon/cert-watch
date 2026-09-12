@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from cryptography import x509
@@ -262,10 +263,17 @@ def test_enter_on_tag_link_filters_instead_of_opening_certificate(
     page.get_by_text("Edit tags", exact=True).click()
     page.locator('input[name="tags"]').fill("keyboard-team")
     page.get_by_role("button", name="Save tags", exact=True).click()
-    page.goto(f"{cert_watch_server}/browse")
+    page.goto(f"{cert_watch_server}/browse?source=uploaded&sort_order=desc&grouped=0")
     link = page.get_by_test_id("cert-row").filter(has_text="kb-tag.example.com").get_by_role(
         "link", name="keyboard-team", exact=True,
     )
     link.focus()
     link.press("Enter")
-    page.wait_for_url("**/browse?q=keyboard-team", timeout=5000)
+    page.wait_for_url(
+        lambda url: urlsplit(url).path == "/browse"
+        and parse_qs(urlsplit(url).query) == {
+            "q": ["keyboard-team"], "source": ["uploaded"],
+            "sort_by": ["days"], "sort_order": ["desc"], "grouped": ["0"],
+        },
+        timeout=5000,
+    )

@@ -423,19 +423,16 @@ def find_orphan_certs(db_path: str | Path) -> list[dict[str, Any]]:
     return orphans
 
 
-def evaluate_renewal_window(
+def renewal_window_candidates(
     db_path: str | Path,
-    alert_repo: AlertRepository,
     window_days: int = 30,
-) -> list[Alert]:
-    """Create ``renewal_stalled`` alerts for leaf certs inside their renewal
-    window with no successor certificate (Plan 027).
+) -> list[dict[str, Any]]:
+    """Read current, unhandled renewal conditions without consulting alerts.
 
-    A signal distinct from ``expiry_warning``: the cert *should* have been
-    rotated by automation by now, but no replacement has appeared — flagging a
-    broken Certbot / cert-manager / ACME job well before the generic expiry
-    alarm. A successor is any cert whose ``replaces_cert_id`` points at this one.
-    Idempotent: at most one pending ``renewal_stalled`` alert per cert.
+    Home and notification generation share this predicate: a leaf is inside
+    the configured window, has no successor, and its host is not marked as
+    renewed or in progress. Delivery success/failure does not resolve it.
+    Each result contains the certificate fields, days_remaining, and owner.
     """
     if window_days <= 0:
         return []
@@ -456,7 +453,7 @@ def evaluate_renewal_window(
         ).fetchall()
 
     _host_thresholds, host_owners = _load_host_owner_maps(db_path)
-    created: list[Alert] = []
+    candidates: list[dict[str, Any]] = []
     for leaf in leaves:
         cid = leaf["id"]
         if cid in superseded:
@@ -467,20 +464,38 @@ def evaluate_renewal_window(
             continue
         if days < 0 or days > window_days:
             continue  # expired (expiry_warning owns it) or outside the window
+        owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
+        if owner.get("renewal_status") in ("renewed", "in_progress"):
+            continue  # operator has flagged renewal as handled
+        candidates.append({**dict(leaf), "days_remaining": days, "owner": owner})
+    return candidates
+
+
+def evaluate_renewal_window(
+    db_path: str | Path,
+    alert_repo: AlertRepository,
+    window_days: int = 30,
+) -> list[Alert]:
+    """Create notifications for the current renewal-window conditions.
+
+    At most one pending ``renewal_stalled`` alert is created per certificate;
+    notification status remains separate from the underlying condition.
+    """
+    created: list[Alert] = []
+    for leaf in renewal_window_candidates(db_path, window_days):
+        cid = leaf["id"]
         existing = alert_repo.list_for_cert(cid)
         if any(
             a.alert_type == "renewal_stalled" and a.status == "pending"
             for a in existing
         ):
             continue  # already flagged this window
-        owner = host_owners.get((leaf["hostname"], leaf["port"]), {})
-        if owner.get("renewal_status") in ("renewed", "in_progress"):
-            continue  # operator has flagged renewal as handled
+        owner = leaf["owner"]
         alert = Alert(
             cert_id=cid,
             alert_type="renewal_stalled",
             status="pending",
-            message=_format_renewal_message(leaf, days, window_days, owner),
+            message=_format_renewal_message(leaf, leaf["days_remaining"], window_days, owner),
             threshold_days=window_days,
             extra_recipients=(
                 [owner["owner_email"]] if owner.get("owner_email") else []
@@ -494,7 +509,7 @@ def evaluate_renewal_window(
 
 
 def _format_renewal_message(
-    leaf: sqlite3.Row, days: int, window_days: int, owner: dict[str, Any]
+    leaf: Mapping[str, Any], days: int, window_days: int, owner: dict[str, Any]
 ) -> str:
     from cert_watch.filters import subject_cn
 

@@ -325,6 +325,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         alert_cfg=s.build_alert_config(),
         webhook_cfg=s.build_webhook_config(),
     )
+    app.state.scheduler_context = ctx
 
     # Purge once at startup too — restarts (e.g. k8s rollouts) are frequent and
     # shouldn't have to wait for the next daily cycle to reclaim the audit log.
@@ -341,6 +342,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         hour=s.sched_hour,
         minute=s.sched_min,
         db_path=s.db_path,
+        schedule_provider=ctx.schedule_time,
     )
     try:
         yield

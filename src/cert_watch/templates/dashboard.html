@@ -5,19 +5,18 @@
 {% import "macros/ui.html" as ui %}
 
 {% macro sort_link(column, label) %}
-  {% set next_order = 'desc' if sort_by == column and sort_order == 'asc' else 'asc' %}
-  <a href="/browse?sort_by={{ column }}&sort_order={{ next_order }}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_urgency %}&urgency={{ filter_urgency }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}" class="sort">{{ label }}</a>
-  {% if sort_by == column %}<span class="arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
+  {% set is_sorted = sort_by == column or (column == 'expiry' and sort_by == 'days') %}
+  {% set next_order = 'desc' if is_sorted and sort_order == 'asc' else 'asc' %}
+  <a href="{{ browse_url(sort_by=column, sort_order=next_order) }}" class="sort">{{ label }}</a>
+  {% if is_sorted %}<span class="arrow">{{ '▲' if sort_order == 'asc' else '▼' }}</span>{% endif %}
 {% endmacro %}
-
-{% macro filter_link(urgency='') %}{% if urgency %}/browse?urgency={{ urgency }}{% else %}/browse?{% endif %}{% if filter_q %}&q={{ filter_q }}{% endif %}{% if filter_source %}&source={{ filter_source }}{% endif %}{% if sort_by != 'days' %}&sort_by={{ sort_by }}&sort_order={{ sort_order }}{% endif %}{% endmacro %}
 
 {# ---- Shared row cells (used by grouped and plain rows alike) ---- #}
 {% macro tags_cell(e) %}
   {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
   {% if _tags %}
     <div class="cw-chiprow">
-      {% for t in _tags %}<a class="cw-chip" href="/browse?q={{ t | urlencode }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
+      {% for t in _tags %}<a class="cw-chip" href="{{ browse_url(q=t) }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
     </div>
   {% else %}<span class="cw-muted">—</span>{% endif %}
 {% endmacro %}
@@ -102,35 +101,56 @@
 
   {# ---- Stat strip: the cells ARE the urgency filter ---- #}
   <div class="cw-stats">
-    {{ ui.stat('Tracked', total_entries, 'certificates', icon='shield',
-                href=filter_link('') if not pivot_view else none, active=not filter_urgency and not pivot_view) }}
+    {{ ui.stat('Tracked', tracked_total, 'endpoints / files' if pivot_groups is none else 'endpoints', icon='shield',
+                href=browse_url(urgency=none) if not pivot_view else none, active=not filter_urgency and not pivot_view) }}
     {{ ui.stat('Expired', pivot_stats.expired, 'needs attention' if pivot_stats.expired else 'none', tone='t-expired', icon='alert',
-                href=filter_link('expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
+                href=browse_url(urgency='expired') if not pivot_view else none, active=filter_urgency == 'expired') }}
     {{ ui.stat('Critical', pivot_stats.critical, '< 7 days' if pivot_stats.critical else 'none', tone='t-crit', icon='alert',
-                href=filter_link('critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
+                href=browse_url(urgency='critical') if not pivot_view else none, active=filter_urgency == 'critical') }}
     {{ ui.stat('Warning', pivot_stats.warning, 'expiry or trust issue' if pivot_stats.warning else 'none', tone='t-warn', icon='clock',
-                href=filter_link('warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
+                href=browse_url(urgency='warning') if not pivot_view else none, active=filter_urgency == 'warning') }}
     {{ ui.stat('Healthy', pivot_stats.healthy, '30+ days · trusted chain', tone='t-ok', icon='check-circle',
-                href=filter_link('healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
+                href=browse_url(urgency='healthy') if not pivot_view else none, active=filter_urgency == 'healthy') }}
   </div>
 
   {# ---- Filter bar ---- #}
-  <form method="get" action="/browse" class="cw-filterbar">
+  <div class="cw-filterbar">
+    {% if not pivot_view %}
+    <form method="get" action="/browse" class="cw-chiprow">
+    <input type="hidden" name="urgency" value="{{ filter_urgency }}">
+    <input type="hidden" name="source" value="{{ filter_source }}">
+    <input type="hidden" name="sort_by" value="{{ sort_by }}">
+    <input type="hidden" name="sort_order" value="{{ sort_order }}">
+    <input type="hidden" name="grouped" value="{{ grouped }}">
     <div class="cw-search">
       {{ icons.svg_icon('search', 15) }}
-      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host, tag…" list="dash-all-tags" data-testid="dashboard-search">
+      <input class="cw-input" type="text" name="q" value="{{ filter_q }}" placeholder="Search subject, issuer, host, tag…" aria-label="Search certificates" list="dash-all-tags" data-testid="dashboard-search">
       <datalist id="dash-all-tags">
         {% for t in all_tags %}<option value="{{ t }}"></option>{% endfor %}
       </datalist>
     </div>
-    <div class="cw-seg" role="group" aria-label="Group certificates">
-      <button type="submit" name="view" value="" class="{% if not pivot_view %}on{% endif %}">All</button>
-      <button type="submit" name="view" value="issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}">By issuer</button>
-      <button type="submit" name="view" value="owner" class="{% if pivot_view == 'owner' %}on{% endif %}">By owner</button>
-      <button type="submit" name="view" value="renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}">By method</button>
-      <button type="submit" name="view" value="calendar" class="{% if pivot_view == 'calendar' %}on{% endif %}">{{ icons.svg_icon('calendar', 13) }}Calendar</button>
+    <button type="submit" class="cw-btn">Search</button>
+    </form>
+    {% endif %}
+    <nav class="cw-seg" aria-label="Inventory views">
+      <a href="{{ browse_url() }}" class="{% if not pivot_view %}on{% endif %}" {% if not pivot_view %}aria-current="page"{% endif %}>Inventory</a>
+      <a href="/browse?view=issuer" class="{% if pivot_view == 'issuer' %}on{% endif %}" {% if pivot_view == 'issuer' %}aria-current="page"{% endif %}>By issuer · all</a>
+      <a href="/browse?view=owner" class="{% if pivot_view == 'owner' %}on{% endif %}" {% if pivot_view == 'owner' %}aria-current="page"{% endif %}>By owner · all</a>
+      <a href="/browse?view=renewal_method" class="{% if pivot_view == 'renewal_method' %}on{% endif %}" {% if pivot_view == 'renewal_method' %}aria-current="page"{% endif %}>By method · all</a>
+      <a href="/browse?view=calendar" class="{% if pivot_view == 'calendar' %}on{% endif %}" {% if pivot_view == 'calendar' %}aria-current="page"{% endif %}>{{ icons.svg_icon('calendar', 13) }}Calendar · all</a>
+    </nav>
+  </div>
+  {% if pivot_view %}
+    <p class="cw-hint">{% if pivot_view == 'calendar' %}Calendar covers scanned and uploaded certificates in your scope.{% else %}Group views cover all scanned endpoints and pending hosts in your scope.{% endif %} Inventory filters do not apply.</p>
+  {% elif filter_q or filter_urgency or filter_source %}
+    <div class="cw-chiprow" data-testid="active-inventory-filters">
+      <span class="cw-hint">Filters:</span>
+      {% if filter_q %}<span class="cw-chip">Search: {{ filter_q }}</span>{% endif %}
+      {% if filter_urgency %}<span class="cw-chip">Status: {{ filter_urgency | urgency_label }}</span>{% endif %}
+      {% if filter_source %}<span class="cw-chip">Source: {{ filter_source }}</span>{% endif %}
+      <a class="cw-link" href="{{ browse_url(q=none, urgency=none, source=none) }}">Clear filters</a>
     </div>
-  </form>
+  {% endif %}
 
   {% if calendar_data is not none %}
   {# ---- Expiry calendar view ---- #}
@@ -158,7 +178,7 @@
           {% endif %}
         </div>
       {% else %}
-        {{ ui.empty('No upcoming expirations', 'All tracked certificates are well within their validity window.', icon='check-circle', tone='t-ok') }}
+        {{ ui.empty('No certificate expirations to show', 'Endpoints without a stored certificate do not appear in the calendar.', icon='calendar') }}
       {% endfor %}
     </div>
   </div>
@@ -166,7 +186,7 @@
   {# ---- Table ---- #}
   <div class="cw-panel">
     <div class="cw-table-clip">
-    {% if pivot_groups %}
+    {% if pivot_groups is not none %}
     <table class="cw-table">
       <thead>
         <tr>
@@ -232,7 +252,7 @@
               {% for h in e.hosts %}
               <div class="row">
                 <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
-                {% set h_urg = h.days_remaining | urgency if h.days_remaining is not none else 'gray' %}
+                {% set h_urg = h.urgency if h.urgency else (h.days_remaining | urgency if h.days_remaining is not none else 'gray') %}
                 {{ ui.status(h_urg) }}
                 {% if h.scan_status == 'failure' %}
                   <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}{{ h.scan_error or 'scan failed' }}</span>
@@ -296,7 +316,9 @@
     {% endif %}
     </div>
 
-    {% if not entries and not pivot_groups %}
+    {% if pivot_groups is not none and not pivot_groups %}
+      {{ ui.empty('No scanned endpoints in this view', 'Uploaded files appear in Inventory and Calendar. Add a host to use endpoint group views.', testid='empty-pivot') }}
+    {% elif not entries and pivot_groups is none %}
       {% if filter_q or filter_urgency or filter_source %}
         {{ ui.empty('No matching certificates', 'Try a different search or filter.') }}
       {% else %}
@@ -309,7 +331,7 @@
     {% endif %}
   </div>
 
-  {{ ui.pager(page, total_pages, '/browse?' ~ ('q=' ~ (filter_q | urlencode) if filter_q else '') ~ ('&urgency=' ~ filter_urgency if filter_urgency else '') ~ ('&source=' ~ filter_source if filter_source else '') ~ ('&sort_by=' ~ sort_by ~ '&sort_order=' ~ sort_order if sort_by != 'days' else '')) }}
+  {{ ui.pager(page, total_pages, browse_url()) }}
   {% endif %}
 </div>
 

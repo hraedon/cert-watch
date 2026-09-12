@@ -307,6 +307,40 @@ class TestSetupWizard:
         assert r.headers.get("location", "") == "/"
         assert kv_get(fresh_db, "allowed_subnets") == "10.0.0.0/8,192.168.0.0/16"
 
+    def test_wizard_allowlist_reaches_the_running_scheduler(
+        self, setup_app_client, fresh_db
+    ):
+        """Persisting the allowlist is not enough; the scheduler must see it.
+
+        The wizard previously assigned ``app.state.settings`` only, so scheduled
+        scans kept the pre-wizard allowlist until the process restarted. The
+        persistence assertion above passed throughout, which is why the
+        divergence survived.
+        """
+        published: list[tuple[str, ...]] = []
+
+        class _RecordingContext:
+            def update_settings(self, settings) -> None:
+                published.append(tuple(settings.allowed_subnets))
+
+        setup_app_client.get("/setup", follow_redirects=False)
+        app = setup_app_client._transport.app  # type: ignore[attr-defined]
+        app.state.scheduler_context = _RecordingContext()
+
+        sid = next(c.value for c in setup_app_client.cookies.jar if c.name == "cw_sid")
+        r = setup_app_client.post("/setup", data={
+            "_csrf_token": make_csrf_token(sid),
+            "step": "1",
+            "username": "admin_sched",
+            "password": "SecurePass123",
+            "password_confirm": "SecurePass123",
+            "allowed_subnets": "10.0.0.0/8, 192.168.0.0/16",
+        }, follow_redirects=False)
+
+        assert r.status_code == 303
+        assert published == [("10.0.0.0/8", "192.168.0.0/16")]
+        assert app.state.settings.allowed_subnets == ("10.0.0.0/8", "192.168.0.0/16")
+
     def test_invalid_allowed_subnet_rejected(self, setup_app_client, fresh_db):
         """An invalid CIDR aborts setup before any admin is created."""
         setup_app_client.get("/setup", follow_redirects=False)

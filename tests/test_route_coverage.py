@@ -345,7 +345,12 @@ def test_dashboard_pivot_owner(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=owner")
     assert r.status_code == 200
-    assert "own.example.com" in r.text  # cert appears in the owner pivot
+    assert r.context["pivot_view"] == "owner"
+    assert r.context["pivot_groups"] == []
+    assert r.context["entries"] == []
+    assert 'data-testid="empty-pivot"' in r.text
+    assert "Inventory filters do not apply" in r.text
+    assert "own.example.com" not in r.text  # Uploaded files have no host owner group.
 
 
 def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
@@ -368,7 +373,12 @@ def test_dashboard_pivot_renewal_method(reload_app, tmp_path):
     with TestClient(app_mod.app) as client:
         r = client.get("/?view=renewal_method")
     assert r.status_code == 200
-    assert "rm.example.com" in r.text  # cert appears in the renewal-method pivot
+    assert r.context["pivot_view"] == "renewal_method"
+    assert r.context["pivot_groups"] == []
+    assert r.context["entries"] == []
+    assert 'data-testid="empty-pivot"' in r.text
+    assert "Inventory filters do not apply" in r.text
+    assert "rm.example.com" not in r.text  # Renewal methods belong to registered hosts.
 
 
 # ---------- dashboard fleet grade ----------

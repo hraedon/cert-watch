@@ -121,7 +121,7 @@ def test_certificate_detail_with_posture(reload_app, tmp_path, leaf_pem_file):
 
 
 def test_certificate_detail_revocation_button(reload_app, tmp_path, leaf_pem_file):
-    """The detail page shows a Check revocation button when posture is present."""
+    """The detail page describes its OCSP/CRL check as endpoint reachability."""
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import init_schema, store_scan_posture
@@ -140,7 +140,10 @@ def test_certificate_detail_revocation_button(reload_app, tmp_path, leaf_pem_fil
     with TestClient(app_mod.app) as client:
         r = client.get(f"/certificates/{cert_id}")
     assert r.status_code == 200
-    assert "Check revocation" in r.text
+    assert "Check endpoint reachability" in r.text
+    assert "Checks OCSP/CRL endpoint reachability" in r.text
+    assert "this does not determine whether this certificate is revoked" in r.text
+    assert "Check revocation" not in r.text
     assert 'id="check-revocation"' in r.text
 
 

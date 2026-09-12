@@ -27,16 +27,16 @@
 
   {# ---- Stat strip: the cells deep-link into Browse filters ---- #}
   <div class="cw-stats">
-    {{ ui.stat('Expiring < 30d', stats.critical + stats.warning, 'certificates', icon='clock',
-                href='/browse', tone='', testid='home-expiring-stat') }}
+    {{ ui.stat('Tracked', tracked_total, 'endpoints / files', icon='shield',
+                href='/browse?grouped=0', tone='', testid='home-tracked-stat') }}
     {{ ui.stat('Expired', stats.expired, 'needs attention' if stats.expired else 'none', tone='t-expired', icon='alert',
-                href='/browse?urgency=expired') }}
+                href='/browse?urgency=expired&grouped=0') }}
     {{ ui.stat('Critical', stats.critical, '< 7 days' if stats.critical else 'none', tone='t-crit', icon='alert',
-                href='/browse?urgency=critical') }}
-    {{ ui.stat('Warning', stats.warning, '7–29 days' if stats.warning else 'none', tone='t-warn', icon='clock',
-                href='/browse?urgency=warning') }}
-    {{ ui.stat('Healthy', stats.healthy, 'expiry healthy' if stats.healthy else 'none', tone='t-ok', icon='check-circle',
-                href='/browse?urgency=healthy') }}
+                href='/browse?urgency=critical&grouped=0') }}
+    {{ ui.stat('Warning', stats.warning, 'expiry or trust issue' if stats.warning else 'none', tone='t-warn', icon='clock',
+                href='/browse?urgency=warning&grouped=0') }}
+    {{ ui.stat('Healthy', stats.healthy, '30+ days · trusted chain' if stats.healthy else 'none', tone='t-ok', icon='check-circle',
+                href='/browse?urgency=healthy&grouped=0') }}
   </div>
 
   {# ---- Attention queue ---- #}

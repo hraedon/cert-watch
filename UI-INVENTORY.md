@@ -8,8 +8,8 @@ diff fails review.
 
 Paths are relative to `src/cert_watch/`. Endpoints marked **(no UI caller)**
 exist but are invoked by no template or bundled JS. State inventoried:
-branch `redesign/attention-home`, 2026-08-30 (V1 + V2 implemented; notes are
-host-scoped only).
+branch `review/product-coherence-20260912`, 2026-09-12 (V1 + V2 implemented;
+notes are host-scoped only; inactive group-webhook controls removed).
 
 IA note: the landing page is now **Home** (`/`, `templates/home.html` — ranked
 attention queue + expiry horizon) and the inventory table lives at
@@ -17,6 +17,11 @@ attention queue + expiry horizon) and the inventory table lives at
 drawer). Home introduces **no new editing controls** — its only mutating
 surface is the per-item "scan now" button, which posts to the pre-existing
 `POST /hosts/{id}/scan` (same endpoint the detail page and Browse rows use).
+Home status cards now use Browse's expiry-and-trust definitions and link to
+individual inventory entries so their counts match the destination. Browse's
+search retains the selected status, source, sort, and grouping; a clear-filters
+link resets the selection. Fleet grouping and calendar links open their full
+visible population, with the scope stated on the selected view.
 
 ## Certificate (`certificates` table)
 
@@ -50,7 +55,7 @@ surface is the per-item "scan now" button, which posts to the pre-existing
 | SMTP transport + global recipients | kv | Form, Settings → Channels — `settings/channels.html:10-56` | `POST /settings/smtp` (routes/settings/smtp.py:45) | As-is |
 | Alert webhook (preset/URL/template/headers) + schedule/retention | kv | Form, Settings → Channels — `settings/channels.html:64-153` | `POST /settings/alerts` (routes/settings/alerts.py:14) | As-is; see V3 (label collision) |
 | Event forwarding (webhook sink, adapter kind, rate limit, PagerDuty key) | kv | Form, Settings → Events — `settings/events.html:18-62` | `POST /settings/events` (routes/settings/events.py:58) | As-is; see V3 |
-| Alert groups (name, match tags, recipients, group webhook, threshold, digest cadence) | `alert_groups` (schema.py:139) | Create + per-group edit forms — `settings/alert_groups.html:70,136,143` | `POST /settings/alert-groups[/{id}[/delete]]` (routes/settings/alert_groups.py:208,242,281) | As-is; see V3 |
+| Alert groups (name, match tags, recipients, threshold, digest cadence) | `alert_groups` (schema.py:139) | Create + per-group edit forms — `settings/alert_groups.html`; legacy webhook presence is read-only | `POST /settings/alert-groups[/{id}[/delete]]` (routes/settings/alert_groups.py) | Group webhook has no delivery consumer: no editing control; ordinary edits preserve stored values. Channels owns the active alert webhook. |
 
 ## Access & administration
 
@@ -85,12 +90,13 @@ surface is the per-item "scan now" button, which posts to the pre-existing
   the detail-page Notes panel (`POST /hosts/{id}/notes`, form POST).
   `PATCH /api/hosts/{id}/notes` remains as the JSON API path (no UI caller).
   One concept, one control, one verb.
-- **V3 — "Webhook URL" names three distinct concepts.** Alert webhook
-  (`settings/channels.html:77`), event-forwarding sink
-  (`settings/events.html:36`), per-alert-group webhook
-  (`settings/alert_groups.html:29`). Same noun, three stores, three delivery
-  behaviors — violates "same noun, same verb". Proposed: qualify the labels
-  (e.g. "Alert webhook URL" / "Event sink URL" / "Group webhook URL").
+- **V3 — inactive group webhook removed, 2026-09-12.** The group webhook
+  field had no delivery consumer. Create/edit forms no longer offer it;
+  existing values remain stored and receive a read-only explanatory notice.
+  Ordinary form edits do not erase those values. Channels owns the active
+  alert webhook; Events owns the independent event-forwarding sink. Channel
+  copy states SMTP-first delivery, webhook fallback, and the union of global
+  SMTP recipients with matching group recipients.
 - **V4 — Owner edits ride a certificate-namespaced endpoint.**
   `POST /certificates/{id}/owner` (routes/certificates.py:559) mutates the
   *hosts* table and accepts a bare `host_id` on cert-less pages

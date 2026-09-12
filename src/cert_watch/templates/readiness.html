@@ -7,7 +7,7 @@
 {# Renewal-automation classification chip. #}
 {% macro class_chip(classification) %}
   {%- if classification == 'likely-automated' -%}
-    <span class="cw-chip t-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Automated</span>
+    <span class="cw-chip t-ok">{{ icons.svg_icon('refresh', 11, 1.6) }}Likely automated</span>
   {%- elif classification == 'manual' -%}
     <span class="cw-chip t-warn">{{ icons.svg_icon('user', 11, 1.6) }}Manual</span>
   {%- else -%}
@@ -44,7 +44,7 @@
             {% if m.margin_days is not none %}
               <span class="cw-chip {{ 't-crit' if m.renew_late else 't-ok' }}">{{ m.margin_days }}d ({{ m.margin_pct }}%)</span>
             {% elif m.renew_late %}
-              <span class="cw-chip t-crit">At risk</span>
+              <span class="cw-chip t-muted">Unknown validity</span>
             {% else %}
               <span class="cw-chip t-muted">&mdash;</span>
             {% endif %}
@@ -67,7 +67,7 @@
   </nav>
 
   {% call ui.page_head('SC-081 Readiness Report',
-                       'Milestone timeline and per-host readiness for shortened certificate lifetimes. Generated ' ~ (report.generated_at[:16] | replace('T', ' ')) ~ ' UTC',
+                       'Monitored endpoints and their current certificate validity. Generated ' ~ (report.generated_at[:16] | replace('T', ' ')) ~ ' UTC',
                        testid='readiness-heading') %}
     <a class="cw-btn" href="/readiness">{{ icons.svg_icon('refresh', 14) }}Refresh</a>
     <a class="cw-btn" href="/api/readiness.json">{{ icons.svg_icon('download', 14) }}JSON</a>
@@ -97,11 +97,11 @@
 
   {# ---- Host counts ---- #}
   <div class="cw-stats">
-    {{ ui.stat('Total hosts', report.total_hosts, icon='server') }}
+    {{ ui.stat('Monitored endpoints', report.total_hosts, icon='server') }}
     {{ ui.stat('Public-trust', report.public_trust_hosts, 'SC-081 applies', tone='t-ok', icon='shield') }}
     {{ ui.stat('Private-CA', report.private_ca_hosts, 'not bound by SC-081', icon='key') }}
     {% if report.unknown_hosts > 0 %}
-    {{ ui.stat('Unknown', report.unknown_hosts, 'chain status unclassified', tone='t-warn', icon='info') }}
+    {{ ui.stat('Unknown', report.unknown_hosts, 'certificate or trust not yet established', tone='t-warn', icon='info') }}
     {% endif %}
   </div>
 
@@ -110,7 +110,7 @@
     <div class="cw-panel-body">
       <div class="cw-note">
         {{ icons.svg_icon('info', 14) }}
-        <div>SC-081 applies to <strong>publicly trusted</strong> certificates only. No hosts with confirmed public-trust certificates were found{% if report.unknown_hosts > 0 %}, though {{ report.unknown_hosts }} host{{ '' if report.unknown_hosts == 1 else 's' }} with unclassified chain status may include public-trust certs{% endif %} &mdash; the milestone timeline and workload forecast below are <strong>not applicable</strong> until public-trust hosts are identified.</div>
+        <div>SC-081 applies to <strong>publicly trusted</strong> certificates only. No monitored endpoints have confirmed public-trust certificates{% if report.unknown_hosts > 0 %}; {{ report.unknown_hosts }} endpoint{{ '' if report.unknown_hosts == 1 else 's' }} still need{{ 's' if report.unknown_hosts == 1 else '' }} a successful scan or trust classification. Their applicability is unknown{% endif %}. A workload forecast is available once public-trust certificates are identified.</div>
       </div>
     </div>
   </div>
@@ -118,6 +118,7 @@
 
   {# ---- Workload forecast ---- #}
   {% if report.workload_forecast and report.public_trust_hosts > 0 %}
+  {% set known_lifetime_count = report.hosts | selectattr('current_lifetime', 'ne', none) | list | length %}
   <div class="cw-panel">
     <div class="cw-panel-head">
       <h2>Workload forecast</h2>
@@ -125,10 +126,11 @@
     </div>
     <div class="cw-panel-body">
       <div class="cw-stats">
-        {{ ui.stat('Current', report.workload_forecast.current_renewals_per_month, 'per month', icon='refresh') }}
+        {{ ui.stat('Current', report.workload_forecast.current_renewals_per_month if known_lifetime_count else '—', 'per month', icon='refresh', testid='readiness-current-workload') }}
         {{ ui.stat('At 100-day max', report.workload_forecast.at_100d_renewals_per_month, 'per month', tone='t-warn', icon='clock') }}
         {{ ui.stat('At 47-day max', report.workload_forecast.at_47d_renewals_per_month, 'per month', tone='t-crit', icon='alert') }}
       </div>
+      <p class="cw-hint">Current estimate uses {{ known_lifetime_count }}/{{ report.public_trust_hosts }} public-trust endpoints with known validity. Future estimates assume every confirmed public-trust endpoint renews at the stated cap.</p>
     </div>
     {% set risk_ns = namespace(any=false) %}
     {% for ms_label, host_list in report.workload_forecast.hosts_by_milestone_risk.items() %}
@@ -160,7 +162,7 @@
     {% if report.hosts %}
       {{ host_table(report.hosts, milestones=report.milestones) }}
     {% else %}
-      {{ ui.empty('No public-trust hosts found', 'SC-081 requirements do not apply to your estate.', icon='shield') }}
+      {{ ui.empty('No confirmed public-trust endpoints', 'Endpoints without a current certificate or confirmed trust remain unclassified.', icon='shield') }}
     {% endif %}
   </div>
 
@@ -174,7 +176,7 @@
     <div class="cw-panel-body">
       <div class="cw-note t-warn">
         {{ icons.svg_icon('info', 14) }}
-        <div>Chain status is unknown for these hosts &mdash; they may be public-trust or private-CA. Upload the root CA as a trust anchor or scan with a complete chain to classify them.</div>
+        <div>These endpoints lack a current certificate or confirmed trust classification. Check scan results first; a complete chain or the appropriate trust anchor may be needed. Missing evidence does not establish that SC-081 is inapplicable.</div>
       </div>
     </div>
     {{ host_table(report.unknown_hosts_list) }}

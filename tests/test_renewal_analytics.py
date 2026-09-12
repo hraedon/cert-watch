@@ -5,7 +5,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from cert_watch.renewal_analytics import (
+    _compute_host_from_entries,
     _compute_trend,
     _is_acme_issuer,
     compute_fleet_analytics,
@@ -492,3 +495,115 @@ class TestCadence:
         result = compute_host_analytics(db, "cadence.example.com")
         assert result.median_cadence_days is not None
         assert result.median_cadence_days == 60.0
+
+
+def _validity_history():
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    entries = []
+    for index, remaining in enumerate((90, 80, 70)):
+        first_seen = base + timedelta(days=60 * index)
+        not_after = first_seen + timedelta(days=remaining)
+        entries.append({
+            "fingerprint_sha256": f"period-{index}", "issuer": "CN=ACME internal CA",
+            "not_before": (not_after - timedelta(days=365)).isoformat(),
+            "not_after": not_after.isoformat(), "scanned_at": first_seen.isoformat(),
+        })
+    return entries
+
+
+class TestHistoricalValidityEvidence:
+    def test_missing_issuance_does_not_invent_short_lifetimes_or_automation(self):
+        entries = _validity_history()
+        for entry in entries:
+            entry["not_before"] = None
+
+        result = _compute_host_from_entries("legacy.example.test", entries, port=443)
+
+        assert result.cert_count == 3
+        assert result.observed_lifetimes == []
+        assert result.lifetime_trend == "unknown"
+        assert result.automation_classification == "unknown"
+        assert result.classification_evidence["known_validity_count"] == 0
+        assert result.classification_evidence["unknown_validity_count"] == 3
+        # Missing issuance does not erase independently observed renewal timing.
+        assert result.renewal_lead_times == [30.0, 20.0]
+        assert result.median_cadence_days == 60.0
+
+    def test_known_long_lifetimes_remain_stable_and_do_not_infer_automation(self):
+        result = _compute_host_from_entries("known.example.test", _validity_history())
+        assert result.observed_lifetimes == [365, 365, 365]
+        assert result.lifetime_trend == "stable"
+        assert result.automation_classification == "manual"
+
+    @pytest.mark.parametrize("first_not_before", [None, "invalid-date", "2099-01-01"])
+    def test_later_observation_recovers_validity_within_same_deployment(self, first_not_before):
+        known = _validity_history()[0]
+        first = dict(known, not_before=first_not_before)
+        second = dict(known, scanned_at="2026-01-02T00:00:00+00:00")
+
+        result = _compute_host_from_entries("rescanned.example.test", [first, second])
+
+        assert result.cert_count == 1
+        assert result.observed_lifetimes == [365]
+        assert result.classification_evidence["known_validity_count"] == 1
+        assert result.classification_evidence["unknown_validity_count"] == 0
+
+    def test_recovery_does_not_cross_a_rollback_boundary(self):
+        a, b, _ = _validity_history()
+        unknown_a = dict(a, not_before=None)
+        rolled_back_a = dict(a, scanned_at="2026-05-01T00:00:00+00:00")
+
+        result = _compute_host_from_entries("rollback.example.test", [unknown_a, b, rolled_back_a])
+
+        assert result.cert_count == 3
+        assert result.observed_lifetimes == [365, 365]
+        assert result.lifetime_trend == "unknown"
+        assert result.automation_classification == "unknown"
+        assert result.classification_evidence["unknown_validity_count"] == 1
+
+    def test_missing_middle_period_cannot_create_a_sparse_lifetime_trend(self):
+        entries = _validity_history()
+        entries[1]["not_before"] = None
+        entries[2]["not_before"] = (
+            datetime.fromisoformat(entries[2]["not_after"]) - timedelta(days=90)
+        ).isoformat()
+
+        result = _compute_host_from_entries("gapped.example.test", entries)
+
+        assert result.observed_lifetimes == [365, 90]
+        assert result.lifetime_trend == "unknown"
+        assert result.automation_classification == "unknown"
+
+    @pytest.mark.parametrize("field,value", [
+        ("not_before", "invalid-date"), ("not_after", "invalid-date"),
+        ("not_before", None), ("not_after", None),
+        ("not_before", "2099-01-01T00:00:00+00:00"),
+        ("not_before", "same-as-expiry"),
+    ])
+    def test_invalid_missing_or_nonpositive_validity_stays_unknown(self, field, value):
+        entries = _validity_history()
+        if value == "same-as-expiry":
+            value = entries[1]["not_after"]
+        entries[1][field] = value
+
+        result = _compute_host_from_entries("malformed.example.test", entries)
+
+        assert result.observed_lifetimes == [365, 365]
+        assert result.lifetime_trend == "unknown"
+        assert result.automation_classification == "unknown"
+        assert result.classification_evidence["unknown_validity_count"] == 1
+
+    def test_incomplete_scan_chronology_cannot_infer_automation(self):
+        entries = _validity_history()
+        for entry in entries:
+            entry["not_before"] = (
+                datetime.fromisoformat(entry["not_after"]) - timedelta(days=90)
+            ).isoformat()
+        entries[1]["scanned_at"] = "invalid-date"
+
+        result = _compute_host_from_entries("unknown-cadence.example.test", entries)
+
+        assert result.observed_lifetimes == [90, 90, 90]
+        assert result.renewal_lead_times == [20.0]
+        assert result.median_cadence_days is None
+        assert result.automation_classification == "unknown"

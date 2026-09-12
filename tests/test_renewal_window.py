@@ -75,6 +75,28 @@ def test_window_zero_disables(tmp_path):
     assert evaluate_renewal_window(db, repo, 0) == []
 
 
+def test_current_candidates_match_evaluation_without_reading_or_writing_alerts(tmp_path):
+    from cert_watch.alerts import evaluate_renewal_window, renewal_window_candidates
+    from cert_watch.database import SqliteAlertRepository
+
+    db = str(tmp_path / "t.sqlite3")
+    _seed(db)
+    _insert_cert(db, cid="custom-window", days_valid=40, hostname="custom.example.com")
+    repo = SqliteAlertRepository(db)
+    assert renewal_window_candidates(db, 0) == []
+    assert renewal_window_candidates(db, 10) == []
+    candidates = renewal_window_candidates(db, 45)
+    assert {candidate["id"] for candidate in candidates} == {"stalled", "custom-window"}
+    assert repo.list_all() == []
+    created = evaluate_renewal_window(db, repo, 45)
+    assert {alert.cert_id for alert in created} == {candidate["id"] for candidate in candidates}
+    for alert in created:
+        repo.mark_sent(alert.id)
+    assert {candidate["id"] for candidate in renewal_window_candidates(db, 45)} == {
+        "stalled", "custom-window",
+    }
+
+
 def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
     """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
     from cert_watch.alerts import evaluate_renewal_window

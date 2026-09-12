@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.readiness import (
@@ -18,7 +19,7 @@ from cert_watch.readiness import (
 
 def _seed_readiness_fleet(db_path: str | Path) -> None:
     from cert_watch.certificate_model import Certificate
-    from cert_watch.database import init_schema, store_scan_posture
+    from cert_watch.database import SqliteHostRepository, init_schema, store_scan_posture
     from cert_watch.database.connection import _connect
     from tests._helpers import seed_certificate
 
@@ -29,6 +30,9 @@ def _seed_readiness_fleet(db_path: str | Path) -> None:
     )
 
     init_schema(db_path)
+    hosts = SqliteHostRepository(db_path)
+    for hostname in ("auto.example.com", "manual.example.com", "new.example.com", "internal.corp"):
+        hosts.add(hostname, 443)
     now = datetime.now(UTC)
 
     automated_cert = Certificate(
@@ -255,6 +259,223 @@ class TestBuildReadinessReport:
         assert report.private_hosts == []
 
 
+def _seed_current_endpoint(db: Path, *, hostname="current.example.test", port=443,
+                           lifetime=365, host_tags="", cert_tags="", history=False):
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import (
+        SqliteHostRepository,
+        init_schema,
+        record_cert_history,
+        store_scan_posture,
+    )
+    from tests._helpers import seed_certificate
+
+    init_schema(db)
+    SqliteHostRepository(db).add(hostname, port, tags=host_tags)
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject=f"CN={hostname}", issuer="CN=Test CA",
+        not_before=now - timedelta(days=lifetime - 5),
+        not_after=now + timedelta(days=5), san_dns_names=[hostname],
+        fingerprint_sha256=f"{hostname}:{port}", raw_der=b"", is_leaf=True,
+    )
+    cert_id = seed_certificate(
+        db, cert, cert_id=f"current-{hostname}-{port}", hostname=hostname,
+        port=port, source="scanned", tags=cert_tags,
+    )
+    store_scan_posture(db, cert_id, hostname, port, "A", [], chain_status="public")
+    if history:
+        record_cert_history(db, hostname, port, cert, scanned_at=now.isoformat())
+    return cert_id
+
+
+class TestCurrentEndpointReadiness:
+    @pytest.mark.parametrize("seconds,expected_lifetime", [
+        (47 * 86400 + 1, 48), (3600, 1), (0, None), (-1, None),
+    ])
+    def test_current_and_historical_validity_never_round_under_a_cap(
+        self, tmp_path, seconds, expected_lifetime,
+    ):
+        from cert_watch.database.connection import _connect
+        from cert_watch.renewal_analytics import _compute_host_from_entries
+
+        db = tmp_path / "estate.sqlite3"
+        cert_id = _seed_current_endpoint(db)
+        not_before = datetime(2026, 1, 1, tzinfo=UTC)
+        not_after = not_before + timedelta(seconds=seconds)
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE certificates SET not_before = ?, not_after = ? WHERE id = ?",
+                (not_before.isoformat(), not_after.isoformat(), cert_id),
+            )
+            conn.commit()
+
+        host = build_readiness_report(db).hosts[0]
+        history = _compute_host_from_entries("current.example.test", [{
+            "fingerprint_sha256": "current", "issuer": "CA",
+            "not_before": not_before.isoformat(), "not_after": not_after.isoformat(),
+            "scanned_at": not_before.isoformat(),
+        }])
+
+        assert host.current_lifetime == expected_lifetime
+        assert history.observed_lifetimes == (
+            [] if expected_lifetime is None else [expected_lifetime]
+        )
+        if expected_lifetime is not None:
+            assert host.margins[-1]["renew_late"] is (expected_lifetime > 47)
+        else:
+            assert host.margins[-1]["margin_days"] is None
+
+    def test_monitored_unobserved_and_failed_endpoints_remain_unknown(self, tmp_path):
+        from cert_watch.database import SqliteHostRepository, init_schema
+        from cert_watch.scheduler import ScanHistory, record_scan_history
+
+        db = tmp_path / "estate.sqlite3"
+        init_schema(db)
+        hosts = SqliteHostRepository(db)
+        hosts.add("unobserved.example.test", 443)
+        hosts.add("failed.example.test", 636)
+        record_scan_history(db, ScanHistory(
+            hostname="failed.example.test", port=636, status="failure", error_message="offline",
+        ))
+
+        report = build_readiness_report(db)
+        assert report.total_hosts == 2
+        assert report.unknown_hosts == 2
+        assert report.public_trust_hosts == report.private_ca_hosts == 0
+        assert {(host.hostname, host.port) for host in report.unknown_hosts_list} == {
+            ("unobserved.example.test", 443), ("failed.example.test", 636),
+        }
+        for host in report.unknown_hosts_list:
+            assert host.current_lifetime is None
+            assert host.current_lead_time is None
+            assert host.classification == "unknown"
+
+    def test_legacy_history_never_substitutes_first_scan_for_issuance(self, tmp_path):
+        from cert_watch.database.connection import _connect
+
+        db = tmp_path / "estate.sqlite3"
+        _seed_current_endpoint(db, lifetime=365, history=True)
+        with _connect(db) as conn:
+            conn.execute("UPDATE cert_history SET not_before = NULL")
+            conn.commit()
+
+        report = build_readiness_report(db)
+        host = report.hosts[0]
+        assert host.current_lifetime == 365
+        assert [margin["margin_days"] for margin in host.margins] == [-165, -265, -318]
+        assert all(margin["renew_late"] for margin in host.margins)
+        assert report.workload_forecast.current_renewals_per_month == 0.1
+
+    def test_current_leaf_without_retained_history_still_has_actual_validity(self, tmp_path):
+        db = tmp_path / "estate.sqlite3"
+        _seed_current_endpoint(db, lifetime=90)
+
+        report = build_readiness_report(db)
+        assert report.total_hosts == report.public_trust_hosts == 1
+        host = report.hosts[0]
+        assert host.current_lifetime == 90
+        assert host.current_lead_time is None
+        assert host.classification == "unknown"
+
+    def test_history_cannot_replace_missing_current_leaf_or_add_unmonitored_hosts(self, tmp_path):
+        from cert_watch.database.connection import _connect
+
+        db = tmp_path / "estate.sqlite3"
+        _seed_current_endpoint(db, hostname="monitored.example.test", history=True)
+        _seed_current_endpoint(db, hostname="unmonitored.example.test", history=True)
+        with _connect(db) as conn:
+            conn.execute("DELETE FROM scan_posture WHERE hostname = 'monitored.example.test'")
+            conn.execute("DELETE FROM certificates WHERE hostname = 'monitored.example.test'")
+            conn.execute("DELETE FROM hosts WHERE hostname = 'unmonitored.example.test'")
+            conn.commit()
+
+        report = build_readiness_report(db)
+        assert report.total_hosts == report.unknown_hosts == 1
+        assert report.public_trust_hosts == 0
+        host = report.unknown_hosts_list[0]
+        assert host.hostname == "monitored.example.test"
+        assert host.current_lifetime is None
+        assert host.chain_status is None
+
+    def test_new_population_preserves_host_scopes_and_exact_ports(self, tmp_path):
+        from cert_watch.database import SqliteHostRepository, init_schema
+
+        db = tmp_path / "estate.sqlite3"
+        init_schema(db)
+        hosts = SqliteHostRepository(db)
+        hosts.add("dual.example.test", 443, tags="Straße")
+        hosts.add("dual.example.test", 636, tags="other-team")
+        _seed_current_endpoint(
+            db, hostname="dual.example.test", port=8443,
+            host_tags="other-team", cert_tags="Straße", history=True,
+        )
+
+        report = build_readiness_report(db, scope_tags=("STRASSE",))
+        assert report.total_hosts == report.unknown_hosts == 1
+        assert [(host.hostname, host.port) for host in report.unknown_hosts_list] == [
+            ("dual.example.test", 443),
+        ]
+        assert report.hosts == []
+        assert report.private_hosts == []
+
+    def test_uploaded_leaf_cannot_supply_current_validity_or_trust(self, tmp_path):
+        from cert_watch.certificate_model import Certificate
+        from cert_watch.database import store_scan_posture
+        from tests._helpers import seed_certificate
+
+        db = tmp_path / "estate.sqlite3"
+        _seed_current_endpoint(db, lifetime=365, history=True)
+        now = datetime.now(UTC)
+        uploaded = Certificate(
+            subject="CN=current.example.test", issuer="CN=Private CA",
+            not_before=now - timedelta(days=5), not_after=now + timedelta(days=5),
+            san_dns_names=[], fingerprint_sha256="uploaded", raw_der=b"", is_leaf=True,
+        )
+        cert_id = seed_certificate(
+            db, uploaded, source="uploaded", hostname="current.example.test", port=443,
+        )
+        store_scan_posture(
+            db, cert_id, "current.example.test", 443, "A", [], chain_status="private",
+        )
+
+        report = build_readiness_report(db)
+        assert report.total_hosts == report.public_trust_hosts == 1
+        assert report.private_hosts == []
+        assert report.hosts[0].current_lifetime == 365
+
+    @pytest.mark.parametrize("invalid_date", ["", "invalid-date", "2099-01-01T00:00:00+00:00"])
+    def test_missing_invalid_or_reversed_current_dates_stay_unknown(self, tmp_path, invalid_date):
+        from cert_watch.database.connection import _connect
+
+        db = tmp_path / "estate.sqlite3"
+        cert_id = _seed_current_endpoint(db, lifetime=365, history=True)
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE certificates SET not_before = ? WHERE id = ?", (invalid_date, cert_id),
+            )
+            conn.commit()
+
+        report = build_readiness_report(db)
+        host = report.hosts[0]
+        assert host.current_lifetime is None
+        assert all(margin["margin_days"] is None for margin in host.margins)
+
+    def test_unobserved_html_does_not_claim_the_estate_is_exempt(self, tmp_path, reload_app):
+        from cert_watch.database import SqliteHostRepository, init_schema
+
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        init_schema(db)
+        SqliteHostRepository(db).add("unobserved.example.test", 443)
+        with TestClient(app_mod.app) as client:
+            response = client.get("/readiness")
+        assert response.status_code == 200
+        assert "unobserved.example.test" in response.text
+        assert "SC-081 requirements do not apply to your estate" not in response.text
+        assert "not applicable" not in response.text
+
+
 class TestWorkloadForecast:
     def test_forecast_from_fixture(self, tmp_path):
         db = tmp_path / "test.sqlite3"
@@ -350,6 +571,67 @@ class TestReadinessReportToDict:
 
 
 class TestReadinessRoutes:
+    @pytest.mark.parametrize("known_count,expected_estimate", [(0, "—"), (1, "0.3")])
+    def test_workload_discloses_known_lifetime_coverage(
+        self, tmp_path, reload_app, known_count, expected_estimate,
+    ):
+        import re
+
+        from cert_watch.database.connection import _connect
+
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        for index in range(2):
+            cert_id = _seed_current_endpoint(db, hostname=f"endpoint-{index}.test", lifetime=90)
+            if index >= known_count:
+                with _connect(db) as conn:
+                    conn.execute("UPDATE certificates SET not_before = '' WHERE id = ?", (cert_id,))
+                    conn.commit()
+
+        with TestClient(app_mod.app) as client:
+            response = client.get("/readiness")
+            data = client.get("/api/readiness.json").json()
+
+        assert response.status_code == 200
+        coverage = (
+            f"Current estimate uses {known_count}/2 public-trust endpoints with known validity"
+        )
+        assert coverage in response.text
+        current_stat = re.search(
+            r'data-testid="readiness-current-workload">.*?class="cw-stat-val">([^<]*)',
+            response.text, re.DOTALL,
+        )
+        assert current_stat is not None
+        assert current_stat.group(1) == expected_estimate
+        assert isinstance(data["workload_forecast"]["current_renewals_per_month"], float)
+
+    def test_readiness_labels_inferred_automation_as_likely(self, tmp_path, reload_app):
+        from cert_watch.database.connection import _connect
+
+        app_mod = reload_app()
+        db = tmp_path / "cert-watch.sqlite3"
+        _seed_current_endpoint(db, lifetime=90)
+        now = datetime.now(UTC)
+        with _connect(db) as conn:
+            for index in range(3):
+                first_seen = now - timedelta(days=60 * (2 - index))
+                conn.execute(
+                    "INSERT INTO cert_history (hostname,port,fingerprint_sha256,issuer,"
+                    "not_before,not_after,scanned_at) VALUES (?,?,?,?,?,?,?)",
+                    ("current.example.test", 443, f"period-{index}", "Let's Encrypt",
+                     first_seen.isoformat(), (first_seen + timedelta(days=90)).isoformat(),
+                     first_seen.isoformat()),
+                )
+            conn.commit()
+
+        with TestClient(app_mod.app) as client:
+            data = client.get("/api/readiness.json").json()
+            response = client.get("/readiness")
+
+        assert data["hosts"][0]["classification"] == "likely-automated"
+        assert response.status_code == 200
+        assert "Likely automated" in response.text
+
     def test_readiness_json(self, reload_app):
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:

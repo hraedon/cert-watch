@@ -73,7 +73,7 @@ class TestQueueAssembly:
 
         _seed(db, "auto", 20, renewal_method="acme")
         _seed(db, "manual", 20, renewal_method="manual")
-        q = [i for i in build_attention_queue(db) if i["severity"] == "warning"]
+        q = [i for i in build_attention_queue(db, window_days=0) if i["severity"] == "warning"]
         assert len(q) == 2
         assert q[0]["confidence"] == "manual"
         assert q[1]["confidence"] == "auto"
@@ -83,11 +83,11 @@ class TestQueueAssembly:
         from cert_watch.attention import build_attention_queue
 
         _seed(db, "crit", 5, renewal_method="acme")
-        q = build_attention_queue(db)
+        q = build_attention_queue(db, window_days=0)
         assert q[0]["severity"] == "critical"
         assert any(r.startswith("expires in ") for r in q[0]["reasons"])
 
-    def test_renewal_stalled_uses_pending_alert(self, db: Path):
+    def test_pending_notification_does_not_duplicate_renewal_condition(self, db: Path):
         from cert_watch.attention import build_attention_queue
 
         cert_id = _seed(db, "stall", 20, renewal_method="acme")
@@ -111,7 +111,7 @@ class TestQueueAssembly:
 
         cert = _mk_cert("shared", 20)
         hosts = SqliteHostRepository(db)
-        hosts.add("a.example.com", 443, renewal_method="acme")
+        hosts.add("a.example.com", 443, renewal_method="acme", renewal_status="in_progress")
         hosts.add("z.example.com", 443, renewal_method="manual")
         first_id = seed_scanned(db, "a.example.com", 443, cert)
         affected_id = seed_scanned(db, "z.example.com", 443, cert)
@@ -138,16 +138,24 @@ class TestQueueAssembly:
         item = build_attention_queue(db)[0]
         assert item["confidence_label"] == "automation configured"
 
-    def test_uploaded_expiry_has_replacement_guidance(self, db: Path):
+    @pytest.mark.parametrize("days,severity", [(5, "critical"), (20, "warning")])
+    def test_uploaded_expiry_has_replacement_guidance(self, db: Path, days: int, severity: str):
+        from cert_watch.alerts import evaluate_renewal_window
         from cert_watch.attention import build_attention_queue
 
-        SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", 20))
+        cert_id = SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", days))
+        # Preserve alert-engine compatibility while Home distinguishes a static
+        # uploaded file from a monitored endpoint inside its renewal window.
+        alerts = evaluate_renewal_window(db, SqliteAlertRepository(db))
+        assert [alert.cert_id for alert in alerts] == [cert_id]
 
         item = build_attention_queue(db)[0]
         assert item["kind"] == "expiry"
+        assert item["severity"] == severity
         assert item["host_id"] is None
         assert item["reasons"][-1] == "upload replacement certificate"
         assert "renewal unknown" not in item["reasons"]
+        assert not any("renewal window" in reason for reason in item["reasons"])
 
     def test_deployment_endpoint_prefers_host_over_certificate_name(
         self, db: Path, monkeypatch
@@ -175,20 +183,47 @@ class TestQueueAssembly:
         item = build_attention_queue(db)[0]
         assert item["endpoint"] == "api.example.com:443"
 
-    def test_sent_stalled_alert_is_not_queued(self, db: Path):
+    @pytest.mark.parametrize("delivery_status", [None, "pending", "sent", "failed"])
+    def test_renewal_condition_does_not_depend_on_delivery_status(self, db: Path, delivery_status):
         from cert_watch.attention import build_attention_queue
 
         cert_id = _seed(db, "stall2", 20, renewal_method="acme")
-        SqliteAlertRepository(db).create(
-            Alert(
+        repo = SqliteAlertRepository(db)
+        if delivery_status is not None:
+            repo.create(Alert(
                 cert_id=cert_id,
                 alert_type="renewal_stalled",
-                status="sent",
+                status=delivery_status,
                 message="stalled",
-            )
-        )
-        kinds = [i["kind"] for i in build_attention_queue(db)]
-        assert "renewal_stalled" not in kinds
+            ))
+        before = repo.list_for_cert(cert_id)
+        items = [item for item in build_attention_queue(db) if item["cert_id"] == cert_id]
+        assert len(items) == 1
+        assert items[0]["kind"] == "renewal_stalled"
+        assert items[0]["severity"] == "stalled"
+        assert repo.list_for_cert(cert_id) == before  # Home only reads current state.
+
+    @pytest.mark.parametrize("resolution", ["in_progress", "renewed", "successor"])
+    def test_handled_condition_clears_despite_pending_notification(self, db: Path, resolution):
+        from cert_watch.attention import build_attention_queue
+
+        cert_id = _seed(db, "handled", 20, renewal_method="acme")
+        SqliteAlertRepository(db).create(Alert(
+            cert_id=cert_id, alert_type="renewal_stalled", status="pending", message="stalled",
+        ))
+        if resolution == "successor":
+            SqliteCertificateRepository(
+                db, source="scanned", hostname="handled.example.com", port=443,
+                replaces_cert_id=cert_id,
+            ).add(_mk_cert("successor", 300))
+        else:
+            with sqlite3_conn(db) as conn:
+                conn.execute(
+                    "UPDATE hosts SET renewal_status = ? WHERE hostname = ?",
+                    (resolution, "handled.example.com"),
+                )
+                conn.commit()
+        assert not any(item["kind"] == "renewal_stalled" for item in build_attention_queue(db))
 
     def test_scan_failing_host_queued(self, db: Path):
         from cert_watch.attention import build_attention_queue
@@ -243,6 +278,27 @@ def sqlite3_conn(db: Path):
 
 
 class TestHomeAndBrowseRoutes:
+    @pytest.mark.parametrize("window_days", [0, 10, 30, 45])
+    def test_home_uses_configured_renewal_window(self, tmp_path, window_days):
+        from dataclasses import replace
+
+        from cert_watch.app import create_app
+        from cert_watch.config import Settings
+
+        application = create_app(
+            settings=replace(Settings.from_env(), renewal_window_days=window_days),
+        )
+        db = tmp_path / "cert-watch.sqlite3"
+        init_schema(db)
+        cert_id = _seed(db, "window", 20, renewal_method="acme")
+        SqliteAlertRepository(db).create(Alert(
+            cert_id=cert_id, alert_type="renewal_stalled", status="pending", message="old notice",
+        ))
+        with TestClient(application) as client:
+            response = client.get("/")
+        assert response.status_code == 200
+        assert ('data-severity="stalled"' in response.text) is (window_days >= 20)
+
     def test_home_renders_empty_state(self, reload_app):
         app_mod = reload_app()
         with TestClient(app_mod.app) as client:
@@ -277,7 +333,9 @@ class TestHomeAndBrowseRoutes:
         assert "manual renewal" in r.text
         assert "ops" in r.text
 
-    def test_home_summary_does_not_count_expired_as_expiring(self, reload_app, tmp_path):
+    def test_home_tracked_summary_includes_expired_outside_future_horizon(
+        self, reload_app, tmp_path
+    ):
         app_mod = reload_app()
         db = tmp_path / "cert-watch.sqlite3"
         init_schema(db)
@@ -285,6 +343,6 @@ class TestHomeAndBrowseRoutes:
         with TestClient(app_mod.app) as client:
             r = client.get("/")
         assert r.status_code == 200
-        expiring = r.text.split('data-testid="home-expiring-stat"', 1)[1].split("</a>", 1)[0]
-        assert '<div class="cw-stat-val">0</div>' in expiring
+        tracked = r.text.split('data-testid="home-tracked-stat"', 1)[1].split("</a>", 1)[0]
+        assert '<div class="cw-stat-val">1</div>' in tracked
         assert "No expirations in the next 12 weeks" in r.text

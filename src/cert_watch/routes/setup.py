@@ -132,6 +132,12 @@ async def setup_submit(
             # Apply immediately to the running app (Settings is frozen).
             request.app.state.settings = _dc_replace(s, allowed_subnets=tuple(subnet_list))
             s = request.app.state.settings
+            # Publish to the running scheduler too. Assigning app.state alone left
+            # scheduled scans on the pre-wizard allowlist until the next restart --
+            # the exact UI/runtime divergence this plan exists to remove.
+            context = getattr(request.app.state, "scheduler_context", None)
+            if context is not None:
+                context.update_settings(s)
             logger.info("setup wizard: scan allowlist set to %s", subnet_list)
 
         # Rebuild auth provider with the new local admin
