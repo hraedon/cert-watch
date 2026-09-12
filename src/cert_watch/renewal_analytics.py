@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
+from datetime import datetime
+from math import ceil
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,12 @@ class RenewalOverdueSignal:
 
 @dataclass
 class HostRenewalAnalytics:
+    """Deployment history; lifetimes contain only known certificate validity.
+
+    Missing periods remain in cert_count but never acquire a duration from a
+    scan timestamp. A lifetime trend requires validity for every period.
+    """
+
     hostname: str
     observed_lifetimes: list[int]
     lifetime_trend: str
@@ -64,7 +72,18 @@ def _classify_automation(
     cadence_intervals: list[float],
     renewal_lead_times: list[float],
 ) -> tuple[str, dict[str, Any]]:
-    evidence: dict[str, Any] = {}
+    known_count = len(observed_lifetimes)
+    unknown_count = len(fingerprint_periods) - known_count
+    expected_intervals = len(fingerprint_periods) - 1
+    chronology_complete = (
+        len(cadence_intervals) == expected_intervals
+        and len(renewal_lead_times) == expected_intervals
+    )
+    evidence: dict[str, Any] = {
+        "known_validity_count": known_count,
+        "unknown_validity_count": unknown_count,
+        "chronology_complete": chronology_complete,
+    }
 
     if len(fingerprint_periods) < 2:
         evidence["reason"] = "fewer than 2 observed renewals"
@@ -74,7 +93,9 @@ def _classify_automation(
     has_acme_issuer = any(_is_acme_issuer(iss) for iss in issuers)
 
     max_lifetime = max(observed_lifetimes) if observed_lifetimes else 0
-    all_short_lived = all(lt <= 90 for lt in observed_lifetimes) if observed_lifetimes else False
+    all_short_lived = unknown_count == 0 and bool(observed_lifetimes) and all(
+        lt <= 90 for lt in observed_lifetimes
+    )
 
     cadence_stdev = statistics.pstdev(cadence_intervals) if len(cadence_intervals) >= 2 else 0.0
 
@@ -91,6 +112,10 @@ def _classify_automation(
     evidence["has_late_renewals"] = has_late_renewals
     evidence["renewal_count"] = len(fingerprint_periods) - 1
 
+    if unknown_count or not chronology_complete:
+        evidence["reason"] = "incomplete certificate validity or scan chronology"
+        return "unknown", evidence
+
     if max_lifetime > 90 or has_late_renewals:
         return "manual", evidence
 
@@ -98,6 +123,23 @@ def _classify_automation(
         return "likely-automated", evidence
 
     return "manual", evidence
+
+
+def _known_timestamp(value: Any) -> datetime | None:
+    try:
+        return _parse_iso(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _known_validity_days(entry: dict[str, Any]) -> int | None:
+    not_before = _known_timestamp(entry.get("not_before"))
+    not_after = _known_timestamp(entry.get("not_after"))
+    if not_before is None or not_after is None:
+        return None
+    seconds = (not_after - not_before).total_seconds()
+    # A partial day must not round a certificate under a validity cap.
+    return ceil(seconds / 86400) if seconds > 0 else None
 
 
 def _compute_host_from_entries(
@@ -128,35 +170,43 @@ def _compute_host_from_entries(
                     "issuer": entry["issuer"],
                     "not_after": entry["not_after"],
                     "not_before": entry.get("not_before"),
+                    "validity_days": _known_validity_days(entry),
                     "first_scanned_at": entry["scanned_at"],
                     "last_scanned_at": entry["scanned_at"],
                 }
             )
         else:
-            fingerprint_periods[-1]["last_scanned_at"] = entry["scanned_at"]
+            period = fingerprint_periods[-1]
+            period["last_scanned_at"] = entry["scanned_at"]
+            # A post-migration observation may supply the missing issuance
+            # date. Recover only inside this contiguous deployment, never
+            # from an earlier/later occurrence across a rollback boundary.
+            validity = _known_validity_days(entry)
+            if period["validity_days"] is None and validity is not None:
+                period["not_before"] = entry["not_before"]
+                period["not_after"] = entry["not_after"]
+                period["validity_days"] = validity
 
     cert_count = len(fingerprint_periods)
 
-    observed_lifetimes: list[int] = []
-    for period in fingerprint_periods:
-        not_after = _parse_iso(period["not_after"])
-        nb = period.get("not_before")
-        if nb:
-            not_before = _parse_iso(nb)
-            validity_days = (not_after - not_before).days
-        else:
-            first_scanned = _parse_iso(period["first_scanned_at"])
-            validity_days = (not_after - first_scanned).days
-        observed_lifetimes.append(max(validity_days, 0))
+    observed_lifetimes: list[int] = [
+        period["validity_days"] for period in fingerprint_periods
+        if period["validity_days"] is not None
+    ]
 
-    lifetime_trend = _compute_trend(observed_lifetimes)
+    lifetime_trend = (
+        _compute_trend(observed_lifetimes)
+        if len(observed_lifetimes) == cert_count else "unknown"
+    )
 
     renewal_lead_times: list[float] = []
     for i in range(1, len(fingerprint_periods)):
         prev = fingerprint_periods[i - 1]
         curr = fingerprint_periods[i]
-        renewal_time = _parse_iso(curr["first_scanned_at"])
-        prev_not_after = _parse_iso(prev["not_after"])
+        renewal_time = _known_timestamp(curr["first_scanned_at"])
+        prev_not_after = _known_timestamp(prev["not_after"])
+        if renewal_time is None or prev_not_after is None:
+            continue
         lead_days = (prev_not_after - renewal_time).total_seconds() / 86400
         renewal_lead_times.append(round(lead_days, 1))
 
@@ -164,8 +214,10 @@ def _compute_host_from_entries(
 
     cadence_intervals: list[float] = []
     for i in range(1, len(fingerprint_periods)):
-        prev_first = _parse_iso(fingerprint_periods[i - 1]["first_scanned_at"])
-        curr_first = _parse_iso(fingerprint_periods[i]["first_scanned_at"])
+        prev_first = _known_timestamp(fingerprint_periods[i - 1]["first_scanned_at"])
+        curr_first = _known_timestamp(fingerprint_periods[i]["first_scanned_at"])
+        if prev_first is None or curr_first is None or curr_first <= prev_first:
+            continue
         interval = (curr_first - prev_first).total_seconds() / 86400
         cadence_intervals.append(round(interval, 1))
 

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from math import ceil
 from pathlib import Path
 from typing import Any, TypedDict
 
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _parse_iso
+from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
 from cert_watch.database.schema import init_schema
 from cert_watch.renewal_analytics import HostRenewalAnalytics, compute_fleet_analytics
 
@@ -59,31 +61,45 @@ class ReadinessReport:
 
 
 
-def _batch_chain_statuses(
-    db_path: str | Path, endpoints: list[tuple[str, int | None]]
-) -> dict[tuple[str, int | None], str | None]:
-    if not endpoints:
-        return {}
-    # Read the latest stored posture for each exact endpoint. A hostname can
-    # serve unrelated public and private certificates on different ports.
-    hostnames = sorted({hostname for hostname, _port in endpoints})
-    placeholders = ",".join("?" * len(hostnames))
+def _current_endpoints(
+    db_path: str | Path, scope_tags: tuple[str, ...]
+) -> list[dict[str, Any]]:
+    """Monitored endpoints, including those without any successful observation.
+
+    Readiness has always used host-tag visibility, like renewal analytics.
+    Preserve that boundary; certificate tags alone do not expose another host.
+    A current leaf's validity and trust must come from that same certificate,
+    not another port, historical deployment, or uploaded certificate.
+    """
+    sql = """SELECT h.hostname, h.port, c.not_before, c.not_after,
+                (SELECT sp.chain_status FROM scan_posture sp WHERE sp.cert_id = c.id
+                 ORDER BY sp.scanned_at DESC, sp.rowid DESC LIMIT 1) AS chain_status
+             FROM hosts h
+             LEFT JOIN certificates c ON c.id = (
+                 SELECT current.id FROM certificates current
+                 WHERE current.hostname = h.hostname AND current.port = h.port
+                   AND current.is_leaf = 1 AND current.source = 'scanned'
+                 ORDER BY current.created_at DESC, current.rowid DESC LIMIT 1
+             )
+             WHERE 1 = 1"""
+    sql, params = _add_effective_tag_filter(
+        sql, [], scope_tags, col_cert=None, col_host="h.tags",
+    )
+    sql += " ORDER BY h.hostname, h.port"
     with _connect(db_path) as conn:
-        rows = conn.execute(
-            f"""SELECT c.hostname, c.port, sp.chain_status FROM scan_posture sp
-                JOIN certificates c ON c.id = sp.cert_id
-                WHERE c.is_leaf = 1 AND c.hostname IN ({placeholders})
-                ORDER BY sp.scanned_at DESC, sp.rowid DESC""",
-            hostnames,
-        ).fetchall()
-    result: dict[tuple[str, int | None], str | None] = dict.fromkeys(endpoints)
-    seen: set[tuple[str, int | None]] = set()
-    for row in rows:
-        endpoint = (row["hostname"], row["port"])
-        if endpoint in result and endpoint not in seen:
-            result[endpoint] = row["chain_status"]
-            seen.add(endpoint)
-    return result
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
+
+
+def _current_lifetime(endpoint: dict[str, Any]) -> int | None:
+    """Actual certificate validity, rounded up to avoid understating cap risk."""
+    if not endpoint["not_before"] or not endpoint["not_after"]:
+        return None
+    try:
+        duration = _parse_iso(endpoint["not_after"]) - _parse_iso(endpoint["not_before"])
+    except (ValueError, TypeError):
+        return None
+    seconds = duration.total_seconds()
+    return ceil(seconds / 86400) if seconds > 0 else None
 
 
 def _compute_margins(lifetime: int | None) -> list[dict[str, Any]]:
@@ -102,7 +118,7 @@ def _compute_margins(lifetime: int | None) -> list[dict[str, Any]]:
             margin_pct = round(margin_days / max_days * 100, 1) if max_days else 0.0
             renew_late = lifetime > max_days
         else:
-            # No observed lifetime (single scan, no not_before): can't confirm
+            # No usable current certificate validity: can't confirm
             # compliance — flag conservatively for operator review.
             margin_days = None
             margin_pct = None
@@ -118,20 +134,19 @@ def _compute_margins(lifetime: int | None) -> list[dict[str, Any]]:
 
 
 def _compute_host_readiness(
-    analytics: HostRenewalAnalytics,
-    chain_status: str | None,
+    endpoint: dict[str, Any],
+    analytics: HostRenewalAnalytics | None,
 ) -> HostReadiness:
-    lead_time = analytics.median_lead_time
-    lifetimes = analytics.observed_lifetimes
-    current_lifetime = lifetimes[-1] if lifetimes else None
-
+    """Current scan supplies validity/trust; history supplies qualified inference."""
+    chain_status = endpoint["chain_status"]
+    current_lifetime = _current_lifetime(endpoint)
     is_private = chain_status == "private"
 
     return HostReadiness(
-        hostname=analytics.hostname,
-        port=analytics.port,
-        classification=analytics.automation_classification,
-        current_lead_time=lead_time,
+        hostname=endpoint["hostname"],
+        port=endpoint["port"],
+        classification=analytics.automation_classification if analytics else "unknown",
+        current_lead_time=analytics.median_lead_time if analytics else None,
         current_lifetime=current_lifetime,
         margins=_compute_margins(current_lifetime) if not is_private else [],
         chain_status=chain_status,
@@ -184,18 +199,20 @@ def build_readiness_report(
     db_path: str | Path, scope_tags: tuple[str, ...] = ()
 ) -> ReadinessReport:
     init_schema(db_path)
-    fleet = compute_fleet_analytics(db_path, scope_tags=scope_tags)
-
-    endpoints = [(a.hostname, a.port) for a in fleet]
-    chain_statuses = _batch_chain_statuses(db_path, endpoints)
+    endpoints = _current_endpoints(db_path, scope_tags)
+    analytics_by_endpoint = {
+        (analytics.hostname, analytics.port): analytics
+        for analytics in compute_fleet_analytics(db_path, scope_tags=scope_tags)
+    }
 
     public_hosts: list[HostReadiness] = []
     private_hosts: list[HostReadiness] = []
     unknown_hosts: list[HostReadiness] = []
 
-    for a in fleet:
-        cs = chain_statuses.get((a.hostname, a.port))
-        readiness = _compute_host_readiness(a, cs)
+    for endpoint in endpoints:
+        cs = endpoint["chain_status"]
+        analytics = analytics_by_endpoint.get((endpoint["hostname"], endpoint["port"]))
+        readiness = _compute_host_readiness(endpoint, analytics)
         if cs == "private":
             private_hosts.append(readiness)
         elif cs == "public":
@@ -212,7 +229,7 @@ def build_readiness_report(
 
     return ReadinessReport(
         generated_at=datetime.now(UTC).isoformat(),
-        total_hosts=len(fleet),
+        total_hosts=len(endpoints),
         public_trust_hosts=len(public_hosts),
         private_ca_hosts=len(private_hosts),
         unknown_hosts=len(unknown_hosts),

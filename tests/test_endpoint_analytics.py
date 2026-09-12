@@ -2,7 +2,7 @@
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import init_schema, store_scan_posture
+from cert_watch.database import SqliteHostRepository, init_schema, store_scan_posture
 from cert_watch.database.connection import _connect
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.renewal_analytics import (
@@ -19,6 +19,7 @@ def test_readiness_keeps_ports_and_current_lifetime_separate(tmp_path):
     init_schema(db)
     now = datetime.now(UTC)
     for port, trust, lifetime in [(443, "public", 90), (636, "private", 365)]:
+        SqliteHostRepository(db).add("dual.example.test", port)
         cert = Certificate(
             subject="CN=dual.example.test", issuer="CN=Test CA",
             not_before=now - timedelta(days=10),
