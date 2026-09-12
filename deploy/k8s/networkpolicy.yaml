@@ -11,22 +11,34 @@ spec:
     - Ingress
     - Egress
   ingress:
+    # Both selectors below must name things that ACTUALLY EXIST in the target
+    # cluster: a namespaceSelector that matches nothing silently denies all
+    # traffic, and the symptom is a 502 from the ingress controller with a
+    # perfectly healthy pod behind it. Verify with:
+    #   kubectl get ns -L kubernetes.io/metadata.name
+    #   kubectl -n <ns> get pods --show-labels
     - from:
+        # The Ingress for this service sets ingressClassName: traefik-internal,
+        # and that controller runs in the namespace of the same name. There is
+        # no namespace called "ingress" — naming one here denied every request
+        # from 2026-06-03 until this was corrected.
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: ingress
+              kubernetes.io/metadata.name: traefik-internal
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik
       ports:
         - port: http
     - from:
+        # Prometheus here is a plain Deployment labelled `app: prometheus`,
+        # not the app.kubernetes.io/name form used by Helm-packaged charts.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: monitoring
           podSelector:
             matchLabels:
-              app.kubernetes.io/name: prometheus
+              app: prometheus
       ports:
         - port: http
   egress:
