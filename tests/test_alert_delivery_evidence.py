@@ -11,7 +11,13 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from cert_watch.alerts import ALERT_MAX_RETRIES, AlertConfig, WebhookConfig, process_pending
+from cert_watch.alerts import (
+    ALERT_MAX_RETRIES,
+    UNDELIVERED_AFTER_HOURS,
+    AlertConfig,
+    WebhookConfig,
+    process_pending,
+)
 from cert_watch.database import (
     Alert,
     SqliteAlertRepository,
@@ -445,3 +451,114 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message
+
+
+def _age_alert(db, alert_id, *, hours):
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET created_at = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(hours=hours)).isoformat(), alert_id),
+        )
+        conn.commit()
+
+
+def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_path, reload_app):
+    """A deferral has no attempt row, so only its age distinguishes it.
+
+    ``process_pending`` defers when the database refuses a write, which is
+    exactly when a reason cannot be persisted on the alert — the store that
+    would hold it is the one that is down. Age is read, not written, and it
+    catches a scheduler that has simply stopped flushing too.
+    """
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" in response.text
+    assert "Still queued past the cycle that should have sent it." in response.text
+
+
+def test_activity_does_not_alarm_over_a_freshly_queued_alert(monkeypatch, tmp_path, reload_app):
+    """Every pending alert is briefly undelivered; saying so on all of them is noise."""
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=1)
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" not in response.text
+    assert "Recorded: pending" in response.text
+
+
+def test_activity_does_not_relabel_an_alert_that_already_reached_a_transport(
+    monkeypatch, tmp_path, reload_app,
+):
+    """A failed alert is not undelivered-and-waiting: it is finished, and failed."""
+    db, repo, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    attempt_id = begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
+    complete_attempt(db, attempt_id, {"outcome": "failed"})
+    repo.mark_failed(alert.id, "relay refused")
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" not in response.text
+    assert "Attempt failed" in response.text
+
+
+def test_activity_reports_both_the_attempt_outcome_and_that_nothing_arrived(
+    monkeypatch, tmp_path, reload_app,
+):
+    """An interrupted attempt leaves an alert both `unknown` and still queued.
+
+    The two chips answer different questions — what the transport said, and
+    whether the alert has gone out — so one must not suppress the other. An
+    outcome of `unknown` reassuring an operator about an alert that is in fact
+    still sitting in the queue is the failure this guards.
+    """
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    # Started, never completed: the process died mid-send. The alert stays pending.
+    begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Delivery outcome unknown" in response.text
+    assert "Not yet delivered" in response.text
+
+
+def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
+    monkeypatch, tmp_path, reload_app,
+):
+    """A row whose age cannot be read is not evidence of anything.
+
+    Both surfaces must agree on that, and they reach it independently — the
+    view parses the timestamp, the health check compares it as a SQL string.
+    A row that one treats as overdue and the other ignores would leave an
+    operator with a banner and no matching alert, or an alert and a green
+    banner, with nothing to reconcile them.
+    """
+    db, _, alert = _pending(tmp_path)
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?", ("not-a-date", alert.id))
+        conn.commit()
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        page = client.get("/alerts")
+        health = client.get("/api/health").json()
+
+    assert "Not yet delivered" not in page.text
+    assert health["undelivered_alerts"] == 0

@@ -45,12 +45,25 @@ database will refuse the next attempt. The failure message reports the transport
 attempts that actually ran, which for a dual-channel estate exceeds
 `ALERT_MAX_RETRIES` — that constant bounds the passes, not the sends.
 
-Deferral is unbounded by design (see #38), so it must not be silent. `/api/health`
-reports `undelivered_alerts` — alerts still `pending` more than 24 hours after
-they were raised — and degrades to `warning` on any. It is queried by outcome
-rather than by cause, so it also catches a scheduler that has stopped flushing.
+Deferral is unbounded by design (see #38), so it must not be silent. Two surfaces
+report it, both derived from `ALERT_UNDELIVERED_AFTER_HOURS` (`alerts.UNDELIVERED_AFTER_HOURS`,
+24h — one daily cycle plus slack):
+
+- `/api/health` reports `undelivered_alerts` — alerts still `pending` past that
+  window — and degrades to `warning` on any.
+- Activity marks each such alert **Not yet delivered**. The chip is additive: an
+  attempt may be recorded and left `unknown` while the alert is still queued, and
+  the outcome chip answers a different question from whether it went out.
+
+Both are derived from age at read time rather than stored on the alert. The
+deferral happens precisely when the database refuses a write, so the reason
+cannot be persisted at the moment it is known — the store that would hold it is
+the one that is down. Age is also cause-agnostic: it catches a scheduler that has
+stopped flushing, which no delivery-side marker would ever record. An unreadable
+`created_at` counts as undelivered on neither surface.
+
 This is the operator-visible trace that the old, incorrect behavior supplied as
-a side effect of marking such alerts `failed`.
+a side effect of marking such alerts `failed`. Closes #37.
 
 ## AC-05: Alert Formatting
 Each alert email must include: certificate subject, expiry date, days remaining, and recommended action.

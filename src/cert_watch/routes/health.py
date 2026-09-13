@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from cert_watch.alerts import UNDELIVERED_AFTER_HOURS
 from cert_watch.auth import SESSION_COOKIE, validate_session
 from cert_watch.database.connection import _connect
 from cert_watch.middleware import (
@@ -213,7 +214,7 @@ def api_health(request: Request) -> JSONResponse:
     # The counter is what makes the deferral loud; it is unbounded by design
     # (see #38), so nothing else would ever raise a hand.
     try:
-        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",

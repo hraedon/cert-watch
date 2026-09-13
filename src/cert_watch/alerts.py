@@ -898,6 +898,13 @@ def resolve_webhook_for_renewed_cert(
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
 
+# How long an alert may sit `pending` before the estate treats it as undelivered.
+# One full daily cycle plus slack: anything older has missed a send it should
+# have caught. Read by the health check and the Activity view, which must agree
+# -- two different ideas of "overdue" is how one surface reassures an operator
+# the other is trying to warn.
+UNDELIVERED_AFTER_HOURS = 24
+
 
 def evaluate_policy_alerts(
     cert_id: str,
