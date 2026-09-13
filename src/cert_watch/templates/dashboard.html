@@ -100,7 +100,7 @@
 <div class="cw-wrap">
   {% call ui.page_head('Certificates', 'Status covers expiry and chain trust. Grades describe the last TLS scan.', testid='dashboard-heading') %}
     <div class="cw-menuwrap">
-      <button class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">{{ icons.svg_icon('download', 14) }}Export{{ icons.svg_icon('chevron-down', 13) }}</button>
+      <button type="button" class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">{{ icons.svg_icon('download', 14) }}Export{{ icons.svg_icon('chevron-down', 13) }}</button>
       <div class="cw-menu cw-hidden" id="export-menu" role="menu" aria-label="Export data">
         <div class="cw-menu-label">Point-in-time snapshot · UTC</div>
         <a class="cw-menu-item" role="menuitem" href="/api/reports/inventory.csv">{{ icons.svg_icon('shield', 14) }}Certificate inventory (CSV)</a>
@@ -109,7 +109,7 @@
       </div>
     </div>
     {% if may_write %}
-    <button class="cw-btn primary" id="add-host-trigger" data-drawer-open="add-drawer" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
+    <button type="button" class="cw-btn primary" id="add-host-trigger" data-drawer-open="add-drawer" data-testid="add-host-btn">{{ icons.svg_icon('plus', 15, 2) }}Add host</button>
     {% endif %}
   {% endcall %}
 
@@ -358,7 +358,7 @@
       <h2 class="cw-drawer-title" id="add-drawer-heading">Add certificates</h2>
       <div class="cw-sub">Scan a host, upload a file, or import in bulk.</div>
     </div>
-    <button class="cw-iconbtn" data-drawer-close="add-drawer" aria-label="Close">{{ icons.svg_icon('x', 16) }}</button>
+    <button type="button" class="cw-iconbtn" data-drawer-close="add-drawer" aria-label="Close">{{ icons.svg_icon('x', 16) }}</button>
   </div>
   <div class="cw-drawer-tabs">
     <div class="cw-seg" role="tablist" aria-label="Add certificates method">
