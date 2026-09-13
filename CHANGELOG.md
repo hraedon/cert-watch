@@ -38,6 +38,28 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **A failing relay no longer stalls the scan cycle in proportion to the alert
+  queue.** The retry backoff sat inside the per-alert loop, so each failing
+  alert slept its own ~6s: a ten-alert queue blocked the scheduler for 71s, and
+  a hundred for roughly twelve minutes — while scanning waited, during exactly
+  the outage an operator needs scanning to survive. Retries now run in waves, so
+  the sleeps are shared by the queue (ten failing alerts: 71s → 7.6s) while each
+  alert still gets its full run of attempts. A wall-clock budget bounds what
+  waves cannot: an unreachable relay burns a socket timeout per attempt rather
+  than refusing, which no amount of sleep-sharing helps. Alerts the budget cuts
+  short stay pending and are reported as deferred, never as failed.
+- **One host could stop the whole estate from being scanned.** `scan_interval_hours`
+  was unbounded in the add-host form and CSV import, and `last_success +
+  timedelta(hours=N)` leaves the representable date range long before `N` does.
+  A single such row made `get_hosts_due_for_scan` and the scheduler's wakeup
+  calculation raise `OverflowError`, so nothing was scanned at all — while the
+  dashboards, which already caught it, kept rendering green. Both write paths
+  now bound the cadence to 1–8760 hours, and the scheduler falls back to the
+  daily cadence (with a warning) for rows written before the bound existed.
+- **A partial CSV import no longer drops rows in silence.** Rows rejected
+  alongside successful ones redirected to a bare `/` with nothing said, so an
+  operator believed they had imported endpoints that were never added. The
+  count and the first few reasons are now reported.
 - **The endpoint-settings form is offered only when the POST would accept it.**
   The affordance asked `AuthContext.may_write_any()` while the POST enforces
   `require_write_form` — a different predicate for API-key contexts and for the

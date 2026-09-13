@@ -45,6 +45,22 @@ database will refuse the next attempt. The failure message reports the transport
 attempts that actually ran, which for a dual-channel estate exceeds
 `ALERT_MAX_RETRIES` — that constant bounds the passes, not the sends.
 
+Retries run in **waves**: every pending alert is attempted once before any is
+attempted a second time. Each alert still receives `ALERT_MAX_RETRIES` attempts
+before it may be marked failed, but the backoff sleeps are shared by the queue
+rather than paid per alert. No sleep may follow the last wave that does work.
+
+The cycle also carries a wall-clock budget, `ALERT_CYCLE_BUDGET_SECONDS`. The
+scheduler runs the alert phase synchronously, so its cost is paid by scanning —
+and it is largest exactly when delivery is failing. Waves bound the sleeping;
+they do not bound transport, because an unreachable relay burns a socket
+timeout per attempt rather than refusing. When the budget is spent, alerts not
+yet resolved stay **pending** and count as **deferred**; they are never marked
+failed, because the clock running out is a property of the queue, not of the
+destination. Breadth before depth is why the two belong together: a budget
+spent down a per-alert loop would give the first few alerts every attempt and
+the rest none.
+
 Deferral is unbounded by design (see #38), so it must not be silent. Two surfaces
 report it, both derived from `ALERT_UNDELIVERED_AFTER_HOURS` (`alerts.UNDELIVERED_AFTER_HOURS`,
 24h — one daily cycle plus slack):
