@@ -11,7 +11,7 @@
 <div class="cw-wrap cw-vstack">
   {% call ui.page_head('Posture', 'Fleet TLS health: grades, protocol adoption, and crypto inventory.', testid='insights-heading') %}
     <div class="cw-menuwrap">
-      <button class="cw-btn" data-menu="reports-menu" aria-haspopup="true" aria-expanded="false">{{ icons.svg_icon('file', 14) }}Generate report{{ icons.svg_icon('chevron-down', 13) }}</button>
+      <button type="button" class="cw-btn" data-menu="reports-menu" aria-haspopup="true" aria-expanded="false">{{ icons.svg_icon('file', 14) }}Generate report{{ icons.svg_icon('chevron-down', 13) }}</button>
       <div class="cw-menu cw-hidden" id="reports-menu" role="menu" aria-label="Reports">
         <div class="cw-menu-label">Point-in-time report pages</div>
         <a class="cw-menu-item" role="menuitem" href="/reports/compliance">{{ icons.svg_icon('shield', 14) }}Compliance report <span class="cw-hint">SOC 2 · ISO 27001 · PCI</span></a>

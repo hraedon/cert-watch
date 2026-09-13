@@ -38,6 +38,13 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Linter versions are pinned to a family.** `ruff`, `mypy` and `djlint` carried
+  open upper bounds, with only `uv.lock` holding them steady — so the next
+  routine `uv lock --upgrade` was free to cross a rule-set expansion and redden
+  CI on untouched code, blaming whoever regenerated the lock. djlint 1.46 was
+  already there, promoting H043 into its defaults and flagging nine unchanged
+  templates. Those nine `<button>` tags now carry an explicit `type`, so both
+  the current and the next djlint are clean and the upgrade is unblocked.
 - **A failing relay no longer stalls the scan cycle in proportion to the alert
   queue.** The retry backoff sat inside the per-alert loop, so each failing
   alert slept its own ~6s: a ten-alert queue blocked the scheduler for 71s, and
