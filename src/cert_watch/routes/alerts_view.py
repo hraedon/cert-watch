@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.alert_delivery import FAILURE_LABELS
+from cert_watch.alerts import UNDELIVERED_AFTER_HOURS
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,
@@ -23,6 +26,39 @@ logger = logging.getLogger("cert_watch.routes.alerts_view")
 router = APIRouter()
 
 templates = get_templates()
+
+
+def _undelivered_ids(rows: list[dict[str, Any]]) -> set[str]:
+    """Pending alerts that have missed the cycle that should have sent them.
+
+    Derived at render time rather than stored on the row. ``process_pending``
+    defers precisely when the database refuses a write, so the reason cannot be
+    persisted at the moment it is known -- the store that would hold it is the
+    one that is down. Reads still work, and age is enough: `pending` past the
+    window means no transport accepted it, whatever the cause. That also covers
+    a scheduler that has simply stopped flushing, which no delivery-side marker
+    would ever record.
+    """
+    cutoff = datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)
+    stale: set[str] = set()
+    for row in rows:
+        if row.get("status") != "pending":
+            continue
+        raised = _parse_timestamp(row.get("created_at"))
+        if raised is not None and raised <= cutoff:
+            stale.add(row["id"])
+    return stale
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    """An unparseable timestamp must not promote an alert to undelivered."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
 
 @router.get("/alerts", response_class=HTMLResponse)
@@ -57,6 +93,7 @@ def alerts_view(
     # existing scope-filtered page. Do not preload this data for other viewers.
     attempts = list_attempts(db, [row["id"] for row in rows]) if auth["is_admin"] else {}
     outcomes = latest_outcomes(db, [row["id"] for row in rows])
+    undelivered = _undelivered_ids(rows)
 
     return templates.TemplateResponse(
         request=request,
@@ -65,6 +102,7 @@ def alerts_view(
             "alerts": rows,
             "delivery_attempts": attempts,
             "delivery_outcomes": outcomes,
+            "undelivered_alert_ids": undelivered,
             "delivery_failure_labels": FAILURE_LABELS,
             "version": __version__, "commit": __commit__,
             **auth,

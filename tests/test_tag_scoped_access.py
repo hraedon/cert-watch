@@ -527,7 +527,7 @@ class TestScopedFlushFullContract:
         result = alerts_mod.process_pending(repo, config=config, webhook_config=None)
 
         assert sent_ids == ["alert-a"]
-        assert result == {"sent": 1, "failed": 0}
+        assert result == {"sent": 1, "failed": 0, "deferred": 0}
         # mark_sent went through the wrapper → only the in-scope alert flipped.
         with _connect(db) as conn:
             statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())

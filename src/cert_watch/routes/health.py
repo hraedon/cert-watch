@@ -10,6 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from cert_watch.alerts import UNDELIVERED_AFTER_HOURS
 from cert_watch.auth import SESSION_COOKIE, validate_session
 from cert_watch.database.connection import _connect
 from cert_watch.middleware import (
@@ -159,6 +160,12 @@ def favicon() -> RedirectResponse:
     return RedirectResponse(url="/static/favicon.svg", status_code=301)
 
 
+def _count(checks: dict[str, object], key: str) -> int:
+    """Read a counter that a failed query may have left as a non-int."""
+    value = checks.get(key)
+    return value if isinstance(value, int) else 0
+
+
 @router.get("/api/health", dependencies=[Depends(require_auth)])
 def api_health(request: Request) -> JSONResponse:
     """Structured health data for the dashboard banner."""
@@ -192,18 +199,37 @@ def api_health(request: Request) -> JSONResponse:
         checks["last_scan_status"] = None
         scan_query_ok = False
 
-    # Failed alerts in last 24h
+    # Alerts that did not go out. Two disjoint populations, both operator-visible:
+    #
+    #   failed      — a transport was reached and refused the message.
+    #   undelivered — still `pending` well past the cycle that should have sent
+    #                 it. Nothing reached a transport at all: the delivery
+    #                 evidence store was unwritable (``process_pending``'s
+    #                 deferral path), or the scheduler is not flushing.
+    #
+    # The second is queried by outcome, not by cause, deliberately. A deferral
+    # is correct behavior — it keeps the alert deliverable instead of burning
+    # its retries on a database outage — but correct-and-silent is how an
+    # expiry notice goes unsent for a week with every health surface green.
+    # The counter is what makes the deferral loud; it is unbounded by design
+    # (see #38), so nothing else would ever raise a hand.
     try:
-        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
+        cutoff = (datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
             row = conn.execute(
                 "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
                 (cutoff,),
             ).fetchone()
-        checks["failed_alerts_24h"] = row[0] if row else 0
+            checks["failed_alerts_24h"] = row[0] if row else 0
+            stuck = conn.execute(
+                "SELECT COUNT(*) FROM alerts WHERE status = 'pending' AND created_at <= ?",
+                (cutoff,),
+            ).fetchone()
+            checks["undelivered_alerts"] = stuck[0] if stuck else 0
     except Exception:
-        logger.warning("health failed-alert query failed", exc_info=True)
+        logger.warning("health alert query failed", exc_info=True)
         checks["failed_alerts_24h"] = 0
+        checks["undelivered_alerts"] = 0
         alert_query_ok = False
 
     # Auth status
@@ -224,8 +250,10 @@ def api_health(request: Request) -> JSONResponse:
     if not db_ok or not scan_query_ok or not alert_query_ok or not checks["scheduler_running"]:
         overall = "critical"
     elif (
-        (checks["failed_alerts_24h"] if isinstance(checks["failed_alerts_24h"], int) else 0) > 0
-    ) or checks.get("last_scan_status") in ("failure", "partial"):
+        _count(checks, "failed_alerts_24h") > 0
+        or _count(checks, "undelivered_alerts") > 0
+        or checks.get("last_scan_status") in ("failure", "partial")
+    ):
         overall = "warning"
 
     checks["overall"] = overall

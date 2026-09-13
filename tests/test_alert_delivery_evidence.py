@@ -11,7 +11,13 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from cert_watch.alerts import ALERT_MAX_RETRIES, AlertConfig, WebhookConfig, process_pending
+from cert_watch.alerts import (
+    ALERT_MAX_RETRIES,
+    UNDELIVERED_AFTER_HOURS,
+    AlertConfig,
+    WebhookConfig,
+    process_pending,
+)
 from cert_watch.database import (
     Alert,
     SqliteAlertRepository,
@@ -45,7 +51,7 @@ def test_process_records_actual_smtp_attempt(monkeypatch, tmp_path):
     connection.send_message.return_value = {}
     monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
 
-    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0}
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
     with _connect(db) as conn:
         rows = conn.execute(
             "SELECT * FROM alert_delivery_events WHERE alert_id = ? ORDER BY id", (alert.id,),
@@ -88,7 +94,7 @@ def test_partial_smtp_refusal_records_both_sets_without_changing_retry_behavior(
     connection = _smtp(
         monkeypatch, refused={"queued@example.invalid": (550, b"private diagnostic")},
     )
-    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0}
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
     connection.send_message.assert_called_once()
     result = list_attempts(db, [alert.id])[alert.id][0]["result"]
     assert result["outcome"] == "partial"
@@ -108,7 +114,7 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
     monkeypatch.setattr("cert_watch.alerts.ssrf_safe_urlopen", Mock(return_value=response))
     webhook = WebhookConfig(url="https://hooks.example.invalid/secret/path?token=private",
                             headers={"Authorization": "webhook-token"})
-    assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0}
+    assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
     attempts = list_attempts(db, [alert.id])[alert.id]
     assert [item["channel"] for item in attempts] == ["generic", "smtp"]
     assert attempts[0]["result"]["http_status"] == 204
@@ -122,7 +128,7 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
 def test_failed_retries_append_each_attempt(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=TimeoutError("do not retain this diagnostic"))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     attempts = list_attempts(db, [alert.id])[alert.id]
     assert len(attempts) == ALERT_MAX_RETRIES
@@ -132,20 +138,58 @@ def test_failed_retries_append_each_attempt(monkeypatch, tmp_path):
 
 def test_missing_configuration_does_not_fabricate_attempts(tmp_path):
     db, repo, alert = _pending(tmp_path)
-    assert process_pending(repo, None) == {"sent": 0, "failed": 0}
+    assert process_pending(repo, None) == {"sent": 0, "failed": 0, "deferred": 0}
     assert list_attempts(db, [alert.id]) == {}
 
 
 def test_start_persistence_failure_refuses_send(monkeypatch, tmp_path):
+    """Refuse the send, and leave the alert deliverable.
+
+    The database was unavailable, not the destination. Previously this counted
+    as a failed delivery, which spent the retry budget on an outage that never
+    touched a transport and left the alert permanently `failed` — an expiry
+    alert the transport would have accepted, silently dropped.
+    """
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
         side_effect=sqlite3.OperationalError("synthetic-password"),
     ))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     connection.send_message.assert_not_called()
     assert list_attempts(db, [alert.id]) == {}
-    assert "synthetic-password" not in repo.list_for_cert(alert.cert_id)[0].error_message
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending", "a database outage must not consume the alert"
+    # The alert is untouched, so no error text is persisted at all — which
+    # also means the driver message (and its secret) cannot leak into it.
+    assert "synthetic-password" not in (stored.error_message or "")
+
+
+def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
+    """The deferred alert is still there to send on the next cycle."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    broken = Mock(side_effect=sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", broken)
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    connection.send_message.assert_not_called()
+
+    monkeypatch.undo()                      # database recovers
+    connection = _smtp(monkeypatch)
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
+    connection.send_message.assert_called_once()
+    assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
+    assert len(list_attempts(db, [alert.id])[alert.id]) == 1
+
+
+def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
+    """Guard the other half: deferral must not swallow genuine delivery failures."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    connection.send_message.side_effect = smtplib.SMTPException("mailbox unavailable")
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES
+    assert repo.list_for_cert(alert.cert_id)[0].status == "failed"
 
 
 def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path):
@@ -154,8 +198,8 @@ def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path
     monkeypatch.setattr("cert_watch.alert_delivery.complete_attempt", Mock(
         side_effect=sqlite3.OperationalError("sensitive database error"),
     ))
-    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0}
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0}
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 0}
     connection.send_message.assert_called_once()
     attempts = list_attempts(db, [alert.id])[alert.id]
     assert len(attempts) == 1
@@ -225,7 +269,7 @@ def test_group_snapshot_and_envelope_survive_configuration_edits(
     config = _config()
     config.recipients = ["Global Operator <global@example.invalid>"]
     _smtp(monkeypatch)
-    assert process_pending(repo, config) == {"sent": 1, "failed": 0}
+    assert process_pending(repo, config) == {"sent": 1, "failed": 0, "deferred": 0}
     groups.update(group_id, name="Renamed afterward", recipients=["later@example.invalid"])
     config.recipients = ["later-global@example.invalid"]
 
@@ -295,3 +339,226 @@ def test_group_snapshot_resolver_limits_resolution_to_requested_certificate(
     assert selected_thresholds == {key: value for key, value in thresholds.items() if key == first}
     assert matched == {first: [group_id]}
     assert _resolve_group_config(db, cert_ids=()) == ({}, {})
+
+
+def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp_path):
+    """A refused SMTP attempt must not abandon the other channel.
+
+    begin_attempt failures are per-statement -- typically a transient
+    SQLITE_BUSY from a concurrent scan write -- so the webhook's own
+    begin_attempt, microseconds later, may well succeed. Guarding the whole
+    retry loop instead of each call silently removed the fallback that existed
+    before evidence recording was introduced.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    response = Mock(status=204)
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    monkeypatch.setattr("cert_watch.alerts.ssrf_safe_urlopen", Mock(return_value=response))
+
+    real_begin = begin_attempt
+
+    def only_smtp_is_unwritable(db_path, alert_id, channel, details):
+        if channel == "smtp":
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(db_path, alert_id, channel, details)
+
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", only_smtp_is_unwritable)
+    webhook = WebhookConfig(url="https://hooks.example.invalid/path")
+
+    assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
+    connection.send_message.assert_not_called()          # SMTP was refused, not attempted
+    assert [item["channel"] for item in list_attempts(db, [alert.id])[alert.id]] == ["generic"]
+    assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
+
+
+def test_evidence_outage_mid_retry_does_not_consume_the_alert(monkeypatch, tmp_path):
+    """A transport failure then a DB outage must defer, not fail.
+
+    The terminal state has to be judged on the LAST pass. Accumulating "a
+    transport was reached at some point" lets an evidence-store outage that
+    began after an earlier, retryable failure mark the alert failed -- the
+    database consuming an alert the relay might still have accepted, which is
+    the exact invariant this path exists to hold. It also reported
+    ALERT_MAX_RETRIES attempts when only one had happened.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("temporary greylist"))
+
+    real_begin = begin_attempt
+    calls = {"n": 0}
+
+    def unwritable_after_the_first_attempt(db_path, alert_id, channel, details):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(db_path, alert_id, channel, details)
+
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt",
+                        unwritable_after_the_first_attempt)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert connection.send_message.call_count == 1
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending", "the database outage must not consume the alert"
+
+
+def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch, tmp_path):
+    """The operator-visible count must not overstate what was tried."""
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert f"after {connection.send_message.call_count} attempts" in stored.error_message
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES
+
+
+def test_total_deferral_stops_instead_of_sleeping_the_whole_retry_budget(monkeypatch, tmp_path):
+    """A pass that reached no transport has nothing to back off from.
+
+    Retrying inside the cycle cannot help — no destination was contacted, and
+    the same unwritable database will refuse the next attempt microseconds
+    later. Looping the full budget would re-pay ALERT_RETRY_DELAY on every
+    cycle for as long as the outage lasts, and block the event loop for the
+    duration of an operator's manual flush.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    refusals = Mock(side_effect=sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", refusals)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    connection.send_message.assert_not_called()
+    assert refusals.call_count == 1, "a total deferral must not retry within the cycle"
+
+
+def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, tmp_path):
+    """Two channels over three passes is six attempts, not three.
+
+    ALERT_MAX_RETRIES bounds the passes, not the sends. Reporting it as the
+    attempt count understates a dual-channel estate by half, and is the value
+    the message carried before it was derived from what actually ran.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
+    monkeypatch.setattr(
+        "cert_watch.alerts.ssrf_safe_urlopen", Mock(side_effect=OSError("webhook unreachable")),
+    )
+    webhook = WebhookConfig(url="https://hooks.example.invalid/path")
+
+    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message
+
+
+def _age_alert(db, alert_id, *, hours):
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET created_at = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(hours=hours)).isoformat(), alert_id),
+        )
+        conn.commit()
+
+
+def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_path, reload_app):
+    """A deferral has no attempt row, so only its age distinguishes it.
+
+    ``process_pending`` defers when the database refuses a write, which is
+    exactly when a reason cannot be persisted on the alert — the store that
+    would hold it is the one that is down. Age is read, not written, and it
+    catches a scheduler that has simply stopped flushing too.
+    """
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" in response.text
+    assert "Still queued past the cycle that should have sent it." in response.text
+
+
+def test_activity_does_not_alarm_over_a_freshly_queued_alert(monkeypatch, tmp_path, reload_app):
+    """Every pending alert is briefly undelivered; saying so on all of them is noise."""
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=1)
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" not in response.text
+    assert "Recorded: pending" in response.text
+
+
+def test_activity_does_not_relabel_an_alert_that_already_reached_a_transport(
+    monkeypatch, tmp_path, reload_app,
+):
+    """A failed alert is not undelivered-and-waiting: it is finished, and failed."""
+    db, repo, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    attempt_id = begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
+    complete_attempt(db, attempt_id, {"outcome": "failed"})
+    repo.mark_failed(alert.id, "relay refused")
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Not yet delivered" not in response.text
+    assert "Attempt failed" in response.text
+
+
+def test_activity_reports_both_the_attempt_outcome_and_that_nothing_arrived(
+    monkeypatch, tmp_path, reload_app,
+):
+    """An interrupted attempt leaves an alert both `unknown` and still queued.
+
+    The two chips answer different questions — what the transport said, and
+    whether the alert has gone out — so one must not suppress the other. An
+    outcome of `unknown` reassuring an operator about an alert that is in fact
+    still sitting in the queue is the failure this guards.
+    """
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
+    # Started, never completed: the process died mid-send. The alert stays pending.
+    begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Delivery outcome unknown" in response.text
+    assert "Not yet delivered" in response.text
+
+
+def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
+    monkeypatch, tmp_path, reload_app,
+):
+    """A row whose age cannot be read is not evidence of anything.
+
+    Both surfaces must agree on that, and they reach it independently — the
+    view parses the timestamp, the health check compares it as a SQL string.
+    A row that one treats as overdue and the other ignores would leave an
+    operator with a banner and no matching alert, or an alert and a green
+    banner, with nothing to reconcile them.
+    """
+    db, _, alert = _pending(tmp_path)
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?", ("not-a-date", alert.id))
+        conn.commit()
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        page = client.get("/alerts")
+        health = client.get("/api/health").json()
+
+    assert "Not yet delivered" not in page.text
+    assert health["undelivered_alerts"] == 0

@@ -93,12 +93,24 @@
           <div class="cw-sub">{{ a.message }}</div>
           <div class="cw-chiprow cw-metarow" data-testid="alert-channels">
             {% set outcome = delivery_outcomes.get(a.id) %}
+            {% set undelivered = a.id in undelivered_alert_ids|default([]) %}
             {% if outcome %}
               {% set outcome_labels = {'accepted': 'Transport accepted', 'partial': 'Partial acceptance', 'failed': 'Attempt failed', 'unknown': 'Delivery outcome unknown'} %}
               {{ ui.status(label=outcome_labels.get(outcome, 'Delivery outcome unknown'), tone='t-ok' if outcome == 'accepted' else 't-warn' if outcome == 'partial' else 't-crit' if outcome == 'failed' else 't-muted') }}
               <span class="cw-sub">Recorded state: {{ a.status }}</span>
             {% else %}
               {{ ui.status(label='Recorded: ' ~ a.status, tone='t-muted') }}
+            {% endif %}
+            {% if undelivered %}
+              {# Additive, not an alternative to the outcome chip. The two say
+                 different things and can both be true: an attempt may have been
+                 recorded and left `unknown` while the alert is still queued.
+                 The outcome reports what a transport said; this reports that the
+                 alert has still not gone out, past the cycle that should have
+                 sent it. Showing it as an ordinary pending row is how an
+                 undelivered expiry notice goes unnoticed. #}
+              {{ ui.status(label='Not yet delivered', tone='t-warn') }}
+              <span class="cw-sub" data-testid="alert-undelivered">Still queued past the cycle that should have sent it.</span>
             {% endif %}
             <span class="cw-spacer"></span>
             <span class="cw-sub mono tnum">{{ a.created_at[:16] | replace('T', ' ') if a.created_at else '' }}</span>
