@@ -152,7 +152,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Bump kustomize image tag
+      - name: Install kustomize
         if: github.ref == 'refs/heads/main'
         run: |
           KUSTOMIZE_VERSION="v5.4.3"
@@ -167,22 +167,20 @@ jobs:
             exit 1
           fi
           tar -xzf /tmp/kustomize.tgz -C /tmp
-          IMAGE_TAG="${{ steps.tag.outputs.sha }}"
-          for dir in deploy/k8s deploy/k8s-demo; do
-            cd "$GITHUB_WORKSPACE/$dir"
-            /tmp/kustomize edit set image ghcr.io/${{ github.repository_owner }}/cert-watch=ghcr.io/${{ github.repository_owner }}/cert-watch:${IMAGE_TAG}
-          done
 
-      - name: Commit tag bump
+      # Re-derives the bump against the current tip and only lands it when that
+      # moves the pointer forward, so a release that finishes after a newer one
+      # withdraws instead of publishing an older image (#35). A plain
+      # `pull --rebase` before the push would clear the non-fast-forward
+      # rejection and cause exactly that silent regression; the concurrency
+      # group above cannot help either, because serialising the runs does not
+      # move this run's checkout forward. See scripts/bump_deploy_image.py.
+      - name: Bump and commit deployment image
         if: github.ref == 'refs/heads/main'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet; then
-            echo "No image change to commit."
-            exit 0
-          fi
-          git add deploy/k8s/kustomization.yaml deploy/k8s-demo/kustomization.yaml
-          IMAGE_TAG="${{ steps.tag.outputs.sha }}"
-          git commit -m "chore(deploy): bump image to ${IMAGE_TAG}"
-          git push
+          python3 scripts/bump_deploy_image.py \
+            --image-tag "${{ steps.tag.outputs.sha }}" \
+            --image "ghcr.io/${{ github.repository_owner }}/cert-watch" \
+            --kustomize /tmp/kustomize

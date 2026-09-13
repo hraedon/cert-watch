@@ -38,6 +38,15 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **The deployment image pointer only moves forward.** A release whose bump
+  commit lost the race to a concurrent merge failed non-fast-forward and
+  dropped the pointer, while the image itself was already published — a red run
+  that was usually benign, which is the worst kind. Rebasing before the push
+  would have cleared the rejection and silently published an *older* image
+  whenever the losing run finished last. `scripts/bump_deploy_image.py` instead
+  re-derives the bump against the current tip on each attempt and withdraws
+  when a newer release already points past this one, so the result converges on
+  the newest image that actually built, whatever order the runs finish in.
 - **A database outage no longer drops a deliverable alert.** Refusing to send
   because the delivery-attempt record could not be written was indistinguishable
   from a transport failure, so it burned the retry budget on every pass and
