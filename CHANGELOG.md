@@ -38,6 +38,15 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **A database outage no longer drops a deliverable alert.** Refusing to send
+  because the delivery-attempt record could not be written was indistinguishable
+  from a transport failure, so it burned the retry budget on every pass and
+  marked the alert failed — permanently, even though no destination was ever
+  contacted. Such an alert is now left pending and reported as `deferred`, and
+  the cycle stops rather than sleeping a backoff it has nothing to back off
+  from. `/api/health` reports `undelivered_alerts` (still pending more than 24
+  hours after being raised) and degrades to `warning`, so a deferral that
+  outlasts the outage is visible rather than merely correct.
 - **Renewal notifications preserve ports.** Digests and webhook enrichment use
   exact endpoints for ownership and certificate evidence. Ambiguous legacy
   events do not borrow another endpoint's owner, expiry or renewal history.

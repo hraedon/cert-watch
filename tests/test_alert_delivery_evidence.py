@@ -406,3 +406,42 @@ def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {connection.send_message.call_count} attempts" in stored.error_message
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
+
+
+def test_total_deferral_stops_instead_of_sleeping_the_whole_retry_budget(monkeypatch, tmp_path):
+    """A pass that reached no transport has nothing to back off from.
+
+    Retrying inside the cycle cannot help — no destination was contacted, and
+    the same unwritable database will refuse the next attempt microseconds
+    later. Looping the full budget would re-pay ALERT_RETRY_DELAY on every
+    cycle for as long as the outage lasts, and block the event loop for the
+    duration of an operator's manual flush.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch)
+    refusals = Mock(side_effect=sqlite3.OperationalError("database is locked"))
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", refusals)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    connection.send_message.assert_not_called()
+    assert refusals.call_count == 1, "a total deferral must not retry within the cycle"
+
+
+def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, tmp_path):
+    """Two channels over three passes is six attempts, not three.
+
+    ALERT_MAX_RETRIES bounds the passes, not the sends. Reporting it as the
+    attempt count understates a dual-channel estate by half, and is the value
+    the message carried before it was derived from what actually ran.
+    """
+    db, repo, alert = _pending(tmp_path)
+    connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
+    monkeypatch.setattr(
+        "cert_watch.alerts.ssrf_safe_urlopen", Mock(side_effect=OSError("webhook unreachable")),
+    )
+    webhook = WebhookConfig(url="https://hooks.example.invalid/path")
+
+    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert connection.send_message.call_count == ALERT_MAX_RETRIES
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message

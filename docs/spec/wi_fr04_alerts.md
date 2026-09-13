@@ -39,6 +39,19 @@ A function `process_pending(alert_repo: AlertRepository, config: AlertConfig) ->
 
 An alert ends a cycle in one of three states. It is marked **sent**, or marked **failed** after its retries are exhausted, or left **pending** and counted as **deferred** — the last when no transport was reached at all because the delivery-evidence store could not be written. A deferral is not a delivery failure: nothing was dispatched, the destination was never contacted, and the alert stays deliverable for a later cycle. It must not consume the retry budget.
 
+A pass that reaches no transport must also stop the cycle rather than exhaust
+its backoff: there is no destination to back off from, and the same unwritable
+database will refuse the next attempt. The failure message reports the transport
+attempts that actually ran, which for a dual-channel estate exceeds
+`ALERT_MAX_RETRIES` — that constant bounds the passes, not the sends.
+
+Deferral is unbounded by design (see #38), so it must not be silent. `/api/health`
+reports `undelivered_alerts` — alerts still `pending` more than 24 hours after
+they were raised — and degrades to `warning` on any. It is queried by outcome
+rather than by cause, so it also catches a scheduler that has stopped flushing.
+This is the operator-visible trace that the old, incorrect behavior supplied as
+a side effect of marking such alerts `failed`.
+
 ## AC-05: Alert Formatting
 Each alert email must include: certificate subject, expiry date, days remaining, and recommended action.
 
