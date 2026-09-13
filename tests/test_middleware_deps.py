@@ -902,3 +902,145 @@ def test_admin_allowed_legacy_empty_admin_users_fail_closed(tmp_path):
     request.state.auth_context = AuthContext.from_tier("anyuser", "viewer")
     assert _admin_allowed(request, "anyuser", use_legacy=True) is False
 
+
+
+# ── the form affordance must match the form gate (#32) ────────────────────
+
+
+def _writable_request(app, *, auth_user="someone"):
+    request = _make_request()
+    request.scope["app"] = app
+    request.scope["auth_user"] = auth_user
+    return request
+
+
+def _offered(request, tmp_path, monkeypatch, *, scope_denial=None):
+    """Would the endpoint-settings form be rendered for this request?"""
+    import cert_watch.routes.hosts as hosts
+
+    monkeypatch.setattr(hosts, "scope_write_denied", lambda *a, **k: scope_denial)
+    return hosts.endpoint_settings_writable(request, tmp_path / "db.sqlite3", "h1")
+
+
+def test_settings_form_is_not_offered_to_an_api_key_the_post_will_refuse(
+    tmp_path, monkeypatch,
+):
+    """#32: the affordance asked a different question from the gate.
+
+    An API-key context is judged on ``may_write()``; the affordance asked
+    ``may_write_any()``, which is also true for a user whose only write grants
+    are per-tag. The form rendered, took the operator's input, and bounced to
+    ``/?error=`` with it discarded.
+    """
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import _write_denied
+
+    app, _ = _app_with_role_map(tmp_path)
+    request = _writable_request(app, auth_user="key-user")
+    request.state.api_key_auth = True
+    context = AuthContext(
+        username="key-user", roles=["viewer"], tier="viewer",
+        tag_tiers={"team-a": "operator"},
+    )
+    request.state.auth_context = context
+
+    assert context.may_write_any() is True, "the predicate the affordance used to ask"
+    assert context.may_write() is False, "the predicate the gate actually applies"
+    assert _write_denied(request, "key-user") is True, "the POST refuses this write"
+
+    assert _offered(request, tmp_path, monkeypatch) is False
+
+
+def test_settings_form_is_not_offered_to_a_legacy_user_outside_write_users(
+    tmp_path, monkeypatch,
+):
+    """The other divergence: no role map, so the gate consults ``write_users``.
+
+    The AuthContext says nothing about that list, so an affordance reading the
+    context alone cannot see the denial coming.
+    """
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.config import Settings
+    from cert_watch.middleware import _write_denied
+
+    class _Provider:
+        pass
+
+    settings = Settings(
+        db_path=tmp_path / "db.sqlite3", data_dir=tmp_path,
+        write_users=("alice",),
+    )
+    app = type("App", (), {"state": type("State", (), {
+        "auth_provider": _Provider(), "settings": settings})()})()
+    request = _writable_request(app, auth_user="bob")
+    request.state.auth_context = AuthContext.full_access("bob")
+
+    assert _write_denied(request, "bob") is True
+    assert _offered(request, tmp_path, monkeypatch) is False
+
+
+def test_settings_form_is_still_offered_to_an_operator_who_may_write(
+    tmp_path, monkeypatch,
+):
+    """The fix must not withdraw the form from someone the POST would accept."""
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import _write_denied
+
+    app, _ = _app_with_role_map(tmp_path)
+    request = _writable_request(app, auth_user="alice")
+    request.state.auth_context = AuthContext.from_roles("alice", ["operator"])
+
+    assert _write_denied(request, "alice") is False
+    assert _offered(request, tmp_path, monkeypatch) is True
+
+
+def test_settings_form_is_withheld_when_the_resource_is_out_of_scope(
+    tmp_path, monkeypatch,
+):
+    """The per-resource half still applies: passing the gate is not enough."""
+    from cert_watch.auth.rbac import AuthContext
+
+    app, _ = _app_with_role_map(tmp_path)
+    request = _writable_request(app, auth_user="alice")
+    request.state.auth_context = AuthContext.from_roles("alice", ["operator"])
+
+    assert _offered(request, tmp_path, monkeypatch, scope_denial="out of scope") is False
+
+
+def test_settings_form_is_offered_when_authentication_is_disabled(tmp_path, monkeypatch):
+    """An open deployment writes freely, and the form must say so."""
+    request = _writable_request(_FakeApp(None), auth_user="")
+
+    assert _offered(request, tmp_path, monkeypatch) is True
+
+
+def test_the_affordance_and_the_form_gate_agree_across_the_matrix(tmp_path, monkeypatch):
+    """Whatever the case, offered-but-refused must never happen.
+
+    Stated as the invariant rather than case by case, so a future auth path
+    added to ``_write_denied`` is covered here the moment it is added to the
+    matrix -- and so the property, not today's enumeration, is what is pinned.
+    """
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.middleware import _write_denied
+
+    app, _ = _app_with_role_map(tmp_path)
+    cases = {
+        "viewer": AuthContext.from_roles("u", ["viewer"]),
+        "operator": AuthContext.from_roles("u", ["operator"]),
+        "admin": AuthContext.from_roles("u", ["admin"]),
+        "tag-only operator": AuthContext(
+            username="u", roles=["viewer"], tier="viewer",
+            tag_tiers={"team-a": "operator"},
+        ),
+    }
+    for api_key in (False, True):
+        for label, context in cases.items():
+            request = _writable_request(app, auth_user="u")
+            request.state.api_key_auth = api_key
+            request.state.auth_context = context
+            refused = _write_denied(request, "u")
+            offered = _offered(request, tmp_path, monkeypatch)
+            assert not (offered and refused), (
+                f"{label} (api_key={api_key}): form offered for a write the POST refuses"
+            )

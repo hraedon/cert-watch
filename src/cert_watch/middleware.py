@@ -1050,13 +1050,36 @@ def require_admin_form(request: Request) -> RedirectResponse | None:
     return None
 
 
+def form_write_error(request: Request) -> str | None:
+    """Why ``require_write_form`` would refuse this request, or None if it would not.
+
+    Everything that gate decides except CSRF, which needs the request body and
+    is not a property of the user. Exported so a template can ask the exact
+    question the POST will answer, instead of approximating it.
+
+    ``_write_denied`` calls itself the single source of truth for the write
+    decision, and for the two gates that use it that is so. A third caller --
+    the settings-form affordance in ``routes/hosts.py`` -- reached past it to
+    ``AuthContext.may_write_any()``, which is a *different* predicate: an
+    API-key context is judged on ``may_write()``, and the legacy path on the
+    ``write_users`` list, so a user with only per-tag write grants was shown a
+    form the POST then refused, discarding what they had typed (#32). Asking
+    one question in two vocabularies is how an affordance drifts from its gate;
+    this makes the template's question the gate's own.
+
+    Note: under disabled auth this installs the open ``AuthContext`` exactly as
+    the request path would, so calling it during a render is idempotent.
+    """
+    return _check_auth(request, resolve_session=False, require_write=True).error
+
+
 async def require_write_form(request: Request) -> RedirectResponse | None:
     """Form-POST helper: check write access + CSRF, return redirect on failure."""
-    result = _check_auth(request, resolve_session=False, require_write=True)
-    if result.error:
-        if result.error == "unauthenticated":
+    error = form_write_error(request)
+    if error:
+        if error == "unauthenticated":
             return RedirectResponse(url="/login", status_code=303)
-        return RedirectResponse(url=f"/?error={quote(result.error)}", status_code=303)
+        return RedirectResponse(url=f"/?error={quote(error)}", status_code=303)
     csrf_err = await _csrf_required_error(request)
     if csrf_err:
         return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)

@@ -21,7 +21,7 @@ from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
-    get_auth_context,
+    form_write_error,
     require_admin_write_form,
     require_auth,
     require_write_form,
@@ -145,10 +145,17 @@ def _hostname_within_octet_limit(hostname: str) -> bool:
 
 
 def endpoint_settings_writable(request: Request, db: str | Path, host_id: str) -> bool:
-    """Match the form's write gate, including per-tag operator permissions."""
-    auth = getattr(request.state, "auth_context", None)
-    may_write = auth.may_write_any() if auth is not None else get_auth_context(request)["may_write"]
-    return bool(may_write and scope_write_denied(request, db, host_id=host_id) is None)
+    """Ask exactly what ``update_host_settings`` will ask, in the same order.
+
+    Both halves must match the POST or the form is a trap: it renders, takes
+    the operator's input, and bounces to ``/?error=`` with the input gone.
+    ``form_write_error`` is the POST's own gate, and ``scope_write_denied`` is
+    the same per-resource check the POST runs immediately after it.
+    """
+    return (
+        form_write_error(request) is None
+        and scope_write_denied(request, db, host_id=host_id) is None
+    )
 
 
 @router.post("/hosts/{host_id}/settings")
