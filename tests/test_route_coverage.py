@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -262,7 +263,60 @@ def test_api_health_alert_query_error_is_critical(monkeypatch, reload_app):
 
     data = response.json()
     assert data["failed_alerts_24h"] == 0
+    assert data["undelivered_alerts"] == 0
     assert data["overall"] == "critical"
+
+
+def _insert_alert(db, *, alert_id, status, created_at):
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at,"
+            " hostname, subject) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (alert_id, "health-cert", "expiry_warning", status, "Certificate expires soon",
+             created_at.isoformat(), "health.example.invalid", "CN=health.example.invalid"),
+        )
+        conn.commit()
+
+
+def test_api_health_reports_alerts_that_never_reached_a_transport(reload_app, tmp_path):
+    """A deferred alert is still an undelivered alert, and must be visible.
+
+    ``process_pending`` leaves an alert pending when the delivery-evidence
+    store cannot be written, so a database outage no longer burns the retry
+    budget — the right call, and it removed the only operator-visible trace
+    the old behavior left behind (the alert going ``failed``, which lit this
+    banner). Without this counter an expiry notice can sit undelivered
+    indefinitely with every health surface green.
+    """
+    app_mod = reload_app()
+    db = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        _insert_alert(db, alert_id="stuck", status="pending",
+                      created_at=datetime.now(UTC) - timedelta(days=3))
+        data = client.get("/api/health").json()
+
+    assert data["undelivered_alerts"] == 1
+    assert data["failed_alerts_24h"] == 0, "a deferral is not a delivery failure"
+    assert data["overall"] == "warning"
+
+
+def test_api_health_does_not_flag_an_alert_still_inside_its_delivery_window(
+    reload_app, tmp_path,
+):
+    """A freshly queued alert has not missed a cycle yet — flagging it is noise."""
+    app_mod = reload_app()
+    db = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        _insert_alert(db, alert_id="fresh", status="pending",
+                      created_at=datetime.now(UTC) - timedelta(minutes=5))
+        _insert_alert(db, alert_id="done", status="sent",
+                      created_at=datetime.now(UTC) - timedelta(days=3))
+        data = client.get("/api/health").json()
+
+    assert data["undelivered_alerts"] == 0
+    assert data["overall"] == "ok"
 
 
 # ---------- favicon ----------

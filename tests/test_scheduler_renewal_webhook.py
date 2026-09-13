@@ -16,6 +16,7 @@ from cert_watch.scheduler import (
     _flush_renewal_webhook_pool,
     _send_renewal_webhook_if_configured,
     _shutdown_renewal_webhook_pool,
+    _start_renewal_webhook_pool,
 )
 from tests._helpers import seed_certificate
 
@@ -33,7 +34,17 @@ def _signal(hostname="host.example.com", fingerprint="abc123") -> RenewalOverdue
 
 @pytest.fixture(autouse=True)
 def _no_sleep():
-    """Keep the backoff loop from actually sleeping between retries."""
+    """Keep the backoff loop from sleeping, and guarantee a live submission pool.
+
+    The pool is module-global and ``stop_scheduler`` detaches it without
+    recreating one, so *any* earlier test in the same process that tore down a
+    ``TestClient`` leaves it at ``None``. ``_submit_renewal_webhook`` then
+    refuses silently and every assertion here reads zero sends — which fails
+    the call-count tests and, worse, passes ``test_not_configured_does_not_send``
+    for entirely the wrong reason. Restarting on the way *in* makes each test
+    independent of what ran before it; under ``-n`` that ordering is chance.
+    """
+    _start_renewal_webhook_pool()
     with patch("cert_watch.retry.time.sleep"):
         yield
     _flush_renewal_webhook_pool()

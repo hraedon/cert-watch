@@ -267,6 +267,9 @@
       if (data.failed_alerts_24h > 0) {
         parts.push(data.failed_alerts_24h + ' failed alert' + (data.failed_alerts_24h > 1 ? 's' : '') + ' in last 24h');
       }
+      if (data.undelivered_alerts > 0) {
+        parts.push(data.undelivered_alerts + ' alert' + (data.undelivered_alerts > 1 ? 's' : '') + ' still undelivered');
+      }
       if (data.overall === 'ok') parts = ['Monitoring pipeline healthy'];
       stripText.textContent = parts.join(' · ') || (data.overall === 'critical'
         ? 'Monitoring health data unavailable' : 'System status unknown');

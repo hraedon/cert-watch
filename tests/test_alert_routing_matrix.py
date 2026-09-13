@@ -191,11 +191,13 @@ def test_routing_matrix_delivers_exact_recipient_unions(db, tmp_path, monkeypatc
     ):
         fallback = WebhookConfig(url=http.url("/global"), allow_private=True)
         assert process_pending(repo, _smtp_config(smtp), fallback) == {
-            "sent": len(cases), "failed": 0,
+            "sent": len(cases), "failed": 0, "deferred": 0,
         }
         _assert_receipts(smtp, {host: recipients for host, (_, recipients) in cases.items()})
         assert http.requests == []  # SMTP success does not also fan out to a webhook.
-        assert process_pending(repo, _smtp_config(smtp), fallback) == {"sent": 0, "failed": 0}
+        assert process_pending(repo, _smtp_config(smtp), fallback) == {
+            "sent": 0, "failed": 0, "deferred": 0,
+        }
         assert evaluate_all_certs(db, repo) == []
         assert len(smtp.messages) == len(cases)
         assert http.requests == []
@@ -215,7 +217,7 @@ def test_zero_group_estate_still_delivers_global_owner_and_role_routes(db, tmp_p
     assert len(evaluate_all_certs(db, repo)) == 2
 
     with allow_loopback_transport(monkeypatch), smtp_target(tmp_path, monkeypatch) as smtp:
-        assert process_pending(repo, _smtp_config(smtp)) == {"sent": 2, "failed": 0}
+        assert process_pending(repo, _smtp_config(smtp)) == {"sent": 2, "failed": 0, "deferred": 0}
         _assert_receipts(smtp, {
             "orphan.routing.test": [GLOBAL_RECIPIENT],
             "owned.routing.test": [GLOBAL_RECIPIENT, "team@example.test", "member@example.test"],
@@ -244,7 +246,7 @@ def test_global_webhook_receives_alert_when_smtp_unavailable(
             url=http.url("/global"), allow_private=True,
             headers={"X-Routing-Probe": "global-fallback"},
         )
-        assert process_pending(repo, config, webhook) == {"sent": 1, "failed": 0}
+        assert process_pending(repo, config, webhook) == {"sent": 1, "failed": 0, "deferred": 0}
         assert len(http.requests) == 1
         receipt = http.requests[0]
         assert receipt.path == "/global" and receipt.method == "POST"
@@ -257,7 +259,7 @@ def test_global_webhook_receives_alert_when_smtp_unavailable(
         if smtp is not None:
             assert smtp.auth_attempts
             assert smtp.messages == []
-        assert process_pending(repo, config, webhook) == {"sent": 0, "failed": 0}
+        assert process_pending(repo, config, webhook) == {"sent": 0, "failed": 0, "deferred": 0}
         assert len(http.requests) == 1
 
     row = repo.list_for_cert(cert_id)[0]
@@ -273,7 +275,7 @@ def test_http_failure_and_later_success_reuse_the_persisted_alert(db, monkeypatc
         capturing_http_target("/unavailable", "/negative", statuses={"/unavailable": 503}) as http,
     ):
         webhook = WebhookConfig(url=http.url("/unavailable"), allow_private=True)
-        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 1}
+        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 1, "deferred": 0}
         assert len(http.requests) == ALERT_MAX_RETRIES
         assert all(request.path == "/unavailable" for request in http.requests)
         assert all(json.loads(request.body)["cert_id"] == cert_id for request in http.requests)
@@ -290,11 +292,11 @@ def test_http_failure_and_later_success_reuse_the_persisted_alert(db, monkeypatc
         capturing_http_target("/recovered", "/negative") as http,
     ):
         webhook = WebhookConfig(url=http.url("/recovered"), allow_private=True)
-        assert process_pending(repo, None, webhook) == {"sent": 1, "failed": 0}
+        assert process_pending(repo, None, webhook) == {"sent": 1, "failed": 0, "deferred": 0}
         assert len(http.requests) == 1
         assert json.loads(http.requests[0].body)["cert_id"] == cert_id
         assert http.received("/negative") == []
-        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 0}
+        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 0, "deferred": 0}
         assert len(http.requests) == 1
     final = repo.list_for_cert(cert_id)
     assert len(final) == 1 and final[0].id == alert_id and final[0].status == "sent"
@@ -307,7 +309,9 @@ def test_orphan_without_global_recipients_is_failed_without_smtp_data(db, tmp_pa
     repo = SqliteAlertRepository(db)
     evaluate_all_certs(db, repo)
     with allow_loopback_transport(monkeypatch), smtp_target(tmp_path, monkeypatch) as smtp:
-        assert process_pending(repo, _smtp_config(smtp, recipients=[])) == {"sent": 0, "failed": 1}
+        assert process_pending(repo, _smtp_config(smtp, recipients=[])) == {
+            "sent": 0, "failed": 1, "deferred": 0,
+        }
         assert smtp.messages == []
         assert smtp.auth_attempts == []
     row = repo.list_for_cert(cert_id)[0]

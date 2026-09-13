@@ -898,6 +898,13 @@ def resolve_webhook_for_renewed_cert(
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
 
+# How long an alert may sit `pending` before the estate treats it as undelivered.
+# One full daily cycle plus slack: anything older has missed a send it should
+# have caught. Read by the health check and the Activity view, which must agree
+# -- two different ideas of "overdue" is how one surface reassures an operator
+# the other is trying to warn.
+UNDELIVERED_AFTER_HOURS = 24
+
 
 def evaluate_policy_alerts(
     cert_id: str,
@@ -1558,42 +1565,98 @@ def process_pending(
     Failed deliveries are retried up to ALERT_MAX_RETRIES times with a short delay.
     """
     if config is None and webhook_config is None:
-        return {"sent": 0, "failed": 0}
-    from cert_watch.alert_delivery import attempt_delivery
+        return {"sent": 0, "failed": 0, "deferred": 0}
+    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
 
     repository_path = getattr(alert_repo, "db_path", None)
     evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
     sent = 0
     failed = 0
+    deferred = 0
     for alert in alert_repo.list_pending():
         delivered = False
         last_error = ""
+        # Whether the FINAL pass reached a transport, and how many passes did.
+        # This must be judged per pass, not accumulated: an earlier pass may
+        # have reached the relay and failed, and if the evidence store then
+        # becomes unwritable a stale "yes" would let a database outage fail an
+        # alert the relay might still accept.
+        reached_transport_this_pass = False
+        attempts_made = 0
         for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+            reached_transport_this_pass = False
             if config is not None:
-                delivered = attempt_delivery(
-                    evidence_db, alert, "smtp", partial(send_alert, alert, config),
-                    recipients=_smtp_recipients(alert, config), global_recipients=config.recipients,
-                )
+                try:
+                    delivered = attempt_delivery(
+                        evidence_db, alert, "smtp", partial(send_alert, alert, config),
+                        recipients=_smtp_recipients(alert, config),
+                        global_recipients=config.recipients,
+                    )
+                    reached_transport_this_pass = True
+                    attempts_made += 1
+                except DeliveryEvidenceUnavailable:
+                    # Guard this call only. A begin_attempt failure is
+                    # per-statement -- typically a transient SQLITE_BUSY from a
+                    # concurrent scan write -- so the webhook fallback below may
+                    # well succeed.
+                    delivered = False
             if not delivered and webhook_config is not None:
                 kind = webhook_config.kind
                 channel = (
                     kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
                     else "webhook"
                 )
-                delivered = attempt_delivery(
-                    evidence_db, alert, channel,
-                    partial(send_webhook, alert, webhook_config),
-                )
+                try:
+                    delivered = attempt_delivery(
+                        evidence_db, alert, channel,
+                        partial(send_webhook, alert, webhook_config),
+                    )
+                    reached_transport_this_pass = True
+                    attempts_made += 1
+                except DeliveryEvidenceUnavailable:
+                    delivered = False
             if delivered:
                 break
             last_error = alert.error_message or "unknown"
+            if not reached_transport_this_pass:
+                # Every configured channel refused BEFORE sending, so the
+                # backoff sleeps cannot help: there is nothing to back off
+                # from. Stop now rather than sleeping the whole budget, which
+                # a deferred alert would otherwise re-pay every cycle -- and
+                # which blocks the event loop during a manual flush.
+                break
         if delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1
-        else:
+        elif reached_transport_this_pass:
+            # The last thing that happened was a real delivery failure.
+            plural = "attempt" if attempts_made == 1 else "attempts"
             alert_repo.mark_failed(
-                alert.id, f"{last_error} (after {ALERT_MAX_RETRIES} attempts)"
+                alert.id, f"{last_error} (after {attempts_made} {plural})"
             )
             failed += 1
-    return {"sent": sent, "failed": failed}
+        else:
+            # No transport was ever reached: the database was unavailable, not
+            # the destination. Leave the alert pending so a later cycle sends
+            # it once the database recovers.
+            #
+            # Deliberately NOT bounded here. Bounding needs an epoch for "how
+            # long has evidence been unwritable", which is per-alert persisted
+            # state this schema does not carry -- alert.created_at is the wrong
+            # clock, because evaluate_all_certs resets a failed alert to pending
+            # while keeping its original created_at, so one transient lock on an
+            # old alert would look like a day-long outage. And the give-up write
+            # would itself go to the database that just refused a write. See #38.
+            #
+            # Caveat, and it is a real one: purge_old_alerts still deletes by age
+            # alone, so a deferral that outlives alert_retention_days is removed
+            # while still pending. evaluate_all_certs recreates the alert while
+            # the threshold is crossed, which limits the damage, but the pending
+            # queue is NOT a durable parking place. See #39.
+            logger.warning(
+                "Alert %s deferred: delivery evidence unavailable, leaving it pending",
+                alert.id,
+            )
+            deferred += 1
+    return {"sent": sent, "failed": failed, "deferred": deferred}

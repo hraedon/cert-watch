@@ -521,7 +521,7 @@ def test_adapter_has_build_resolve():
 
 def test_process_pending_no_config(alert_repo):
     counts = process_pending(alert_repo, None)
-    assert counts == {"sent": 0, "failed": 0}
+    assert counts == {"sent": 0, "failed": 0, "deferred": 0}
 
 
 def test_process_pending_sends_and_marks(alert_repo, expiring_cert):
