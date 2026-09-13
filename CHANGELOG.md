@@ -38,6 +38,12 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **The endpoint-settings form is offered only when the POST would accept it.**
+  The affordance asked `AuthContext.may_write_any()` while the POST enforces
+  `require_write_form` — a different predicate for API-key contexts and for the
+  legacy `write_users` path. A user with only per-tag write grants was shown the
+  form, filled it in, and was bounced to `/?error=` with their input discarded.
+  Both now call one exported gate, `middleware.form_write_error`.
 - **The deployment image pointer only moves forward.** A release whose bump
   commit lost the race to a concurrent merge failed non-fast-forward and
   dropped the pointer, while the image itself was already published — a red run
