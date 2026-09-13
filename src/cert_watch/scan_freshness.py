@@ -8,6 +8,27 @@ from pathlib import Path
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
 
+# A per-host scan cadence must fall between these, or be blank for the daily
+# boundary. One hour is the floor because every wakeup runs the whole pipeline,
+# and sub-hourly refresh of a certificate -- an object that changes a few times
+# a year -- is a job for a different kind of product. 8760h is one year, past
+# which "monitored" stops meaning anything.
+#
+# The upper bound is not only a policy: `last_success + timedelta(hours=N)`
+# leaves the representable date range long before N does, and an unbounded
+# value stored by an older write path used to abort scan selection for the
+# entire estate. The scheduler now tolerates such a row; this keeps new ones
+# from being written. See #29.
+MIN_SCAN_INTERVAL_HOURS = 1
+MAX_SCAN_INTERVAL_HOURS = 8760
+
+
+def scan_interval_out_of_range(interval_hours: int | None) -> bool:
+    """True when a cadence override cannot be stored. Blank (None) is the default."""
+    return interval_hours is not None and not (
+        MIN_SCAN_INTERVAL_HOURS <= interval_hours <= MAX_SCAN_INTERVAL_HOURS
+    )
+
 
 def cadence_due_at(last_success: datetime, interval_hours: int | None,
                    hour: int, minute: int) -> datetime:

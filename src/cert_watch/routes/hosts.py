@@ -35,8 +35,18 @@ from cert_watch.scan import (
     scan_host_async,
     store_scanned_async,
 )
+from cert_watch.scan_freshness import (
+    MAX_SCAN_INTERVAL_HOURS,
+    MIN_SCAN_INTERVAL_HOURS,
+    scan_interval_out_of_range,
+)
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.tags import parse_tags
+
+SCAN_INTERVAL_ERROR = (
+    f"Scan interval must be between {MIN_SCAN_INTERVAL_HOURS} and "
+    f"{MAX_SCAN_INTERVAL_HOURS} hours, or blank for daily."
+)
 
 logger = logging.getLogger("cert_watch.routes.hosts")
 
@@ -205,8 +215,8 @@ async def update_host_settings(
         return invalid("Scan interval must be a whole number of hours, or blank for daily.")
     # Old creation/import paths accepted arbitrary integers. Preserve unchanged
     # legacy values; new overrides are bounded to one hour through one year.
-    if interval is not None and interval != host.scan_interval_hours and not 1 <= interval <= 8760:
-        return invalid("Scan interval must be between 1 and 8760 hours, or blank for daily.")
+    if interval != host.scan_interval_hours and scan_interval_out_of_range(interval):
+        return invalid(SCAN_INTERVAL_ERROR)
     try:
         threshold = int(threshold_days.strip()) if threshold_days.strip() else None
     except ValueError:
@@ -273,6 +283,10 @@ async def add_host(
     if threshold_days is not None and threshold_days < 1:
         return RedirectResponse(
             url=f"/?error={quote('threshold_days must be at least 1')}", status_code=303
+        )
+    if scan_interval_out_of_range(scan_interval_hours):
+        return RedirectResponse(
+            url=f"/?error={quote(SCAN_INTERVAL_ERROR)}", status_code=303
         )
     if not check_rate_limit(f"add_host:{_extract_client_ip(request)}", 20, 60):
         return RedirectResponse(
@@ -424,6 +438,13 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             except ValueError:
                 errors.append(f"row {i}: invalid scan_interval_hours '{interval_str}'")
                 continue
+            if scan_interval_out_of_range(interval_hours):
+                errors.append(
+                    f"row {i}: scan_interval_hours must be between "
+                    f"{MIN_SCAN_INTERVAL_HOURS} and {MAX_SCAN_INTERVAL_HOURS}, "
+                    f"got '{interval_str}'"
+                )
+                continue
         row_starttls = (row.get("starttls_mode") or "").strip().lower()
         if row_starttls and row_starttls not in STARTTLS_MODES:
             errors.append(f"row {i}: unsupported starttls_mode '{row_starttls}'")
@@ -477,9 +498,20 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
             url=f"/?error={quote('Import failed: ' + '; '.join(errors[:3]))}", status_code=303
         )
     if errors:
+        # A partial import used to redirect to a bare "/": rows the operator
+        # believed they had imported were dropped and nothing on the page said
+        # so. Silence is affordable when a row is merely a duplicate; it is not
+        # when the row was an endpoint somebody meant to start monitoring, and
+        # bounding the cadence (#29) adds a reason to reject a row that was
+        # previously accepted -- turning a silent bad value into a silent
+        # missing host, which is worse.
         logger.info("CSV import partial: %d imported, %d errors", imported, len(errors))
-    else:
-        logger.info("CSV import complete: %d hosts imported", imported)
+        shown = "; ".join(errors[:3])
+        if len(errors) > 3:
+            shown += f"; and {len(errors) - 3} more"
+        summary = f"Imported {imported} host(s); {len(errors)} row(s) rejected: {shown}"
+        return RedirectResponse(url=f"/?warning={quote(summary)}", status_code=303)
+    logger.info("CSV import complete: %d hosts imported", imported)
     return RedirectResponse(url="/", status_code=303)
 
 

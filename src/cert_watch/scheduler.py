@@ -120,7 +120,28 @@ def _host_scan_deadlines(
         if last is None:
             deadline = now
         else:
-            deadline = cadence_due_at(last, r["scan_interval_hours"], hour, minute)
+            try:
+                deadline = cadence_due_at(last, r["scan_interval_hours"], hour, minute)
+            except (OverflowError, TypeError, ValueError):
+                # A stored interval this arithmetic cannot use -- historically
+                # any integer was accepted here, and `last + timedelta(hours=N)`
+                # leaves the representable range well before N does. Falling
+                # back to the daily boundary keeps the host scanned on the
+                # default cadence.
+                #
+                # Isolation is the point. This loop selects work for the WHOLE
+                # estate, so letting one row raise stopped `get_hosts_due_for_scan`
+                # and `_seconds_until_next_scan` outright and nothing was scanned
+                # at all -- while `load_scan_evidence`, which already caught this,
+                # kept every dashboard rendering green. A certificate monitor
+                # that has silently stopped monitoring is the worst shape this
+                # failure could take. See #29.
+                logger.warning(
+                    "host %s:%s has an unusable scan_interval_hours (%r); "
+                    "falling back to the daily cadence",
+                    r["hostname"], r["port"], r["scan_interval_hours"],
+                )
+                deadline = cadence_due_at(last, None, hour, minute)
         if attempt is not None and (last is None or attempt > last):
             deadline = max(deadline, attempt + timedelta(seconds=FAST_RETRY_INTERVAL))
         deadlines.append((r["hostname"], r["port"], deadline, attempt is None))
