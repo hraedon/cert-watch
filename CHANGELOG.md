@@ -38,6 +38,16 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **A failing relay no longer stalls the scan cycle in proportion to the alert
+  queue.** The retry backoff sat inside the per-alert loop, so each failing
+  alert slept its own ~6s: a ten-alert queue blocked the scheduler for 71s, and
+  a hundred for roughly twelve minutes — while scanning waited, during exactly
+  the outage an operator needs scanning to survive. Retries now run in waves, so
+  the sleeps are shared by the queue (ten failing alerts: 71s → 7.6s) while each
+  alert still gets its full run of attempts. A wall-clock budget bounds what
+  waves cannot: an unreachable relay burns a socket timeout per attempt rather
+  than refusing, which no amount of sleep-sharing helps. Alerts the budget cuts
+  short stay pending and are reported as deferred, never as failed.
 - **One host could stop the whole estate from being scanned.** `scan_interval_hours`
   was unbounded in the add-host form and CSV import, and `last_success +
   timedelta(hours=N)` leaves the representable date range long before `N` does.

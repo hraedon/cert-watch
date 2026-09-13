@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from email.message import EmailMessage
 from functools import partial
 from pathlib import Path
+from time import monotonic
 from typing import TYPE_CHECKING, Any
 
 from cert_watch.certificate_model import Certificate
@@ -898,6 +899,16 @@ def resolve_webhook_for_renewed_cert(
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
 
+# Wall-clock ceiling on one process_pending cycle. The scheduler calls the
+# alert phase synchronously, so whatever this costs, the rest of the cycle --
+# scanning above all -- waits for it. That matters most precisely when delivery
+# is failing, which is when an operator least wants scanning to stop.
+#
+# Generous by design: a healthy 100-alert queue clears in well under a second,
+# and 1000 in a few, so this only engages when something is actually wrong.
+# Alerts left unattempted stay pending and go out on the next cycle.
+ALERT_CYCLE_BUDGET_SECONDS = 300.0
+
 # How long an alert may sit `pending` before the estate treats it as undelivered.
 # One full daily cycle plus slack: anything older has missed a send it should
 # have caught. Read by the health check and the Activity view, which must agree
@@ -1555,94 +1566,158 @@ def send_expiry_digest(
     return False
 
 
+@dataclass
+class _Delivery:
+    """One alert's progress through the cycle. Mutable; one per pending alert."""
+
+    alert: Alert
+    delivered: bool = False
+    last_error: str = ""
+    attempts_made: int = 0
+    # Whether the MOST RECENT wave reached a transport. Judged per wave, never
+    # accumulated: an earlier wave may have reached the relay and failed, and if
+    # the evidence store then becomes unwritable a stale "yes" would let a
+    # database outage mark an alert failed that the relay might still accept.
+    reached_transport: bool = False
+    # Set when every configured channel refused before sending. Such an alert
+    # leaves the cycle immediately -- further waves cannot help, because there
+    # is nothing to back off from.
+    evidence_unavailable: bool = False
+
+    @property
+    def done(self) -> bool:
+        return self.delivered or self.evidence_unavailable
+
+
+def _attempt_once(
+    item: _Delivery,
+    *,
+    evidence_db: Path | None,
+    config: AlertConfig | None,
+    webhook_config: WebhookConfig | None,
+) -> None:
+    """One pass over every configured channel for a single alert."""
+    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
+
+    alert = item.alert
+    item.reached_transport = False
+    if config is not None:
+        try:
+            item.delivered = attempt_delivery(
+                evidence_db, alert, "smtp", partial(send_alert, alert, config),
+                recipients=_smtp_recipients(alert, config),
+                global_recipients=config.recipients,
+            )
+            item.reached_transport = True
+            item.attempts_made += 1
+        except DeliveryEvidenceUnavailable:
+            # Guard this call only. A begin_attempt failure is per-statement --
+            # typically a transient SQLITE_BUSY from a concurrent scan write --
+            # so the webhook fallback below may well succeed.
+            item.delivered = False
+    if not item.delivered and webhook_config is not None:
+        kind = webhook_config.kind
+        channel = (
+            kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
+            else "webhook"
+        )
+        try:
+            item.delivered = attempt_delivery(
+                evidence_db, alert, channel, partial(send_webhook, alert, webhook_config),
+            )
+            item.reached_transport = True
+            item.attempts_made += 1
+        except DeliveryEvidenceUnavailable:
+            item.delivered = False
+    if item.delivered:
+        return
+    item.last_error = alert.error_message or "unknown"
+    item.evidence_unavailable = not item.reached_transport
+
+
 def process_pending(
     alert_repo: AlertRepository,
     config: AlertConfig | None,
     webhook_config: WebhookConfig | None = None,
+    *,
+    budget_seconds: float = ALERT_CYCLE_BUDGET_SECONDS,
 ) -> dict[str, int]:
     """See AC-04. No-ops when both configs are None. Tries webhook if SMTP fails or is absent.
 
-    Failed deliveries are retried up to ALERT_MAX_RETRIES times with a short delay.
+    Retries in **waves**: every alert is attempted once before any is attempted
+    a second time. Each alert still gets ``ALERT_MAX_RETRIES`` attempts, but the
+    backoff sleeps are shared by the queue instead of paid per alert -- the
+    sleeps used to sit inside the per-alert loop, so a failing relay cost ~6s
+    *each* and a 100-alert queue blocked the scheduler for ten minutes (#43).
+
+    Waves alone do not bound that. An unreachable relay does not refuse, it
+    hangs to the 15s socket timeout, and there is one connect per attempt: 100
+    alerts x 3 attempts x 15s is 75 minutes of transport with no sleeping at
+    all. So the cycle also carries a wall-clock ``budget_seconds``. When it is
+    spent, the alerts not yet resolved stay ``pending`` and are counted as
+    deferred -- the state #36 already defined for "nothing was dispatched and
+    the alert is still deliverable", reused rather than reinvented.
+
+    Breadth before depth is why the two belong together: spending a budget down
+    the per-alert loop would give the first few alerts three attempts each and
+    the rest none. Under an outage, having tried everything once is worth more
+    than having tried three things thrice.
     """
     if config is None and webhook_config is None:
         return {"sent": 0, "failed": 0, "deferred": 0}
-    from cert_watch.alert_delivery import DeliveryEvidenceUnavailable, attempt_delivery
 
     repository_path = getattr(alert_repo, "db_path", None)
     evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
-    sent = 0
-    failed = 0
-    deferred = 0
-    for alert in alert_repo.list_pending():
-        delivered = False
-        last_error = ""
-        # Whether the FINAL pass reached a transport, and how many passes did.
-        # This must be judged per pass, not accumulated: an earlier pass may
-        # have reached the relay and failed, and if the evidence store then
-        # becomes unwritable a stale "yes" would let a database outage fail an
-        # alert the relay might still accept.
-        reached_transport_this_pass = False
-        attempts_made = 0
-        for _ in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
-            reached_transport_this_pass = False
-            if config is not None:
-                try:
-                    delivered = attempt_delivery(
-                        evidence_db, alert, "smtp", partial(send_alert, alert, config),
-                        recipients=_smtp_recipients(alert, config),
-                        global_recipients=config.recipients,
-                    )
-                    reached_transport_this_pass = True
-                    attempts_made += 1
-                except DeliveryEvidenceUnavailable:
-                    # Guard this call only. A begin_attempt failure is
-                    # per-statement -- typically a transient SQLITE_BUSY from a
-                    # concurrent scan write -- so the webhook fallback below may
-                    # well succeed.
-                    delivered = False
-            if not delivered and webhook_config is not None:
-                kind = webhook_config.kind
-                channel = (
-                    kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
-                    else "webhook"
+    queue = [_Delivery(alert=alert) for alert in alert_repo.list_pending()]
+    started = monotonic()
+    exhausted = False
+
+    active = [item for item in queue if not item.done]
+    for wave in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
+        for item in active:
+            if monotonic() - started >= budget_seconds:
+                exhausted = True
+                logger.warning(
+                    "Alert cycle budget of %.0fs spent during attempt %d; %d alert(s) "
+                    "left pending for the next cycle",
+                    budget_seconds, wave + 1,
+                    sum(1 for entry in queue if not entry.done),
                 )
-                try:
-                    delivered = attempt_delivery(
-                        evidence_db, alert, channel,
-                        partial(send_webhook, alert, webhook_config),
-                    )
-                    reached_transport_this_pass = True
-                    attempts_made += 1
-                except DeliveryEvidenceUnavailable:
-                    delivered = False
-            if delivered:
                 break
-            last_error = alert.error_message or "unknown"
-            if not reached_transport_this_pass:
-                # Every configured channel refused BEFORE sending, so the
-                # backoff sleeps cannot help: there is nothing to back off
-                # from. Stop now rather than sleeping the whole budget, which
-                # a deferred alert would otherwise re-pay every cycle -- and
-                # which blocks the event loop during a manual flush.
-                break
-        if delivered:
+            _attempt_once(
+                item, evidence_db=evidence_db, config=config, webhook_config=webhook_config,
+            )
+        # Decided here, at the END of the wave, so abandoning the generator
+        # skips its sleep. Testing it at the top instead still pays one backoff
+        # after the last useful wave -- a queue that delivered everything on the
+        # first pass would sit there sleeping with nothing left to retry.
+        active = [item for item in active if not item.done]
+        if not active or exhausted:
+            break
+
+    sent = failed = deferred = 0
+    for item in queue:
+        alert = item.alert
+        if item.delivered:
             alert.sent_at = datetime.now(UTC)
             alert_repo.mark_sent(alert.id)
             sent += 1
-        elif reached_transport_this_pass:
-            # The last thing that happened was a real delivery failure.
-            plural = "attempt" if attempts_made == 1 else "attempts"
+        elif item.reached_transport and not exhausted and item.attempts_made:
+            # A real delivery failure, and the alert had its full run of waves.
+            plural = "attempt" if item.attempts_made == 1 else "attempts"
             alert_repo.mark_failed(
-                alert.id, f"{last_error} (after {attempts_made} {plural})"
+                alert.id, f"{item.last_error} (after {item.attempts_made} {plural})"
             )
             failed += 1
         else:
-            # No transport was ever reached: the database was unavailable, not
-            # the destination. Leave the alert pending so a later cycle sends
-            # it once the database recovers.
+            # Either no transport was ever reached (the database was
+            # unavailable, not the destination), or the cycle ran out of budget
+            # before this alert had its full run. Both leave it deliverable, so
+            # both leave it pending rather than spending its retries on an
+            # outage that never reached a destination.
             #
-            # Deliberately NOT bounded here. Bounding needs an epoch for "how
-            # long has evidence been unwritable", which is per-alert persisted
+            # Deliberately NOT bounded by age. Bounding needs an epoch for "how
+            # long has this been undeliverable", which is per-alert persisted
             # state this schema does not carry -- alert.created_at is the wrong
             # clock, because evaluate_all_certs resets a failed alert to pending
             # while keeping its original created_at, so one transient lock on an
@@ -1655,8 +1730,9 @@ def process_pending(
             # the threshold is crossed, which limits the damage, but the pending
             # queue is NOT a durable parking place. See #39.
             logger.warning(
-                "Alert %s deferred: delivery evidence unavailable, leaving it pending",
+                "Alert %s deferred (%s), leaving it pending",
                 alert.id,
+                "cycle budget spent" if exhausted else "delivery evidence unavailable",
             )
             deferred += 1
     return {"sent": sent, "failed": failed, "deferred": deferred}
