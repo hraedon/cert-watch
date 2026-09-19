@@ -676,17 +676,47 @@ def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_pa
     exactly when a reason cannot be persisted on the alert — the store that
     would hold it is the one that is down. Age is read, not written, and it
     catches a scheduler that has simply stopped flushing too.
+
+    A transport is configured because the chip claims the alert is *late*, and
+    only an estate that sends has a cycle to be late for.
     """
     db, _, alert = _pending(tmp_path)
     _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
     monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
     monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
-    with TestClient(reload_app().app) as client:
+    with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         response = client.get("/alerts")
 
     assert response.status_code == 200
     assert "Not yet delivered" in response.text
     assert "Still queued past the cycle that should have sent it." in response.text
+
+
+def test_activity_does_not_call_a_queued_alert_late_when_nothing_sends(
+    monkeypatch, tmp_path, reload_app,
+):
+    """With no transport there is no cycle, so the alert is queued, not late.
+
+    ``process_pending`` returns before doing anything when neither SMTP nor a
+    webhook is set, so these alerts stay pending for ever by design. Telling
+    the operator they are "past the cycle that should have sent it" describes
+    an outage that is not happening; the tab says once that nothing is
+    configured to send them instead.
+    """
+    db, _, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS * 30)
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+        health = client.get("/api/health").json()
+
+    assert response.status_code == 200
+    assert "Not yet delivered" not in response.text
+    assert "Recorded: pending" in response.text
+    assert 'data-testid="alerts-no-delivery"' in response.text
+    assert health["undelivered_alerts"] == 0
+    assert health["alert_delivery_configured"] is False
 
 
 def test_activity_does_not_alarm_over_a_freshly_queued_alert(monkeypatch, tmp_path, reload_app):
@@ -738,7 +768,7 @@ def test_activity_reports_both_the_attempt_outcome_and_that_nothing_arrived(
     begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
     monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
     monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
-    with TestClient(reload_app().app) as client:
+    with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         response = client.get("/alerts")
 
     assert response.status_code == 200
@@ -763,7 +793,8 @@ def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
         conn.commit()
     monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
     monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
-    with TestClient(reload_app().app) as client:
+    # SMTP is set so this exercises the timestamp path, not the no-transport one.
+    with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         page = client.get("/alerts")
         health = client.get("/api/health").json()
 

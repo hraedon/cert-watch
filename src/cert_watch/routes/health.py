@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.alerts import UNDELIVERED_AFTER_HOURS
+from cert_watch.alerts import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.auth import SESSION_COOKIE, validate_session
 from cert_watch.database.connection import _connect
 from cert_watch.middleware import (
@@ -19,7 +19,7 @@ from cert_watch.middleware import (
     authenticate_api_key,
     require_auth,
 )
-from cert_watch.routes._deps import _db_path
+from cert_watch.routes._deps import _db_path, _get_settings
 
 logger = logging.getLogger("cert_watch.routes.health")
 
@@ -215,6 +215,15 @@ def api_health(request: Request) -> JSONResponse:
     # EVIDENCE_DEFERRAL_GIVE_UP_HOURS on its persisted clock is marked failed
     # (#38), but only if the database will take that write; when it will not,
     # this age-based count is still the only hand raised.
+    #
+    # It only means anything when something was supposed to send. With no SMTP
+    # and no webhook, `process_pending` returns immediately and every alert
+    # stays pending for ever by design; counting those would light this banner
+    # permanently on a dashboard-only install, for an outage that is not
+    # happening. `alert_delivery_configured` reports which regime is in force,
+    # so a zero here is legible rather than mysterious.
+    delivery_configured = delivery_is_configured(_get_settings(request))
+    checks["alert_delivery_configured"] = delivery_configured
     try:
         cutoff = (datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
@@ -223,10 +232,14 @@ def api_health(request: Request) -> JSONResponse:
                 (cutoff,),
             ).fetchone()
             checks["failed_alerts_24h"] = row[0] if row else 0
-            stuck = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE status = 'pending' AND created_at <= ?",
-                (cutoff,),
-            ).fetchone()
+            stuck = (
+                conn.execute(
+                    "SELECT COUNT(*) FROM alerts WHERE status = 'pending' AND created_at <= ?",
+                    (cutoff,),
+                ).fetchone()
+                if delivery_configured
+                else None
+            )
             checks["undelivered_alerts"] = stuck[0] if stuck else 0
     except Exception:
         logger.warning("health alert query failed", exc_info=True)

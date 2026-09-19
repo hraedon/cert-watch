@@ -63,6 +63,18 @@
   <div class="cw-note t-ok">{{ icons.svg_icon('check-circle', 14) }}{{ saved }}</div>
   {% endif %}
 
+  {# Said once, at the top, rather than as a warning chip on every row: with no
+     SMTP and no webhook these alerts are queued and nothing will send them,
+     which is a configuration fact, not an outage. Only shown when there is at
+     least one queued alert to explain. #}
+  {% if not alert_delivery_configured|default(true)
+        and alerts|selectattr('status', 'equalto', 'pending')|list %}
+  <div class="cw-note t-muted" data-testid="alerts-no-delivery">
+    {{ icons.svg_icon('send', 14) }}No delivery is configured, so queued alerts stay in this list.
+    {% if is_admin %}<a href="/settings/channels">Configure email or a webhook</a>.{% endif %}
+  </div>
+  {% endif %}
+
   <div class="cw-filterbar">
     <div class="cw-seg" role="group" aria-label="Filter alerts">
       <a href="/alerts?filter_type=all" class="{% if filter_type == 'all' %}on{% endif %}">All <span class="cnt">{{ alert_counts.all }}</span></a>

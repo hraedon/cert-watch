@@ -930,6 +930,22 @@ UNDELIVERED_AFTER_HOURS = 24
 EVIDENCE_DEFERRAL_GIVE_UP_HOURS = 72
 
 
+def delivery_is_configured(settings: Any) -> bool:
+    """Whether any transport exists for ``process_pending`` to try.
+
+    ``process_pending`` returns immediately when neither SMTP nor a webhook is
+    configured, so on a dashboard-only install every alert stays ``pending``
+    for ever, by design and not by fault. The surfaces that call an old pending
+    alert *undelivered* -- the health counter and the Activity chip -- mean
+    "should have been sent and was not", so they must ask this first or they
+    accuse a deliberately configured estate of an outage it is not having.
+
+    Mirrors the choice the flush route makes when it builds the two configs, so
+    the warning and the delivery path cannot disagree about what is configured.
+    """
+    return bool(getattr(settings, "smtp_host", None) or getattr(settings, "webhook_url", None))
+
+
 def evaluate_policy_alerts(
     cert_id: str,
     hostname: str,
