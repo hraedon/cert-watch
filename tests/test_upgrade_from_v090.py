@@ -65,7 +65,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     # The exact path the app runs on startup.
     init_schema(v090_db)
 
-    # Every registered migration is now recorded, and 0024–0032 were the delta.
+    # Every registered migration is now recorded, and 0024–0033 were the delta.
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
     from cert_watch.migrations.runner import get_migrations
 
@@ -74,7 +74,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
         applied = [r[0] for r in conn.execute("SELECT id FROM schema_version ORDER BY id")]
     assert applied == expected_ids
     assert [i for i in applied if i > "0023"] == [
-        "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032",
+        "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033",
     ]
 
     # No data lost.
@@ -98,3 +98,9 @@ def test_v090_upgrade_applies_post_floor_schema(v090_db: Path) -> None:
     assert "permission_tier" in roles_cols   # m0024 role tiers
     assert "starttls_mode" in hosts_cols     # m0027 STARTTLS scanning
     assert ct is None                        # m0028 dropped the unused table
+    with sqlite3.connect(str(v090_db)) as conn:
+        alerts_cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)")}
+        # The pre-existing alert row is untouched by 0033: NULL, not stamped.
+        legacy = conn.execute("SELECT deferred_since FROM alerts").fetchall()
+    assert "deferred_since" in alerts_cols   # m0033 bounded evidence deferral
+    assert legacy == [(None,)]

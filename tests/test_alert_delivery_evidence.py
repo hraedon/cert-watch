@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 
 from cert_watch.alerts import (
     ALERT_MAX_RETRIES,
+    EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
     UNDELIVERED_AFTER_HOURS,
     AlertConfig,
     WebhookConfig,
@@ -481,6 +482,191 @@ def _age_alert(db, alert_id, *, hours):
             ((datetime.now(UTC) - timedelta(hours=hours)).isoformat(), alert_id),
         )
         conn.commit()
+
+
+# ---------- the deferral clock and its bound (#38, migration 0033) ----------
+
+
+def _deferred_since(db, alert_id):
+    with _connect(db) as conn:
+        return conn.execute(
+            "SELECT deferred_since FROM alerts WHERE id = ?", (alert_id,),
+        ).fetchone()[0]
+
+
+def _stamp_deferred_since(db, alert_id, *, hours_ago):
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET deferred_since = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(hours=hours_ago)).isoformat(), alert_id),
+        )
+        conn.commit()
+
+
+def _unwritable_evidence_store(monkeypatch):
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
+        side_effect=sqlite3.OperationalError("database is locked"),
+    ))
+
+
+def test_first_deferral_stamps_the_alert_and_later_ones_keep_the_stamp(monkeypatch, tmp_path):
+    """``deferred_since`` is the start of the outage, not the latest cycle."""
+    db, repo, alert = _pending(tmp_path)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+    assert _deferred_since(db, alert.id) is None
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    first = _deferred_since(db, alert.id)
+    assert first is not None
+    assert datetime.now(UTC) - datetime.fromisoformat(first) < timedelta(minutes=1)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert _deferred_since(db, alert.id) == first
+    assert repo.list_for_cert(alert.cert_id)[0].status == "pending"
+
+
+def test_an_old_alert_deferred_once_is_not_failed(monkeypatch, tmp_path):
+    """The bound runs on the deferral clock, never on ``created_at``.
+
+    ``evaluate_all_certs`` resets a failed alert to pending with its original
+    ``created_at``, so an age-based bound would fail an old alert on its first
+    millisecond-long lock and then flip-flop forever -- the implementation #36
+    tried and reverted (#38).
+    """
+    db, repo, alert = _pending(tmp_path)
+    _age_alert(db, alert.id, hours=10 * 24)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert repo.list_for_cert(alert.cert_id)[0].status == "pending"
+
+
+def test_a_deferral_past_the_bound_fails_with_an_honest_message(monkeypatch, tmp_path):
+    db, repo, alert = _pending(tmp_path)
+    _stamp_deferred_since(db, alert.id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 1)
+    connection = _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    connection.send_message.assert_not_called()
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "failed"
+    assert "delivery evidence could not be recorded since" in stored.error_message
+    # The stamp was one hour past the bound, and the message reports the real age.
+    assert f"({EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 1}h)" in stored.error_message
+    assert "database is locked" not in stored.error_message
+    assert stored.deferred_since is None
+
+
+def test_a_deferral_inside_the_bound_stays_pending(monkeypatch, tmp_path):
+    db, repo, alert = _pending(tmp_path)
+    _stamp_deferred_since(db, alert.id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS - 1)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert repo.list_for_cert(alert.cert_id)[0].status == "pending"
+
+
+def test_a_refused_give_up_write_does_not_abort_the_cycle(monkeypatch, tmp_path):
+    """The give-up UPDATE goes to the database that just refused a write.
+
+    When it is refused too, the alert stays pending (it already is) and the
+    cycle carries on to the next alert; #36's first attempt let that UPDATE
+    raise, which skipped every later alert and made a manual flush 500 (#38).
+    """
+    db, repo, first = _pending(tmp_path)
+    second = Alert(cert_id="other-cert", alert_type="expiry_warning", status="pending",
+                   message="Certificate expires within seven days", threshold_days=7,
+                   subject="CN=other.invalid", extra_recipients=["queued@example.invalid"])
+    second.id = repo.create(second)
+    for alert_id in (first.id, second.id):
+        _stamp_deferred_since(db, alert_id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 1)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    real_mark_failed = SqliteAlertRepository.mark_failed
+    refusals = {"n": 0}
+
+    def refuse_the_first_failure_write(self, alert_id, error_message):
+        refusals["n"] += 1
+        if refusals["n"] == 1:
+            raise sqlite3.OperationalError("disk I/O error")
+        return real_mark_failed(self, alert_id, error_message)
+
+    monkeypatch.setattr(SqliteAlertRepository, "mark_failed", refuse_the_first_failure_write)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 1}
+    statuses = sorted(
+        a.status for a in repo.list_for_cert(first.cert_id) + repo.list_for_cert(second.cert_id)
+    )
+    assert statuses == ["failed", "pending"]
+
+
+def test_a_refused_deferral_stamp_is_tolerated(monkeypatch, tmp_path):
+    db, repo, alert = _pending(tmp_path)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+    monkeypatch.setattr(SqliteAlertRepository, "note_deferral", Mock(
+        side_effect=sqlite3.OperationalError("attempt to write a readonly database"),
+    ))
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert repo.list_for_cert(alert.cert_id)[0].status == "pending"
+    assert _deferred_since(db, alert.id) is None
+
+
+def test_an_attempt_recorded_this_cycle_restarts_the_deferral_clock(monkeypatch, tmp_path):
+    """A transport was reached, then the store became unwritable mid-retry.
+
+    The store was provably writable this cycle, so an old stamp cannot mean
+    the outage has lasted since then; the clock restarts instead of failing
+    the alert on stale evidence.
+    """
+    db, repo, alert = _pending(tmp_path)
+    _stamp_deferred_since(db, alert.id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 10)
+    _smtp(monkeypatch, error=smtplib.SMTPException("temporary greylist"))
+    real_begin = begin_attempt
+    calls = {"n": 0}
+
+    def unwritable_after_the_first_attempt(db_path, alert_id, channel, details):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise sqlite3.OperationalError("database is locked")
+        return real_begin(db_path, alert_id, channel, details)
+
+    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt",
+                        unwritable_after_the_first_attempt)
+
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    stamped = _deferred_since(db, alert.id)
+    assert datetime.now(UTC) - datetime.fromisoformat(stamped) < timedelta(minutes=1)
+
+
+def test_delivery_and_status_changes_clear_the_deferral_clock(monkeypatch, tmp_path):
+    db, repo, alert = _pending(tmp_path)
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
+    assert _deferred_since(db, alert.id) is not None
+
+    monkeypatch.undo()                      # database recovers
+    _smtp(monkeypatch)
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
+    assert _deferred_since(db, alert.id) is None
+
+    repo.note_deferral(alert.id, datetime.now(UTC))     # ignored: not pending
+    assert _deferred_since(db, alert.id) is None
+    repo.reset_to_pending(alert.id)
+    repo.note_deferral(alert.id, datetime.now(UTC))
+    assert _deferred_since(db, alert.id) is not None
+    repo.mark_failed(alert.id, "relay refused")
+    assert _deferred_since(db, alert.id) is None
+    repo.reset_to_pending(alert.id)
+    assert _deferred_since(db, alert.id) is None
+    assert repo.list_pending()[0].deferred_since is None
 
 
 def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_path, reload_app):

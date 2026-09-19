@@ -109,6 +109,50 @@ Manual file operations (restoring a backup, swapping the DB) are the exception:
   first** for any manual file operation (backup restore, DB swap). Once it stops
   cleanly the WAL is checkpointed and the file is a safe standalone copy.
 
+### Migration 0033: `alerts.deferred_since` (bounded evidence deferral, #38)
+
+**What it does.** Adds one nullable column, `alerts.deferred_since`. It records
+when delivery of a pending alert was first deferred because the
+delivery-evidence store refused the write that must precede a send. The
+migration modifies no rows; existing alerts get `NULL`. Startup applies it
+automatically after the usual pre-migration backup.
+
+**Behaviour it enables.** An alert whose delivery keeps being deferred for
+72 hours on that clock (`EVIDENCE_DEFERRAL_GIVE_UP_HOURS`) is marked `failed`
+with a message stating since when. The clock restarts whenever an attempt is
+recorded and is cleared by every status change, so a transient lock on an old
+alert cannot read as a days-long outage. If the database will not take the
+give-up write either, the alert stays pending and the event is logged at
+ERROR; the age-based `undelivered_alerts` health count and the Activity view's
+"Not yet delivered" chip remain the signal in that case.
+
+**Manual application** (Windows/IIS hosts, or any operator who stages schema
+changes by hand). Stop the app pool or service first, take a backup
+(`cert-watch backup <path>` or copy the file), then run against the database:
+
+```sql
+ALTER TABLE alerts ADD COLUMN deferred_since TEXT;
+INSERT INTO schema_version (id, description, applied_at)
+VALUES ('0033',
+        'add deferred_since to alerts for bounded evidence deferral (#38)',
+        strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+```
+
+Running only the `ALTER` is also fine: startup sees the column, skips the
+`ALTER`, and records `0033` itself. Both paths are covered by
+`tests/test_migrations.py`.
+
+**Verify** with `PRAGMA table_info(alerts);` (a `deferred_since` row is
+present) and `SELECT id FROM schema_version WHERE id = '0033';` (one row).
+
+**Rollback.** The column is additive and nullable, and the previous release
+never reads it, so rolling back the code needs no database change. (The
+`cert-watch routing-report` diagnostic of the previous release will refuse a
+snapshot that records `0033`, because it requires an exact schema match.) To
+remove the column as well, either restore the `*-pre-migration-*` backup, or
+with the app stopped run `ALTER TABLE alerts DROP COLUMN deferred_since;` and
+`DELETE FROM schema_version WHERE id = '0033';` (SQLite 3.35 or newer).
+
 ## Upgrading from a pre-0.9.0 release
 
 There is no full-fidelity data export/import tool. Two options:

@@ -12,7 +12,7 @@ import sqlite3
 import ssl
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from email.message import EmailMessage
 from functools import partial
 from pathlib import Path
@@ -916,6 +916,19 @@ ALERT_CYCLE_BUDGET_SECONDS = 300.0
 # the other is trying to warn.
 UNDELIVERED_AFTER_HOURS = 24
 
+# How long delivery may keep being deferred because the evidence store refuses
+# the write that must precede a send, before the alert is marked failed. The
+# clock is ``alerts.deferred_since`` (migration 0033): stamped at the first
+# deferred cycle, kept across later ones, restarted by any recorded attempt and
+# cleared by every status change. ``created_at`` is the wrong clock, because
+# ``evaluate_all_certs`` resets a failed alert to pending with its original
+# ``created_at``, so one transient lock on an old alert would read as a
+# days-long outage and flip-flop forever (#38). Three daily cycles: the health
+# check and Activity view already flag the alert as undelivered after
+# UNDELIVERED_AFTER_HOURS, so this only has to make a persistent outage
+# terminate visibly, not detect it first.
+EVIDENCE_DEFERRAL_GIVE_UP_HOURS = 72
+
 
 def evaluate_policy_alerts(
     cert_id: str,
@@ -1635,6 +1648,55 @@ def _attempt_once(
     item.evidence_unavailable = not item.reached_transport
 
 
+def _settle_evidence_deferral(
+    alert_repo: AlertRepository, item: _Delivery, *, now: datetime,
+) -> str:
+    """Persist a deferral, or give up on one that has outlived its bound.
+
+    Returns ``"failed"`` or ``"deferred"``. Every write here targets the
+    database that has just refused one, so each is tolerated: a failure is
+    logged and the alert stays pending, which is the state it is already in.
+    Nothing here may raise, or one refused UPDATE would abort the cycle and
+    skip every alert after it (#38).
+    """
+    alert = item.alert
+    # An attempt recorded in THIS cycle proves the store was writable more
+    # recently than any earlier stamp, so the outage is younger than that stamp.
+    restart = item.attempts_made > 0
+    since = None if restart else alert.deferred_since
+    if since is not None and since.tzinfo is None:
+        since = since.replace(tzinfo=UTC)
+    if since is not None and now - since >= timedelta(hours=EVIDENCE_DEFERRAL_GIVE_UP_HOURS):
+        hours = int((now - since).total_seconds() // 3600)
+        message = (
+            f"delivery evidence could not be recorded since "
+            f"{since.astimezone(UTC).isoformat(timespec='minutes')} ({hours}h); "
+            "no transport was reached in that time"
+        )
+        try:
+            alert_repo.mark_failed(alert.id, message)
+        except (sqlite3.Error, OSError):
+            logger.error(
+                "Alert %s has been deferred for %dh and the failure could not be "
+                "recorded either; leaving it pending", alert.id, hours, exc_info=True,
+            )
+            return "deferred"
+        logger.error("Alert %s failed: %s", alert.id, message)
+        return "failed"
+    try:
+        alert_repo.note_deferral(alert.id, now, restart=restart)
+    except (sqlite3.Error, OSError):
+        logger.warning(
+            "Alert %s deferred (delivery evidence unavailable) and the deferral itself "
+            "could not be recorded; leaving it pending", alert.id, exc_info=True,
+        )
+    else:
+        logger.warning(
+            "Alert %s deferred (delivery evidence unavailable), leaving it pending", alert.id,
+        )
+    return "deferred"
+
+
 def process_pending(
     alert_repo: AlertRepository,
     config: AlertConfig | None,
@@ -1696,10 +1758,11 @@ def process_pending(
             break
 
     sent = failed = deferred = 0
+    now = datetime.now(UTC)
     for item in queue:
         alert = item.alert
         if item.delivered:
-            alert.sent_at = datetime.now(UTC)
+            alert.sent_at = now
             alert_repo.mark_sent(alert.id)
             sent += 1
         elif item.reached_transport and not exhausted and item.attempts_made:
@@ -1709,30 +1772,22 @@ def process_pending(
                 alert.id, f"{item.last_error} (after {item.attempts_made} {plural})"
             )
             failed += 1
+        elif item.evidence_unavailable:
+            # No transport was reached: the database was unavailable, not the
+            # destination. The alert stays deliverable, so it stays pending
+            # rather than spending its retries on an outage that never reached
+            # a destination. The deferral is stamped on the row (best effort --
+            # the same database just refused a write) and, once it has outlived
+            # EVIDENCE_DEFERRAL_GIVE_UP_HOURS on that persisted clock, the alert
+            # is marked failed with a message that says since when (#38).
+            if _settle_evidence_deferral(alert_repo, item, now=now) == "failed":
+                failed += 1
+            else:
+                deferred += 1
         else:
-            # Either no transport was ever reached (the database was
-            # unavailable, not the destination), or the cycle ran out of budget
-            # before this alert had its full run. Both leave it deliverable, so
-            # both leave it pending rather than spending its retries on an
-            # outage that never reached a destination.
-            #
-            # Deliberately NOT bounded by age. Bounding needs an epoch for "how
-            # long has this been undeliverable", which is per-alert persisted
-            # state this schema does not carry -- alert.created_at is the wrong
-            # clock, because evaluate_all_certs resets a failed alert to pending
-            # while keeping its original created_at, so one transient lock on an
-            # old alert would look like a day-long outage. And the give-up write
-            # would itself go to the database that just refused a write. See #38.
-            #
-            # Caveat, and it is a real one: purge_old_alerts still deletes by age
-            # alone, so a deferral that outlives alert_retention_days is removed
-            # while still pending. evaluate_all_certs recreates the alert while
-            # the threshold is crossed, which limits the damage, but the pending
-            # queue is NOT a durable parking place. See #39.
-            logger.warning(
-                "Alert %s deferred (%s), leaving it pending",
-                alert.id,
-                "cycle budget spent" if exhausted else "delivery evidence unavailable",
-            )
+            # The cycle ran out of budget before this alert had its full run.
+            # It is still deliverable and goes out next cycle; the deferral
+            # clock is for the evidence store, so it is not touched here.
+            logger.warning("Alert %s deferred (cycle budget spent), leaving it pending", alert.id)
             deferred += 1
     return {"sent": sent, "failed": failed, "deferred": deferred}
