@@ -1,6 +1,7 @@
 """Repository implementations."""
 from __future__ import annotations
 
+import contextlib
 import json
 import sqlite3
 import uuid
@@ -30,6 +31,10 @@ class Alert:
     extra_recipients: list[str] = field(default_factory=list)
     hostname: str = ""
     subject: str = ""
+    # First cycle in which delivery was deferred because the evidence store
+    # refused the write that precedes a send; cleared by any recorded attempt
+    # and by every status change (migration 0033, #38).
+    deferred_since: datetime | None = None
 
 
 @dataclass
@@ -246,6 +251,17 @@ class AlertRepository(ABC):
     @abstractmethod
     def reset_to_pending(self, alert_id: str) -> None: ...
 
+    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+        """Record that delivery was deferred at *when* (see migration 0033).
+
+        The first deferral stamps ``deferred_since``; later ones leave it alone,
+        so it stays the start of the outage. ``restart=True`` overwrites it,
+        for a cycle in which an attempt *was* recorded before the store became
+        unwritable again: the outage is younger than the old stamp. Repositories
+        that do not persist alerts may keep this default no-op.
+        """
+        return None
+
 
 class SqliteAlertRepository(AlertRepository):
     def __init__(self, db_path: str | Path) -> None:
@@ -410,7 +426,8 @@ class SqliteAlertRepository(AlertRepository):
     def mark_sent(self, alert_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE alerts SET status = 'sent', sent_at = ? WHERE id = ?",
+                "UPDATE alerts SET status = 'sent', sent_at = ?, deferred_since = NULL "
+                "WHERE id = ?",
                 (_iso(datetime.now(UTC)), alert_id),
             )
             conn.commit()
@@ -418,7 +435,8 @@ class SqliteAlertRepository(AlertRepository):
     def mark_failed(self, alert_id: str, error_message: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE alerts SET status = 'failed', error_message = ? WHERE id = ?",
+                "UPDATE alerts SET status = 'failed', error_message = ?, deferred_since = NULL "
+                "WHERE id = ?",
                 (error_message, alert_id),
             )
             conn.commit()
@@ -426,8 +444,19 @@ class SqliteAlertRepository(AlertRepository):
     def reset_to_pending(self, alert_id: str) -> None:
         with _connect(self.db_path) as conn:
             conn.execute(
-                "UPDATE alerts SET status = 'pending', error_message = NULL WHERE id = ?",
+                "UPDATE alerts SET status = 'pending', error_message = NULL, "
+                "deferred_since = NULL WHERE id = ?",
                 (alert_id,),
+            )
+            conn.commit()
+
+    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+        assignment = "?" if restart else "COALESCE(deferred_since, ?)"
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                f"UPDATE alerts SET deferred_since = {assignment} "
+                "WHERE id = ? AND status = 'pending'",
+                (_iso(when), alert_id),
             )
             conn.commit()
 
@@ -439,6 +468,13 @@ class SqliteAlertRepository(AlertRepository):
             extra_recipients = json.loads(extra) if extra else []
         except (json.JSONDecodeError, TypeError):
             extra_recipients = []
+        deferred_since: datetime | None = None
+        deferred_raw = row_dict.get("deferred_since")
+        if deferred_raw:
+            # A corrupt stamp must not make the row unreadable; it only loses
+            # its deferral clock, and the age-based health check still applies.
+            with contextlib.suppress(ValueError, TypeError):
+                deferred_since = _parse_iso(deferred_raw)
         return Alert(
             id=row["id"],
             cert_id=row["cert_id"],
@@ -452,6 +488,7 @@ class SqliteAlertRepository(AlertRepository):
             extra_recipients=extra_recipients,
             hostname=row["hostname"] if "hostname" in row_dict else "",
             subject=row["subject"] if "subject" in row_dict else "",
+            deferred_since=deferred_since,
         )
 
 
@@ -497,6 +534,9 @@ class ScopedAlertRepository(AlertRepository):
 
     def reset_to_pending(self, alert_id: str) -> None:
         self._repo.reset_to_pending(alert_id)
+
+    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+        self._repo.note_deferral(alert_id, when, restart=restart)
 
 
 # ---------- Trust Anchors ----------

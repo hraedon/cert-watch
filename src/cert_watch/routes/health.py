@@ -211,8 +211,10 @@ def api_health(request: Request) -> JSONResponse:
     # is correct behavior — it keeps the alert deliverable instead of burning
     # its retries on a database outage — but correct-and-silent is how an
     # expiry notice goes unsent for a week with every health surface green.
-    # The counter is what makes the deferral loud; it is unbounded by design
-    # (see #38), so nothing else would ever raise a hand.
+    # The counter is what makes the deferral loud. A deferral that outlives
+    # EVIDENCE_DEFERRAL_GIVE_UP_HOURS on its persisted clock is marked failed
+    # (#38), but only if the database will take that write; when it will not,
+    # this age-based count is still the only hand raised.
     try:
         cutoff = (datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:

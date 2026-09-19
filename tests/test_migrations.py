@@ -817,6 +817,68 @@ def _stamp_feature_branch_migrations(
         conn.commit()
 
 
+# ── 0033: alerts.deferred_since (bounded evidence deferral, #38) ─────────────
+
+
+def test_migration_0033_adds_deferred_since_and_is_idempotent(db_path: Path) -> None:
+    from cert_watch.migrations.m0033_alert_deferred_since import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        assert "deferred_since" in _table_columns(conn, "alerts")
+        upgrade(conn)
+        upgrade(conn)  # must not raise: the column already exists
+        assert "deferred_since" in _table_columns(conn, "alerts")
+
+
+def _mk_pre0033_db(db: Path) -> None:
+    """A database whose ledger says 0001–0032 but whose alerts lack the column."""
+    ensure_base(db)
+    _stamp_feature_branch_migrations(db, tuple(f"{number:04d}" for number in range(1, 33)))
+
+
+def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -> None:
+    """UPGRADING.md tells an operator how to apply 0033 by hand. Prove that the
+    documented statements leave the database exactly where startup would."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.m0033_alert_deferred_since import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "manual.sqlite3"
+    _mk_pre0033_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        for statement in MANUAL_SQL:
+            conn.execute(statement)
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == []
+    with sqlite3.connect(str(db)) as conn:
+        assert "deferred_since" in _table_columns(conn, "alerts")
+        ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
+    assert ledger == [("0033",)]
+
+    # The documentation must quote the statement the runner actually executes.
+    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
+    assert COLUMN_SQL in upgrading
+
+
+def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """An operator who ran only the ALTER gets the ledger row from startup."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.m0033_alert_deferred_since import COLUMN_SQL
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "half-manual.sqlite3"
+    _mk_pre0033_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(COLUMN_SQL)
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == ["0033"]
+
+
 def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) -> None:
     """Old UI ids 0029/0030 must not suppress the canonical digest table.
 
@@ -840,7 +902,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0031", "0032"]
+    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
@@ -869,7 +931,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         db, tuple(f"{number:04d}" for number in range(1, 30))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032"]
+    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032", "0033"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
