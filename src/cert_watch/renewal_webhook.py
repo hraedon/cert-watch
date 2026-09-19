@@ -78,13 +78,26 @@ def build_renewal_payload(
     port: int | None = None,
     base_url: str = "",
 ) -> dict[str, Any]:
-    """Enrich one endpoint; retain the legacy 443 default only when unspecified."""
+    """Enrich exactly one endpoint; a missing port is refused, never assumed.
+
+    Endpoint identity is hostname *and* port. The weekly digest already treats
+    a legacy event without a port as "port unknown" and attributes it to
+    nobody rather than guessing; this path used to fill in 443 instead, so the
+    two disagreed about what a missing port means (#33). Now neither guesses:
+    a signal that names no port cannot be attributed to an endpoint and is
+    rejected, which the scheduler's per-endpoint guard logs and skips.
+    """
     for value in (port, signal.port):
         if value is not None and (type(value) is not int or not 1 <= value <= 65535):
             raise ValueError("renewal webhook port must be an integer from 1 to 65535")
     if port is not None and signal.port is not None and port != signal.port:
         raise ValueError("renewal webhook port conflicts with the overdue signal")
-    effective_port = port if port is not None else signal.port if signal.port is not None else 443
+    effective_port = port if port is not None else signal.port
+    if effective_port is None:
+        raise ValueError(
+            "renewal webhook port is required: a signal without a port cannot be "
+            "attributed to an endpoint, and 443 is not assumed"
+        )
     cert = _resolve_cert_details(db_path, signal.hostname, effective_port, signal.cert_fingerprint)
     automation = _resolve_automation_hint(db_path, signal.hostname, effective_port)
 
