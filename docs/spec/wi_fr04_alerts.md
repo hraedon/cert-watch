@@ -65,6 +65,11 @@ Deferral is unbounded by design (see #38), so it must not be silent. Two surface
 report it, both derived from `ALERT_UNDELIVERED_AFTER_HOURS` (`alerts.UNDELIVERED_AFTER_HOURS`,
 24h — one daily cycle plus slack):
 
+- Both surfaces below apply only when a transport is configured (SMTP or a
+  webhook). With neither, `process_pending` returns immediately and alerts stay
+  `pending` by design, so they are queued, not late; `/api/health` reports
+  `alert_delivery_configured: false` and `undelivered_alerts: 0`, and Activity
+  says once that nothing is configured to send them.
 - `/api/health` reports `undelivered_alerts` — alerts still `pending` past that
   window — and degrades to `warning` on any.
 - Activity marks each such alert **Not yet delivered**. The chip is additive: an

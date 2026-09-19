@@ -50,6 +50,19 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **An install with no alert transport no longer reports its queued alerts as
+  undelivered.** With neither SMTP nor a webhook configured, `process_pending`
+  has always returned immediately, so every alert stays `pending` for ever by
+  design. The health banner counted those after 24 hours and sat permanently on
+  "N alerts still undelivered", and Activity labelled each one "Not yet
+  delivered — still queued past the cycle that should have sent it", for a
+  delivery outage that was not happening. `/api/health` now reports
+  `alert_delivery_configured` alongside `undelivered_alerts`, and both the
+  counter and the chip apply only when a transport exists; the Activity tab
+  says once, at the top, that nothing is configured to send the queue. If you
+  run such an install, expect the banner to go green on upgrade. Nothing
+  changes for an estate that does deliver.
+
 - **Per-certificate notes are merged into host notes (migration 0031).** Every
   non-empty `certificates.notes` value is concatenated into the matching
   `hosts.notes` row and the column is dropped. Notes on *uploaded*

@@ -11,14 +11,14 @@ from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.alert_delivery import FAILURE_LABELS
-from cert_watch.alerts import UNDELIVERED_AFTER_HOURS
+from cert_watch.alerts import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,
 )
 from cert_watch.database.delivery_evidence import latest_outcomes, list_attempts
 from cert_watch.middleware import get_auth_context, get_csrf_context
-from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.alerts_view")
@@ -28,7 +28,7 @@ router = APIRouter()
 templates = get_templates()
 
 
-def _undelivered_ids(rows: list[dict[str, Any]]) -> set[str]:
+def _undelivered_ids(rows: list[dict[str, Any]], *, delivery_configured: bool = True) -> set[str]:
     """Pending alerts that have missed the cycle that should have sent them.
 
     Derived at render time rather than stored on the row. ``process_pending``
@@ -38,7 +38,14 @@ def _undelivered_ids(rows: list[dict[str, Any]]) -> set[str]:
     window means no transport accepted it, whatever the cause. That also covers
     a scheduler that has simply stopped flushing, which no delivery-side marker
     would ever record.
+
+    "Missed the cycle that should have sent it" presupposes such a cycle. With
+    no transport configured there is none, so nothing here is late; the rows
+    still render as ``Recorded: pending`` and the tab says once, at the top,
+    that nothing is configured to send them.
     """
+    if not delivery_configured:
+        return set()
     cutoff = datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)
     stale: set[str] = set()
     for row in rows:
@@ -93,7 +100,8 @@ def alerts_view(
     # existing scope-filtered page. Do not preload this data for other viewers.
     attempts = list_attempts(db, [row["id"] for row in rows]) if auth["is_admin"] else {}
     outcomes = latest_outcomes(db, [row["id"] for row in rows])
-    undelivered = _undelivered_ids(rows)
+    delivery_configured = delivery_is_configured(_get_settings(request))
+    undelivered = _undelivered_ids(rows, delivery_configured=delivery_configured)
 
     return templates.TemplateResponse(
         request=request,
@@ -103,6 +111,7 @@ def alerts_view(
             "delivery_attempts": attempts,
             "delivery_outcomes": outcomes,
             "undelivered_alert_ids": undelivered,
+            "alert_delivery_configured": delivery_configured,
             "delivery_failure_labels": FAILURE_LABELS,
             "version": __version__, "commit": __commit__,
             **auth,

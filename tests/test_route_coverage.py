@@ -289,17 +289,56 @@ def test_api_health_reports_alerts_that_never_reached_a_transport(reload_app, tm
     the old behavior left behind (the alert going ``failed``, which lit this
     banner). Without this counter an expiry notice can sit undelivered
     indefinitely with every health surface green.
+
+    SMTP is configured here because that is the only estate in which a
+    deferral can happen at all: with no transport ``process_pending`` returns
+    before it can defer anything. The test used to omit it and still expect
+    the counter, which is the false positive the no-transport test below pins.
     """
-    app_mod = reload_app()
+    app_mod = reload_app(SMTP_HOST="relay.example.invalid")
     db = str(tmp_path / "cert-watch.sqlite3")
     with TestClient(app_mod.app) as client:
         _insert_alert(db, alert_id="stuck", status="pending",
                       created_at=datetime.now(UTC) - timedelta(days=3))
         data = client.get("/api/health").json()
 
+    assert data["alert_delivery_configured"] is True
     assert data["undelivered_alerts"] == 1
     assert data["failed_alerts_24h"] == 0, "a deferral is not a delivery failure"
     assert data["overall"] == "warning"
+
+
+def test_api_health_does_not_call_an_alert_undelivered_with_no_transport(reload_app, tmp_path):
+    """A dashboard-only install queues alerts on purpose; that is not an outage.
+
+    With neither SMTP nor a webhook, ``process_pending`` returns immediately
+    and every alert stays pending for ever. Counting those lit the health
+    banner permanently, for an outage that was not happening — and the longer
+    retention for undelivered alerts (#39) made it last four times as long.
+    """
+    app_mod = reload_app()
+    db = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        _insert_alert(db, alert_id="never-sendable", status="pending",
+                      created_at=datetime.now(UTC) - timedelta(days=30))
+        data = client.get("/api/health").json()
+
+    assert data["alert_delivery_configured"] is False
+    assert data["undelivered_alerts"] == 0
+    assert data["overall"] == "ok"
+
+
+def test_api_health_counts_undelivered_when_only_a_webhook_is_configured(reload_app, tmp_path):
+    """Either transport is enough: the flush route tries both."""
+    app_mod = reload_app(ALERT_WEBHOOK_URL="https://hooks.example.invalid/path")
+    db = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        _insert_alert(db, alert_id="stuck", status="pending",
+                      created_at=datetime.now(UTC) - timedelta(days=3))
+        data = client.get("/api/health").json()
+
+    assert data["alert_delivery_configured"] is True
+    assert data["undelivered_alerts"] == 1
 
 
 def test_api_health_does_not_flag_an_alert_still_inside_its_delivery_window(
