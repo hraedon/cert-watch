@@ -182,12 +182,33 @@ def _inspect_routing(scratch: Path) -> dict[str, Any]:
     }
 
 
+def _snapshot_failure(exc: OSError | sqlite3.Error) -> RoutingReportError:
+    """Name the cause, so an unreadable file is not diagnosed as a bad backup.
+
+    The CLI suppresses the chained cause on purpose (it prints one line and
+    exits 2), so the type and text have to travel in the message itself. Both
+    are kept ASCII: the detail may carry the operator's path, and a legacy
+    Windows console must still be able to print it.
+    """
+    detail = (str(exc).strip() or "no detail").encode("ascii", "backslashreplace").decode()
+    return RoutingReportError(
+        f"could not read snapshot ({type(exc).__name__}: {detail}); provide a readable, "
+        "complete backup compatible with this build"
+    )
+
+
 def build_routing_report(snapshot: Path) -> dict[str, Any]:
     """Resolve routes without changing the input or creating source-side files.
 
     Require an offline, consolidated backup whose schema matches this build.
     Identity/hash checks catch observed changes, but cannot turn a raw copy of
     a running WAL database into a valid snapshot. Acquire backups separately.
+
+    Only the phases that touch the operator's file translate ``OSError`` and
+    ``sqlite3.Error`` into the snapshot-contract error, and that error names
+    its cause. The resolvers run over a disposable copy: a ``TypeError`` or
+    ``ValueError`` raised there is a defect in this build, not in the
+    snapshot, and propagates as itself so the diagnosis stays honest (#28).
     """
     try:
         source = snapshot.resolve(strict=True)
@@ -195,32 +216,34 @@ def build_routing_report(snapshot: Path) -> dict[str, Any]:
             raise RoutingReportError("snapshot must be a regular database file")
         _refuse_companions(source)
         before = _fingerprint(source)
-        with TemporaryDirectory(prefix="cert-watch-routing-") as temp:
-            scratch = Path(temp) / "routing.sqlite3"
+    except OSError as exc:
+        raise _snapshot_failure(exc) from exc
+    with TemporaryDirectory(prefix="cert-watch-routing-") as temp:
+        scratch = Path(temp) / "routing.sqlite3"
+        try:
             try:
                 version = _copy_routing_rows(source, scratch)
-                report = _inspect_routing(scratch)
-            finally:
-                # Release only this scratch connection, including on Windows;
-                # callers' other cached DB handles remain valid.
-                holder = _thread_cache()
-                connection = holder.connections.pop(str(scratch), None)
-                holder.meta.pop(str(scratch), None)
-                if connection is not None:
-                    connection.close()
+            except (OSError, sqlite3.Error) as exc:
+                raise _snapshot_failure(exc) from exc
+            report = _inspect_routing(scratch)
+        finally:
+            # Release only this scratch connection, including on Windows;
+            # callers' other cached DB handles remain valid.
+            holder = _thread_cache()
+            connection = holder.connections.pop(str(scratch), None)
+            holder.meta.pop(str(scratch), None)
+            if connection is not None:
+                connection.close()
+    try:
         _refuse_companions(source)
-        if _fingerprint(source) != before:
-            raise RoutingReportError("snapshot changed during inspection")
-        report["snapshot_sha256"] = before[0]
-        report["schema_version"] = version
-        return report
-    except RoutingReportError:
-        raise
-    except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
-        raise RoutingReportError(
-            "could not inspect snapshot; provide a readable, complete backup "
-            "compatible with this build"
-        ) from exc
+        changed = _fingerprint(source) != before
+    except OSError as exc:
+        raise _snapshot_failure(exc) from exc
+    if changed:
+        raise RoutingReportError("snapshot changed during inspection")
+    report["snapshot_sha256"] = before[0]
+    report["schema_version"] = version
+    return report
 
 
 def render_routing_report(report: dict[str, Any]) -> str:

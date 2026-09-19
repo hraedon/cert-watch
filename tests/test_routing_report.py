@@ -21,7 +21,11 @@ import pytest
 from cert_watch.__main__ import main
 from cert_watch.database import init_schema
 from cert_watch.database.connection import close_connections
-from cert_watch.routing_report import build_routing_report, render_routing_report
+from cert_watch.routing_report import (
+    RoutingReportError,
+    build_routing_report,
+    render_routing_report,
+)
 
 _STAMP = "2026-09-12T00:00:00+00:00"
 _SECRET = "synthetic-password-hash-do-not-read-57d3"
@@ -304,6 +308,59 @@ def test_malformed_snapshot_is_refused_unchanged(tmp_path: Path, payload: bytes)
     with pytest.raises(ValueError):
         build_routing_report(path)
     assert _tree_bytes(tmp_path) == before
+
+
+def test_unreadable_snapshot_names_its_cause_in_the_message_and_on_stderr(tmp_path: Path, capsys):
+    """The one-line CLI failure must carry the real cause (#28).
+
+    The CLI deliberately suppresses the chained exception, so the type and
+    text have to be in the message itself for the operator to act on them.
+    """
+    path = tmp_path / "malformed.sqlite3"
+    path.write_bytes(b"not a database")
+    with pytest.raises(RoutingReportError) as caught:
+        build_routing_report(path)
+    assert "DatabaseError" in str(caught.value)
+    assert "not a database" in str(caught.value)
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["routing-report", str(path)])
+    assert exit_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "DatabaseError" in err
+    err.encode("ascii")  # a legacy console must be able to print the diagnosis
+
+
+def test_missing_snapshot_names_the_filesystem_cause(tmp_path: Path):
+    with pytest.raises(RoutingReportError, match="FileNotFoundError"):
+        build_routing_report(tmp_path / "does-not-exist.sqlite3")
+
+
+def test_snapshot_failure_detail_is_escaped_to_ascii(tmp_path: Path):
+    """An operator path with non-ASCII characters must not break the console."""
+    missing = tmp_path / "東京" / "missing.sqlite3"
+    missing.parent.mkdir()
+    with pytest.raises(RoutingReportError) as caught:
+        build_routing_report(missing)
+    str(caught.value).encode("ascii")
+    assert "\\u6771" in str(caught.value)
+
+
+def test_internal_resolver_defect_is_not_blamed_on_the_snapshot(estate: Estate, monkeypatch):
+    """A TypeError inside the resolvers is a defect in this build, not the input (#28).
+
+    The old catch-all rewrote it as "provide a readable, complete backup",
+    sending the operator to re-acquire a backup that was never the problem.
+    """
+    import cert_watch.alerts as alerts
+
+    def defective_resolver(*_args, **_kwargs):
+        raise TypeError("injected resolver defect")
+
+    monkeypatch.setattr(alerts, "resolve_cert_recipients", defective_resolver)
+    with pytest.raises(TypeError, match="injected resolver defect") as caught:
+        build_routing_report(estate.path)
+    assert not isinstance(caught.value, RoutingReportError)
 
 
 @pytest.mark.parametrize("sql", [
