@@ -187,7 +187,7 @@ All configuration is via environment variables.
 | `CERT_WATCH_LOG_FORMAT` | `text` | Log output format; set `json` for structured logs |
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
-| `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of alert records to keep; purged at startup + daily. `0` disables purging |
+| `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of *delivered* alert records to keep; purged at startup + daily. Alerts that were never delivered (pending or failed) are kept 4× as long, so the record of a delivery outage outlives the outage. `0` disables purging |
 | `CERT_WATCH_EVENT_RETENTION_DAYS` | `30` | Days of event-log entries to keep; purged at startup + daily. `0` disables purging |
 | `CERT_WATCH_DRIFT_ALERTS` | `1` | Set `0` to disable drift alerts (issuer change, key-size drop, SHA-1 downgrade, posture/TLS downgrade) |
 | `CERT_WATCH_RENEWAL_WINDOW_DAYS` | `30` | Window for the renewal-stall alert: a leaf cert this many days from expiry with no successor certificate raises a `renewal_stalled` alert. `0` disables it |
