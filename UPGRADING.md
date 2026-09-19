@@ -62,6 +62,22 @@ restore the pre-migration backup.
   says once, at the top, that nothing is configured to send the queue. If you
   run such an install, expect the banner to go green on upgrade. Nothing
   changes for an estate that does deliver.
+- **An unchanged certificate no longer re-alerts on every scan.** Each scan
+  rewrites the endpoint's inventory row under a new id, and the "each threshold
+  fires exactly once" dedup was keyed to that id, so a certificate sitting
+  inside its expiry window crossed the same threshold again every cycle. With a
+  transport configured that meant **a fresh notification per scan** (daily, by
+  default) for the same certificate until it was renewed. A rescan that sees the
+  same fingerprint now carries the existing alerts onto the rewritten row, so
+  the threshold fires once. A genuine renewal is a different certificate and
+  still alerts on its own merits. No schema change and no action required: the
+  dedup is correct again from the first cycle after upgrade. Alerts already
+  duplicated before the upgrade stay in the list as history until they age out
+  under `CERT_WATCH_ALERT_RETENTION_DAYS`. Two side effects worth knowing: a
+  pending alert now keeps its original `created_at` across rescans, so the
+  "undelivered for more than 24h" signal can actually reach its threshold on a
+  daily-scan estate; and a `failed` alert is now retried on the next cycle
+  instead of being stranded and duplicated.
 
 - **Per-certificate notes are merged into host notes (migration 0031).** Every
   non-empty `certificates.notes` value is concatenated into the matching

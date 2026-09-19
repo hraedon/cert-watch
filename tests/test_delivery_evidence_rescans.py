@@ -78,6 +78,19 @@ def _stored_rows(db, alert_id):
     return dict(alert) if alert is not None else None, [dict(event) for event in events]
 
 
+def _rebound(stored, cert_id):
+    """The same stored rows, with the alert re-pointed at *cert_id*.
+
+    A rescan that sees the same bytes carries the alert onto the rewritten
+    inventory row, because that id is what the threshold dedup reads; every
+    other column, and the whole evidence ledger, must be untouched. Comparing
+    against this makes the one intended difference explicit instead of
+    loosening the assertion.
+    """
+    alert, events = stored
+    return ({**alert, "cert_id": cert_id} if alert is not None else None), events
+
+
 @pytest.mark.parametrize("changed", [False, True], ids=["identical-cert", "changed-cert"])
 @pytest.mark.parametrize("status,outcome", [
     ("sent", "accepted"), ("sent", "partial"), ("failed", "failed"), ("sent", None),
@@ -95,11 +108,20 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
     )
 
     assert replaced_id == cert_id and new_id != cert_id
-    assert _stored_rows(db, alert_id) == original
+    if changed:
+        # A different certificate. The old one's alert stays with it as
+        # history and does not follow the endpoint to its successor.
+        assert _stored_rows(db, alert_id) == original
+        assert repo.list_for_cert(new_id) == []
+    else:
+        # The same certificate, observed again. Its alert is carried onto the
+        # rewritten row so the threshold dedup still finds it -- otherwise the
+        # threshold fires again on the next cycle and re-notifies for ever.
+        assert _stored_rows(db, alert_id) == _rebound(original, new_id)
+        assert [item.id for item in repo.list_for_cert(new_id)] == [alert_id]
     with _connect(db) as conn:
         assert conn.execute("SELECT id FROM certificates WHERE id = ?", (cert_id,)).fetchone() \
             is None
-    assert repo.list_for_cert(new_id) == []
     assert repo.list_pending() == []
     assert latest_outcomes(db, [alert_id]) == {alert_id: outcome or "unknown"}
 
@@ -176,11 +198,12 @@ def test_retention_purge_still_cascades_for_historical_delivery_evidence(tmp_pat
     for alert_id in (old_alert, recent_alert):
         _evidence(db, alert_id)
     recent_original = _stored_rows(db, recent_alert)
-    replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
+    # The same certificate, so both alerts are carried onto the rewritten row.
+    new_id, _ = replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
     assert set(list_attempts(db, [old_alert, recent_alert])) == {old_alert, recent_alert}
 
     assert purge_old_alerts(db, 0) == 0
     assert purge_old_alerts(db, 90) == 1
 
     assert _stored_rows(db, old_alert) == (None, [])
-    assert _stored_rows(db, recent_alert) == recent_original
+    assert _stored_rows(db, recent_alert) == _rebound(recent_original, new_id)

@@ -86,22 +86,48 @@ def _do_replace(
         ).fetchall()
     ]
 
+    # A rescan that sees the same bytes has not replaced anything: it is the
+    # same certificate, observed again. Its inventory row is still rewritten
+    # under a new id (the chain, posture and history rows hang off that id),
+    # so the alerts have to follow it or they are orphaned on an id that no
+    # longer exists -- and `evaluate_thresholds` dedups by exactly that id.
+    # Orphaning them made every threshold fire again on the next cycle: one
+    # unchanged certificate inside its expiry window re-alerted, and re-mailed,
+    # once per scan, for ever.
+    unchanged = (
+        old_leaf_row is not None
+        and old_leaf_row["fingerprint_sha256"] == leaf.fingerprint_sha256
+    )
+    carried: list[str] = list(old_leaves) if unchanged else []
     if old_all_ids:
         ph = ",".join("?" * len(old_all_ids))
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({ph})", old_all_ids
         )
-        # Sent/failed observations belong to the original certificate, even
-        # after a routine rescan replaces its inventory row. Keep those alert
-        # IDs (and the cascading delivery ledger) until normal alert retention.
-        # Obsolete pending alerts must still disappear so they cannot be sent.
-        conn.execute(
-            f"""DELETE FROM alerts WHERE cert_id IN ({ph})
-                AND NOT (status IN ('sent', 'failed') AND EXISTS (
-                    SELECT 1 FROM alert_delivery_events e WHERE e.alert_id = alerts.id
-                ))""",
-            old_all_ids,
-        )
+        if carried:
+            # Carry the whole history forward, pending included: a pending
+            # alert is still deliverable and keeps its original created_at,
+            # which is what the undelivered-after-24h signal reads. Deleting
+            # and re-creating it each cycle reset that clock daily.
+            cph = ",".join("?" * len(carried))
+            conn.execute(
+                f"UPDATE alerts SET cert_id = ? WHERE cert_id IN ({cph})",
+                (leaf_id, *carried),
+            )
+        stale = [cert_id for cert_id in old_all_ids if cert_id not in set(carried)]
+        if stale:
+            # Sent/failed observations belong to the original certificate, even
+            # after a routine rescan replaces its inventory row. Keep those alert
+            # IDs (and the cascading delivery ledger) until normal alert retention.
+            # Obsolete pending alerts must still disappear so they cannot be sent.
+            sph = ",".join("?" * len(stale))
+            conn.execute(
+                f"""DELETE FROM alerts WHERE cert_id IN ({sph})
+                    AND NOT (status IN ('sent', 'failed') AND EXISTS (
+                        SELECT 1 FROM alert_delivery_events e WHERE e.alert_id = alerts.id
+                    ))""",
+                stale,
+            )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",
             old_all_ids,
