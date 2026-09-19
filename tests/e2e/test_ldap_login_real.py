@@ -24,7 +24,9 @@ import urllib.request
 from collections.abc import Iterator
 
 import pytest
-from playwright.sync_api import expect
+
+pytest.importorskip("playwright")
+from playwright.sync_api import expect  # noqa: E402
 
 pytestmark = [
     pytest.mark.e2e,

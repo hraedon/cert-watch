@@ -6,8 +6,10 @@ from unittest.mock import Mock
 from urllib.parse import urlsplit
 
 import pytest
-from playwright.sync_api import expect
-from starlette.testclient import TestClient
+
+pytest.importorskip("playwright")
+from playwright.sync_api import expect  # noqa: E402
+from starlette.testclient import TestClient  # noqa: E402
 
 from cert_watch.database.delivery_evidence import begin_attempt
 from tests.test_alert_delivery_evidence import _config, _pending, _smtp

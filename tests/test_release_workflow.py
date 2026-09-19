@@ -88,9 +88,17 @@ def test_windows_smoke_installs_production_preload_prerequisite() -> None:
 
 
 def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
-    """Exercise the actual workflow shell without building or publishing an image."""
+    """Exercise the actual workflow shell without building or publishing an image.
+
+    The script reads ``pyproject.toml`` with ``python3 -c ... tomllib``. On the
+    runner that is Python 3.12; on a dev box ``python3`` is whatever the distro
+    ships (Ubuntu 22.04: 3.10, no ``tomllib``), which failed the test for a
+    property of the host rather than of the workflow. The interpreter running
+    the tests is >=3.12 by ``requires-python``, so shim it in as ``python3``.
+    """
     import os
     import subprocess
+    import sys
 
     import yaml
 
@@ -109,9 +117,14 @@ def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-qm",
         "Release fixture\n\nCo-Authored-By: GPT-6 <noreply@openai.com>")
     git("tag", "v1.2.3")
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    (shim / "python3").symlink_to(sys.executable)
+
     output = tmp_path / "outputs"
     env = {**os.environ, "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.2.3",
-           "GITHUB_OUTPUT": str(output)}
+           "GITHUB_OUTPUT": str(output),
+           "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
     command = ["bash", "-e", "-o", "pipefail", "-c", script]
     valid = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True)
     assert valid.returncode == 0, valid.stderr.decode()
