@@ -6,6 +6,7 @@ markup change only needs updating in one place.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import socket
 import subprocess
@@ -33,6 +34,22 @@ def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
+
+
+# How long boot_server waits for /healthz. A healthy server returns the moment
+# it answers, so this budget only lengthens the *failure* path; it is generous
+# because a loaded CI runner can legitimately take far longer than a dev box to
+# import the app and bind (#34). Override per run with CERT_WATCH_E2E_STARTUP_SECONDS.
+_DEFAULT_STARTUP_SECONDS = 45.0
+
+
+def _startup_budget_seconds() -> float:
+    raw = os.environ.get("CERT_WATCH_E2E_STARTUP_SECONDS", "")
+    try:
+        budget = float(raw) if raw.strip() else _DEFAULT_STARTUP_SECONDS
+    except ValueError:
+        budget = _DEFAULT_STARTUP_SECONDS
+    return budget if budget > 0 else _DEFAULT_STARTUP_SECONDS
 
 
 def boot_server(
@@ -63,7 +80,8 @@ def boot_server(
             stderr=subprocess.STDOUT,
         )
     base = f"http://{host}:{port}"
-    deadline = time.monotonic() + 8
+    budget = _startup_budget_seconds()
+    deadline = time.monotonic() + budget
     startup_wait = threading.Event()
     while time.monotonic() < deadline:
         if proc.poll() is not None:
@@ -78,11 +96,15 @@ def boot_server(
             startup_wait.wait(0.1)
     if proc.poll() is None:
         proc.kill()
-    proc.wait(timeout=5)
+    # The cleanup path must not replace the diagnostic below with its own
+    # timeout; report the process as still running and carry on (#34).
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        proc.wait(timeout=5)
+    status = "still running" if proc.returncode is None else f"exit {proc.returncode}"
     output = log_path.read_text(encoding="utf-8", errors="replace")
     raise RuntimeError(
-        f"cert-watch server did not become ready (exit {proc.returncode}; log: {log_path}):\n"
-        f"{output[-8192:]}"
+        f"cert-watch server did not become ready within {budget:g}s "
+        f"({status}; log: {log_path}):\n{output[-8192:]}"
     )
 
 
