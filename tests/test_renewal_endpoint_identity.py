@@ -174,6 +174,20 @@ def test_webhook_automation_hint_uses_only_affected_endpoint(tmp_path):
     assert payload["automation_hint"] == "likely-automated"
 
 
+def test_webhook_refuses_to_guess_a_missing_port(tmp_path):
+    """The digest calls a port-less legacy event "port unknown" and attributes
+    it to nobody. The webhook used to assume 443 for the same input, so the two
+    paths disagreed about what a missing port means (#33). Neither guesses now.
+    """
+    db = tmp_path / "estate.sqlite3"
+    _endpoint(db, 443)
+    legacy_signal = RenewalOverdueSignal("dual.example.test", "fingerprint-443", 5, 30, 25, "low")
+    assert legacy_signal.port is None
+
+    with pytest.raises(ValueError, match="port is required"):
+        build_renewal_payload(legacy_signal, db)
+
+
 @pytest.mark.parametrize("port", [0, -1, 65536, "636", True, 636])
 def test_webhook_rejects_invalid_or_conflicting_port(tmp_path, port):
     db = tmp_path / "estate.sqlite3"

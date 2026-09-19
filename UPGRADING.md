@@ -62,6 +62,18 @@ restore the pre-migration backup.
   per endpoint (host-scoped); `POST /certificates/{id}/notes`,
   `PATCH /api/certificates/{id}/notes`, and the `notes` key in
   `GET /api/certificates/{id}` are removed.
+- **Renewal events are keyed by endpoint (hostname *and* port), and a missing
+  port is never guessed.** `cert_renewed` / `renewal_overdue` events written
+  by earlier releases carry no port. The weekly renewal digest lists such an
+  event as `hostname (port unknown)` under no owner, with no current-certificate
+  context, rather than attributing it to whichever endpoint happens to share
+  the hostname. This is a one-time transitional effect: it lasts only for the
+  digest cycles whose look-back window (default 7 days) still covers events
+  from before the upgrade, after which every event carries its port. The
+  renewal webhook applies the same rule and no longer assumes port 443 when a
+  signal names no port; such a signal is rejected and logged instead of being
+  delivered against an endpoint it may not belong to. The scheduler always
+  supplies the port, so operators see no change for live scans.
 - **The landing page is now Home; the inventory table moved to `/browse`.**
   `/` renders the attention queue (what needs a human, ranked by
   time-to-impact) plus a 12-week expiry horizon. Requests to `/` carrying the

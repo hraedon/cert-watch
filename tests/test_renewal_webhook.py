@@ -46,7 +46,9 @@ def test_load_renewal_webhook_config_invalid_headers(caplog):
     )
 
 
-def _make_signal(hostname="host.example.com", fingerprint="abc123") -> RenewalOverdueSignal:
+def _make_signal(
+    hostname="host.example.com", fingerprint="abc123", port=443,
+) -> RenewalOverdueSignal:
     return RenewalOverdueSignal(
         hostname=hostname,
         cert_fingerprint=fingerprint,
@@ -54,6 +56,7 @@ def _make_signal(hostname="host.example.com", fingerprint="abc123") -> RenewalOv
         expected_renewal_at_days=30.0,
         days_overdue=23.0,
         confidence="low",
+        port=port,
     )
 
 
