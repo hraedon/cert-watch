@@ -26,6 +26,7 @@ from cert_watch.database import (
     purge_old_alerts,
 )
 from cert_watch.database.delivery_evidence import begin_attempt, complete_attempt, list_attempts
+from cert_watch.database.pagination import UNDELIVERED_RETENTION_MULTIPLIER
 
 
 def _pending(tmp_path):
@@ -224,11 +225,31 @@ def test_alert_retention_also_purges_recipient_evidence(tmp_path):
     db, _, alert = _pending(tmp_path)
     begin_attempt(db, alert.id, "smtp", {"recipients": ["private@example.invalid"]})
     with _connect(db) as conn:
-        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
-                     ((datetime.now(UTC) - timedelta(days=91)).isoformat(), alert.id))
+        # The alert is still pending, so it is retained on the longer
+        # undelivered horizon (#39); age it past that to exercise the cascade.
+        undelivered_horizon = 90 * UNDELIVERED_RETENTION_MULTIPLIER
+        conn.execute(
+            "UPDATE alerts SET created_at = ? WHERE id = ?",
+            ((datetime.now(UTC) - timedelta(days=undelivered_horizon + 1)).isoformat(), alert.id),
+        )
         conn.commit()
     assert purge_old_alerts(db, 90) == 1
     assert list_attempts(db, [alert.id]) == {}
+
+
+def test_undelivered_alert_and_its_evidence_outlive_the_delivered_window(tmp_path):
+    """Evidence that an alert never reached anyone must not expire on the
+    delivered-alert schedule (#39). Here the attempt was started and never
+    completed: the alert is still pending and its ledger row is the record."""
+    db, repo, alert = _pending(tmp_path)
+    begin_attempt(db, alert.id, "smtp", {"recipients": ["private@example.invalid"]})
+    with _connect(db) as conn:
+        conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?",
+                     ((datetime.now(UTC) - timedelta(days=91)).isoformat(), alert.id))
+        conn.commit()
+    assert purge_old_alerts(db, 90) == 0
+    assert [a.id for a in repo.list_pending()] == [alert.id]
+    assert len(list_attempts(db, [alert.id])[alert.id]) == 1
 
 
 def test_evidence_is_not_loaded_or_rendered_for_scoped_operator(monkeypatch, tmp_path):
