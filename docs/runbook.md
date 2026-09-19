@@ -110,6 +110,32 @@ docker compose -f deploy/compose/docker-compose.yml up -d
 
 The new binary applies migrations on first boot. The pre-migration backup is kept automatically.
 
+### Verifying a published image
+
+Every image the release workflow publishes is signed with keyless cosign and
+carries an SPDX SBOM plus SLSA provenance. Verifying before an upgrade answers
+"did this image come from this repository's release workflow, and what is in
+it" without trusting the registry:
+
+```bash
+# Signature: identity is the release workflow, issued by GitHub's OIDC provider.
+cosign verify ghcr.io/hraedon/cert-watch:latest \
+  --certificate-identity-regexp '^https://github\.com/hraedon/cert-watch/\.github/workflows/release\.yml@' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# What is inside it, and which commit/workflow built it. The SBOM and
+# provenance are BuildKit attestations carried in the image index, so they are
+# read with buildx rather than cosign.
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
+  --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
+  --format '{{ json .Provenance }}'
+```
+
+Signing is per-digest, so verifying any tag that resolves to a published digest
+works. Images built before this was wired up have no signature and will fail
+verification — that is the expected answer for them, not a tampering signal.
+
 **Upgrade procedure (Kubernetes):**
 
 Merge to `main`. CI handles the image build and kustomize tag bump. Argo CD syncs within a minute. The pod restarts with the new image and applies any pending migrations.

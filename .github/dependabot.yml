@@ -1,0 +1,29 @@
+version: 2
+
+# Python dependencies are deliberately absent: `uv.lock` is the source of
+# truth (AGENTS.md "Dependency resolution") and Dependabot cannot round-trip
+# uv's native lockfile. `.github/workflows/dependency-update.yml` refreshes it
+# monthly with `uv lock` + pip-audit instead. What that leaves unwatched, and
+# what this file covers, is everything pinned by digest or SHA: an action or
+# base image pinned for supply-chain reasons never moves on its own, so
+# without a bot it silently ages out of security support.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "ci"
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "build"

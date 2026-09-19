@@ -87,6 +87,61 @@ def test_windows_smoke_installs_production_preload_prerequisite() -> None:
     assert "warmup.dll" in smoke
 
 
+def test_published_image_is_signed_and_attested() -> None:
+    """Provenance for the artefact a trust-hygiene tool asks its own users to trust.
+
+    Three parts, and each is useless without the others: the push must attach
+    an SBOM and provenance, the signature must cover the *digest* (a tag can be
+    repointed at an unsigned image), and the signing step must run on the push
+    output rather than on tags computed earlier in the job.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_workflow("release.yml"))
+    job = workflow["jobs"]["build-and-bump"]
+    steps = job["steps"]
+
+    assert job["permissions"].get("id-token") == "write", (
+        "keyless cosign signing needs an OIDC token"
+    )
+
+    push = next(s for s in steps if s.get("id") == "push")
+    assert push["with"]["push"] is True
+    assert push["with"]["sbom"] is True
+    assert push["with"]["provenance"] == "mode=max"
+
+    # The scan build loads into the docker daemon, which cannot carry
+    # attestations; leaving them on would fail the build outright.
+    scan = next(s for s in steps if s.get("with", {}).get("load") is True)
+    assert scan["with"]["provenance"] is False
+    assert scan["with"]["sbom"] is False
+
+    sign = next(s for s in steps if "cosign sign" in (s.get("run") or ""))
+    assert "steps.push.outputs.digest" in sign["env"]["DIGEST"]
+    assert "${IMAGE}@${DIGEST}" in sign["run"], "sign the digest, not a tag"
+    assert steps.index(sign) > steps.index(push)
+
+
+def test_dependabot_watches_what_the_monthly_lock_refresh_cannot() -> None:
+    """Actions and base images are digest-pinned, so nothing else ages them.
+
+    `dependency-update.yml` re-resolves `uv.lock` monthly, which covers Python
+    only. The pins this repository adds for supply-chain reasons — action SHAs,
+    base-image digests — are inert by design and stay on a stale, eventually
+    unsupported version unless something proposes the bump.
+    """
+    import yaml
+
+    config = yaml.safe_load((Path(__file__).parents[1] / ".github" / "dependabot.yml").read_text())
+    ecosystems = {entry["package-ecosystem"] for entry in config["updates"]}
+
+    assert {"github-actions", "docker"} <= ecosystems
+    assert "pip" not in ecosystems, (
+        "uv.lock is the source of truth and Dependabot cannot round-trip it; "
+        "dependency-update.yml owns Python"
+    )
+
+
 def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     """Exercise the actual workflow shell without building or publishing an image.
 
