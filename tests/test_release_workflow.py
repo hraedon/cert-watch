@@ -122,6 +122,52 @@ def test_published_image_is_signed_and_attested() -> None:
     assert steps.index(sign) > steps.index(push)
 
 
+def test_the_signature_is_verified_before_the_deployment_pointer_moves() -> None:
+    """Signing without verifying only proves the workflow reached the sign step.
+
+    The bump is what puts an image in front of users, so the gate belongs
+    between the two: the digest must verify against this workflow's exact
+    keyless identity at a release ref, and the attestations must describe this
+    commit, before anything repoints the cluster. An identity regex loose
+    enough to match any ref would accept a signature minted by a run of this
+    file on an attacker's branch.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_workflow("release.yml"))
+    steps = workflow["jobs"]["build-and-bump"]["steps"]
+
+    verify = next(s for s in steps if "cosign verify" in (s.get("run") or ""))
+    sign = next(s for s in steps if "cosign sign" in (s.get("run") or ""))
+    bump = next(s for s in steps if "bump_deploy_image" in (s.get("run") or ""))
+    assert steps.index(sign) < steps.index(verify) < steps.index(bump)
+
+    assert "steps.push.outputs.digest" in verify["env"]["DIGEST"]
+    assert "${IMAGE}@${DIGEST}" in verify["run"], "verify the digest, not a tag"
+    assert (
+        verify["env"]["IDENTITY"]
+        == "https://github.com/${{ github.repository }}"
+        "/.github/workflows/release.yml@${{ github.ref }}"
+    )
+    assert "--certificate-identity \"${IDENTITY}\"" in verify["run"]
+    assert (
+        "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in verify["run"]
+    )
+    assert "verify_release_attestations.py" in verify["run"]
+    assert "--commit \"${GITHUB_SHA}\"" in verify["run"]
+
+    # The identity is only anchored because the workflow cannot run from an
+    # arbitrary ref in the first place.
+    triggers = workflow[True]["push"]
+    assert triggers["branches"] == ["main"]
+    assert triggers["tags"] == ["v*"]
+
+    installer = next(s for s in steps if "cosign-installer" in (s.get("uses") or ""))
+    assert installer["with"]["cosign-release"].startswith("v"), (
+        "pin the cosign binary, not just the action that downloads it"
+    )
+
+
 def test_dependabot_watches_what_the_monthly_lock_refresh_cannot() -> None:
     """Actions and base images are digest-pinned, so nothing else ages them.
 

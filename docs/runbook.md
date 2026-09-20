@@ -120,7 +120,7 @@ it" without trusting the registry:
 ```bash
 # Signature: identity is the release workflow, issued by GitHub's OIDC provider.
 cosign verify ghcr.io/hraedon/cert-watch:latest \
-  --certificate-identity-regexp '^https://github\.com/hraedon/cert-watch/\.github/workflows/release\.yml@' \
+  --certificate-identity-regexp '^https://github\.com/hraedon/cert-watch/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 
 # What is inside it, and which commit/workflow built it. The SBOM and
@@ -131,6 +131,12 @@ docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
 docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
   --format '{{ json .Provenance }}'
 ```
+
+The identity is anchored to `refs/heads/main` and `refs/tags/v*`: an unanchored
+`@` prefix would also accept a signature minted by a run of this same workflow
+file from any other ref. The release job runs the same check against its own
+exact ref, and refuses to move the deployment pointer if either the signature
+or the attestations disagree (`scripts/verify_release_attestations.py`).
 
 Signing is per-digest, so verifying any tag that resolves to a published digest
 works. Images built before this was wired up have no signature and will fail

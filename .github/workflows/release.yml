@@ -166,6 +166,10 @@ jobs:
           cache-to: type=gha,mode=max
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          # The action's default floats with its own releases; the binary that
+          # signs and verifies our images is pinned here like every other tool.
+          cosign-release: v3.0.6
 
       # Sign the digest, not the tags: a tag can be moved, a digest cannot, and
       # one signature covers every tag that resolves to this index. See
@@ -175,6 +179,33 @@ jobs:
           IMAGE: ghcr.io/${{ github.repository_owner }}/cert-watch
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      # A signature nothing reads is decoration. Verify what was just published
+      # -- against the exact keyless identity of this workflow at this ref, and
+      # against attestations that must name this commit -- before the
+      # deployment pointer is allowed to move. The workflow only runs on main
+      # and v* tags, so ${{ github.ref }} anchors the identity to a release ref.
+      - name: Verify published image
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/cert-watch
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@${{ github.ref }}
+        run: |
+          cosign verify "${IMAGE}@${DIGEST}" \
+            --certificate-identity "${IDENTITY}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            > /dev/null
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+            --format '{{ json .Provenance }}' > /tmp/provenance.json
+          docker buildx imagetools inspect "${IMAGE}@${DIGEST}" \
+            --format '{{ json .SBOM }}' > /tmp/sbom.json
+          python3 scripts/verify_release_attestations.py \
+            --provenance /tmp/provenance.json \
+            --sbom /tmp/sbom.json \
+            --commit "${GITHUB_SHA}" \
+            --short-commit "${{ steps.tag.outputs.sha }}" \
+            --platform linux/amd64 \
+            --platform linux/arm64
 
       - name: Install kustomize
         if: github.ref == 'refs/heads/main'
