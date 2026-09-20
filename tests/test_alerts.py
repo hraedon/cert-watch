@@ -1080,6 +1080,42 @@ def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
     assert result is True
 
 
+def test_send_expiry_digest_rejects_injected_owner_email(tmp_path):
+    """A stored owner_email containing a comma must not reach the To: header.
+
+    smtplib.send_message derives the envelope recipients from that header, so
+    an unvalidated stored value would inject a second recipient into the
+    weekly digest. Every other send path applies _validate_email; this one
+    did not (#63). The invalid owner is skipped with a warning and gets no
+    owner digest; the cert still appears in the global digest.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from cert_watch.alerts import AlertConfig, send_expiry_digest
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(
+        "h.example.com",
+        owner_email="alice@example.com, mallory@evil.example",
+    )
+    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
+    _insert_cert(db, hostname="h.example.com", not_after=soon)
+
+    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
+                         from_addr="from@test", recipients=["ops@test"])
+    sent: list = []
+    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+        mock_smtp.SMTP.return_value.send_message.side_effect = sent.append
+        result = send_expiry_digest(db, config)
+
+    assert result is True
+    assert sent, "the global digest should still be delivered"
+    for msg in sent:
+        assert "evil.example" not in msg["To"]
+
+
 def test_send_expiry_digest_discord_adapter_format(tmp_path):
     """WI-011: digest webhook to kind='discord' uses Discord embed format."""
     import json

@@ -1501,6 +1501,9 @@ def send_expiry_digest(
     for cert in expiring:
         oe = cert["owner_email"]
         if oe:
+            if not _validate_email(oe):
+                logger.warning("skipping invalid owner_email digest: %r", oe)
+                continue
             cf = oe.casefold()
             original_emails.setdefault(cf, oe)
             on = cert.get("owner_name", "")
@@ -1511,7 +1514,7 @@ def send_expiry_digest(
     for cert in expiring:
         oe = cert["owner_email"]
         cf = oe.casefold() if oe else ""
-        if cf and cf not in global_recipients_cf:
+        if cf and cf in original_emails and cf not in global_recipients_cf:
             owner_certs.setdefault(cf, []).append(cert)
 
     any_smtp_success = False
