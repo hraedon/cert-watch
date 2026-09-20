@@ -1107,10 +1107,7 @@ def test_send_expiry_digest_rejects_injected_owner_email(tmp_path):
                          from_addr="from@test", recipients=["ops@test"])
     sent: list = []
     with patch("cert_watch.alerts.smtplib") as mock_smtp:
-        mock_server = MagicMock()
-        mock_server.send_message.side_effect = sent.append
-        mock_smtp.SMTP.return_value.__enter__ = lambda s: mock_server
-        mock_smtp.SMTP.return_value.__exit__ = MagicMock(return_value=False)
+        mock_smtp.SMTP.return_value.send_message.side_effect = sent.append
         result = send_expiry_digest(db, config)
 
     assert result is True
