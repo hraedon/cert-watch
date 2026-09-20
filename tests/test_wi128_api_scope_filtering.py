@@ -77,6 +77,22 @@ def _insert_cert_history(conn, hostname, port, fingerprint, issuer, protocol_ver
     )
 
 
+def _insert_alert(conn, alert_id, cert_id, alert_type="policy_violation",
+                  status="pending", hostname="", message="(critical) test"):
+    conn.execute(
+        """
+        INSERT INTO alerts
+        (id, cert_id, alert_type, status, message, threshold_days, extra_recipients,
+         created_at, sent_at, error_message, hostname, subject)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            alert_id, cert_id, alert_type, status, message, 30,
+            "[]", datetime.now(UTC).isoformat(), None, None, hostname, "",
+        ),
+    )
+
+
 def _insert_scan_posture(conn, cert_id, hostname, port, grade, chain_status, scanned_at):
     conn.execute(
         """INSERT INTO scan_posture
@@ -655,6 +671,48 @@ class TestApiRoutesScopeFiltering:
         with _scoped_client(app, groups) as client:
             r = client.get("/readiness")
         assert r.status_code == 200
+
+    def test_api_policy_violations_scoped(self, db: Path, tmp_path: Path):
+        """WI-128: /api/reports/policy-violations must respect scope_tags —
+        a scoped viewer must not receive other teams' violations."""
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            _insert_alert(conn, "pv-a", "cert-a", hostname="host-a.example.com")
+            _insert_alert(conn, "pv-b", "cert-b", hostname="host-b.example.com")
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client:
+            r = client.get("/api/reports/policy-violations")
+        assert r.status_code == 200
+        assert {v["cert_id"] for v in r.json()["violations"]} == {"cert-a"}
+
+    def test_api_policy_violations_scoped_csv(self, db: Path, tmp_path: Path):
+        """The CSV export applies the same scope filter as the JSON view."""
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            _insert_alert(conn, "pv-a", "cert-a", hostname="host-a.example.com")
+            _insert_alert(conn, "pv-b", "cert-b", hostname="host-b.example.com")
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client:
+            r = client.get("/api/reports/policy-violations?format=csv")
+        assert r.status_code == 200
+        assert "host-a.example.com" in r.text
+        assert "host-b.example.com" not in r.text
+
+    def test_api_policy_violations_unscoped_sees_all(self, db: Path, tmp_path: Path):
+        _seed_two_teams(db)
+        with _connect(db) as conn:
+            _insert_alert(conn, "pv-a", "cert-a", hostname="host-a.example.com")
+            _insert_alert(conn, "pv-b", "cert-b", hostname="host-b.example.com")
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="")
+        with _scoped_client(app, groups) as client:
+            r = client.get("/api/reports/policy-violations")
+        assert r.status_code == 200
+        assert {v["cert_id"] for v in r.json()["violations"]} == {
+            "cert-a", "cert-b",
+        }
 
     def test_api_unscoped_sees_all(self, db: Path, tmp_path: Path):
         _seed_two_teams(db)

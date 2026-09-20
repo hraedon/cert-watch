@@ -348,18 +348,35 @@ class SqliteAlertRepository(AlertRepository):
         alert_type: str | None = None,
         limit: int = 100,
         offset: int = 0,
+        scope_tags: tuple[str, ...] | list[str] = (),
     ) -> list[Alert]:
-        conditions: list[str] = ["status = 'pending'"]
+        """Return pending alerts, optionally narrowed by type and tag scope.
+
+        A non-empty *scope_tags* restricts rows to alerts whose certificate's
+        effective tags (cert ∪ host, WI-078 semantics) intersect the scope;
+        empty means no restriction. Alerts on certs with no certificate row
+        drop out of a scoped listing — their tags cannot be verified, so the
+        join fails closed.
+        """
+        conditions: list[str] = ["a.status = 'pending'"]
         params: list[Any] = []
         if alert_type:
-            conditions.append("alert_type = ?")
+            conditions.append("a.alert_type = ?")
             params.append(alert_type)
-        where = " AND ".join(conditions)
+        sql = "SELECT a.* FROM alerts a"
+        if scope_tags:
+            from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+            sql += " JOIN certificates c ON c.id = a.cert_id"
+            clause, scope_params = build_scope_tag_clause(scope_tags, cert_table="c")
+            conditions.append(clause)
+            params += scope_params
+        sql += (
+            f" WHERE {' AND '.join(conditions)}"
+            " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
+        )
         with _connect(self.db_path) as conn:
-            rows = conn.execute(
-                f"SELECT * FROM alerts WHERE {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                params + [limit, offset],
-            ).fetchall()
+            rows = conn.execute(sql, params + [limit, offset]).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
     def list_pending_scoped(

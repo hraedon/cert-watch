@@ -263,6 +263,25 @@ class TestScopedRepoMethods:
         pending = SqliteAlertRepository(db).list_pending_scoped(())
         assert {a.id for a in pending} == {"alert-a", "alert-b"}
 
+    def test_alert_list_pending_filtered_scoped(self, db: Path):
+        """list_pending_filtered must honour scope_tags the same way
+        list_pending_scoped does — it feeds /api/reports/policy-violations."""
+        from cert_watch.database import SqliteAlertRepository
+
+        _seed_two_teams(db)
+        repo = SqliteAlertRepository(db)
+        assert [a.id for a in repo.list_pending_filtered(
+            scope_tags=("team-a",),
+        )] == ["alert-a"]
+        assert {a.id for a in repo.list_pending_filtered(scope_tags=())} == {
+            "alert-a",
+            "alert-b",
+        }
+        # Scope and type filters compose.
+        assert repo.list_pending_filtered(
+            alert_type="policy_violation", scope_tags=("team-a",),
+        ) == []
+
     def test_alert_mark_all_read_scoped(self, db: Path):
         from cert_watch.database import SqliteAlertRepository
 

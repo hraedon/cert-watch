@@ -20,6 +20,7 @@ from cert_watch.policy import (
     save_policy_set_locked,
 )
 from cert_watch.routes._deps import _csv_safe, _db_path
+from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.api.policy")
 
@@ -166,10 +167,12 @@ def api_policy_violations(
 ) -> JSONResponse | PlainTextResponse:
     db = _db_path(request)
     repo = SqliteAlertRepository(str(db))
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
     violations = repo.list_pending_filtered(
         alert_type="policy_violation",
         limit=limit,
         offset=offset,
+        scope_tags=scope_tags,
     )
 
     if format == "csv":
