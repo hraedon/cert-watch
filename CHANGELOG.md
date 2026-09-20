@@ -266,6 +266,16 @@ All notable changes to cert-watch are documented in this file.
   requests.
 
 ### Changed
+- **The identifier gate now fails closed everywhere it runs.** The local hooks
+  previously exited before invoking the gate whenever no denylist was
+  configured, so the always-on swap-file/`.env`/guarded-dir guards and the
+  public-repo fail-closed logic never fired outside CI; they are now always
+  invoked and the script itself decides. In `--staged` mode the publication
+  declaration is read from the index — the bytes the commit actually records —
+  not the worktree, and staged type-changes (`T`) are scanned, not just
+  adds/copies/modifications. The CI job runs on `pull_request_target` with the
+  base ref's script scanning an untrusted PR tree (new `--tree` mode), so fork
+  PRs are gated instead of hard-failing on a secret they cannot hold.
 - **Information architecture: Home / Browse split.** The landing page is now a
   **Home** view organized around the operator's actual question — "what needs
   a human, and when?" — instead of the raw inventory table. Home shows a

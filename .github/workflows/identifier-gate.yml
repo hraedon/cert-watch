@@ -1,10 +1,29 @@
 name: identifier-gate
-on: [push, pull_request]
+on: [push, pull_request_target]
+# Pull requests use pull_request_target so the job runs in the BASE repo's
+# context: fork PRs receive no secrets under plain `pull_request`, and on a
+# public repo an absent denylist is a hard failure — fork PRs would be blocked
+# for a secret they can never hold. The flip is safe here because the only
+# code that executes comes from the base ref's checkout (this script, and the
+# pinned actions below); the PR's tree is checked out separately and scanned
+# as data, never executed.
+permissions:
+  contents: read
 jobs:
   identifier-gate:
     runs-on: ubuntu-latest
     steps:
+      # Base ref checkout: trusted. This copy of the script is the only code
+      # the denylist secret ever reaches.
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Check out the pull request tree (untrusted content only)
+        if: github.event_name == 'pull_request_target'
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-tree
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
@@ -12,4 +31,10 @@ jobs:
       - name: Check for committed work-domain identifiers
         env:
           CERT_WATCH_FORBIDDEN_IDENTIFIERS: ${{ secrets.CERT_WATCH_FORBIDDEN_IDENTIFIERS }}
-        run: python3 scripts/check_committed_identifiers.py
+        run: |
+          set -euo pipefail
+          if [ -d pr-tree ]; then
+            python3 scripts/check_committed_identifiers.py --tree pr-tree
+          else
+            python3 scripts/check_committed_identifiers.py
+          fi

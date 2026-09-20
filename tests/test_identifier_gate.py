@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -789,3 +790,258 @@ def test_gate_error_message_names_the_failing_command() -> None:
     with pytest.raises(gate.GateError) as excinfo:
         gate._run_git([sys.executable, "-c", "import sys; sys.exit(3)"])
     assert "exit 3" in str(excinfo.value)
+
+
+# --------------------------------------------------------------------------
+# Staged-mode publication declaration: judged from the index, not the worktree
+# --------------------------------------------------------------------------
+
+
+def test_staged_mode_ignores_a_worktree_only_public_declaration(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A declaration staged into the NEXT commit is not yet the repo's
+    declaration; the gate judges the index it is about to commit."""
+    _track(repo, "README.md", "hello\n")
+    _commit(repo, "init")
+    # public declaration exists only as an UNSTAGED worktree file
+    _declare(repo, "public")
+    _track(repo, "new-file.md", "content\n")  # stage something else
+    monkeypatch.delenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", raising=False)
+    assert gate.main(["--staged"]) == 0
+
+
+def test_staged_mode_reads_a_staged_public_declaration(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _track(repo, "README.md", "hello\n")
+    _commit(repo, "init")
+    _declare(repo, "public")
+    _track(repo, "publication.toml", (repo / "publication.toml").read_text())
+    monkeypatch.delenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", raising=False)
+    assert gate.main(["--staged"]) == 1
+
+
+def test_staged_mode_follows_the_committed_declaration_over_worktree_edit(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declaration committed as public, then edited to private in the worktree
+    but NOT staged: the commit being gated still carries public, so the gate
+    stays failed-closed."""
+    _declare(repo, "public")
+    _track(repo, "publication.toml", (repo / "publication.toml").read_text())
+    _commit(repo, "declare public")
+    _declare(repo, "private-until-review")  # worktree only
+    _track(repo, "unrelated.md", "content\n")
+    monkeypatch.delenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", raising=False)
+    assert gate.main(["--staged"]) == 1
+
+
+# --------------------------------------------------------------------------
+# Staged type-changes are scanned (diff-filter ACMT)
+# --------------------------------------------------------------------------
+
+
+def test_staged_type_change_file_to_symlink_is_scanned(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A tracked file re-staged as a symlink whose TARGET names a forbidden
+    identifier is a type-change (T), which --diff-filter=ACM missed."""
+    _track(repo, "pointer", "plain text\n")
+    _commit(repo, "add plain file")
+    (repo / "pointer").unlink()
+    (repo / "pointer").symlink_to("/srv/widgetcorp/data")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    assert "pointer" in [p.as_posix() for p in gate.collect_staged_paths()]
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp")
+    assert gate.main(["--staged"]) == 1
+
+
+# --------------------------------------------------------------------------
+# scan_staged_blobs fail-closed default
+# --------------------------------------------------------------------------
+
+
+def test_unreadable_staged_blob_raises_when_no_collector_is_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        gate, "_read_staged_blob",
+        lambda *a, **kw: (_ for _ in ()).throw(gate.GateError("simulated read failure")),
+    )
+    import pytest as _pytest
+    with _pytest.raises(gate.GateError, match="could not be read"):
+        gate.scan_staged_blobs(gate.parse_identifier_set("widgetcorp"), [Path("x")])
+    collected: list[Path] = []
+    out = gate.scan_staged_blobs(
+        gate.parse_identifier_set("widgetcorp"), [Path("x")], unreadable=collected,
+    )
+    assert out == []
+    assert collected == [Path("x")]
+
+
+# --------------------------------------------------------------------------
+# --tree mode (pull_request_target fork-PR scanning)
+# --------------------------------------------------------------------------
+
+
+def _write_tree(root: Path, files: dict[str, str]) -> Path:
+    for rel, content in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return root
+
+
+def test_tree_mode_scans_a_tree_outside_any_repo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _write_tree(tmp_path / "pr-tree", {"src/app.py": "host = widgetcorp\n"})
+    _declare(tmp_path, "private-until-review")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp")
+    assert gate.main(["--tree", str(tree)]) == 1
+
+
+def test_tree_mode_clean_tree_passes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _write_tree(tmp_path / "pr-tree", {"src/app.py": "print('hi')\n"})
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp")
+    assert gate.main(["--tree", str(tree)]) == 0
+
+
+def test_tree_mode_never_descends_into_dot_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tree = _write_tree(
+        tmp_path / "pr-tree",
+        {".git/config": "widgetcorp-internal-host\n", "src/app.py": "ok\n"},
+    )
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp-internal-host")
+    assert gate.main(["--tree", str(tree)]) == 0
+
+
+def test_tree_mode_guard_guard_paths_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The always-on guards (guarded data dir, root .env, swap files) apply to a
+    scanned tree exactly as they do to a tracked tree."""
+    tree = _write_tree(tmp_path / "pr-tree", {".env": "PASSWORD=hunter2\n"})
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "widgetcorp")
+    assert gate.main(["--tree", str(tree)]) == 1
+
+
+def test_tree_mode_combines_with_neither_staged_nor_range(
+    tmp_path: Path,
+) -> None:
+    import pytest as _pytest
+    tree = _write_tree(tmp_path / "pr-tree", {"a.txt": "x\n"})
+    with _pytest.raises(SystemExit):
+        gate.main(["--tree", str(tree), "--staged"])
+
+
+# --------------------------------------------------------------------------
+# Vim collision-plane semantics: deliberate, and pinned
+# --------------------------------------------------------------------------
+
+
+def test_vim_collision_plane_does_not_catch_plain_extension_files() -> None:
+    """``logo.svg`` is a normal file; only DOT-starting names with the vim
+    collision suffix (e.g. ``.logo.svg`` — vim's swap for ``logo.sv``) are
+    treated as swap files. A tracked legitimate dotfile with such a suffix is
+    rejected by design: the false-positive window is narrower than the leak."""
+    assert gate.leaked_tracked_files([Path("docs/logo.svg")], gate._GUARDED_DIRS) == []
+    assert gate.leaked_tracked_files([Path(".logo.svg")], gate._GUARDED_DIRS) == [
+        Path(".logo.svg"),
+    ]
+
+
+# --------------------------------------------------------------------------
+# Hooks no longer short-circuit before invoking the gate
+# --------------------------------------------------------------------------
+
+
+_HOOKS = Path(__file__).resolve().parents[1] / "githooks"
+
+
+def _run_hook(
+    repo: Path, hook: str, home: Path, *args: str
+) -> subprocess.CompletedProcess[str]:
+    """Run a repo's hook with the denylist truly absent: no env var, no
+    per-repo file, and a HOME that cannot contain the shared one."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "CERT_WATCH_FORBIDDEN_IDENTIFIERS"
+    }
+    env["HOME"] = str(home)
+    return subprocess.run(
+        ["bash", str(repo / "githooks" / hook), *args],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.fixture
+def hooked_repo(repo: Path) -> Path:
+    """The throwaway repo, with this repo's gate script and hooks installed."""
+    (repo / "scripts").mkdir()
+    shutil.copy2(_SCRIPT, repo / "scripts" / _SCRIPT.name)
+    (repo / "githooks").mkdir()
+    for hook in ("pre-commit", "commit-msg", "pre-push"):
+        shutil.copy2(_HOOKS / hook, repo / "githooks" / hook)
+    return repo
+
+
+def test_pre_commit_hook_fails_closed_for_a_public_repo_without_a_denylist(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    _declare(hooked_repo, "public")
+    _track(hooked_repo, "publication.toml", (hooked_repo / "publication.toml").read_text())
+    _commit(hooked_repo, "declare public")
+    _track(hooked_repo, "new-file.md", "content\n")
+    result = _run_hook(hooked_repo, "pre-commit", tmp_path / "home")
+    assert result.returncode == 1
+    assert "INACTIVE" not in result.stderr
+
+
+def test_pre_commit_hook_swap_and_env_guards_fire_without_a_denylist(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    """The always-on guards must run even when the gate is unconfigured —
+    previously the hook exited 0 before the script could see the force-add."""
+    _track(hooked_repo, "README.md", "x\n")
+    _commit(hooked_repo, "init")
+    _track(hooked_repo, ".env", "PASSWORD=hunter2\n")
+    result = _run_hook(hooked_repo, "pre-commit", tmp_path / "home")
+    assert result.returncode == 1
+    assert ".env" in result.stderr
+
+
+def test_pre_commit_hook_private_repo_without_a_denylist_passes(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    _track(hooked_repo, "README.md", "nothing sensitive\n")
+    result = _run_hook(hooked_repo, "pre-commit", tmp_path / "home")
+    assert result.returncode == 0
+
+
+def test_commit_msg_hook_asks_the_gate_instead_of_short_circuiting(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    """Without the denylist the script decides: this repo declares nothing, so
+    commit-msg passes; a forbidden message WITH the denylist must still fail
+    through the same hook path."""
+    _track(hooked_repo, "README.md", "x\n")
+    message = hooked_repo / ".git" / "COMMIT_EDITMSG"
+    message.write_text("add the widgetcorp endpoint\n", encoding="utf-8")
+    result = _run_hook(hooked_repo, "commit-msg", tmp_path / "home", str(message))
+    assert result.returncode == 0
+
+    env_dir = hooked_repo / ".identifiers-denylist.local"
+    env_dir.write_text("widgetcorp\n", encoding="utf-8")
+    result = _run_hook(hooked_repo, "commit-msg", tmp_path / "home", str(message))
+    assert result.returncode == 1
