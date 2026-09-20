@@ -52,7 +52,7 @@ def _do_replace(
     leaf: Certificate,
     chain: list[Certificate],
     chain_valid: bool | None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, bool]:
     """Inner implementation of replace_scanned using an existing connection."""
     from cert_watch.cert_chain import validate_chain_order
 
@@ -223,7 +223,7 @@ def _do_replace(
                 "certificate renewed for %s:%s — %s",
                 hostname, port, "; ".join(changes),
             )
-    return leaf_id, replaces_id
+    return leaf_id, replaces_id, unchanged
 
 
 def replace_scanned(
@@ -235,15 +235,16 @@ def replace_scanned(
     chain_valid: bool | None,
     *,
     conn: sqlite3.Connection | None = None,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, bool]:
     """Atomically replace all certs for host:port with new leaf + chain.
 
     Deletes old leaf + chain children, inserts new ones. When *conn* is
     provided it is used directly and the caller owns commit/rollback;
     otherwise a fresh connection + transaction is opened and committed.
-    Returns ``(new_leaf_id, replaced_cert_id)`` — the ``replaced_cert_id`` is
-    the old leaf's id when a cert was replaced (None when this is a fresh
-    insert with no prior leaf).
+    Returns ``(new_leaf_id, replaced_cert_id, unchanged)`` —
+    ``replaced_cert_id`` is the old leaf's id when a prior leaf existed
+    (None on a fresh insert); ``unchanged`` is True when that prior leaf had
+    the same fingerprint, i.e. a routine rescan rather than a renewal.
     """
     if conn is None:
         with get_write_lock(), _connect(db_path) as conn:

@@ -455,7 +455,7 @@ def _stage_replace(
     repo_path: str | Path,
     entry: ScannedEntry,
     conn: sqlite3.Connection,
-) -> tuple[str, str | None]:
+) -> tuple[str, str | None, bool]:
     """Persist leaf + chain, removing previous certs for the same (hostname, port)."""
     return replace_scanned(
         repo_path,
@@ -795,6 +795,7 @@ def _stage_events(
     *,
     conn: sqlite3.Connection,
     event_config: EventStreamConfig,
+    cert_unchanged: bool = False,
 ) -> list[tuple[Any, ...]]:
     """Emit cert_added/cert_renewed and posture_changed events.
 
@@ -802,26 +803,30 @@ def _stage_events(
     thread pool doesn't fire before the transaction commits — preventing
     phantom events on COMMIT failure (WI-114). Returns a list of
     ``(event, config, row_id)`` tuples for the caller to submit after COMMIT.
+
+    An unchanged rescan (``cert_unchanged``) emits no lifecycle event at
+    all — the certificate was observed again, not added or renewed.
     """
     from cert_watch.events import Event, emit_event
 
     pending: list[tuple[Any, ...]] = []
 
-    evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
-    event = Event(
-        event_type=evt_type,
-        timestamp=datetime.now(UTC),
-        payload={
-            "cert_id": leaf_id,
-            "hostname": entry.host,
-            "port": entry.port,
-            "replaced_cert_id": replaced_cert_id,
-        },
-        source="scan",
-    )
-    row_id = emit_event(event, repo_path, config=event_config, conn=conn, _defer_webhook=True)
-    if event_config.webhook_url and row_id is not None:
-        pending.append((event, event_config, row_id))
+    if not cert_unchanged:
+        evt_type = "cert_renewed" if replaced_cert_id else "cert_added"
+        event = Event(
+            event_type=evt_type,
+            timestamp=datetime.now(UTC),
+            payload={
+                "cert_id": leaf_id,
+                "hostname": entry.host,
+                "port": entry.port,
+                "replaced_cert_id": replaced_cert_id,
+            },
+            source="scan",
+        )
+        row_id = emit_event(event, repo_path, config=event_config, conn=conn, _defer_webhook=True)
+        if event_config.webhook_url and row_id is not None:
+            pending.append((event, event_config, row_id))
 
     if posture_grade and previous_grade is not None and previous_grade != posture_grade:
         event = Event(
@@ -967,7 +972,7 @@ def store_scanned(
         # evaluated lazily on the cert detail page.
         posture_eval = _posture_eval
         conn.execute("BEGIN")
-        leaf_id, replaced_cert_id = _stage(
+        leaf_id, replaced_cert_id, cert_unchanged = _stage(
             "replace", _stage_replace, repo_path, entry, conn,
         )
         if posture_eval is not None:
@@ -999,6 +1004,7 @@ def store_scanned(
             repo_path, leaf_id, entry,
             replaced_cert_id, posture_grade, previous_grade,
             conn=conn, event_config=event_config,
+            cert_unchanged=cert_unchanged,
         )
         conn.commit()
     except Exception:
@@ -1028,10 +1034,13 @@ def store_scanned(
     # Post-transaction HTTP: failures must not invalidate the scan.
     # When _deferred is provided, stash the work for the caller to execute
     # after releasing the write lock (avoids holding the lock during HTTP).
+    # A rescan that saw identical bytes is not a renewal: no resolve fires,
+    # or it would close an incident the operator still needs (#62).
+    renewed_from_id = replaced_cert_id if not cert_unchanged else None
     if _deferred is not None:
         _deferred.repo_path = repo_path
         _deferred.entry = entry
-        _deferred.replaced_cert_id = replaced_cert_id
+        _deferred.replaced_cert_id = renewed_from_id
         _deferred.webhook_config = webhook_config
         _deferred.pending_for_resolve = pending_for_resolve
         _deferred.pending_event_webhooks = pending_event_webhooks
@@ -1040,7 +1049,7 @@ def store_scanned(
             _stage(
                 "webhook_resolve",
                 _stage_webhook_resolve,
-                repo_path, entry, replaced_cert_id,
+                repo_path, entry, renewed_from_id,
                 webhook_config, pending_for_resolve,
             )
         except Exception:

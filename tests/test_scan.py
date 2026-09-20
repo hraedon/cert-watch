@@ -1006,7 +1006,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", "old-cert-id"),
+        lambda *a, **kw: ("leaf-id-1", "old-cert-id", False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1050,7 +1050,7 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", "old-cert-id"),
+        lambda *a, **kw: ("leaf-id-1", "old-cert-id", False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1084,13 +1084,14 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
 
 
 def test_store_scanned_alertmanager_resolve_end_to_end(
-    monkeypatch, tmp_path, self_signed_leaf,
+    monkeypatch, tmp_path, self_signed_leaf, expiring_soon_leaf,
 ):
     """Alertmanager resolve is called through the full scan path on renewal.
 
     Uses real replace_scanned so the pre-fetch-before-delete ordering is
     actually exercised (the resolve must see alerts that replace_scanned
-    will delete).
+    will delete). The second scan carries a *different* certificate —
+    rescanning identical bytes is not a renewal and must not resolve (#62).
     """
     import json
 
@@ -1101,10 +1102,11 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     leaf = parse_certificate(self_signed_leaf.der)
-    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+    renewed_leaf = parse_certificate(expiring_soon_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=renewed_leaf, chain=[])
 
     # First insert: use real replace_scanned to get a real cert ID
-    first_leaf_id, _ = replace_scanned(
+    first_leaf_id, *_ = replace_scanned(
         db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
     )
 
@@ -1170,7 +1172,7 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
 
 
 def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
-    monkeypatch, tmp_path, self_signed_leaf,
+    monkeypatch, tmp_path, self_signed_leaf, expiring_soon_leaf,
 ):
     """An Alertmanager resolve failure must not block the scan pipeline."""
     from cert_watch.alerts import WebhookConfig
@@ -1180,10 +1182,11 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
     db = tmp_path / "cw.sqlite3"
     init_schema(db)
     leaf = parse_certificate(self_signed_leaf.der)
-    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+    renewed_leaf = parse_certificate(expiring_soon_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=renewed_leaf, chain=[])
 
     # First insert
-    first_leaf_id, _ = replace_scanned(
+    first_leaf_id, *_ = replace_scanned(
         db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
     )
 
@@ -1231,6 +1234,81 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
         assert leaf_id != first_leaf_id
 
 
+def test_store_scanned_unchanged_rescan_sends_no_resolve(
+    monkeypatch, tmp_path, self_signed_leaf,
+):
+    """A rescan of identical bytes is not a renewal and must not resolve (#62).
+
+    Before the fix, the resolve gated on ``replaced_cert_id`` being truthy —
+    which is set for *any* pre-existing leaf — so each daily cycle resolved
+    the previous day's incident with a false "certificate renewed" note,
+    closing an incident the operator still needs. The carried alert must
+    stay pending and the resolve must not fire.
+    """
+    from cert_watch.alerts import WebhookConfig
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    from cert_watch.database.cert_ops import replace_scanned
+    from cert_watch.database.connection import _connect
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    first_leaf_id, *_ = replace_scanned(
+        db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
+    )
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_leaf_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_posture",
+        lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://am.example.com/api/v1/alerts",
+        kind="alertmanager",
+    )
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
+        assert leaf_id != first_leaf_id
+        mock_urlopen.assert_not_called()
+
+    # The pending alert was carried onto the rewritten row, not resolved
+    # away: it stays deliverable against the live certificate id.
+    assert [a.status for a in alert_repo.list_for_cert(leaf_id)] == ["pending"]
+
+    # No cert_renewed event either — the renewal digest counts those rows.
+    with _connect(db) as conn:
+        types = [
+            r["event_type"]
+            for r in conn.execute("SELECT event_type FROM event_log").fetchall()
+        ]
+    assert "cert_renewed" not in types
+
+
 def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_signed_leaf):
     db = tmp_path / "cw.sqlite3"
     leaf = parse_certificate(self_signed_leaf.der)
@@ -1238,7 +1316,7 @@ def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     # Mock store_scan_posture to raise, testing the posture stage exception path
     monkeypatch.setattr(
@@ -1273,7 +1351,7 @@ def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_l
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1315,7 +1393,7 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1345,7 +1423,7 @@ def test_store_scanned_drift_detection_exception(monkeypatch, tmp_path, self_sig
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1372,7 +1450,7 @@ def test_store_scanned_cert_history_exception(monkeypatch, tmp_path, self_signed
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -1403,7 +1481,7 @@ def test_store_scanned_chain_incomplete_warning(monkeypatch, tmp_path, self_sign
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -2043,7 +2121,7 @@ def test_store_scanned_event_webhooks_deferred_until_commit(
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
@@ -2089,7 +2167,7 @@ def test_store_scanned_event_webhooks_not_fired_on_rollback(
 
     monkeypatch.setattr(
         "cert_watch.scan.replace_scanned",
-        lambda *a, **kw: ("leaf-id-1", None),
+        lambda *a, **kw: ("leaf-id-1", None, False),
     )
     monkeypatch.setattr(
         "cert_watch.scan._evaluate_posture",
