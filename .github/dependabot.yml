@@ -16,9 +16,21 @@ updates:
     commit-message:
       prefix: "ci"
     groups:
+      # The actions that publish, scan and sign the image are the ones a bad
+      # bump would be worth making, so they do not ride along in the grouped
+      # "everything else" PR where a single click moves them all.
+      release-pipeline:
+        patterns:
+          - "docker/*"
+          - "sigstore/*"
+          - "aquasecurity/*"
       actions:
         patterns:
           - "*"
+        exclude-patterns:
+          - "docker/*"
+          - "sigstore/*"
+          - "aquasecurity/*"
 
   - package-ecosystem: docker
     directory: /

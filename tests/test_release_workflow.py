@@ -182,6 +182,15 @@ def test_dependabot_watches_what_the_monthly_lock_refresh_cannot() -> None:
     ecosystems = {entry["package-ecosystem"] for entry in config["updates"]}
 
     assert {"github-actions", "docker"} <= ecosystems
+
+    # Bumps to the actions that build, scan and sign the published image are
+    # separated from the grouped bump of everything else: main takes direct
+    # pushes, so a release-pipeline pin should not arrive inside a PR whose
+    # interesting content is a linter bump.
+    actions = next(e for e in config["updates"] if e["package-ecosystem"] == "github-actions")
+    pipeline = set(actions["groups"]["release-pipeline"]["patterns"])
+    assert {"docker/*", "sigstore/*", "aquasecurity/*"} == pipeline
+    assert pipeline <= set(actions["groups"]["actions"]["exclude-patterns"])
     assert "pip" not in ecosystems, (
         "uv.lock is the source of truth and Dependabot cannot round-trip it; "
         "dependency-update.yml owns Python"
