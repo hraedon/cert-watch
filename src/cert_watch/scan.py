@@ -475,7 +475,13 @@ def _stage_webhook_resolve(
     webhook_config: object | None,
     pending_for_resolve: list[Any] | None,
 ) -> None:
-    """Send resolve events for open incidents on the replaced cert."""
+    """Send resolve events for open incidents on the replaced cert.
+
+    Only called when the scan changed the certificate (``replaced_cert_id``
+    is already ``None`` for an unchanged rescan); resolves are keyed on the
+    row id the triggering alert fired against, so they match the incident
+    PagerDuty has open regardless of intervening row rewrites.
+    """
     if not replaced_cert_id or webhook_config is None:
         return
     from cert_watch.alerts import WebhookConfig, resolve_webhook_for_renewed_cert
@@ -795,7 +801,7 @@ def _stage_events(
     *,
     conn: sqlite3.Connection,
     event_config: EventStreamConfig,
-    cert_unchanged: bool = False,
+    cert_unchanged: bool,
 ) -> list[tuple[Any, ...]]:
     """Emit cert_added/cert_renewed and posture_changed events.
 
@@ -805,7 +811,9 @@ def _stage_events(
     ``(event, config, row_id)`` tuples for the caller to submit after COMMIT.
 
     An unchanged rescan (``cert_unchanged``) emits no lifecycle event at
-    all — the certificate was observed again, not added or renewed.
+    all — the certificate was observed again, not added or renewed. The
+    flag is a required keyword so a future caller cannot silently inherit
+    the renewal-emitting behaviour by omission.
     """
     from cert_watch.events import Event, emit_event
 
@@ -880,8 +888,9 @@ def store_scanned(
     resolve webhook runs after commit and is best-effort.
 
     When ``webhook_config`` is a ``WebhookConfig`` with ``kind="pagerduty"``
-    or ``kind="alertmanager"``, sends resolve events for any open incidents
-    on the replaced cert.
+    or ``kind="alertmanager"``, sends resolve events for open incidents on
+    the replaced cert — but only when the certificate actually changed; an
+    unchanged rescan replaces nothing and sends no resolve.
     """
     repo_path = db_path
     init_schema(repo_path)

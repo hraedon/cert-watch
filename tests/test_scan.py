@@ -1307,6 +1307,164 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
             for r in conn.execute("SELECT event_type FROM event_log").fetchall()
         ]
     assert "cert_renewed" not in types
+def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
+    monkeypatch, tmp_path, self_signed_leaf, expiring_soon_leaf,
+):
+    """#62 full sequence: trigger on R1, unchanged rescan rewrites to R2,
+    genuine renewal resolves the incident keyed on R1.
+
+    The PagerDuty dedup key is derived from a certificate row id. Without the
+    stored trigger row id (migration 0034), the resolve sent at renewal would
+    hash R2 — an incident PagerDuty never opened — and the open incident would
+    stay up forever while cert-watch logged "resolved 1 webhook incident(s)".
+    """
+    import hashlib
+    import json
+
+    from cert_watch.alerts import WebhookConfig
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    from cert_watch.database.cert_ops import replace_scanned
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    renewed_leaf = parse_certificate(expiring_soon_leaf.der)
+
+    first_leaf_id, *_ = replace_scanned(
+        db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
+    )
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_leaf_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+    # Creation stamps the trigger row id; the unchanged rescan must keep it.
+    carried = alert_repo.list_for_cert(first_leaf_id)[0]
+    assert carried.trigger_cert_id == first_leaf_id
+    expected_key = hashlib.sha256(
+        f"{first_leaf_id}:expiry_warning:7".encode()
+    ).hexdigest()[:32]
+
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_posture",
+        lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://pd.example.com",
+        kind="pagerduty",
+        routing_key="rk",
+    )
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        mock_resp = MagicMock()
+        mock_resp.status = 202
+        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        mock_urlopen.return_value = mock_resp
+
+        # Cycle 1: unchanged rescan — alert carried to a rewritten row, no HTTP.
+        unchanged_entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+        rewritten_id = store_scanned(
+            unchanged_entry, db, webhook_config=webhook_config,
+        )
+        assert rewritten_id != first_leaf_id
+        mock_urlopen.assert_not_called()
+        carried = alert_repo.list_for_cert(rewritten_id)
+        assert len(carried) == 1
+        assert carried[0].trigger_cert_id == first_leaf_id
+
+        # Cycle 2: genuine renewal — exactly one resolve, keyed on R1.
+        renewed_entry = ScannedEntry(host="x", port=443, leaf=renewed_leaf, chain=[])
+        renewed_id = store_scanned(
+            renewed_entry, db, webhook_config=webhook_config,
+        )
+        assert renewed_id != rewritten_id
+        assert mock_urlopen.call_count == 1
+        payload = json.loads(mock_urlopen.call_args[1]["data"])
+        assert payload["event_action"] == "resolve"
+        assert payload["dedup_key"] == expected_key
+
+
+def test_store_scanned_unchanged_rescan_defers_no_resolve(
+    monkeypatch, tmp_path, self_signed_leaf,
+):
+    """#62 deferred path: the scheduler stashes no resolve for an unchanged
+    rescan, so executing the deferred work performs no HTTP."""
+    from cert_watch.alerts import WebhookConfig
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+    from cert_watch.database.cert_ops import replace_scanned
+    from cert_watch.scan import DeferredPostCommit, _execute_deferred_post_commit
+
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    leaf = parse_certificate(self_signed_leaf.der)
+    entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
+
+    first_leaf_id, *_ = replace_scanned(
+        db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
+    )
+    alert_repo = SqliteAlertRepository(db)
+    alert_repo.create(Alert(
+        cert_id=first_leaf_id,
+        alert_type="expiry_warning",
+        status="pending",
+        message="expiring",
+        threshold_days=7,
+        hostname="x",
+        subject=leaf.subject,
+    ))
+
+    monkeypatch.setattr(
+        "cert_watch.scan._evaluate_posture",
+        lambda *a, **kw: _PostureEval("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.scan._stage_posture",
+        lambda *a, **kw: ("A", [], None),
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.detect_drift",
+        lambda *a, **kw: [],
+    )
+    monkeypatch.setattr(
+        "cert_watch.database.record_cert_history",
+        lambda *a, **kw: "hist-id",
+    )
+
+    webhook_config = WebhookConfig(
+        url="https://pd.example.com",
+        kind="pagerduty",
+        routing_key="rk",
+    )
+
+    deferred = DeferredPostCommit()
+    leaf_id = store_scanned(
+        entry, db, webhook_config=webhook_config, _deferred=deferred,
+    )
+    assert leaf_id != first_leaf_id
+    assert deferred.replaced_cert_id is None
+
+    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        _execute_deferred_post_commit(deferred)
+        mock_urlopen.assert_not_called()
 
 
 def test_store_scanned_posture_evaluation_exception(monkeypatch, tmp_path, self_signed_leaf):
@@ -2291,7 +2449,7 @@ def test_stage_events_posture_changed(tmp_path, self_signed_leaf):
     config = EventStreamConfig(webhook_url="https://example.com/hook")
     pending = _stage_events(
         db, "test-cert-id", entry, None, "B", "A",
-        conn=conn, event_config=config,
+        conn=conn, event_config=config, cert_unchanged=False,
     )
     conn.commit()
 
@@ -2321,7 +2479,7 @@ def test_stage_events_posture_unchanged(tmp_path, self_signed_leaf):
     config = EventStreamConfig(webhook_url="https://example.com/hook")
     pending = _stage_events(
         db, "test-cert-id", entry, None, "A", "A",
-        conn=conn, event_config=config,
+        conn=conn, event_config=config, cert_unchanged=False,
     )
     conn.commit()
 

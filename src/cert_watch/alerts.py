@@ -884,8 +884,12 @@ def resolve_webhook_for_renewed_cert(
         if key in seen:
             continue
         seen.add(key)
+        # Key the resolve on the row id the trigger was keyed on. A carried
+        # alert may sit on a rewritten row id that PagerDuty never saw (#62);
+        # pre-0034 rows (trigger_cert_id NULL) keep the old keying, which is
+        # also what their open incidents were raised with.
         if send_webhook_resolve(
-            old_cert_id, alert.alert_type, alert.threshold_days,
+            alert.trigger_cert_id or old_cert_id, alert.alert_type, alert.threshold_days,
             webhook_config,
             summary=f"cert-watch: certificate renewed, resolving {alert.alert_type} alert",
             hostname=alert.hostname,

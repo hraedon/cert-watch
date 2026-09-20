@@ -61,6 +61,13 @@ def _pd_severity(alert_type: str, threshold_days: int | None) -> str:
 
 
 def _pd_dedup_key(cert_id: str, alert_type: str, threshold_days: int | None) -> str:
+    """Key a PagerDuty incident by the certificate row the alert fired on.
+
+    Callers must pass the alert's ``trigger_cert_id`` (falling back to
+    ``cert_id``): an unchanged rescan rewrites the leaf row under a new id
+    and carries the alert with it (#57), so keying resolves on the current
+    row id would never match the incident the trigger opened (#62).
+    """
     raw = f"{cert_id}:{alert_type}:{threshold_days}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
@@ -205,7 +212,11 @@ class PagerDutyAdapter:
 
     def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
         severity = _pd_severity(alert.alert_type, alert.threshold_days)
-        dedup_key = _pd_dedup_key(alert.cert_id, alert.alert_type, alert.threshold_days)
+        dedup_key = _pd_dedup_key(
+            alert.trigger_cert_id or alert.cert_id,
+            alert.alert_type,
+            alert.threshold_days,
+        )
         summary = alert.message
         if len(summary) > 1024:
             summary = summary[:1021] + "..."
