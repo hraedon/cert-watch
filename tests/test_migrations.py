@@ -892,8 +892,39 @@ def test_migration_0034_adds_trigger_cert_id_and_is_idempotent(db_path: Path) ->
     with sqlite3.connect(str(db_path)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         upgrade(conn)
-        upgrade(conn)  # must not raise: the column already exists
+        upgrade(conn)  # must not raise: the column already exists (and re-backfill is a no-op)
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
+
+
+def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
+    tmp_path: Path,
+) -> None:
+    """Every released version deletes an alert together with its certificate
+    row, so a pre-existing alert's cert_id IS the row it fired against — the
+    id its open PagerDuty incident was keyed with. The carry behaviour of #57
+    ships in the same release as this migration, so without the backfill the
+    first post-upgrade rescan would move the alert to a row id the incident
+    never saw and the renewal resolve would silently miss (#62).
+    """
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "backfill.sqlite3"
+    _mk_pre0034_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message,"
+            " threshold_days, created_at) VALUES ('a1', 'row-that-fired',"
+            " 'expiry_warning', 'pending', 'expiring', 7, '2026-09-01T00:00:00Z')"
+        )
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == ["0034"]
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute(
+            "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
+        ).fetchone()
+    assert row == ("row-that-fired",)
 
 
 def _mk_pre0034_db(db: Path) -> None:

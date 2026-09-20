@@ -34,8 +34,10 @@ class Alert:
     # Certificate row id the alert first fired against. Survives the row
     # rewrites an unchanged rescan performs (#57), and is what webhook
     # dedup keys are built from, so a trigger and its later resolve always
-    # compute the same key (migration 0034, #62). NULL on pre-0034 rows;
-    # keyed lookups fall back to cert_id.
+    # compute the same key (migration 0034, #62). Rows from before 0034 are
+    # backfilled with their cert_id — the row they fired against in every
+    # released version, which is what their open incidents were keyed with;
+    # the runtime NULL fallback exists only for belt-and-braces.
     trigger_cert_id: str | None = None
     # First cycle in which delivery was deferred because the evidence store
     # refused the write that precedes a send; cleared by any recorded attempt

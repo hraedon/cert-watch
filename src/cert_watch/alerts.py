@@ -886,8 +886,8 @@ def resolve_webhook_for_renewed_cert(
         seen.add(key)
         # Key the resolve on the row id the trigger was keyed on. A carried
         # alert may sit on a rewritten row id that PagerDuty never saw (#62);
-        # pre-0034 rows (trigger_cert_id NULL) keep the old keying, which is
-        # also what their open incidents were raised with.
+        # pre-0034 rows were backfilled by the migration with the row id they
+        # fired against; the fallback exists only for belt and braces.
         if send_webhook_resolve(
             alert.trigger_cert_id or old_cert_id, alert.alert_type, alert.threshold_days,
             webhook_config,

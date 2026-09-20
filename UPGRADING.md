@@ -184,17 +184,23 @@ with the app stopped run `ALTER TABLE alerts DROP COLUMN deferred_since;` and
 
 ### Migration 0034: `alerts.trigger_cert_id` (stable resolve keying, #62)
 
-**What it does.** Adds one nullable column, `alerts.trigger_cert_id`. It
-records the certificate row id an alert was created against. Since #57 an
-unchanged rescan rewrites the leaf row under a new id and carries its alerts
-forward; webhook dedup keys (PagerDuty) are derived from a row id, so keying
-a renewal's resolve on the alert's *current* row id would never match the
+**What it does.** Adds one nullable column, `alerts.trigger_cert_id`, then
+backfills existing alerts with their current `cert_id`. The column records
+the certificate row id an alert was created against. Since #57 an unchanged
+rescan rewrites the leaf row under a new id and carries its alerts forward;
+webhook dedup keys (PagerDuty) are derived from a row id, so keying a
+renewal's resolve on the alert's *current* row id would never match the
 incident its trigger opened. New alerts stamp the row id they fire against;
-that stamp survives every row rewrite, and resolves key on it. The migration
-modifies no rows; existing alerts get `NULL` and keep the pre-migration
-keying (the row the alert currently sits on), which is also what their
-already-open incidents were raised with. Startup applies it automatically
-after the usual pre-migration backup.
+that stamp survives every row rewrite, and resolves key on it.
+
+The backfill is exact for every alert a released version can hold: before
+this release an alert was deleted together with its certificate row, so the
+row an existing alert sits on IS the row it fired against — the id its open
+incident was keyed with. (A database that already ran unreleased #57 code may
+hold a carried alert pointing at a rewritten row; its backfilled key hashes
+that rewritten row id, which is neither better nor worse than the previous
+fallback and only affects incidents raised against unreleased code.) Startup
+applies the migration automatically after the usual pre-migration backup.
 
 **Manual application** (Windows/IIS hosts, or any operator who stages schema
 changes by hand). Stop the app pool or service first, take a backup
@@ -202,15 +208,16 @@ changes by hand). Stop the app pool or service first, take a backup
 
 ```sql
 ALTER TABLE alerts ADD COLUMN trigger_cert_id TEXT;
+UPDATE alerts SET trigger_cert_id = cert_id WHERE trigger_cert_id IS NULL;
 INSERT INTO schema_version (id, description, applied_at)
 VALUES ('0034',
         'add trigger_cert_id to alerts for stable resolve keying (#62)',
         strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
 ```
 
-Running only the `ALTER` is also fine: startup sees the column, skips the
-`ALTER`, and records `0034` itself. Both paths are covered by
-`tests/test_migrations.py`.
+Running only the `ALTER` — or the `ALTER` and the `UPDATE` — is also fine:
+startup sees the column, skips it, runs the idempotent backfill, and records
+`0034` itself. Both paths are covered by `tests/test_migrations.py`.
 
 **Verify** with `PRAGMA table_info(alerts);` (a `trigger_cert_id` row is
 present) and `SELECT id FROM schema_version WHERE id = '0034';` (one row).

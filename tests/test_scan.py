@@ -1307,6 +1307,8 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
             for r in conn.execute("SELECT event_type FROM event_log").fetchall()
         ]
     assert "cert_renewed" not in types
+
+
 def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
     monkeypatch, tmp_path, self_signed_leaf, expiring_soon_leaf,
 ):

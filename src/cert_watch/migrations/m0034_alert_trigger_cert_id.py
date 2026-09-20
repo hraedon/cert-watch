@@ -10,9 +10,12 @@ discarded.
 ``trigger_cert_id`` persistently records the row id the alert was created
 against — the id the trigger event's dedup key was built from — and survives
 every row rewrite. Resolves key on it instead of the alert's current row id,
-so a trigger and its later resolve always agree. Existing rows get ``NULL``
-and fall back to ``cert_id``, which preserves the pre-migration keying for
-already-open incidents.
+so a trigger and its later resolve always agree. Existing rows are backfilled
+with their current ``cert_id``: every released version deletes an alert with
+its certificate row (the rewrite-and-carry behaviour of #57 ships in the same
+release as this migration), so for every pre-existing alert the row it sits
+on IS the row it fired against — exactly the id its open incident was keyed
+with.
 
 Manual application is documented in UPGRADING.md and uses ``MANUAL_SQL`` below,
 which is the same statement the runner executes plus the ledger row it would
@@ -27,9 +30,14 @@ import sqlite3
 MIGRATION_ID = "0034"
 DESCRIPTION = "add trigger_cert_id to alerts for stable resolve keying (#62)"
 COLUMN_SQL = "ALTER TABLE alerts ADD COLUMN trigger_cert_id TEXT"
-# The two statements an operator runs to apply this migration by hand.
+BACKFILL_SQL = (
+    "UPDATE alerts SET trigger_cert_id = cert_id WHERE trigger_cert_id IS NULL"
+)
+# The statements an operator runs to apply this migration by hand (the ALTER,
+# the backfill, then the ledger row).
 MANUAL_SQL = (
     COLUMN_SQL,
+    BACKFILL_SQL,
     "INSERT INTO schema_version (id, description, applied_at) "
     f"VALUES ('{MIGRATION_ID}', '{DESCRIPTION}', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
 )
@@ -39,4 +47,5 @@ def upgrade(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
     if "trigger_cert_id" not in cols:
         conn.execute(COLUMN_SQL)
+    conn.execute(BACKFILL_SQL)
     conn.commit()
