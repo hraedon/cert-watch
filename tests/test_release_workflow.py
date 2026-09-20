@@ -156,6 +156,10 @@ def test_the_signature_is_verified_before_the_deployment_pointer_moves() -> None
     assert "verify_release_attestations.py" in verify["run"]
     assert "--commit \"${GITHUB_SHA}\"" in verify["run"]
 
+    assert "--digest \"${{ steps.push.outputs.digest }}\"" in bump["run"], (
+        "the deployment pointer must pin the verified digest, not only the tag"
+    )
+
     # The identity is only anchored because the workflow cannot run from an
     # arbitrary ref in the first place.
     triggers = workflow[True]["push"]

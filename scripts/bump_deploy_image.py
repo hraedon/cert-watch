@@ -40,7 +40,16 @@ the order runs finish in. It cannot invent freshness: if the newest commit's
 own release fails its gates, the pointer stays at the last commit that actually
 built, which is the correct thing to deploy.
 
-Run:  python scripts/bump_deploy_image.py --image-tag <short-sha> [--dry-run]
+Run:  python scripts/bump_deploy_image.py --image-tag <short-sha> --digest sha256:... [--dry-run]
+
+The pointer is a digest, not just a tag
+--------------------------------------
+The tag is only the *selector* for the supersession reasoning above; the
+kustomization also pins ``digest:`` to the image digest the release job
+verified (signature + attestations) immediately before calling this script.
+Kustomize renders the digest over the tag, and a digest cannot be repointed,
+so what Argo CD pulls is exactly what the pipeline verified -- not whatever
+the mutable short-sha tag resolves to at sync time.
 """
 
 from __future__ import annotations
@@ -110,16 +119,55 @@ def is_superseded(repo: Path, current_tag: str | None, image_tag: str) -> bool:
                 cwd=repo, check=False).returncode == 0
 
 
-def apply_bump(repo: Path, kustomize: str, image: str, image_tag: str) -> None:
+def apply_bump(repo: Path, kustomize: str, image: str, image_tag: str, digest: str) -> None:
     for directory in KUSTOMIZATION_DIRS:
         subprocess.run(
             [kustomize, "edit", "set", "image", f"{image}={image}:{image_tag}"],
             cwd=repo / directory, check=True, capture_output=True, text=True,
         )
+        _pin_digest(repo / directory / "kustomization.yaml", image, digest)
+
+
+def _pin_digest(kustomization: Path, image: str, digest: str) -> None:
+    """Set the ``digest:`` of *image*'s entry, inserting it after ``newTag:``.
+
+    Text-based for the same reason read_current_tag is: this script runs from
+    a bare checkout. The tag stays (it is what the supersession logic reasons
+    about); the digest is what the rendered manifest pulls.
+    """
+    lines = kustomization.read_text(encoding="utf-8").splitlines()
+    out: list[str] = []
+    in_target_image = False
+    wrote_digest = False
+    insert_at: int | None = None
+    insert_indent = "  "
+    for raw in lines:
+        stripped = raw.strip()
+        indent = raw[: len(raw) - len(stripped)]
+        if stripped.startswith("- name:"):
+            in_target_image = stripped.split(":", 1)[1].strip().strip("\"'") == image
+            out.append(raw)
+            continue
+        if in_target_image and stripped.startswith("newTag:"):
+            out.append(raw)
+            insert_at = len(out)
+            insert_indent = indent
+            continue
+        if in_target_image and stripped.startswith("digest:"):
+            out.append(f"{indent}digest: {digest}")
+            wrote_digest = True
+            continue
+        if not raw.startswith((" ", "\t", "-")) and stripped:
+            in_target_image = False
+        out.append(raw)
+    if not wrote_digest and insert_at is not None:
+        out.insert(insert_at, f"{insert_indent}digest: {digest}")
+    kustomization.write_text("\n".join(out) + "\n", encoding="utf-8")
 
 
 def bump_once(
-    repo: Path, *, kustomize: str, image: str, image_tag: str, branch: str, dry_run: bool,
+    repo: Path, *, kustomize: str, image: str, image_tag: str, digest: str,
+    branch: str, dry_run: bool,
 ) -> str:
     """One attempt. Returns 'landed', 'superseded', 'unchanged', or 'retry'."""
     # Retryable, not fatal: a fetch fails for a network blip as readily as for a
@@ -136,7 +184,7 @@ def bump_once(
     if is_superseded(repo, current, image_tag):
         return "superseded"
 
-    apply_bump(repo, kustomize, image, image_tag)
+    apply_bump(repo, kustomize, image, image_tag, digest)
     if _git("diff", "--quiet", cwd=repo, check=False).returncode == 0:
         return "unchanged"
 
@@ -157,6 +205,10 @@ def bump_once(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image-tag", required=True, help="short SHA of the built image")
+    parser.add_argument(
+        "--digest", required=True,
+        help="sha256 digest the release job verified; the deploy pointer pins it",
+    )
     parser.add_argument("--image", default="ghcr.io/hraedon/cert-watch")
     parser.add_argument("--repo", default=".", type=Path)
     parser.add_argument("--kustomize", default="kustomize")
@@ -164,12 +216,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--attempts", default=DEFAULT_ATTEMPTS, type=int)
     parser.add_argument("--dry-run", action="store_true", help="commit locally, do not push")
     args = parser.parse_args(argv)
+    if args.digest.startswith("sha256:") and len(args.digest) == len("sha256:") + 64 \
+            and all(c in "0123456789abcdef" for c in args.digest[7:]):
+        pass
+    else:
+        parser.error(
+            "--digest must be a sha256 digest (sha256:<64 lowercase hex>); "
+            "got " + args.digest
+        )
 
     repo = args.repo.resolve()
     for attempt in range(1, args.attempts + 1):
         outcome = bump_once(
             repo, kustomize=args.kustomize, image=args.image, image_tag=args.image_tag,
-            branch=args.branch, dry_run=args.dry_run,
+            digest=args.digest, branch=args.branch, dry_run=args.dry_run,
         )
         if outcome == "superseded":
             print(f"A newer release already points past {args.image_tag}; withdrawing this bump.")

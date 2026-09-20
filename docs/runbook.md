@@ -142,6 +142,17 @@ Signing is per-digest, so verifying any tag that resolves to a published digest
 works. Images built before this was wired up have no signature and will fail
 verification — that is the expected answer for them, not a tampering signal.
 
+Two caveats to know before drawing conclusions from a tag:
+
+- The release job pushes all tags and *then* signs, so a tag (any tag,
+  including `:latest`) can briefly resolve to an image whose signature is a
+  few seconds away. Verify against a digest — `ghcr.io/hraedon/cert-watch@sha256:…`,
+  taken from the release run's build output — whenever timing matters.
+- The Kubernetes deployment pointer pins the digest the release job verified
+  (`digest:` in `deploy/k8s/kustomization.yaml`; the tag alongside it is only
+  the freshness selector for the pointer-update logic), so Argo CD pulls
+  exactly what was signed regardless of what any tag resolves to afterwards.
+
 **Upgrade procedure (Kubernetes):**
 
 Merge to `main`. CI handles the image build and kustomize tag bump. Argo CD syncs within a minute. The pod restarts with the new image and applies any pending migrations.
