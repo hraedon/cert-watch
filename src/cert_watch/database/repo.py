@@ -31,6 +31,14 @@ class Alert:
     extra_recipients: list[str] = field(default_factory=list)
     hostname: str = ""
     subject: str = ""
+    # Certificate row id the alert first fired against. Survives the row
+    # rewrites an unchanged rescan performs (#57), and is what webhook
+    # dedup keys are built from, so a trigger and its later resolve always
+    # compute the same key (migration 0034, #62). Rows from before 0034 are
+    # backfilled with their cert_id — the row they fired against in every
+    # released version, which is what their open incidents were keyed with;
+    # the runtime NULL fallback exists only for belt-and-braces.
+    trigger_cert_id: str | None = None
     # First cycle in which delivery was deferred because the evidence store
     # refused the write that precedes a send; cleared by any recorded attempt
     # and by every status change (migration 0033, #38).
@@ -287,6 +295,7 @@ class SqliteAlertRepository(AlertRepository):
             alert.error_message,
             alert.hostname,
             alert.subject,
+            alert.trigger_cert_id or alert.cert_id,
         )
         if conn is None:
             with _connect(self.db_path) as conn:
@@ -295,8 +304,8 @@ class SqliteAlertRepository(AlertRepository):
                     INSERT INTO alerts
                     (id, cert_id, alert_type, status, message, threshold_days,
                      extra_recipients, created_at, sent_at, error_message,
-                     hostname, subject)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     hostname, subject, trigger_cert_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     params,
                 )
@@ -307,8 +316,8 @@ class SqliteAlertRepository(AlertRepository):
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
                  extra_recipients, created_at, sent_at, error_message,
-                 hostname, subject)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 hostname, subject, trigger_cert_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params,
             )
@@ -506,6 +515,7 @@ class SqliteAlertRepository(AlertRepository):
             hostname=row["hostname"] if "hostname" in row_dict else "",
             subject=row["subject"] if "subject" in row_dict else "",
             deferred_since=deferred_since,
+            trigger_cert_id=row_dict.get("trigger_cert_id"),
         )
 
 

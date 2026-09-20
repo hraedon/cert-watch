@@ -798,3 +798,46 @@ def test_adapter_has_build_resolve_unknown_kind():
     from cert_watch.alerts import _adapter_has_build_resolve
 
     assert _adapter_has_build_resolve("nonexistent") is False
+
+
+# ---------------------------------------------------------------------------
+# PagerDuty dedup-key stability across row rewrites (#62 / migration 0034)
+# ---------------------------------------------------------------------------
+
+
+class TestPagerDutyDedupKeyStability:
+    """An unchanged rescan rewrites the leaf row (#57) and carries the alert.
+    The dedup key must still be built from the row the alert fired on, or a
+    genuine renewal's resolve will never match the open incident."""
+
+    def test_trigger_keys_on_trigger_cert_id_when_set(self):
+        adapter = PagerDutyAdapter()
+        config = _config(kind="pagerduty", routing_key="rk")
+        alert = _alert(cert_id="cert-2", threshold_days=7)
+        alert.trigger_cert_id = "cert-1"
+        body = json.loads(adapter.build(alert, config).body)
+        assert body["dedup_key"] == _pd_dedup_key("cert-1", "expiry_warning", 7)
+
+    def test_trigger_falls_back_to_cert_id_when_unset(self):
+        adapter = PagerDutyAdapter()
+        config = _config(kind="pagerduty", routing_key="rk")
+        alert = _alert(cert_id="cert-2", threshold_days=7)
+        assert alert.trigger_cert_id is None
+        body = json.loads(adapter.build(alert, config).body)
+        assert body["dedup_key"] == _pd_dedup_key("cert-2", "expiry_warning", 7)
+
+    def test_carried_alert_trigger_and_resolve_agree_after_row_rewrite(self):
+        """Alert fired on cert-1, carried onto rewritten row cert-2: the trigger
+        and the later resolve must hash the same incident."""
+        adapter = PagerDutyAdapter()
+        config = _config(kind="pagerduty", routing_key="rk")
+        alert = _alert(cert_id="cert-2", threshold_days=7)
+        alert.trigger_cert_id = "cert-1"
+        trigger_key = json.loads(adapter.build(alert, config).body)["dedup_key"]
+        resolve = adapter.build_resolve(
+            alert.trigger_cert_id or alert.cert_id,
+            alert.alert_type,
+            alert.threshold_days,
+            config,
+        )
+        assert json.loads(resolve.body)["dedup_key"] == trigger_key

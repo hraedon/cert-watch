@@ -41,7 +41,7 @@ def _estate(tmp_path):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     SqliteHostRepository(db).add(HOSTNAME, tags="team-a")
-    cert_id, _ = replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
+    cert_id, *_ = replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
     return db, SqliteAlertRepository(db), cert_id
 
 
@@ -103,7 +103,7 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
     _evidence(db, alert_id, outcome)
     original = _stored_rows(db, alert_id)
 
-    new_id, replaced_id = replace_scanned(
+    new_id, replaced_id, _ = replace_scanned(
         db, HOSTNAME, 443, _certificate(changed=changed), [], True,
     )
 
@@ -132,7 +132,7 @@ def test_rescan_removes_pending_and_legacy_alerts_but_leaves_other_port_untouche
     # A crash can leave a start observation before the pending status is finalized.
     _evidence(db, pending, None)
     legacy = [_alert(repo, cert_id, status=status) for status in ("pending", "sent", "failed")]
-    other_cert_id, _ = replace_scanned(db, HOSTNAME, 8443, _certificate(), [], True)
+    other_cert_id, *_ = replace_scanned(db, HOSTNAME, 8443, _certificate(), [], True)
     other_pending = _alert(repo, other_cert_id, status="pending")
     other_sent = _alert(repo, other_cert_id)
     _evidence(db, other_sent)
@@ -151,7 +151,7 @@ def test_rescan_removes_pending_and_legacy_alerts_but_leaves_other_port_untouche
 
 def test_rescan_preserves_chain_alerts_as_historical_without_reparenting(tmp_path):
     db, repo, _ = _estate(tmp_path)
-    cert_id, _ = replace_scanned(db, HOSTNAME, 443, _certificate(), [_certificate()], True)
+    cert_id, *_ = replace_scanned(db, HOSTNAME, 443, _certificate(), [_certificate()], True)
     with _connect(db) as conn:
         chain_id = conn.execute(
             "SELECT id FROM certificates WHERE parent_cert_id = ?", (cert_id,),
@@ -199,7 +199,7 @@ def test_retention_purge_still_cascades_for_historical_delivery_evidence(tmp_pat
         _evidence(db, alert_id)
     recent_original = _stored_rows(db, recent_alert)
     # The same certificate, so both alerts are carried onto the rewritten row.
-    new_id, _ = replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
+    new_id, *_ = replace_scanned(db, HOSTNAME, 443, _certificate(), [], True)
     assert set(list_attempts(db, [old_alert, recent_alert])) == {old_alert, recent_alert}
 
     assert purge_old_alerts(db, 0) == 0

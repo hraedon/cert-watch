@@ -832,9 +832,12 @@ def test_migration_0033_adds_deferred_since_and_is_idempotent(db_path: Path) -> 
 
 
 def _mk_pre0033_db(db: Path) -> None:
-    """A database whose ledger says 0001–0032 but whose alerts lack the column."""
+    """A database whose ledger says 0001–0032 and 0034 but whose alerts lack
+    the 0033 column (0034 is stamped so only 0033 stays pending)."""
     ensure_base(db)
-    _stamp_feature_branch_migrations(db, tuple(f"{number:04d}" for number in range(1, 33)))
+    _stamp_feature_branch_migrations(
+        db, tuple(f"{number:04d}" for number in range(1, 33)) + ("0034",)
+    )
 
 
 def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -> None:
@@ -879,6 +882,99 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
     assert run_pending_migrations(db, backup=False) == ["0033"]
 
 
+# ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
+
+
+def test_migration_0034_adds_trigger_cert_id_and_is_idempotent(db_path: Path) -> None:
+    from cert_watch.migrations.m0034_alert_trigger_cert_id import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        assert "trigger_cert_id" in _table_columns(conn, "alerts")
+        upgrade(conn)
+        upgrade(conn)  # must not raise: the column already exists (and re-backfill is a no-op)
+        assert "trigger_cert_id" in _table_columns(conn, "alerts")
+
+
+def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
+    tmp_path: Path,
+) -> None:
+    """Every released version deletes an alert together with its certificate
+    row, so a pre-existing alert's cert_id IS the row it fired against — the
+    id its open PagerDuty incident was keyed with. The carry behaviour of #57
+    ships in the same release as this migration, so without the backfill the
+    first post-upgrade rescan would move the alert to a row id the incident
+    never saw and the renewal resolve would silently miss (#62).
+    """
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "backfill.sqlite3"
+    _mk_pre0034_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message,"
+            " threshold_days, created_at) VALUES ('a1', 'row-that-fired',"
+            " 'expiry_warning', 'pending', 'expiring', 7, '2026-09-01T00:00:00Z')"
+        )
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == ["0034"]
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute(
+            "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
+        ).fetchone()
+    assert row == ("row-that-fired",)
+
+
+def _mk_pre0034_db(db: Path) -> None:
+    """A database whose ledger says 0001–0033 but whose alerts lack the column."""
+    ensure_base(db)
+    _stamp_feature_branch_migrations(db, tuple(f"{number:04d}" for number in range(1, 34)))
+
+
+def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -> None:
+    """UPGRADING.md tells an operator how to apply 0034 by hand. Prove that the
+    documented statements leave the database exactly where startup would."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.m0034_alert_trigger_cert_id import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "manual.sqlite3"
+    _mk_pre0034_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        for statement in MANUAL_SQL:
+            conn.execute(statement)
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == []
+    with sqlite3.connect(str(db)) as conn:
+        assert "trigger_cert_id" in _table_columns(conn, "alerts")
+        ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
+    assert ledger == [("0034",)]
+
+    # The documentation must quote the statement the runner actually executes.
+    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
+    assert COLUMN_SQL in upgrading
+
+
+def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
+    tmp_path: Path,
+) -> None:
+    """An operator who ran only the ALTER gets the ledger row from startup."""
+    import cert_watch.migrations.registry  # noqa: F401 — registers migrations
+    from cert_watch.migrations.m0034_alert_trigger_cert_id import COLUMN_SQL
+    from cert_watch.migrations.runner import run_pending_migrations
+
+    db = tmp_path / "half-manual.sqlite3"
+    _mk_pre0034_db(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute(COLUMN_SQL)
+        conn.commit()
+
+    assert run_pending_migrations(db, backup=False) == ["0034"]
+
+
 def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) -> None:
     """Old UI ids 0029/0030 must not suppress the canonical digest table.
 
@@ -902,7 +998,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033"]
+    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033", "0034"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
@@ -931,7 +1027,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
         db, tuple(f"{number:04d}" for number in range(1, 30))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032", "0033"]
+    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032", "0033", "0034"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {

@@ -75,6 +75,7 @@ def test_v090_upgrades_to_head_without_data_loss(v090_db: Path) -> None:
     assert applied == expected_ids
     assert [i for i in applied if i > "0023"] == [
         "0024", "0025", "0026", "0027", "0028", "0029", "0030", "0031", "0032", "0033",
+        "0034",
     ]
 
     # No data lost.

@@ -38,6 +38,15 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **A genuine renewal now resolves the PagerDuty incident the trigger actually
+  opened.** The dedup key was derived from the certificate row id, but an
+  unchanged rescan rewrites that row (#57) and carries the alert to the new
+  id — so the resolve sent at renewal hashed a row PagerDuty had never seen,
+  and the incident stayed open while the log claimed a resolve. Alerts now
+  persist the row id they fired against (`trigger_cert_id`, migration 0034),
+  and triggers and resolves both key on it; the migration backfills existing
+  alerts with their current row id, which is exactly the id their open
+  incidents were keyed with.
 - **Linter versions are pinned to a family.** `ruff`, `mypy` and `djlint` carried
   open upper bounds, with only `uv.lock` holding them steady — so the next
   routine `uv lock --upgrade` was free to cross a rule-set expansion and redden

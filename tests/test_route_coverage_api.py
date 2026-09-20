@@ -94,7 +94,7 @@ def test_api_cert_history(reload_app, tmp_path, leaf_pem_file):
         not_before=now - timedelta(days=1),
         not_after=now + timedelta(days=90),
     )
-    leaf_id, _ = replace_scanned(db, "hist.example.com", 443, cert, [], True)
+    leaf_id, *_ = replace_scanned(db, "hist.example.com", 443, cert, [], True)
     with TestClient(app_mod.app) as client:
         r = client.get(f"/api/certificates/{leaf_id}/history")
     assert r.status_code == 200

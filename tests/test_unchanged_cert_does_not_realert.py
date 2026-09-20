@@ -114,7 +114,7 @@ def test_the_carried_alert_keeps_its_original_age(tmp_path):
 def test_the_carried_alert_follows_the_certificate_row(tmp_path):
     db, repo = _estate(tmp_path)
     _cycle(db, repo, _cert())
-    new_leaf, _ = replace_scanned(db, HOST, PORT, _cert(), [], True)
+    new_leaf, *_ = replace_scanned(db, HOST, PORT, _cert(), [], True)
 
     rows = _alert_rows(db)
     assert len(rows) == 1

@@ -182,6 +182,52 @@ remove the column as well, either restore the `*-pre-migration-*` backup, or
 with the app stopped run `ALTER TABLE alerts DROP COLUMN deferred_since;` and
 `DELETE FROM schema_version WHERE id = '0033';` (SQLite 3.35 or newer).
 
+### Migration 0034: `alerts.trigger_cert_id` (stable resolve keying, #62)
+
+**What it does.** Adds one nullable column, `alerts.trigger_cert_id`, then
+backfills existing alerts with their current `cert_id`. The column records
+the certificate row id an alert was created against. Since #57 an unchanged
+rescan rewrites the leaf row under a new id and carries its alerts forward;
+webhook dedup keys (PagerDuty) are derived from a row id, so keying a
+renewal's resolve on the alert's *current* row id would never match the
+incident its trigger opened. New alerts stamp the row id they fire against;
+that stamp survives every row rewrite, and resolves key on it.
+
+The backfill is exact for every alert a released version can hold: before
+this release an alert was deleted together with its certificate row, so the
+row an existing alert sits on IS the row it fired against — the id its open
+incident was keyed with. (A database that already ran unreleased #57 code may
+hold a carried alert pointing at a rewritten row; its backfilled key hashes
+that rewritten row id, which is neither better nor worse than the previous
+fallback and only affects incidents raised against unreleased code.) Startup
+applies the migration automatically after the usual pre-migration backup.
+
+**Manual application** (Windows/IIS hosts, or any operator who stages schema
+changes by hand). Stop the app pool or service first, take a backup
+(`cert-watch backup <path>` or copy the file), then run against the database:
+
+```sql
+ALTER TABLE alerts ADD COLUMN trigger_cert_id TEXT;
+UPDATE alerts SET trigger_cert_id = cert_id WHERE trigger_cert_id IS NULL;
+INSERT INTO schema_version (id, description, applied_at)
+VALUES ('0034',
+        'add trigger_cert_id to alerts for stable resolve keying (#62)',
+        strftime('%Y-%m-%dT%H:%M:%SZ', 'now'));
+```
+
+Running only the `ALTER` — or the `ALTER` and the `UPDATE` — is also fine:
+startup sees the column, skips it, runs the idempotent backfill, and records
+`0034` itself. Both paths are covered by `tests/test_migrations.py`.
+
+**Verify** with `PRAGMA table_info(alerts);` (a `trigger_cert_id` row is
+present) and `SELECT id FROM schema_version WHERE id = '0034';` (one row).
+
+**Rollback.** The column is additive and nullable, and the previous release
+never reads it, so rolling back the code needs no database change. To remove
+the column as well, either restore the `*-pre-migration-*` backup, or with
+the app stopped run `ALTER TABLE alerts DROP COLUMN trigger_cert_id;` and
+`DELETE FROM schema_version WHERE id = '0034';` (SQLite 3.35 or newer).
+
 ## Upgrading from a pre-0.9.0 release
 
 There is no full-fidelity data export/import tool. Two options:

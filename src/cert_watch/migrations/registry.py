@@ -90,6 +90,15 @@ from cert_watch.migrations.m0033_alert_deferred_since import (
 from cert_watch.migrations.m0033_alert_deferred_since import (
     upgrade as alert_deferred_since_upgrade,
 )
+from cert_watch.migrations.m0034_alert_trigger_cert_id import (
+    DESCRIPTION as alert_trigger_cert_id_description,
+)
+from cert_watch.migrations.m0034_alert_trigger_cert_id import (
+    MIGRATION_ID as alert_trigger_cert_id_id,
+)
+from cert_watch.migrations.m0034_alert_trigger_cert_id import (
+    upgrade as alert_trigger_cert_id_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -196,4 +205,8 @@ runner.register(
 )
 runner.register(
     alert_deferred_since_id, alert_deferred_since_description, alert_deferred_since_upgrade,
+)
+runner.register(
+    alert_trigger_cert_id_id, alert_trigger_cert_id_description,
+    alert_trigger_cert_id_upgrade,
 )

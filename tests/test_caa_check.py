@@ -243,7 +243,7 @@ def test_compliance_report_caa_metric_collected(tmp_path):
         fingerprint_sha256="a" * 64,
         raw_der=_caa_valid_cert_der(),
     )
-    leaf_id, _ = replace_scanned(db, "example.com", 443, cert, [], True)
+    leaf_id, *_ = replace_scanned(db, "example.com", 443, cert, [], True)
     store_scan_posture(
         db_path=db,
         cert_id=leaf_id,
@@ -288,7 +288,7 @@ def test_compliance_report_caa_metric_not_collected_when_empty(tmp_path):
         fingerprint_sha256="a" * 64,
         raw_der=_caa_valid_cert_der(),
     )
-    leaf_id, _ = replace_scanned(db, "example.com", 443, cert, [], True)
+    leaf_id, *_ = replace_scanned(db, "example.com", 443, cert, [], True)
     store_scan_posture(
         db_path=db,
         cert_id=leaf_id,

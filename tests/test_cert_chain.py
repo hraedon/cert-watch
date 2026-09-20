@@ -396,7 +396,7 @@ def test_chain_status_public_survives_database_round_trip(
 
     init_schema(db)
     repo = SqliteCertificateRepository(db)
-    leaf_id, _ = replace_scanned(
+    leaf_id, *_ = replace_scanned(
         db, "chain-leaf.example.com", 443, leaf, [intermediate, root], None
     )
     stored_leaf = repo.get_by_id(leaf_id)
