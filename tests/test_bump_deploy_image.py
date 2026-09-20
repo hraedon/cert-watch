@@ -101,7 +101,8 @@ def _digest(seed: str = "a") -> str:
     return f"sha256:{seed * 64}"
 
 
-def _run(repo: Path, *, image_tag: str, kustomize: str, attempts: int = 5, digest: str | None = None):
+def _run(repo: Path, *, image_tag: str, kustomize: str, attempts: int = 5,
+         digest: str | None = None):
     return subprocess.run(
         [sys.executable, str(SCRIPT), "--image-tag", image_tag,
          "--digest", digest or _digest(), "--image", IMAGE,
