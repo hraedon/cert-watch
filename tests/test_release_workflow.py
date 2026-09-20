@@ -97,6 +97,7 @@ def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     the tests is >=3.12 by ``requires-python``, so shim it in as ``python3``.
     """
     import os
+    import shutil
     import subprocess
     import sys
 
@@ -119,7 +120,10 @@ def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     git("tag", "v1.2.3")
     shim = tmp_path / "shim"
     shim.mkdir()
-    (shim / "python3").symlink_to(sys.executable)
+    try:
+        (shim / "python3").symlink_to(sys.executable)
+    except OSError:  # Windows without developer mode: a copy shims just as well
+        shutil.copy2(sys.executable, shim / "python3")
 
     output = tmp_path / "outputs"
     env = {**os.environ, "GITHUB_REF_TYPE": "tag", "GITHUB_REF_NAME": "v1.2.3",
