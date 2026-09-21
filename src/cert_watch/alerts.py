@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert as Alert
 from cert_watch.database import AlertRepository
+from cert_watch.email_validation import is_safe_email_address
 from cert_watch.http_client import (
     SSRFBlockedError,
     resolve_smtp_host,
@@ -38,27 +39,7 @@ logger = logging.getLogger("cert_watch.alerts")
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 
 
-def _validate_email(addr: str) -> bool:
-    """Reject email addresses that could inject extra SMTP recipients.
-
-    Parses the address and rejects:
-    - empty/only-display-name results,
-    - any comma or semicolon (prevents header-injection of multiple
-      To:/Cc: recipients via a stored owner_email),
-    - newlines, carriage returns, tabs, or other control characters
-      (prevents SMTP header injection),
-    - malformed addresses without an '@'.
-    """
-    if not addr:
-        return False
-    if any(c in addr for c in (",", ";", "\r", "\n", "\t")):
-        return False
-    if any(ord(c) < 32 for c in addr):
-        return False
-    from email.utils import parseaddr
-
-    _real_name, email = parseaddr(addr)
-    return bool(email and "@" in email)
+_validate_email = is_safe_email_address
 
 
 CHAIN_THRESHOLDS = (30, 14, 7)

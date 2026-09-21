@@ -1,18 +1,33 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from cert_watch.audit import list_audit
+from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.services import host_ownership
 from cert_watch.services.host_ownership import (
+    HostOwnershipTargetError,
     HostOwnershipUpdate,
     HostOwnershipValidationError,
+    resolve_host_ownership_target,
     update_host_ownership,
 )
+from tests._helpers import seed_certificate
+
+
+def _certificate() -> Certificate:
+    now = datetime.now(UTC)
+    return Certificate(
+        subject="CN=owner.example.test",
+        issuer="CN=Test CA",
+        not_before=now - timedelta(days=1),
+        not_after=now + timedelta(days=30),
+    )
 
 
 def test_ownership_update_is_partial_and_audited(tmp_path: Path) -> None:
@@ -93,3 +108,41 @@ def test_audit_failure_rolls_back_ownership_update(
     stored = repo.get(host_id)
     assert stored is not None
     assert stored.owner_name == "Before"
+
+
+def test_resolve_ownership_target_accepts_host_or_certificate_id(tmp_path: Path) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    host_id = repo.add("owner.example.test", port=8443)
+    seed_certificate(
+        db,
+        _certificate(),
+        cert_id="cert-id",
+        hostname="owner.example.test",
+        port=8443,
+    )
+
+    by_host = resolve_host_ownership_target(db, host_id)
+    by_certificate = resolve_host_ownership_target(db, "cert-id")
+
+    assert (by_host.host_id, by_host.source) == (host_id, "host")
+    assert (by_certificate.host_id, by_certificate.source) == (host_id, "certificate")
+
+
+def test_resolve_ownership_target_reports_missing_association(tmp_path: Path) -> None:
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    seed_certificate(
+        db,
+        _certificate(),
+        cert_id="cert-id",
+        source="uploaded",
+        hostname="",
+        port=443,
+    )
+
+    with pytest.raises(HostOwnershipTargetError) as exc_info:
+        resolve_host_ownership_target(db, "cert-id")
+
+    assert exc_info.value.reason == "no_host_associated"

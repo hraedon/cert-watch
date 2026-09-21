@@ -10,10 +10,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit
 from cert_watch.database.connection import _connect, get_write_lock
-from cert_watch.database.host_ops import update_host_ownership as persist_host_ownership
+from cert_watch.database.host_ops import (
+    resolve_host_target,
+)
+from cert_watch.database.host_ops import (
+    update_host_ownership as persist_host_ownership,
+)
+from cert_watch.email_validation import is_safe_email_address
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress", "renewed"})
@@ -43,6 +48,12 @@ class HostOwnership:
     notes: str
 
 
+@dataclass(frozen=True)
+class HostOwnershipTarget:
+    host_id: str
+    source: str
+
+
 class HostOwnershipValidationError(ValueError):
     """The requested ownership update is invalid."""
 
@@ -53,6 +64,14 @@ class HostOwnershipValidationError(ValueError):
 
 class HostNotFoundError(LookupError):
     """The ownership target does not exist."""
+
+
+class HostOwnershipTargetError(LookupError):
+    """A host or certificate id cannot resolve to an ownership target."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason.replace("_", " "))
+        self.reason = reason
 
 
 def runbook_url_error(url: str) -> str | None:
@@ -70,7 +89,7 @@ def _validate(update: HostOwnershipUpdate) -> None:
         if value is not None and not isinstance(value, str):
             raise HostOwnershipValidationError(field_name, f"{field_name} must be a string")
 
-    if update.owner_email and not _validate_email(update.owner_email):
+    if update.owner_email and not is_safe_email_address(update.owner_email):
         raise HostOwnershipValidationError(
             "owner_email", f"invalid email: {update.owner_email}"
         )
@@ -102,6 +121,16 @@ def _validate(update: HostOwnershipUpdate) -> None:
         error = runbook_url_error(update.runbook_url)
         if error:
             raise HostOwnershipValidationError("runbook_url", error)
+
+
+def resolve_host_ownership_target(
+    db_path: str | Path, resource_id: str
+) -> HostOwnershipTarget:
+    """Resolve the legacy certificate-or-host route id to one host target."""
+    lookup = resolve_host_target(_connect(db_path), resource_id)
+    if lookup.host is None:
+        raise HostOwnershipTargetError(lookup.status)
+    return HostOwnershipTarget(host_id=lookup.host.id, source=lookup.status)
 
 
 def update_host_ownership(

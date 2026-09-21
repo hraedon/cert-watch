@@ -7,10 +7,9 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.database import (
     SqliteCertificateRepository,
-    get_write_lock,
     list_cert_history,
     list_dashboard_page,
 )
@@ -22,6 +21,12 @@ from cert_watch.routes.api._shared import (
     _normalize_pagination,
     _pagination_links,
     _tags_from_body,
+)
+from cert_watch.services.resource_metadata import (
+    ResourceMetadataNotFoundError,
+    ResourceMetadataValidationError,
+    normalize_tags,
+    update_certificate_tags,
 )
 from cert_watch.tags import parse_tags
 
@@ -194,7 +199,6 @@ async def api_set_cert_tags(
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
-    repo = SqliteCertificateRepository(db)
     try:
         body = await request.json()
     except ValueError:
@@ -204,28 +208,30 @@ async def api_set_cert_tags(
         return JSONResponse(
             content={"error": "tags must be a string or list of strings"}, status_code=400
         )
+    try:
+        normalized = normalize_tags(tags)
+    except ResourceMetadataValidationError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
+
     from cert_watch.routes._scoped import scope_new_tags_denied
 
-    new_tags_denied = scope_new_tags_denied(request, tags)
+    new_tags_denied = scope_new_tags_denied(request, normalized)
     if new_tags_denied:
         return JSONResponse(status_code=403, content={"error": new_tags_denied})
-    with get_write_lock():
-        if repo.get_by_id(cert_id) is None:
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-        repo.set_tags(cert_id, tags)
-        record_audit(
+    try:
+        result = update_certificate_tags(
             db,
+            cert_id,
+            normalized,
             actor=resolve_actor(request),
-            action="cert.set_tags",
-            target_type="certificate",
-            target_id=cert_id,
-            detail={"tags": tags},
             source_ip=resolve_source_ip(request),
         )
+    except ResourceMetadataNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(
         content={
             "id": cert_id,
-            "tags": parse_tags(tags),
-            "effective_tags": repo.effective_tags(cert_id),
+            "tags": list(result.tags),
+            "effective_tags": list(result.effective_tags),
         }
     )

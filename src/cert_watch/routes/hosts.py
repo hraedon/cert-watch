@@ -41,7 +41,17 @@ from cert_watch.scan_freshness import (
     scan_interval_out_of_range,
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
-from cert_watch.tags import parse_tags
+from cert_watch.services.resource_metadata import (
+    ResourceMetadataNotFoundError,
+    ResourceMetadataValidationError,
+    normalize_tags,
+)
+from cert_watch.services.resource_metadata import (
+    update_host_notes as persist_host_notes,
+)
+from cert_watch.services.resource_metadata import (
+    update_host_tags as persist_host_tags,
+)
 
 SCAN_INTERVAL_ERROR = (
     f"Scan interval must be between {MIN_SCAN_INTERVAL_HOURS} and "
@@ -522,28 +532,22 @@ async def update_host_notes(
     write_err = await require_write_form(request)
     if write_err:
         return write_err
-    if len(notes) > 10000:
-        return RedirectResponse(
-            url=f"/?error={quote('notes too long (max 10000)')}", status_code=303
-        )
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    repo = SqliteHostRepository(db)
-    with get_write_lock():
-        updated = repo.update_notes(host_id, notes)
-    if not updated:
+    try:
+        persist_host_notes(
+            db,
+            host_id,
+            notes,
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.update_notes",
-        target_type="host",
-        target_id=host_id,
-        detail={"notes_length": len(notes)},
-        source_ip=resolve_source_ip(request),
-    )
     logger.info("updated notes for host %s", host_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -555,37 +559,31 @@ async def update_host_tags(
     write_err = await require_write_form(request)
     if write_err:
         return write_err
-    if len(tags) > 2000:
-        return RedirectResponse(
-            url=f"/hosts/{host_id}?error={quote('tags too long (max 2000)')}",
-            status_code=303,
-        )
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    from cert_watch.tags import format_tags
-
-    normalized = format_tags(parse_tags(tags))
+    try:
+        normalized = normalize_tags(tags)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/hosts/{host_id}?error={quote(str(exc))}", status_code=303,
+        )
     from cert_watch.routes._scoped import scope_new_tags_denied
 
     new_tags_denied = scope_new_tags_denied(request, normalized)
     if new_tags_denied:
         return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
-    repo = SqliteHostRepository(db)
-    with get_write_lock():
-        updated = repo.set_tags(host_id, normalized)
-    if not updated:
+    try:
+        persist_host_tags(
+            db,
+            host_id,
+            normalized,
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.update_tags",
-        target_type="host",
-        target_id=host_id,
-        detail={"tags": normalized},
-        source_ip=resolve_source_ip(request),
-    )
     logger.info("updated tags for host %s", host_id)
     return RedirectResponse(url=f"/hosts/{host_id}", status_code=303)
 

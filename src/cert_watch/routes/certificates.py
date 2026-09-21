@@ -13,11 +13,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.cert_chain import (
-    ACTIONABLE_CHAIN_STATUSES,
-    display_urgency,
-    validate_is_ca_certificate,
-)
+from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -30,12 +26,7 @@ from cert_watch.database import (
     get_renewal_history,
     get_write_lock,
 )
-from cert_watch.filters import (
-    compute_urgency,
-    friendly_issuer,
-    issuer_cn,
-    subject_cn,
-)
+from cert_watch.filters import issuer_cn
 from cert_watch.middleware import (
     _extract_client_ip,
     check_rate_limit,
@@ -44,6 +35,7 @@ from cert_watch.middleware import (
     require_auth,
     require_write_form,
 )
+from cert_watch.presenters.certificate_detail import present_certificate_technical_details
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
@@ -55,9 +47,19 @@ from cert_watch.routes.hosts import endpoint_settings_writable
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
+    HostOwnershipTargetError,
     HostOwnershipUpdate,
     HostOwnershipValidationError,
+    resolve_host_ownership_target,
     update_host_ownership,
+)
+from cert_watch.services.resource_metadata import (
+    ResourceMetadataNotFoundError,
+    ResourceMetadataValidationError,
+    normalize_tags,
+)
+from cert_watch.services.resource_metadata import (
+    update_certificate_tags as persist_certificate_tags,
 )
 from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
@@ -164,37 +166,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     if denied:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
 
-    from cryptography import x509
     from cryptography.exceptions import UnsupportedAlgorithm
-    from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
-
-    # Parse key type and signature algorithm from raw DER
-    try:
-        x509_cert = x509.load_der_x509_certificate(cert.raw_der)
-        key_info = x509_cert.public_key()
-        key_type_str = type(key_info).__name__
-        try:
-            if isinstance(key_info, rsa.RSAPublicKey):
-                key_type_str = f"RSA {key_info.key_size}"
-            elif isinstance(key_info, ec.EllipticCurvePublicKey):
-                key_type_str = f"ECDSA {key_info.curve.name}"
-            elif isinstance(key_info, ed25519.Ed25519PublicKey):
-                key_type_str = "Ed25519"
-            elif isinstance(key_info, ed448.Ed448PublicKey):
-                key_type_str = "Ed448"
-        except (ValueError, TypeError):  # crypto key access
-            pass
-        sig_alg = x509_cert.signature_algorithm_oid._name
-        serial = format(x509_cert.serial_number, "X")
-        serial = ":".join(serial[i : i + 2] for i in range(0, len(serial), 2))
-    except (ValueError, TypeError, UnsupportedAlgorithm):  # x509 DER parse
-        key_type_str = "unknown"
-        sig_alg = "unknown"
-        serial = "unknown"
-
-    fp_hex = cert.fingerprint_sha256
-    if ":" not in fp_hex and len(fp_hex) == 64:
-        fp_hex = ":".join(fp_hex[i : i + 2] for i in range(0, len(fp_hex), 2)).upper()
 
     # Get chain (non-leaf certs with this cert as parent)
     with _connect(db) as conn:
@@ -203,57 +175,20 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             (cert_id,),
         ).fetchall()
 
-    chain_certs = []
-    for cr in chain_rows:
-        c = _row_to_cert(cr)
-        chain_days = c.days_until_expiry()
-        # Determine key type from raw DER
-        kt = "unknown"
-        try:
-            x509_chain = x509.load_der_x509_certificate(c.raw_der)
-            k = x509_chain.public_key()
-            kt = type(k).__name__
-            if isinstance(k, rsa.RSAPublicKey):
-                kt = f"RSA {k.key_size}"
-            elif isinstance(k, ec.EllipticCurvePublicKey):
-                kt = f"ECDSA {k.curve.name}"
-            elif isinstance(k, ed25519.Ed25519PublicKey):
-                kt = "Ed25519"
-            elif isinstance(k, ed448.Ed448PublicKey):
-                kt = "Ed448"
-        except (ValueError, TypeError, UnsupportedAlgorithm):  # crypto key access
-            pass
-        chain_certs.append(
-            {
-                "id": cr["id"],
-                "subject": c.subject,
-                "issuer": c.issuer,
-                "not_after": c.not_after.isoformat(),
-                "days_remaining": chain_days,
-                "subject_cn": subject_cn(c.subject),
-                "issuer_org": friendly_issuer(c.issuer),
-                "key_type": kt,
-                "self_issued": c.subject == c.issuer,
-            }
-        )
-
     # Determine chain status
     from cert_watch.cert_chain import chain_status as _chain_status
 
     anchors = SqliteTrustAnchorRepository(db).list_entries()
     chain_certs_objects = [_row_to_cert(cr) for cr in chain_rows]
     cs = _chain_status(cert, chain_certs_objects, anchors)
-
-    # Compute urgency from the cert and chain
-    leaf_days = cert.days_until_expiry()
-    all_chain_days = [ch["days_remaining"] for ch in chain_certs]
-    worst_days = min([leaf_days] + all_chain_days) if all_chain_days else leaf_days
-    urgency = display_urgency(compute_urgency(worst_days), cs)
-
-    # Override urgency if chain issue
-    chain_issue = None
-    if cs in ACTIONABLE_CHAIN_STATUSES:
-        chain_issue = cs
+    technical_view = present_certificate_technical_details(
+        cert,
+        [
+            (row["id"], chain_cert)
+            for row, chain_cert in zip(chain_rows, chain_certs_objects, strict=True)
+        ],
+        cs,
+    )
 
     # Get host info if scanned
     hostname = ""
@@ -423,21 +358,12 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "commit": __commit__,
             **auth_ctx,
             "active_page": "browse",
-            "key_type": key_type_str,
-            "sig_alg": sig_alg,
-            "serial": serial,
-            "fingerprint": fp_hex,
-            "chain": chain_certs,
+            **technical_view.template_context(),
             "chain_status": cs,
             "chain_guidance": describe_chain(cert, chain_certs_objects, cs),
             "chain_posture_changed": bool(
                 _posture and _posture.get("chain_status") != cs
             ),
-            "urgency": urgency,
-            "days_remaining": leaf_days,
-            "subject_cn": subject_cn(cert.subject),
-            "issuer_org": friendly_issuer(cert.issuer),
-            "issuer_cn": issuer_cn(cert.issuer),
             "hostname": hostname,
             "port": port,
             "host_id": host_id,
@@ -447,7 +373,6 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "host_info": host_info,
             "cert_tags": parse_tags(repo.get_tags(cert_id)),
             "effective_tags": repo.effective_tags(cert_id),
-            "chain_issue": chain_issue,
             "renewal_history": renewal_history,
             "renewal_method_label": renewal_method_label,
             "renewal_method_indicator": renewal_method_indicator,
@@ -519,38 +444,31 @@ async def update_certificate_tags(
     write_err = await require_write_form(request)
     if write_err:
         return write_err
-    if len(tags) > 2000:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('tags too long (max 2000)')}",
-            status_code=303,
-        )
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
         return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    repo = SqliteCertificateRepository(db)
-    if repo.get_by_id(cert_id) is None:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-    # Normalize through the tag parser (dedupe/trim) before persisting.
-    from cert_watch.tags import format_tags
-
-    normalized = format_tags(parse_tags(tags))
+    try:
+        normalized = normalize_tags(tags)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
+        )
     from cert_watch.routes._scoped import scope_new_tags_denied
 
     new_tags_denied = scope_new_tags_denied(request, normalized)
     if new_tags_denied:
         return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
-    with get_write_lock():
-        repo.set_tags(cert_id, normalized)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="cert.update_tags",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"tags": normalized},
-        source_ip=resolve_source_ip(request),
-    )
+    try:
+        persist_certificate_tags(
+            db,
+            cert_id,
+            normalized,
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ResourceMetadataNotFoundError:
+        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
     logger.info("updated tags for certificate %s", cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
@@ -574,54 +492,25 @@ async def update_certificate_owner(
         )
     db = _db_path(request)
 
-    # If no cert exists, the cert_id may be a host_id (pending/failed scan).
-    host_repo = SqliteHostRepository(db)
-    host = host_repo.get(cert_id)
-    if host is not None:
-        # Pending host path — check scope against the host_id.
-        denied = scope_write_denied(request, db, host_id=cert_id)
-        if denied:
-            return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-        host_id = cert_id
-        hostname = host.hostname
-        port = host.port
-    else:
-        repo = SqliteCertificateRepository(db)
-        cert = repo.get_by_id(cert_id)
-        if cert is None:
+    try:
+        target = resolve_host_ownership_target(db, cert_id)
+    except HostOwnershipTargetError as exc:
+        if exc.reason == "resource_not_found":
             return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+        message = (
+            "no host associated" if exc.reason == "no_host_associated" else "host not found"
+        )
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
+        )
 
-        denied = scope_write_denied(request, db, cert_id=cert_id)
-        if denied:
-            return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-
-        # Find host by certificate hostname/port
-        hostname = ""
-        port = 443
-        with _connect(db) as conn:
-            row = conn.execute(
-                "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
-            ).fetchone()
-            if row:
-                hostname = row["hostname"] or ""
-                port = row["port"] or 443
-
-        if not hostname:
-            return RedirectResponse(
-                url=f"/certificates/{cert_id}?error={quote('no host associated')}",
-                status_code=303,
-            )
-
-        with _connect(db) as conn:
-            host_row = conn.execute(
-                "SELECT id FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
-            ).fetchone()
-        if not host_row:
-            return RedirectResponse(
-                url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
-            )
-
-        host_id = host_row["id"]
+    scope_target = (
+        {"host_id": target.host_id} if target.source == "host" else {"cert_id": cert_id}
+    )
+    denied = scope_write_denied(request, db, **scope_target)
+    if denied:
+        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
+    host_id = target.host_id
     try:
         update_host_ownership(
             db,
@@ -653,7 +542,7 @@ async def update_certificate_owner(
 async def upload(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
-    password: str | None = Form(None),  # noqa: B008
+    password: str | None = Form(None),
 ) -> RedirectResponse:
     csrf_err = await require_write_form(request)
     if csrf_err:

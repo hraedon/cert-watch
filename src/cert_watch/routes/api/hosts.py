@@ -19,6 +19,13 @@ from cert_watch.services.host_ownership import (
     HostOwnershipValidationError,
     update_host_ownership,
 )
+from cert_watch.services.resource_metadata import (
+    ResourceMetadataNotFoundError,
+    ResourceMetadataValidationError,
+    normalize_tags,
+    update_host_notes,
+    update_host_tags,
+)
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
@@ -49,7 +56,7 @@ def api_list_hosts(
             total = conn.execute(count_sql, count_params).fetchone()[0]
         page, limit, pages, offset = _normalize_pagination(page, limit, total)
         with _connect(db) as conn:
-            host_rows = conn.execute(page_sql, page_params + [limit, offset]).fetchall()
+            host_rows = conn.execute(page_sql, [*page_params, limit, offset]).fetchall()
         page_hosts = [SqliteHostRepository(db)._row_to_host(r) for r in host_rows]
     else:
         repo = SqliteHostRepository(db)
@@ -146,31 +153,26 @@ async def api_update_host_notes(
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
-    repo = SqliteHostRepository(db)
     try:
         body = await request.json()
     except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse(content={"error": "JSON body must be an object"}, status_code=400)
     notes = body.get("notes", "")
-    if not isinstance(notes, str):
-        return JSONResponse(content={"error": "notes must be a string"}, status_code=400)
-    if len(notes) > 10000:
-        return JSONResponse(content={"error": "notes too long (max 10000)"}, status_code=400)
-    with get_write_lock():
-        host = repo.get(host_id)
-        if host is None:
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-        repo.update_notes(host_id, notes)
-        record_audit(
-            _db_path(request),
+    try:
+        updated_notes = update_host_notes(
+            db,
+            host_id,
+            notes,
             actor=resolve_actor(request),
-            action="host.update_notes",
-            target_type="host",
-            target_id=host_id,
-            detail={"notes_length": len(notes)},
             source_ip=resolve_source_ip(request),
         )
-    return JSONResponse(content={"id": host_id, "notes": notes})
+    except ResourceMetadataValidationError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
+    except ResourceMetadataNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    return JSONResponse(content={"id": host_id, "notes": updated_notes})
 
 
 @router.put("/api/hosts/{host_id}/tags")
@@ -181,7 +183,6 @@ async def api_set_host_tags(
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
         return JSONResponse(status_code=403, content={"error": denied})
-    repo = SqliteHostRepository(db)
     try:
         body = await request.json()
     except ValueError:
@@ -193,26 +194,27 @@ async def api_set_host_tags(
         return JSONResponse(
             content={"error": "tags must be a string or list of strings"}, status_code=400
         )
+    try:
+        normalized = normalize_tags(tags)
+    except ResourceMetadataValidationError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
+
     from cert_watch.routes._scoped import scope_new_tags_denied
 
-    new_tags_denied = scope_new_tags_denied(request, tags)
+    new_tags_denied = scope_new_tags_denied(request, normalized)
     if new_tags_denied:
         return JSONResponse(status_code=403, content={"error": new_tags_denied})
-    with get_write_lock():
-        if not repo.set_tags(host_id, tags):
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-        record_audit(
+    try:
+        result = update_host_tags(
             db,
+            host_id,
+            normalized,
             actor=resolve_actor(request),
-            action="host.set_tags",
-            target_type="host",
-            target_id=host_id,
-            detail={"tags": tags},
             source_ip=resolve_source_ip(request),
         )
-    from cert_watch.tags import parse_tags
-
-    return JSONResponse(content={"id": host_id, "tags": parse_tags(tags)})
+    except ResourceMetadataNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    return JSONResponse(content={"id": host_id, "tags": list(result.tags)})
 
 
 @router.get("/api/hosts/{host_id}/issuers")
