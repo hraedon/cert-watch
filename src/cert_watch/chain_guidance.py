@@ -5,6 +5,7 @@ not generally knowable without that certificate. Never fetch or trust it here.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 
 from cert_watch.cert_chain import _issuer_bytes, _subject_bytes
@@ -44,7 +45,7 @@ def describe_chain(leaf: Certificate, chain: list[Certificate], status: str) -> 
         "complete bundle, in issuer order."
     )
     full = [leaf, *chain]
-    for child, parent in zip(full, full[1:], strict=False):
+    for child, parent in itertools.pairwise(full):
         if _issuer_bytes(child) != _subject_bytes(parent):
             present = any(_issuer_bytes(child) == _subject_bytes(c) for c in chain)
             return ChainGuidance(

@@ -1112,7 +1112,7 @@ def test_ldaps_ca_cert_builds_tls_with_cert_required(_mock_ldap3):
         ca_cert="-----BEGIN CERTIFICATE-----\nMIID...\n-----END CERTIFICATE-----",
     )
     _mock_ldap3.Server.return_value = MagicMock()
-    tls, servers = provider._build_tls()
+    _tls, _servers = provider._build_tls()
     _mock_ldap3.Tls.assert_called_once()
     tls_kwargs = _mock_ldap3.Tls.call_args[1]
     assert tls_kwargs.get("validate") is not None
@@ -1293,7 +1293,7 @@ def test_ldap_dc_failover_multiple_servers(_mock_ldap3):
     mock_conn.unbind = MagicMock()
     _mock_ldap3.Connection = MagicMock(return_value=mock_conn)
 
-    tls, servers = provider._build_tls()
+    _tls, servers = provider._build_tls()
     assert len(servers) == 2
     assert _mock_ldap3.Server.call_count == 2
 
@@ -1432,7 +1432,7 @@ def test_ldap_connect_timeout_config(_mock_ldap3):
         connect_timeout=10,
     )
     _mock_ldap3.Server.return_value = MagicMock()
-    _, servers = provider._build_tls()
+    _, _servers = provider._build_tls()
     _mock_ldap3.Server.assert_called_once()
     call_kwargs = _mock_ldap3.Server.call_args[1]
     assert call_kwargs.get("connect_timeout") == 10
@@ -1554,7 +1554,7 @@ class TestOAuthJWKSVerification:
         return mock
 
     def test_valid_token_verified(self):
-        key, jwk, jwks = _generate_rsa_jwk()
+        key, _jwk, jwks = _generate_rsa_jwk()
         provider = _make_oauth_provider(jwks=jwks)
 
         import time
@@ -1782,7 +1782,7 @@ class TestOAuthJWKSVerification:
 
     def test_fetch_jwks_cache_hit_skips_network(self, monkeypatch):
         """_fetch_jwks() returns cached JWKS without hitting the network."""
-        key, _, jwks = _generate_rsa_jwk()
+        _key, _, jwks = _generate_rsa_jwk()
         provider = _make_oauth_provider(jwks=jwks)
         provider._jwks_fetched_at = time.monotonic()
         provider._jwks_ttl = 86400
@@ -1805,8 +1805,8 @@ class TestOAuthJWKSVerification:
 
     def test_fetch_jwks_stale_cache_refreshes(self, monkeypatch):
         """_fetch_jwks() refreshes when cached JWKS exceeds TTL."""
-        key, _, jwks1 = _generate_rsa_jwk()
-        key2, _, jwks2 = _generate_rsa_jwk(kid="key-2")
+        _key, _, jwks1 = _generate_rsa_jwk()
+        _key2, _, jwks2 = _generate_rsa_jwk(kid="key-2")
         provider = _make_oauth_provider(jwks=jwks1)
         provider._jwks_fetched_at = time.monotonic() - 90000
         provider._jwks_ttl = 86400
@@ -1829,8 +1829,8 @@ class TestOAuthJWKSVerification:
 
     def test_fetch_jwks_force_refresh(self, monkeypatch):
         """_fetch_jwks(force=True) bypasses the cache."""
-        key, _, jwks1 = _generate_rsa_jwk()
-        key2, _, jwks2 = _generate_rsa_jwk(kid="new-key")
+        _key, _, jwks1 = _generate_rsa_jwk()
+        _key2, _, jwks2 = _generate_rsa_jwk(kid="new-key")
         provider = _make_oauth_provider(jwks=jwks1)
         provider._jwks_fetched_at = time.monotonic()
         provider._jwks_ttl = 86400
@@ -1854,7 +1854,7 @@ class TestOAuthJWKSVerification:
     @pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
     def test_key_id_missing_triggers_refresh(self, monkeypatch):
         """_verify_id_token() triggers JWKS refresh on invalid key id and retries."""
-        old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
+        _old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
         new_key, _, jwks_new = _generate_rsa_jwk(kid="new-key")
         provider = _make_oauth_provider(jwks=jwks_old)
 
@@ -1889,7 +1889,7 @@ class TestOAuthJWKSVerification:
     @pytest.mark.skipif(not _HAS_JOSE or not _HAS_AUTHLIB, reason="requires joserfc and authlib")
     def test_key_id_retry_authlib_path(self, monkeypatch):
         """Retry path works when joserfc raises InvalidKeyIdError."""
-        old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
+        _old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
         new_key, _, jwks_new = _generate_rsa_jwk(kid="new-key")
         provider = _make_oauth_provider(jwks=jwks_old)
 
@@ -2465,7 +2465,7 @@ class TestValidateClaimsManual:
 class TestJWKSCacheTTL:
 
     def test_jwks_refetched_after_ttl_expires(self, monkeypatch):
-        key, jwk, jwks_old = _generate_rsa_jwk(kid="key-1")
+        _key, _jwk, jwks_old = _generate_rsa_jwk(kid="key-1")
         _, _, jwks_new = _generate_rsa_jwk(kid="key-2")
 
         provider = _make_oauth_provider(jwks=jwks_old)
@@ -2501,7 +2501,7 @@ class TestJWKSCacheTTL:
         assert provider._jwks["keys"][0]["kid"] == "key-2"
 
     def test_jwks_not_refetched_within_ttl(self, monkeypatch):
-        key, _, jwks = _generate_rsa_jwk()
+        _key, _, jwks = _generate_rsa_jwk()
         provider = _make_oauth_provider(jwks=jwks)
         provider._jwks_ttl = 86400
 
@@ -2520,7 +2520,7 @@ class TestJWKSCacheTTL:
         assert call_count == 0
 
     def test_invalid_key_id_triggers_jwks_refetch_and_retry(self, monkeypatch):
-        old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
+        _old_key, _, jwks_old = _generate_rsa_jwk(kid="old-key")
         new_key, _, jwks_new = _generate_rsa_jwk(kid="new-key")
 
         provider = _make_oauth_provider(jwks=jwks_old)

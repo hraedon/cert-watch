@@ -55,7 +55,7 @@ def visual_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
                 if r.status == 200:
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
             time.sleep(0.1)
     else:
         proc.kill()
@@ -139,7 +139,7 @@ def populated_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
             with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
                 if r.status == 200:
                     break
-        except Exception:
+        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
             time.sleep(0.1)
     else:
         proc.kill()

@@ -186,7 +186,7 @@ def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
 
 def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
     """Guard the other half: deferral must not swallow genuine delivery failures."""
-    db, repo, alert = _pending(tmp_path)
+    _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     connection.send_message.side_effect = smtplib.SMTPException("mailbox unavailable")
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
@@ -405,7 +405,7 @@ def test_evidence_outage_mid_retry_does_not_consume_the_alert(monkeypatch, tmp_p
     the exact invariant this path exists to hold. It also reported
     ALERT_MAX_RETRIES attempts when only one had happened.
     """
-    db, repo, alert = _pending(tmp_path)
+    _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("temporary greylist"))
 
     real_begin = begin_attempt
@@ -428,7 +428,7 @@ def test_evidence_outage_mid_retry_does_not_consume_the_alert(monkeypatch, tmp_p
 
 def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch, tmp_path):
     """The operator-visible count must not overstate what was tried."""
-    db, repo, alert = _pending(tmp_path)
+    _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
     stored = repo.list_for_cert(alert.cert_id)[0]
@@ -445,7 +445,7 @@ def test_total_deferral_stops_instead_of_sleeping_the_whole_retry_budget(monkeyp
     cycle for as long as the outage lasts, and block the event loop for the
     duration of an operator's manual flush.
     """
-    db, repo, alert = _pending(tmp_path)
+    _db, repo, _alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     refusals = Mock(side_effect=sqlite3.OperationalError("database is locked"))
     monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", refusals)
@@ -462,7 +462,7 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     attempt count understates a dual-channel estate by half, and is the value
     the message carried before it was derived from what actually ran.
     """
-    db, repo, alert = _pending(tmp_path)
+    _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
     monkeypatch.setattr(
         "cert_watch.alerts.ssrf_safe_urlopen", Mock(side_effect=OSError("webhook unreachable")),

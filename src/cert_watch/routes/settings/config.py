@@ -99,7 +99,7 @@ def _effective_config(
         env_val = os.environ.get(env_name)
         if env_val is not None and env_val.strip():
             result[kv_key] = env_val
-        elif kv_key in kv and kv[kv_key]:
+        elif kv.get(kv_key):
             val = kv[kv_key]
             if encryption_key and kv_key in _SENSITIVE_KEYS:
                 val = fernet_decrypt(val, encryption_key) or ""

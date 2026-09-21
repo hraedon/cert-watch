@@ -149,7 +149,7 @@ def list_audit(
     with _connect(db_path) as conn:
         rows = conn.execute(
             f"SELECT * FROM audit_log{where} ORDER BY ts DESC LIMIT ? OFFSET ?",
-            params + [limit, offset],
+            [*params, limit, offset],
         ).fetchall()
     return [dict(r) for r in rows]
 

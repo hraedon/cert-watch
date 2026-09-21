@@ -75,7 +75,26 @@ target-version = "py313"
 extend-exclude = ["scripts/patina-check.py", "docs/patina"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "SIM"]
+# Keep this explicit list aligned with Ruff's current rule families whenever
+# Ruff is upgraded. RUF100 makes stale suppressions visible instead of letting
+# this list silently turn them into documentation for checks that never run.
+select = [
+    "E", "F", "I", "B", "UP", "SIM", "RUF", "BLE",
+    "C901", "PLR0912", "PLR0915",
+]
+# These characters are intentional prose/math glyphs in documentation, comments,
+# and user-facing strings; they are not used as identifier lookalikes.
+allowed-confusables = ["–", "×", "∪", "›"]
+
+[tool.ruff.lint.mccabe]
+# Structural ratchet: lower this as the current worst function is simplified.
+max-complexity = 43
+
+[tool.ruff.lint.pylint]
+# Structural ratchets measured from the existing tree. They block regression
+# without requiring unrelated large functions to be refactored in this change.
+max-branches = 44
+max-statements = 156
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

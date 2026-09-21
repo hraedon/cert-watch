@@ -26,7 +26,7 @@ def _docker_available() -> bool:
     try:
         subprocess.run(["docker", "version"], capture_output=True, timeout=5, check=True)
         return True
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -130,7 +130,7 @@ class TestMutationVerify:
 
         # Manually run the authenticate logic with use_ssl=True injected.
         # This is what the old broken code did.
-        tls, servers = provider._build_tls()
+        _tls, servers = provider._build_tls()
         pool = servers[0]
         with pytest.raises(TypeError, match="use_ssl"):
             real_ldap3.Connection(

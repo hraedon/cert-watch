@@ -1206,7 +1206,7 @@ class TestPolicyWriteLock:
                         severity="warning", enabled=True,
                     ))
                     save_policy_set_locked(db, current)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — collect worker failures for the assertion
                 errors.append(f"writer_a: {e}")
 
         def writer_b() -> None:
@@ -1219,7 +1219,7 @@ class TestPolicyWriteLock:
                         severity="info", enabled=True,
                     ))
                     save_policy_set_locked(db, current)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — collect worker failures for the assertion
                 errors.append(f"writer_b: {e}")
 
         t1 = threading.Thread(target=writer_a)
@@ -1297,7 +1297,7 @@ class TestPolicyWriteLock:
                         severity=severity, enabled=True,
                     ))
                     save_policy_set_locked(db, current)
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 — collect worker failures for the assertion
                 errors.append(f"{rule_id}: {e}")
 
         t1 = threading.Thread(target=writer, args=("rule_x", "critical"))

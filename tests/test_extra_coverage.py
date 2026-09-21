@@ -341,7 +341,7 @@ def test_pivot_grade_monthly():
         {"date": "2026-02-01", "posture_grade": "F", "count": 1},
         {"date": "2026-02-02", "posture_grade": "C", "count": 4},
     ]
-    result, max_total = _pivot_grade_monthly(rows)
+    result, _max_total = _pivot_grade_monthly(rows)
     assert len(result) == 2
     assert result[0]["month"] == "2026-01"
     assert result[0]["grade_a"] == 7  # A + A+

@@ -75,7 +75,7 @@ def readyz(request: Request) -> JSONResponse:
             checks["last_scan_status"] = scan_row["status"]
         else:
             checks["last_scan"] = "none"
-    except Exception:
+    except Exception:  # noqa: BLE001 — readiness must report arbitrary DB initialization failures
         checks["database"] = "error"
         ok = False
     # DB write capability (only if the DB is reachable) — best-effort: a
@@ -260,7 +260,7 @@ def api_health(request: Request) -> JSONResponse:
     try:
         with _connect(db) as conn:
             conn.execute("SELECT 1").fetchone()
-    except Exception:
+    except Exception:  # noqa: BLE001 — diagnostic endpoint reports DB failure in its payload
         db_ok = False
     if not db_ok or not scan_query_ok or not alert_query_ok or not checks["scheduler_running"]:
         overall = "critical"

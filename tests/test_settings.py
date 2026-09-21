@@ -1744,7 +1744,7 @@ def test_check_ldap_ssrf_allows_private_when_allowed(monkeypatch):
     )
 
     # M8: _check_ldap_ssrf now returns (error_or_None, resolved_ips)
-    err, ips = _check_ldap_ssrf("ldap.internal.example", allow_private=True)
+    err, _ips = _check_ldap_ssrf("ldap.internal.example", allow_private=True)
     assert err is None
 
     blocked, _ = _check_ldap_ssrf("ldap.internal.example", allow_private=False)

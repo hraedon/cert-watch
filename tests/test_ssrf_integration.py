@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import contextlib
 import ipaddress
+import re
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -35,7 +36,7 @@ pytestmark = pytest.mark.integration
 class _QuietHandler(BaseHTTPRequestHandler):
     """Suppress request-log noise during test runs."""
 
-    def log_message(self, fmt: str, *args) -> None:  # noqa: ARG002
+    def log_message(self, fmt: str, *args) -> None:
         pass
 
 
@@ -132,7 +133,9 @@ def _ok_route(handler: BaseHTTPRequestHandler) -> None:
 def test_loopback_ipv4_literal_blocked_with_real_server():
     """A live server on 127.0.0.1 is unreachable because the IPv4 loopback
     range is always blocked, independent of ``allow_private``."""
-    with http_server(_ok_route) as srv, pytest.raises(SSRFBlockedError, match="127.0.0.1"):
+    with http_server(_ok_route) as srv, pytest.raises(
+        SSRFBlockedError, match=re.escape("127.0.0.1")
+    ):
         ssrf_safe_urlopen(server_url(srv))
 
 
@@ -140,17 +143,17 @@ def test_loopback_ipv4_literal_blocked_with_real_server():
 def test_loopback_ipv6_literal_blocked_with_real_server():
     """A live server on ::1 is unreachable because IPv6 loopback is always
     blocked, independent of ``allow_private``."""
-    with _http_server_ipv6() as srv:  # noqa: SIM117
+    with _http_server_ipv6() as srv:
         host, port = srv.server_address[:2]
         url = _server_url(host, port)
-        with pytest.raises(SSRFBlockedError, match="::1"):
+        with pytest.raises(SSRFBlockedError, match=re.escape("::1")):
             ssrf_safe_urlopen(url)
 
 
 def test_loopback_hostname_resolved_blocked():
     """``localhost`` resolves to loopback through the real resolver; the
     request is blocked before any TCP handshake."""
-    with pytest.raises(SSRFBlockedError, match="127.0.0.1"):
+    with pytest.raises(SSRFBlockedError, match=re.escape("127.0.0.1")):
         ssrf_safe_urlopen("http://localhost:12345/")
 
 
@@ -161,7 +164,7 @@ def test_loopback_hostname_resolved_blocked():
 
 def test_link_local_literal_blocked():
     """Literal link-local metadata IPs are blocked before any connection."""
-    with pytest.raises(SSRFBlockedError, match="169.254.169.254"):
+    with pytest.raises(SSRFBlockedError, match=re.escape("169.254.169.254")):
         ssrf_safe_urlopen("http://169.254.169.254/")
 
 
@@ -177,7 +180,7 @@ def test_link_local_resolved_blocked(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
-    with pytest.raises(SSRFBlockedError, match="169.254.1.1"):
+    with pytest.raises(SSRFBlockedError, match=re.escape("169.254.1.1")):
         ssrf_safe_urlopen("http://link.local/", allow_private=True)
 
 
@@ -263,7 +266,7 @@ def test_redirect_to_blocked_private_ip_caught(monkeypatch: pytest.MonkeyPatch):
         _, first_port = srv.server_address
         second_port = first_port
         url = f"http://first.example:{first_port}/redirect"
-        with pytest.raises(SSRFBlockedError, match="10.0.0.5"):
+        with pytest.raises(SSRFBlockedError, match=re.escape("10.0.0.5")):
             ssrf_safe_urlopen(url, allow_private=False)
 
 

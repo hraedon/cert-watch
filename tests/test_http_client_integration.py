@@ -7,6 +7,7 @@ local threaded HTTP/HTTPS servers (no mocks, no external network).
 from __future__ import annotations
 
 import json
+import re
 import socket
 import ssl
 from http.server import BaseHTTPRequestHandler
@@ -184,7 +185,7 @@ def test_redirect_blocked_on_second_hop(monkeypatch):
         url = server_url(srv, path="/redirect").replace("127.0.0.1", "first.example")
         parsed = urlparse(url)
         url = f"http://first.example:{parsed.port}/redirect"
-        with pytest.raises(SSRFBlockedError, match="10.0.0.5"):
+        with pytest.raises(SSRFBlockedError, match=re.escape("10.0.0.5")):
             ssrf_safe_urlopen(
                 url,
                 allow_private=False,
@@ -202,7 +203,7 @@ def test_redirect_allowed_within_loopback_transport(monkeypatch):
             handler.end_headers()
             handler.wfile.write(b"done")
             return
-        host, port = handler.server.server_address
+        _host, port = handler.server.server_address
         handler.send_response(302)
         handler.send_header("Location", f"http://second.example:{port}/done")
         handler.send_header("Content-Length", "0")

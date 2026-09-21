@@ -98,7 +98,7 @@ def test_split_leaf_intermediates_empty():
 
 def test_deduplicate_chain(chain_pem_bytes):
     certs = extract_chain_from_pem(chain_pem_bytes.decode())
-    duped = certs + [certs[0], certs[1]]
+    duped = [*certs, certs[0], certs[1]]
     out = deduplicate_chain(duped)
     assert len(out) == 3
     # Order preserved.
@@ -308,7 +308,7 @@ def test_validate_chain_signatures_forged():
     # Self-signed root.
     root_self_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Forge Root CA")])
-    root_cert, root_key = _issue("Forge Root CA", root_name, root_self_key, root_self_key)
+    root_cert, _root_key = _issue("Forge Root CA", root_name, root_self_key, root_self_key)
 
     # Forged intermediate: issuer NAME == root's subject, but signed by an
     # ATTACKER key, not root_key. Name linkage holds; signature is bogus.

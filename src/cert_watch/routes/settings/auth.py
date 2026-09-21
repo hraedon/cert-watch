@@ -31,7 +31,7 @@ async def save_auth_config(request: Request) -> RedirectResponse:
             request.app.state.auth_provider = auth
             request.app.state.needs_setup = False
             logger.info("settings: auth provider updated to '%s'", s.auth_provider)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — provider rebuild errors become form feedback
             logger.warning("settings: auth provider rebuild failed: %s", exc)
             return RedirectResponse(
                 url=f"/settings?tab=auth&error={str(exc)[:120].replace(chr(10), ' ')}",
@@ -355,7 +355,7 @@ async def test_ldap_connection(
             "ok": False,
             "error": "ldap3 not installed (pip install cert-watch[auth-ldap])",
         })
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — LDAP library/probe failures become JSON feedback
         logger.warning("LDAP test failed: %s", exc)
         return JSONResponse({"ok": False, "error": _sanitize_test_error(str(exc))})
 

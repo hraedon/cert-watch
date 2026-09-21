@@ -32,7 +32,7 @@ from cert_watch.auth.rbac import (
     AuthContext,
     build_auth_context,
 )
-from cert_watch.security import SecurityContext  # noqa: F401  (re-exported)
+from cert_watch.security import SecurityContext  # Re-exported for compatibility.
 
 if TYPE_CHECKING:
     from cert_watch.auth.session import SessionInfo

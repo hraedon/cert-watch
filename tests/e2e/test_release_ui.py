@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 pytest.importorskip("playwright")
-from playwright.sync_api import Page, expect  # noqa: E402
+from playwright.sync_api import Page, expect
 
 MOBILE = {"width": 390, "height": 844}
 

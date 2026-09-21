@@ -836,7 +836,7 @@ def _mk_pre0033_db(db: Path) -> None:
     the 0033 column (0034 is stamped so only 0033 stays pending)."""
     ensure_base(db)
     _stamp_feature_branch_migrations(
-        db, tuple(f"{number:04d}" for number in range(1, 33)) + ("0034",)
+        db, (*tuple(f"{number:04d}" for number in range(1, 33)), "0034")
     )
 
 

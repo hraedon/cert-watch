@@ -155,7 +155,7 @@ def send_renewal_webhook(
             payload.get("hostname", "?"),
         )
         return True
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — external webhook failures are a false result
         logger.warning(
             "renewal webhook delivery failed for %s: %s",
             payload.get("hostname", "?"),

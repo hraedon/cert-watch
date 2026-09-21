@@ -196,7 +196,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         init_schema(base.db_path)
         try:
             s = Settings.from_env_with_kv(base.db_path, encryption_key)
-        except Exception:
+        except Exception:  # noqa: BLE001 — corrupt/unavailable persisted settings fall back to env
             logger.warning("Could not merge kv_store settings, using env-only")
             s = base
         # WI-083: SecurityContext is the single source of truth for signing

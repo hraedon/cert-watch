@@ -127,7 +127,7 @@ class SiemExporter:
             import win32evtlogutil
 
             self._eventlog = (win32evtlogutil, win32evtlog)
-        except Exception:
+        except Exception:  # noqa: BLE001 — pywin32 import/DLL failures disable the optional sink
             logger.warning(
                 "CERT_WATCH_EVENTLOG=1 but pywin32 is unavailable "
                 "(install 'cert-watch[windows]' on Windows); disabling it"

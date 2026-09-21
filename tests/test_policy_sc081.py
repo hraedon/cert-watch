@@ -244,12 +244,15 @@ class TestSC081NoPostureGradeImpact:
             ruleset=pack,
         )
         sc081_vs = [v for v in vs if v.rule_id.startswith("sc081_")]
-        vs = sc081_vs + [PolicyViolation(
-            "key_size_rsa", "critical",
-            "RSA key size 1024 < 2048 bits",
-            "Replace certificate",
-            grade_affecting=True,
-        )]
+        vs = [
+            *sc081_vs,
+            PolicyViolation(
+                "key_size_rsa", "critical",
+                "RSA key size 1024 < 2048 bits",
+                "Replace certificate",
+                grade_affecting=True,
+            ),
+        ]
         assert apply_policy_overrides("A", vs) == "F"
 
     def test_disabled_pack_no_violations(self):

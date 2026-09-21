@@ -113,7 +113,7 @@ def build_attention_queue(
                 "host_count": 1,
             }
 
-            if kind == "pending" or e.get("source") == "scanned" and days is None:
+            if kind == "pending" or (e.get("source") == "scanned" and days is None):
                 if failing:
                     err = e.get("scan_error") or "no certificate retrieved"
                     items.append(

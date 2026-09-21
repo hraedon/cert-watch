@@ -36,7 +36,7 @@ def _docker_available() -> bool:
             ["docker", "version"], capture_output=True, timeout=5, check=True
         )
         return True
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -137,7 +137,7 @@ def _wait_ldap(port: int, timeout: int = 120) -> bool:
                 resp = sock.recv(1024)
                 if b"\x02\x01\x01" in resp:
                     return True
-        except Exception:
+        except OSError:
             pass
         time.sleep(0.5)
     return False

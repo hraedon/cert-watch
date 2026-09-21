@@ -249,7 +249,7 @@ def _run_cycle(
     try:
         scan_fn()
         logger.info("scheduled scan completed")
-    except Exception:  # noqa: BLE001 — failure isolation: one stage failing must not stop the others
+    except Exception:  # Failure isolation: one stage must not stop the others.
         logger.exception("scheduler scan_fn failed")
     if stop_event is not None and stop_event.is_set():
         return
@@ -257,14 +257,14 @@ def _run_cycle(
         try:
             ct_fn()
             logger.info("scheduled CT check completed")
-        except Exception:  # noqa: BLE001 — failure isolation
+        except Exception:  # Failure isolation between scheduler stages.
             logger.exception("scheduler ct_fn failed")
     if stop_event is not None and stop_event.is_set():
         return
     try:
         alert_fn()
         logger.info("scheduled alerts completed")
-    except Exception:  # noqa: BLE001 — failure isolation
+    except Exception:  # Failure isolation between scheduler stages.
         logger.exception("scheduler alert_fn failed")
     if stop_event is not None and stop_event.is_set():
         return
@@ -272,14 +272,14 @@ def _run_cycle(
         try:
             digest_fn()
             logger.info("scheduled digest completed")
-        except Exception:  # noqa: BLE001 — failure isolation
+        except Exception:  # Failure isolation between scheduler stages.
             logger.exception("scheduler digest_fn failed")
     if stop_event is not None and stop_event.is_set():
         return
     if maintenance_fn is not None:
         try:
             maintenance_fn()
-        except Exception:  # noqa: BLE001 — failure isolation
+        except Exception:  # Failure isolation between scheduler stages.
             logger.exception("scheduler maintenance_fn failed")
 
 
@@ -418,7 +418,7 @@ def run_scan_now(
     for hostname, port in hosts:
         try:
             result = scan_fn(hostname, port)
-        except Exception as exc:  # noqa: BLE001 — AC-05
+        except Exception as exc:  # AC-05: isolate this host from the remaining batch.
             logger.exception("scan_fn raised for %s:%s", hostname, port)
             failures += 1
             if db_path is not None:
@@ -458,7 +458,7 @@ def run_scan_now(
                         ),
                         db_path,
                     )
-                except Exception:  # noqa: BLE001 — best-effort event emission; must not crash scan loop
+                except Exception:  # Best-effort event emission must not stop the scan loop.
                     logger.debug("scan_failed event suppressed", exc_info=True)
             continue
 
@@ -466,7 +466,7 @@ def run_scan_now(
         if store_fn is not None:
             try:
                 new_id = store_fn(result)
-            except Exception as exc:  # noqa: BLE001 — pluggable store_fn; failure must not crash scan loop
+            except Exception as exc:  # A pluggable store failure must not stop the scan loop.
                 # Persistence failed: the scan produced a result but nothing was
                 # stored, so it must not count as a successful scan (WI-142
                 # sibling — success was previously bookkept before the store
@@ -623,7 +623,7 @@ def _check_renewal_overdue(
                         "renewal webhook failed for %s:%s — continuing sweep",
                         hostname, port,
                     )
-    except Exception:  # noqa: BLE001 — best-effort overdue check; must not crash scan cycle
+    except Exception:  # Best-effort overdue detection must not stop the scan cycle.
         logger.exception("renewal overdue check failed")
 
 

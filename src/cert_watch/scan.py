@@ -53,9 +53,9 @@ from cert_watch.scan_resolver import (  # noqa: F401
 __all__ = [
     "DEFAULT_SCAN_MAX_OUTPUT_BYTES",
     "DEFAULT_TIMEOUT",
-    "DeferredPostCommit",
     "HSTS_TIMEOUT",
     "STARTTLS_MODES",
+    "DeferredPostCommit",
     "ScanError",
     "ScanOutputTooLargeError",
     "ScannedEntry",

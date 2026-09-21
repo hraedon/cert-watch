@@ -343,7 +343,7 @@ def test_openssl_invalid_base64_skipped(monkeypatch, self_signed_leaf):
     with patch(
         "cert_watch.scan_conn._run_openssl", return_value=(valid_pem + invalid_pem, b"", 0),
     ):
-        chain, proto = _scan_via_openssl("example.com", 443, timeout=1)
+        chain, _proto = _scan_via_openssl("example.com", 443, timeout=1)
     assert len(chain) == 1
     assert chain[0] == self_signed_leaf.der
 
@@ -1690,7 +1690,7 @@ def test_evaluate_and_store_posture_caa_exception(monkeypatch, tmp_path, self_si
         lambda *a, **kw: (_ for _ in ()).throw(OSError("dns timeout")),
     )
 
-    grade, findings, _ = _evaluate_and_store_posture(db, "cert-id", entry)
+    grade, _findings, _ = _evaluate_and_store_posture(db, "cert-id", entry)
     assert grade == "A"
 
 
@@ -1717,7 +1717,7 @@ def test_evaluate_and_store_posture_caa_value_error(monkeypatch, tmp_path, self_
         lambda *a, **kw: (_ for _ in ()).throw(ValueError("bad domain")),
     )
 
-    grade, findings, _ = _evaluate_and_store_posture(db, "cert-id", entry)
+    grade, _findings, _ = _evaluate_and_store_posture(db, "cert-id", entry)
     assert grade == "B"
 
 
@@ -2086,7 +2086,7 @@ def test_run_openssl_stderr_reader_stops_at_cap():
         "sys.stdout.buffer.flush();"
         "sys.stderr.buffer.write(b'y');"
     )
-    stdout, stderr, rc = _run_openssl(
+    stdout, stderr, _rc = _run_openssl(
         [sys.executable, "-c", script],
         b"",
         max_output_bytes=100_000,

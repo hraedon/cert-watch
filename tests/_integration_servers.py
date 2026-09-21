@@ -27,7 +27,7 @@ def free_port() -> int:
 class _QuietHandler(BaseHTTPRequestHandler):
     """Suppress request-log noise during test runs."""
 
-    def log_message(self, fmt: str, *args) -> None:  # noqa: ARG002
+    def log_message(self, fmt: str, *args) -> None:
         pass
 
 

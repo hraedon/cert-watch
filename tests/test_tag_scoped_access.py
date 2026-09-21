@@ -91,7 +91,7 @@ class TestDashboardScopeFiltering:
             _insert_cert(conn, "ca1", "host-a.example.com")
             _insert_cert(conn, "cb1", "host-b.example.com")
 
-        rows, total = list_dashboard_page(db, scope_tags=())
+        _rows, total = list_dashboard_page(db, scope_tags=())
         assert total == 2
 
     def test_scoped_user_non_ascii_casefold_parity(self, db: Path):
@@ -124,7 +124,7 @@ class TestDashboardScopeFiltering:
             _insert_cert(conn, "c1", "de.example.com", source="uploaded")
 
         assert tags_match(["STRASSE"], ["Straße"]) is True
-        rows, total = list_dashboard_grouped_page(
+        _rows, total = list_dashboard_grouped_page(
             db, scope_tags=("Straße",), per_page=0
         )
         assert total == 1

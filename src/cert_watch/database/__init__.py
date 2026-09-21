@@ -241,7 +241,7 @@ from cert_watch.database.users_roles import (
     User,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     # schema
     "init_schema",
     "ensure_base",

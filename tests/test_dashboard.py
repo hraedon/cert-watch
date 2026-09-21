@@ -514,7 +514,7 @@ def test_group_entries_by_fingerprint():
     ]
     result = group_entries_by_fingerprint(entries)
     assert len(result) == 3
-    grouped_entry = [e for e in result if e["kind"] == "grouped"][0]
+    grouped_entry = next(e for e in result if e["kind"] == "grouped")
     assert grouped_entry["host_count"] == 2
     assert grouped_entry["healthy_count"] == 2
     assert len(grouped_entry["hosts"]) == 2

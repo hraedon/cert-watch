@@ -42,13 +42,13 @@ def linux_container(docker_image, waiter):
 
 
 def test_entrypoint_serves_healthz(linux_container):
-    cid, w = linux_container
+    _cid, w = linux_container
     body = w.poll_healthy()
     assert body["status"] == "ok"
 
 
 def test_entrypoint_serves_readyz(linux_container):
-    cid, w = linux_container
+    _cid, w = linux_container
     body = w.poll_ready()
     assert body["status"] == "ok"
     assert body.get("checks", {}).get("database") == "ok"
