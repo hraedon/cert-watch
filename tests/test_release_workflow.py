@@ -87,6 +87,20 @@ def test_windows_smoke_installs_production_preload_prerequisite() -> None:
     assert "warmup.dll" in smoke
 
 
+def test_windows_smoke_exercises_optional_eventlog_sink() -> None:
+    smoke = _workflow("deploy-smoke.yml")
+    install = smoke.index("Install cert-watch via install-windows.ps1")
+    eventlog = smoke.index("Verify optional Windows Event Log sink", install)
+    start = smoke.index("Start app on loopback and wait for health", eventlog)
+
+    assert install < eventlog < start
+    assert ".Path + '[windows]'" in smoke[eventlog:start]
+    assert "import os, win32evtlog, win32evtlogutil" in smoke[eventlog:start]
+    assert "siem.export_audit_event" in smoke[eventlog:start]
+    assert "Get-EventLog -LogName Application" in smoke[eventlog:start]
+    assert "ReplacementStrings" in smoke[eventlog:start]
+
+
 def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     """Exercise the actual workflow shell without building or publishing an image.
 

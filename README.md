@@ -157,12 +157,23 @@ Set `CERT_WATCH_TRUST_PROXY=1` so the client IP (for rate limiting and the audit
 log) is read from IIS's forwarded headers rather than the loopback connection.
 
 To land audit events in the **Windows Event Log** (Application log, where AMA /
-SIEM agents collect them), install the extra and enable the sink:
+SIEM agents collect them), install the optional dependency into the same venv
+created by `install-windows.ps1`, then enable the sink. The installer intentionally
+does not select this extra; run this explicit step on each new installation that
+uses Event Log export:
 
 ```powershell
-uv pip install -e ".[windows]"   # pywin32
+$venvPython = "C:\ProgramData\cert-watch\venv\Scripts\python.exe"
+$package = (Resolve-Path ".").Path + "[windows]"
+& $venvPython -m pip install --upgrade $package   # installs pywin32
 $env:CERT_WATCH_EVENTLOG = "1"
 ```
+
+If `-InstallDir` was used, adjust `$venvPython`. Set
+`CERT_WATCH_EVENTLOG=1` in the IIS or service environment; the process-scoped
+assignment above is only a quick shell example. See the
+[`deploy/iis` runbook](deploy/iis/README.md#optional-windows-event-log-export)
+for deployment details.
 
 ## Upgrading
 
