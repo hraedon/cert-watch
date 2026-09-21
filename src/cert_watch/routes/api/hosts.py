@@ -7,13 +7,18 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import SqliteHostRepository, get_write_lock
 from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
+from cert_watch.services.host_ownership import (
+    HostNotFoundError,
+    HostOwnershipUpdate,
+    HostOwnershipValidationError,
+    update_host_ownership,
+)
 
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
@@ -97,86 +102,31 @@ async def api_update_host_owner(
     except ValueError:
         return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
 
-    valid_statuses = {"pending", "in_progress", "renewed"}
-    renewal_status = body.get("renewal_status")
-    if renewal_status is not None and renewal_status not in valid_statuses:
-        return JSONResponse(
-            content={"error": f"renewal_status must be one of {valid_statuses}"},
-            status_code=400,
-        )
-    for field in ("owner_name", "owner_email", "owner_slack"):
-        val = body.get(field)
-        if val is not None and not isinstance(val, str):
-            return JSONResponse(
-                content={"error": f"{field} must be a string"},
-                status_code=400,
-            )
-    owner_email = body.get("owner_email")
-    if owner_email is not None and owner_email and not _validate_email(owner_email):
-        return JSONResponse(content={"error": f"invalid email: {owner_email}"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse(content={"error": "JSON body must be an object"}, status_code=400)
 
-    valid_methods = {"", "acme", "cert-manager", "manual"}
-    renewal_method = body.get("renewal_method")
-    if renewal_method is not None and renewal_method not in valid_methods:
-        return JSONResponse(
-            content={"error": f"renewal_method must be one of {valid_methods}"},
-            status_code=400,
-        )
-    runbook_url = body.get("runbook_url")
-    if runbook_url is not None:
-        if not isinstance(runbook_url, str):
-            return JSONResponse(
-                content={"error": "runbook_url must be a string"},
-                status_code=400,
-            )
-        from cert_watch.routes.api._shared import _runbook_url_error
-
-        err = _runbook_url_error(runbook_url)
-        if err:
-            return JSONResponse(content={"error": err}, status_code=400)
-
-    repo = SqliteHostRepository(db)
-    with get_write_lock():
-        host = repo.get(host_id)
-        if host is None:
-            return JSONResponse(content={"error": "host not found"}, status_code=404)
-
-        repo.update_owner(
+    try:
+        updated = update_host_ownership(
+            db,
             host_id,
-            owner_name=body.get("owner_name"),
-            owner_email=body.get("owner_email"),
-            owner_slack=body.get("owner_slack"),
-            renewal_status=renewal_status,
-        )
-        if renewal_method is not None or runbook_url is not None:
-            repo.update_renewal(
-                host_id,
-                renewal_method=renewal_method,
-                runbook_url=runbook_url,
-            )
-        record_audit(
-            _db_path(request),
+            HostOwnershipUpdate(
+                owner_name=body.get("owner_name"),
+                owner_email=body.get("owner_email"),
+                owner_slack=body.get("owner_slack"),
+                renewal_status=body.get("renewal_status"),
+                renewal_method=body.get("renewal_method"),
+                runbook_url=body.get("runbook_url"),
+            ),
             actor=resolve_actor(request),
-            action="owner.update",
-            target_type="host",
-            target_id=host_id,
-            detail={
-                "owner_name": body.get("owner_name"),
-                "owner_email": body.get("owner_email"),
-                "owner_slack": body.get("owner_slack"),
-                "renewal_status": renewal_status,
-                "renewal_method": renewal_method,
-            },
             source_ip=resolve_source_ip(request),
         )
-        updated = repo.get(host_id)
-    if updated is None:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail="host not found")
+    except HostOwnershipValidationError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
+    except HostNotFoundError:
+        return JSONResponse(content={"error": "host not found"}, status_code=404)
     return JSONResponse(
         content={
-            "id": host_id,
+            "id": updated.host_id,
             "owner_name": updated.owner_name,
             "owner_email": updated.owner_email,
             "owner_slack": updated.owner_slack,

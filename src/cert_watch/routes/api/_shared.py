@@ -61,13 +61,9 @@ def _runbook_url_error(url: str) -> str | None:
     ``data:`` scheme, so a write-user could otherwise plant a click-to-execute
     stored-XSS payload. Allow empty (clears the field) and http(s) only.
     """
-    if not url.strip():
-        return None
-    from urllib.parse import urlparse
+    from cert_watch.services.host_ownership import runbook_url_error
 
-    if urlparse(url.strip()).scheme.lower() not in ("http", "https"):
-        return "runbook_url must be an http(s) URL"
-    return None
+    return runbook_url_error(url)
 
 
 def _validate_webhook_url(url: str) -> JSONResponse | None:

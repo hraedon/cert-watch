@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.alerts import _validate_email
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.cert_chain import (
     ACTIONABLE_CHAIN_STATUSES,
@@ -54,6 +53,12 @@ from cert_watch.routes._scoped import (
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.services.host_ownership import (
+    HostNotFoundError,
+    HostOwnershipUpdate,
+    HostOwnershipValidationError,
+    update_host_ownership,
+)
 from cert_watch.tags import parse_tags
 from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
@@ -617,50 +622,29 @@ async def update_certificate_owner(
             )
 
         host_id = host_row["id"]
-    valid_methods = {"", "acme", "cert-manager", "manual"}
-    if renewal_method not in valid_methods:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('invalid renewal method')}", status_code=303,
-        )
-    if owner_email and not _validate_email(owner_email):
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote('invalid email')}", status_code=303,
-        )
-    if runbook_url:
-        from cert_watch.routes.api._shared import _runbook_url_error
-        err = _runbook_url_error(runbook_url)
-        if err:
-            return RedirectResponse(
-                url=f"/certificates/{cert_id}?error={quote(err)}", status_code=303,
-            )
-
-    with get_write_lock():
-        host_repo.update_owner(
+    try:
+        update_host_ownership(
+            db,
             host_id,
-            owner_name=owner_name,
-            owner_email=owner_email,
-            owner_slack=owner_slack,
+            HostOwnershipUpdate(
+                owner_name=owner_name,
+                owner_email=owner_email,
+                owner_slack=owner_slack,
+                renewal_method=renewal_method,
+                runbook_url=runbook_url,
+            ),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-        host_repo.update_renewal(
-            host_id,
-            renewal_method=renewal_method,
-            runbook_url=runbook_url,
+    except HostOwnershipValidationError as exc:
+        message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
         )
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="owner.update",
-        target_type="host",
-        target_id=host_id,
-        detail={
-            "owner_name": owner_name,
-            "owner_email": owner_email,
-            "owner_slack": owner_slack,
-            "renewal_method": renewal_method,
-            "runbook_url": runbook_url,
-        },
-        source_ip=resolve_source_ip(request),
-    )
+    except HostNotFoundError:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
+        )
     logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
