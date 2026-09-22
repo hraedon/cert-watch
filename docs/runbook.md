@@ -110,6 +110,49 @@ docker compose -f deploy/compose/docker-compose.yml up -d
 
 The new binary applies migrations on first boot. The pre-migration backup is kept automatically.
 
+### Verifying a published image
+
+Every image the release workflow publishes is signed with keyless cosign and
+carries an SPDX SBOM plus SLSA provenance. Verifying before an upgrade answers
+"did this image come from this repository's release workflow, and what is in
+it" without trusting the registry:
+
+```bash
+# Signature: identity is the release workflow, issued by GitHub's OIDC provider.
+cosign verify ghcr.io/hraedon/cert-watch:latest \
+  --certificate-identity-regexp '^https://github\.com/hraedon/cert-watch/\.github/workflows/release\.yml@refs/(heads/main|tags/v.*)$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# What is inside it, and which commit/workflow built it. The SBOM and
+# provenance are BuildKit attestations carried in the image index, so they are
+# read with buildx rather than cosign.
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
+  --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:latest \
+  --format '{{ json .Provenance }}'
+```
+
+The identity is anchored to `refs/heads/main` and `refs/tags/v*`: an unanchored
+`@` prefix would also accept a signature minted by a run of this same workflow
+file from any other ref. The release job runs the same check against its own
+exact ref, and refuses to move the deployment pointer if either the signature
+or the attestations disagree (`scripts/verify_release_attestations.py`).
+
+Signing is per-digest, so verifying any tag that resolves to a published digest
+works. Images built before this was wired up have no signature and will fail
+verification — that is the expected answer for them, not a tampering signal.
+
+Two caveats to know before drawing conclusions from a tag:
+
+- The release job pushes all tags and *then* signs, so a tag (any tag,
+  including `:latest`) can briefly resolve to an image whose signature is a
+  few seconds away. Verify against a digest — `ghcr.io/hraedon/cert-watch@sha256:…`,
+  taken from the release run's build output — whenever timing matters.
+- The Kubernetes deployment pointer pins the digest the release job verified
+  (`digest:` in `deploy/k8s/kustomization.yaml`; the tag alongside it is only
+  the freshness selector for the pointer-update logic), so Argo CD pulls
+  exactly what was signed regardless of what any tag resolves to afterwards.
+
 **Upgrade procedure (Kubernetes):**
 
 Merge to `main`. CI handles the image build and kustomize tag bump. Argo CD syncs within a minute. The pod restarts with the new image and applies any pending migrations.
