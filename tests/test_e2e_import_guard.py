@@ -17,11 +17,54 @@ from __future__ import annotations
 import ast
 import functools
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 E2E_DIR = Path(__file__).resolve().parent / "e2e"
+
+
+def _is_test_module(path: Path) -> bool:
+    """Both of pytest's default ``python_files`` patterns; the repo overrides neither."""
+    return path.name.startswith("test_") or path.name.endswith("_test.py")
+
+
+def _python_files(root: Path) -> Iterator[Path]:
+    for path in root.rglob("*.py"):
+        if "__pycache__" not in path.parts:
+            yield path
+
+
+def collected_modules(root: Path) -> list[Path]:
+    """Every file under ``root`` pytest would import while collecting."""
+    return sorted(p for p in _python_files(root) if _is_test_module(p))
+
+
+def _executed_statements(tree: ast.Module) -> Iterator[ast.stmt]:
+    """Statements that run at import time, including conditional ones.
+
+    ``if sys.platform == "linux": import playwright`` executes during
+    collection exactly as a plain import does, so descend into anything whose
+    body runs immediately — but not into ``def``/``class``, whose bodies run
+    when called.
+    """
+    for node in tree.body:
+        yield from _executed_in(node)
+
+
+def _executed_in(node: ast.stmt) -> Iterator[ast.stmt]:
+    yield node
+    bodies: list[list[ast.stmt]] = []
+    if isinstance(node, ast.If | ast.For | ast.While):
+        bodies = [node.body, node.orelse]
+    elif isinstance(node, ast.With):
+        bodies = [node.body]
+    elif isinstance(node, ast.Try):
+        bodies = [node.body, node.orelse, node.finalbody, *(h.body for h in node.handlers)]
+    for body in bodies:
+        for child in body:
+            yield from _executed_in(child)
 
 
 def _imported_names(node: ast.AST) -> set[str]:
@@ -43,6 +86,29 @@ def _imported_names(node: ast.AST) -> set[str]:
     return names - {""}
 
 
+def _local_names(node: ast.AST) -> set[str]:
+    """The subset of :func:`_imported_names` that can mean a ``tests/e2e`` module.
+
+    Helpers are matched by bare module name, so an unrelated third-party
+    ``from vendor import _helpers`` would otherwise inherit the local
+    ``_helpers.py``'s Playwright dependency. A local helper can only be reached
+    relatively, through a path naming the package, or as a bare module name.
+    """
+    if isinstance(node, ast.ImportFrom):
+        package = node.module or ""
+        if node.level or "e2e" in package.split(".") or "." not in package:
+            return _imported_names(node)
+        return set()
+    if isinstance(node, ast.Import):
+        return {
+            component
+            for alias in node.names
+            for component in alias.name.split(".")
+            if "." not in alias.name or "e2e" in alias.name.split(".")
+        }
+    return set()
+
+
 @functools.cache
 def _triggers() -> frozenset[str]:
     """Names whose module-level import needs Playwright installed.
@@ -55,11 +121,11 @@ def _triggers() -> frozenset[str]:
     helper_imports = {
         path.stem: {
             name
-            for node in ast.parse(path.read_text(encoding="utf-8")).body
+            for node in _executed_statements(ast.parse(path.read_text(encoding="utf-8")))
             for name in _imported_names(node)
         }
-        for path in E2E_DIR.glob("*.py")
-        if not path.name.startswith("test_")
+        for path in _python_files(E2E_DIR)
+        if not _is_test_module(path)
     }
 
     triggers = {"playwright"}
@@ -73,35 +139,33 @@ def _triggers() -> frozenset[str]:
 
 
 def _guard_line(tree: ast.Module) -> int | None:
-    """Line number of a module-level ``pytest.importorskip("playwright")``."""
-    for node in tree.body:
-        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+    """Line number of ``pytest.importorskip("playwright")``, called or assigned."""
+    for node in _executed_statements(tree):
+        call = node.value if isinstance(node, ast.Expr | ast.Assign | ast.AnnAssign) else None
+        if not isinstance(call, ast.Call):
             continue
-        func = node.value.func
+        func = call.func
         if (
             isinstance(func, ast.Attribute)
             and func.attr == "importorskip"
             and isinstance(func.value, ast.Name)
             and func.value.id == "pytest"
-            and node.value.args
-            and isinstance(node.value.args[0], ast.Constant)
-            and node.value.args[0].value == "playwright"
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and call.args[0].value == "playwright"
         ):
             return node.lineno
     return None
 
 
 def _first_triggering_import(tree: ast.Module) -> tuple[int, str] | None:
-    """Line and name of the earliest import that needs Playwright installed.
-
-    Only module-level imports matter: an import inside a function body runs at
-    call time, long after collection.
-    """
-    for node in tree.body:
-        triggering = sorted(_imported_names(node) & _triggers())
-        if triggering:
-            return node.lineno, triggering[0]
-    return None
+    """Line and name of the earliest import that needs Playwright installed."""
+    found: list[tuple[int, str]] = []
+    for node in _executed_statements(tree):
+        helpers = _local_names(node) & (_triggers() - {"playwright"})
+        names = helpers | ({"playwright"} & _imported_names(node))
+        found.extend((node.lineno, name) for name in sorted(names))
+    return min(found) if found else None
 
 
 @pytest.mark.parametrize(
@@ -117,7 +181,25 @@ def _first_triggering_import(tree: ast.Module) -> tuple[int, str] | None:
 )
 def test_every_spelling_of_a_helper_import_is_recognised(source: str) -> None:
     """The guard is only as good as the import spellings it can see."""
-    assert "_helpers" in _imported_names(ast.parse(source).body[0])
+    assert "_helpers" in _local_names(ast.parse(source).body[0])
+
+
+def test_an_unrelated_package_does_not_inherit_a_helper_name() -> None:
+    """Helpers are matched by bare name; only local-looking paths may match."""
+    assert "_helpers" not in _local_names(ast.parse("from vendor.pkg import _helpers").body[0])
+
+
+def test_a_conditional_module_level_import_still_counts() -> None:
+    """It runs at collection time exactly as an unconditional one does."""
+    source = "import sys\nif sys.platform == 'linux':\n    import playwright\n"
+    assert _first_triggering_import(ast.parse(source)) == (3, "playwright")
+
+    deferred = "def test_x() -> None:\n    import playwright\n"
+    assert _first_triggering_import(ast.parse(deferred)) is None
+
+
+def test_an_assigned_importorskip_is_a_guard() -> None:
+    assert _guard_line(ast.parse('api = pytest.importorskip("playwright")\n')) == 1
 
 
 def test_a_helper_is_a_trigger_for_importing_playwright_not_for_naming_it(
@@ -137,7 +219,21 @@ def test_a_helper_is_a_trigger_for_importing_playwright_not_for_naming_it(
         _triggers.cache_clear()
 
 
-@pytest.mark.parametrize("path", sorted(E2E_DIR.glob("test_*.py")), ids=lambda p: p.name)
+def test_discovery_matches_what_pytest_would_import(tmp_path: Path) -> None:
+    """Both default filename patterns, at any depth — a missed file is a silent hole."""
+    (tmp_path / "nested").mkdir()
+    for name in ("test_top.py", "login_test.py", "nested/test_nested.py", "nested/x_test.py"):
+        (tmp_path / name).write_text("import playwright\n")
+    (tmp_path / "_helper.py").write_text("import playwright\n")
+
+    assert {p.relative_to(tmp_path).as_posix() for p in collected_modules(tmp_path)} == {
+        "test_top.py", "login_test.py", "nested/test_nested.py", "nested/x_test.py",
+    }
+
+
+@pytest.mark.parametrize(
+    "path", collected_modules(E2E_DIR), ids=lambda p: p.relative_to(E2E_DIR).as_posix()
+)
 def test_playwright_import_is_guarded(path: Path) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
     triggering = _first_triggering_import(tree)
