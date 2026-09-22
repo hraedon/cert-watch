@@ -23,6 +23,12 @@ All notable changes to cert-watch are documented in this file.
   The receipt suite runs explicitly in CI, including TLS certificate and hostname
   refusal checks, rather than being silently excluded by integration markers.
 
+### Changed
+- **Audit action names for tag edits are unified.** The HTML and JSON paths now
+  share one service, and both record `host.update_tags` / `cert.update_tags`.
+  The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
+  SIEM filters on the old names need updating.
+
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
   host-scoped concept. Migration 0031 concatenates every non-empty
