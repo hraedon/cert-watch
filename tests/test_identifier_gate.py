@@ -23,8 +23,10 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
+import yaml
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_committed_identifiers.py"
+_WORKFLOW = Path(__file__).resolve().parent.parent / ".github/workflows/identifier-gate.yml"
 
 
 def _load_gate() -> ModuleType:
@@ -546,6 +548,24 @@ def test_configured_gate_catches_an_identifier_in_a_tracked_file(
     assert gate.main([]) == 1
 
 
+def test_redacted_ci_output_omits_identifier_and_source_line(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    identifier = "private-widget-92831"
+    source_line = f"endpoint = https://{identifier}.example.test"
+    _track(repo, "src/settings.py", f"{source_line}\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    assert gate.main(["--redact-output"]) == 1
+
+    err = capsys.readouterr().err
+    assert "src/settings.py:1: denylist entry #1" in err
+    assert identifier not in err
+    assert source_line not in err
+
+
 def test_configured_gate_catches_a_quoted_phrase_in_a_tracked_file(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -881,7 +901,7 @@ def test_unreadable_staged_blob_raises_when_no_collector_is_supplied(
 
 
 # --------------------------------------------------------------------------
-# --tree mode (pull_request_target fork-PR scanning)
+# --tree mode (unpacked-tree scanning)
 # --------------------------------------------------------------------------
 
 
@@ -938,6 +958,80 @@ def test_tree_mode_combines_with_neither_staged_nor_range(
     tree = _write_tree(tmp_path / "pr-tree", {"a.txt": "x\n"})
     with _pytest.raises(SystemExit):
         gate.main(["--tree", str(tree), "--staged"])
+
+
+# --------------------------------------------------------------------------
+# GitHub Actions trust-boundary routing
+# --------------------------------------------------------------------------
+
+
+def _identifier_gate_workflow() -> dict[str, object]:
+    return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
+
+
+def test_workflow_push_with_tracked_pr_tree_scans_full_tree(repo: Path) -> None:
+    """A tracked ``pr-tree/`` directory cannot switch a push to subtree mode."""
+    workflow = _identifier_gate_workflow()
+    job = workflow["jobs"]["identifier-gate"]
+    scan_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Check for committed work-domain identifiers"
+    )
+    command = scan_step["run"]
+
+    identifier = "private-push-value-92831"
+    _track(repo, "scripts/check_committed_identifiers.py", _SCRIPT.read_bytes())
+    _track(repo, "pr-tree/README.md", "clean subtree\n")
+    _track(repo, "outside-pr-tree.txt", f"contains {identifier}\n")
+    env = os.environ.copy()
+    env["GITHUB_EVENT_NAME"] = "push"
+    env["CERT_WATCH_FORBIDDEN_IDENTIFIERS"] = identifier
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "outside-pr-tree.txt:1: denylist entry #1" in result.stderr
+    assert identifier not in result.stderr
+
+
+def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
+    workflow = _identifier_gate_workflow()
+    job = workflow["jobs"]["identifier-gate"]
+    job_condition = job["if"]
+    assert "github.event_name == 'pull_request_target'" in job_condition
+    assert "head.repo.full_name != github.repository" in job_condition
+
+    fork_step = next(
+        step
+        for step in job["steps"]
+        if step.get("name") == "Reject fork pull request without exposing the denylist"
+    )
+    result = subprocess.run(
+        ["bash", "-c", fork_step["run"]],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 1
+    assert "maintainer must re-push" in result.stdout
+
+    non_fork_steps = [step for step in job["steps"] if step is not fork_step]
+    assert non_fork_steps
+    assert all(
+        step.get("if") == "github.event_name != 'pull_request_target'"
+        for step in non_fork_steps
+    )
+    fork_serialized = yaml.safe_dump(fork_step)
+    assert "CERT_WATCH_FORBIDDEN_IDENTIFIERS" not in fork_serialized
+    assert "actions/checkout" not in fork_serialized
 
 
 # --------------------------------------------------------------------------

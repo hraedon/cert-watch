@@ -1,43 +1,41 @@
 name: identifier-gate
-on: [push, pull_request_target]
-# Pull requests use pull_request_target so the job runs in the BASE repo's
-# context: fork PRs receive no secrets under plain `pull_request`, and on a
-# public repo an absent denylist is a hard failure — fork PRs would be blocked
-# for a secret they can never hold. The flip is safe here because the only
-# code that executes comes from the base ref's checkout (this script, and the
-# pinned actions below); the PR's tree is checked out separately and scanned
-# as data, never executed.
+on: [push, pull_request, pull_request_target]
+# Same-repository pull requests use `pull_request`, where the checked-out code
+# and the denylist secret have the same trust boundary. A fork's
+# `pull_request_target` run never receives the secret and never checks out fork
+# content: it fails with instructions for a maintainer to re-push the change to
+# a same-repository branch. This intentionally refuses to make the denylist a
+# queryable oracle for fork authors.
 permissions:
   contents: read
 jobs:
   identifier-gate:
+    # Do not duplicate same-repository PR scans under pull_request_target, and
+    # do not run the secretless pull_request job for forks. Event metadata—not
+    # repository-controlled filesystem state—selects the path.
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository) ||
+      (github.event_name == 'pull_request_target' &&
+       github.event.pull_request.head.repo.full_name != github.repository)
     runs-on: ubuntu-latest
     steps:
-      # Base ref checkout: trusted. This copy of the script is the only code
-      # the denylist secret ever reaches.
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-      - name: Check out the pull request tree (untrusted content only)
+      - name: Reject fork pull request without exposing the denylist
         if: github.event_name == 'pull_request_target'
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          repository: ${{ github.event.pull_request.head.repo.full_name }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          path: pr-tree
-          persist-credentials: false
+        run: |
+          echo "::error::Fork pull requests cannot be scanned with the private identifier denylist."
+          echo "A maintainer must re-push this change to a same-repository branch for scanning."
+          exit 1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        if: github.event_name != 'pull_request_target'
       - name: Set up Python
+        if: github.event_name != 'pull_request_target'
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.12"
       - name: Check for committed work-domain identifiers
+        if: github.event_name != 'pull_request_target'
         env:
           CERT_WATCH_FORBIDDEN_IDENTIFIERS: ${{ secrets.CERT_WATCH_FORBIDDEN_IDENTIFIERS }}
-        run: |
-          set -euo pipefail
-          # Dispatch on the event, not on directory presence: a committed
-          # pr-tree/ directory must never be able to redirect a push run into
-          # scanning only itself.
-          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request_target" ]; then
-            python3 scripts/check_committed_identifiers.py --tree pr-tree
-          else
-            python3 scripts/check_committed_identifiers.py
-          fi
+        run: python3 scripts/check_committed_identifiers.py --redact-output
