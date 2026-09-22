@@ -736,7 +736,11 @@ def _login_admin(client, monkeypatch):
     }
     req = StRequest(scope)
     security = _request_security(req)
-    token = create_session("admin", security, version=0)
+    # Mint the session exactly as a break-glass login does (reserved claim),
+    # so it stays admin once a role map (e.g. one saved from the UI) is live.
+    from cert_watch.auth.rbac import BREAK_GLASS_CLAIM
+
+    token = create_session("admin", security, version=0, roles=[BREAK_GLASS_CLAIM])
     client.cookies.set(SESSION_COOKIE, token)
     return client
 

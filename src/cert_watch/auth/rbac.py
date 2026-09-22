@@ -1,9 +1,16 @@
 """Role-Based Access Control for cert-watch (Plan 035).
 
-When no role map is configured, all authenticated users get full access
-(backward compat).  When CERT_WATCH_ROLE_MAP (JSON) is set, users
-are mapped to roles (admin / operator / viewer) based on IdP groups/roles,
-and permissions are derived from the ROLE_PERMISSIONS table.
+When no role map is configured, all authenticated *directory* (LDAP/OAuth)
+users get full access (backward compat).  When a role map is set (the
+CERT_WATCH_ROLE_MAP JSON merged with the Settings → Roles mapping), directory
+users are mapped to roles (admin / operator / viewer) based on IdP
+groups/roles, and permissions are derived from the ROLE_PERMISSIONS table.
+
+Local accounts never depend on the role map: a session minted by the users
+table resolves from that user's assigned role on every request (no role, or a
+deleted role, means viewer), and the break-glass admin is always admin. Which
+of the three a session is travels as a reserved claim that IdP claims can
+never carry (see :func:`claims_for_session`).
 
 The central concept is the ``AuthContext`` — a per-request object that
 carries the resolved roles and permissions for the current user.
@@ -17,7 +24,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from cert_watch.database.users_roles import SqliteRoleRepository
+    from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
 
 
 # Valid RBAC tiers.  The team-role name is now decoupled from the permission
@@ -43,6 +50,13 @@ class Permission(StrEnum):
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"
+
+# Reserved session claims (stored in the session's roles list) naming how the
+# session was minted. The "cw:" prefix is stripped from IdP claims before they
+# reach the cookie, so only the login route can set them.
+RESERVED_CLAIM_PREFIX = "cw:"
+LOCAL_USER_CLAIM = "cw:local-user"
+BREAK_GLASS_CLAIM = "cw:break-glass"
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     ROLE_ADMIN: frozenset(Permission),
@@ -135,7 +149,11 @@ def claims_for_session(
         relevant_groups.update(mapping.get("groups", []))
         relevant_roles.update(mapping.get("roles", []))
     groups = [g for g in (user_groups or []) if g in relevant_groups]
-    roles = [r for r in (user_roles or []) if r in relevant_roles]
+    # Reserved claims mark local sessions; an IdP must never be able to mint one.
+    roles = [
+        r for r in (user_roles or [])
+        if r in relevant_roles and not r.startswith(RESERVED_CLAIM_PREFIX)
+    ]
     return groups, roles
 
 
@@ -163,6 +181,10 @@ class AuthContext:
     # role contributes its tier *for its tags* here instead of raising the
     # global tier — so "operator for prod, viewer for edge" is expressible.
     tag_tiers: dict[str, str] = field(default_factory=dict)
+    # True for a users-table account: its role decides writes and admin even
+    # with no role map, so the legacy write_users/admin_users lists (which
+    # only apply to the no-role-map directory path) must not widen it.
+    local_account: bool = False
 
     @classmethod
     def from_roles(cls, username: str, roles: list[str]) -> AuthContext:
@@ -179,6 +201,7 @@ class AuthContext:
         scope_tag: str = "",
         email: str = "",
         tag_tiers: dict[str, str] | None = None,
+        local_account: bool = False,
     ) -> AuthContext:
         """Build a context from the explicit permission tier (WI-050)."""
         tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
@@ -190,6 +213,7 @@ class AuthContext:
             scope_tag=scope_tag,
             email=email,
             tag_tiers=dict(tag_tiers or {}),
+            local_account=local_account,
         )
 
     @classmethod
@@ -328,21 +352,60 @@ def _resolve_tier_and_scope(
     return chosen_tier, format_tags(scope_tags), tag_tiers
 
 
+def _local_user_context(
+    username: str,
+    role_repo: SqliteRoleRepository | None,
+    user_repo: SqliteUserRepository | None,
+) -> AuthContext:
+    """AuthContext for a users-table account, from its assigned role.
+
+    The role is read on every request, so a role change or deletion applies
+    to live sessions. No user row, no role, a dangling ``role_id`` or an
+    unreadable database all resolve to viewer -- never to full access.
+    """
+    viewer = AuthContext.from_tier(username, tier=ROLE_VIEWER, local_account=True)
+    if user_repo is None or role_repo is None:
+        return viewer
+    try:
+        user = user_repo.get_by_username(username)
+        role = role_repo.get(user.role_id) if user is not None and user.role_id else None
+        if user is None or role is None:
+            return viewer
+        overrides = role_repo.list_tag_tiers(role.id)
+    except (OSError, sqlite3.Error):
+        return viewer
+    tier, scope, tag_tiers = _resolve_tier_and_scope(
+        [role.name], {role.name: (role.permission_tier, role.scope_tag, overrides)},
+    )
+    return AuthContext.from_tier(
+        username, tier=tier, roles=[role.name], scope_tag=scope,
+        email=user.email, tag_tiers=tag_tiers, local_account=True,
+    )
+
+
 def build_auth_context(
     username: str,
     user_groups: list[str],
     user_roles: list[str],
     role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None = None,
+    user_repo: SqliteUserRepository | None = None,
 ) -> AuthContext:
     """Build an AuthContext by resolving IdP groups/roles to cert-watch roles.
 
-    If *role_map* is empty, returns a full-access context (backward compat).
+    Local sessions come first and ignore *role_map*: the break-glass admin is
+    always admin, and a users-table account resolves from its assigned role
+    (see :func:`_local_user_context`).
 
-    When *role_repo* is supplied, the permission tier and scope tag are read
-    from the Role row (WI-050). Otherwise the legacy role-name → permission
-    mapping is used.
+    For directory users: if *role_map* is empty, returns a full-access context
+    (backward compat). When *role_repo* is supplied, the permission tier and
+    scope tag are read from the Role row (WI-050). Otherwise the legacy
+    role-name → permission mapping is used.
     """
+    if BREAK_GLASS_CLAIM in user_roles:
+        return AuthContext.full_access(username)
+    if LOCAL_USER_CLAIM in user_roles:
+        return _local_user_context(username, role_repo, user_repo)
     if not role_map:
         return AuthContext.full_access(username)
 

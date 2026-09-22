@@ -175,6 +175,7 @@ class LocalAdminProvider(AuthProvider):
                             email=user.email,
                             groups=[role_name] if role_name else [],
                             roles=[role_name] if role_name else [],
+                            local_account="user",
                         )
                     # Wrong password for DB user — spend dummy time then fail
                     self._dummy_verify(password, user.password_hash)
@@ -195,6 +196,7 @@ class LocalAdminProvider(AuthProvider):
             email="",
             groups=["admins"],
             roles=["admin"],
+            local_account="break-glass",
         )
 
     def start_oauth_flow(self, redirect_uri: str) -> AuthResult:

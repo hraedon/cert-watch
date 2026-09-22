@@ -13,13 +13,11 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth import (
     SESSION_COOKIE,
-    LocalAdminProvider,
     NoAuthProvider,
-    _CompositeProvider,
     check_authz,
     create_session,
 )
-from cert_watch.auth.rbac import claims_for_session
+from cert_watch.auth.rbac import BREAK_GLASS_CLAIM, LOCAL_USER_CLAIM, claims_for_session
 from cert_watch.database import bump_session_version, get_session_version
 from cert_watch.middleware import (
     _COOKIE_SECURE,
@@ -96,9 +94,9 @@ async def login_submit(
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
         )
-    is_break_glass = isinstance(auth, LocalAdminProvider) or (
-        isinstance(auth, _CompositeProvider) and result.username == auth._local.username
-    )
+    # Decided by which provider authenticated, not by the username: a directory
+    # user who shares the break-glass name is not break-glass.
+    is_break_glass = result.local_account == "break-glass"
     if is_break_glass:
         logger.warning("Break-glass login by local admin: %s", result.username)
         try:
@@ -116,7 +114,7 @@ async def login_submit(
                 )
         except OSError:
             logger.debug("audit log write failed for break-glass login", exc_info=True)
-    else:
+    elif not result.local_account:
         settings = getattr(request.app.state, "settings", None)
         allowed_groups = list(settings.allowed_groups) if settings else []
         allowed_roles = list(settings.allowed_roles) if settings else []
@@ -140,6 +138,13 @@ async def login_submit(
     # post-login redirect loop (see claims_for_session).
     role_map = getattr(settings, "role_map", {}) or {}
     stored_groups, stored_roles = claims_for_session(result.groups, result.roles, role_map)
+    if result.local_account:
+        # Local accounts are authorized from the users/roles tables (or as
+        # break-glass admin) on every request, never from the role map.
+        stored_groups = []
+        stored_roles = [
+            BREAK_GLASS_CLAIM if result.local_account == "break-glass" else LOCAL_USER_CLAIM
+        ]
     token = create_session(
         result.username,
         _request_security(request),

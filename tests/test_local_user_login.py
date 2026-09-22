@@ -10,16 +10,18 @@ forms, and the new user then logs in through ``POST /login``.
 
 from __future__ import annotations
 
-import json
 import re
 
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import SESSION_COOKIE, _scrypt_hash, decode_session
 from cert_watch.auth.rbac import build_auth_context
-from cert_watch.database import SqliteRoleRepository, init_schema, kv_set
-
-_ROLE_MAP = {"admin": {"roles": ["admin"]}, "ops": {"roles": ["ops"]}}
+from cert_watch.database import (
+    SqliteRoleRepository,
+    SqliteUserRepository,
+    init_schema,
+    kv_set,
+)
 
 
 def _seed_local_admin(tmp_path):
@@ -53,7 +55,6 @@ def test_user_created_in_settings_can_log_in_with_role_tier(
     reload_app, tmp_path, monkeypatch, login_csrf
 ):
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-    monkeypatch.setenv("CERT_WATCH_ROLE_MAP", json.dumps(_ROLE_MAP))
     db = _seed_local_admin(tmp_path)
     _no_secure_cookies(monkeypatch)
     app_mod = reload_app()
@@ -86,9 +87,10 @@ def test_user_created_in_settings_can_log_in_with_role_tier(
         raw = client.cookies.get(SESSION_COOKIE).strip('"')
         info = decode_session(raw, client.app.state.security)
         assert info is not None and info.username == "jsmith"
+        # No role map is configured: the local account's own role decides.
         ctx = build_auth_context(
-            info.username, info.groups, info.roles, _ROLE_MAP,
-            role_repo=SqliteRoleRepository(db),
+            info.username, info.groups, info.roles, {},
+            role_repo=SqliteRoleRepository(db), user_repo=SqliteUserRepository(db),
         )
         assert ctx.tier == "operator"
         assert ctx.may_write() and not ctx.is_admin

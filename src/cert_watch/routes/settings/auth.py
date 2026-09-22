@@ -16,7 +16,12 @@ from cert_watch.middleware import check_csrf, require_admin_form, require_admin_
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
 from cert_watch.routes.settings.config import _AUTH_KEYS
-from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section, logger
+from cert_watch.routes.settings.core import (
+    _rebuild_settings,
+    _sanitize_test_error,
+    _save_config_section,
+    logger,
+)
 
 router = APIRouter()
 
@@ -94,6 +99,9 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
 
     with get_write_lock():
         kv_set(db, "ldap_role_map", json.dumps(map_data))
+    # Apply the mapping now: it is part of Settings.role_map (merged in
+    # Settings.from_env_with_kv), which request-time RBAC reads.
+    _rebuild_settings(request, db)
     return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 

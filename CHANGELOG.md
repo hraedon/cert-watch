@@ -46,8 +46,8 @@ All notable changes to cert-watch are documented in this file.
 ### Fixed
 - **Accounts created in Settings → Users can log in (#59).** The auth provider
   was built without the database path, so the users table was never consulted
-  and every locally created account was rejected. A local user's role tier
-  applies through `CERT_WATCH_ROLE_MAP`, like any other role.
+  and every locally created account was rejected. Each account is authorized
+  by its assigned role (see Security).
 - **OAuth/Entra sign-in works (#58).** `/auth/login` was not a public path, so
   the "Sign in with …" button bounced back to `/login`; and the OAuth state
   cookie was `SameSite=Strict`, which browsers withhold on the IdP's cross-site
@@ -329,6 +329,18 @@ All notable changes to cert-watch are documented in this file.
   `deploy/iis/README.md`.
 
 ### Security
+- **Local accounts are authorized by their assigned role, not the role map.**
+  With #59 fixed, accounts created in Settings → Users would have received
+  full access whenever no `CERT_WATCH_ROLE_MAP` was set. A users-table
+  session now resolves from its own role on every request (no role, or a
+  deleted role, means read-only) and ignores the legacy write/admin user
+  lists; the break-glass admin is always admin. How a session was minted
+  travels as a reserved claim an IdP cannot supply, so a directory user who
+  shares a local username gets neither its role nor break-glass status.
+- **The Settings → Roles IdP mapping takes effect.** It was stored but never
+  read, so directory users kept full access while the UI showed them mapped.
+  It is now merged into the role map (env `CERT_WATCH_ROLE_MAP` wins per role)
+  at startup and when saved. See UPGRADING.md before saving a first mapping.
 - **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
   and `POST /trust-anchors/{id}/delete` required only write access on some tag,
   so a tag-scoped operator could install or remove a fleet-wide trust anchor.

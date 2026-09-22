@@ -450,5 +450,16 @@ class Settings:
         When *encryption_key* is set, sensitive kv_store values with the
         ``enc:v1:`` prefix are transparently decrypted (BC-082).
         """
+        import dataclasses
+
         from cert_watch.config.kv_loader import _merge_kv_settings
-        return _merge_kv_settings(cls.from_env(), db_path, encryption_key)
+        from cert_watch.database import kv_get
+
+        merged = _merge_kv_settings(cls.from_env(), db_path, encryption_key)
+        # The role mapping saved from Settings → Roles (kv ``ldap_role_map``)
+        # was stored but never read, so the UI's mapping had no effect. Merge it
+        # per role, with CERT_WATCH_ROLE_MAP winning for any role it names.
+        ui_map = _parse_role_map(kv_get(db_path, "ldap_role_map") or "")
+        if not ui_map:
+            return merged
+        return dataclasses.replace(merged, role_map={**ui_map, **merged.role_map})
