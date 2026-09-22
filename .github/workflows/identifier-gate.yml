@@ -33,7 +33,10 @@ jobs:
           CERT_WATCH_FORBIDDEN_IDENTIFIERS: ${{ secrets.CERT_WATCH_FORBIDDEN_IDENTIFIERS }}
         run: |
           set -euo pipefail
-          if [ -d pr-tree ]; then
+          # Dispatch on the event, not on directory presence: a committed
+          # pr-tree/ directory must never be able to redirect a push run into
+          # scanning only itself.
+          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request_target" ]; then
             python3 scripts/check_committed_identifiers.py --tree pr-tree
           else
             python3 scripts/check_committed_identifiers.py

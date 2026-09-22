@@ -964,21 +964,25 @@ def test_vim_collision_plane_does_not_catch_plain_extension_files() -> None:
 _HOOKS = Path(__file__).resolve().parents[1] / "githooks"
 
 
-def _run_hook(
-    repo: Path, hook: str, home: Path, *args: str
-) -> subprocess.CompletedProcess[str]:
-    """Run a repo's hook with the denylist truly absent: no env var, no
-    per-repo file, and a HOME that cannot contain the shared one."""
+def _run_hook_env(home: Path) -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
         if key != "CERT_WATCH_FORBIDDEN_IDENTIFIERS"
     }
     env["HOME"] = str(home)
+    return env
+
+
+def _run_hook(
+    repo: Path, hook: str, home: Path, *args: str
+) -> subprocess.CompletedProcess[str]:
+    """Run a repo's hook with the denylist truly absent: no env var, no
+    per-repo file, and a HOME that cannot contain the shared one."""
     return subprocess.run(
         ["bash", str(repo / "githooks" / hook), *args],
         cwd=repo,
-        env=env,
+        env=_run_hook_env(home),
         capture_output=True,
         text=True,
         check=False,
@@ -1045,3 +1049,81 @@ def test_commit_msg_hook_asks_the_gate_instead_of_short_circuiting(
     env_dir.write_text("widgetcorp\n", encoding="utf-8")
     result = _run_hook(hooked_repo, "commit-msg", tmp_path / "home", str(message))
     assert result.returncode == 1
+
+
+def _pre_push_stdin(sha: str) -> str:
+    zero = "0" * 40
+    return f"refs/heads/main {sha} refs/heads/main {zero}\n"
+
+
+def _prepare_pre_push_repo(hooked_repo: Path) -> str:
+    """A repo ready for a pre-push run: publication declaration, origin remote,
+    and the plumbing script installed. Returns the HEAD sha."""
+    shutil.copy2(
+        _SCRIPT.parent / "check_publication_plumbing.py",
+        hooked_repo / "scripts" / "check_publication_plumbing.py",
+    )
+    (hooked_repo / "publication.toml").write_text(
+        '[publication]\nremote_owner = "someone"\n'
+        'author_email = "t@example.invalid"\nvisibility = "public"\n',
+        encoding="utf-8",
+    )
+    _track(hooked_repo, "publication.toml", (hooked_repo / "publication.toml").read_text())
+    _track(hooked_repo, "README.md", "hello\n")
+    _commit(hooked_repo, "init publication")
+    subprocess.run(
+        ["git", "remote", "add", "origin", "https://github.com/someone/repo.git"],
+        cwd=hooked_repo, check=True,
+    )
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=hooked_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_pre_push_hook_scans_commit_messages_without_short_circuit(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    """The pre-push message scan must run even when the denylist resolves only
+    from a local file -- previously the hook skipped it entirely."""
+    _prepare_pre_push_repo(hooked_repo)
+    _track(hooked_repo, "feature.md", "new feature\n")
+    _commit(hooked_repo, "wire up the widgetcorp endpoint")
+    (hooked_repo / ".identifiers-denylist.local").write_text(
+        "widgetcorp\n", encoding="utf-8",
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=hooked_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+
+    # Feed stdin the ref update git provides at push time...
+    result = subprocess.run(
+        ["bash", str(hooked_repo / "githooks" / "pre-push"),
+         "origin", "https://github.com/someone/repo.git"],
+        cwd=hooked_repo,
+        env=_run_hook_env(tmp_path / "home"),
+        input=_pre_push_stdin(head),
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1
+    assert "widgetcorp" in result.stderr
+    assert "commit message" in result.stderr
+
+
+def test_pre_push_hook_fails_closed_for_public_repo_without_a_denylist(
+    hooked_repo: Path, tmp_path: Path
+) -> None:
+    """visibility=\"public\" + no denylist = the gate may not pass. pre-push must
+    surface that, not skip the scan and publish anyway."""
+    head = _prepare_pre_push_repo(hooked_repo)
+    result = subprocess.run(
+        ["bash", str(hooked_repo / "githooks" / "pre-push"),
+         "origin", "https://github.com/someone/repo.git"],
+        cwd=hooked_repo,
+        env=_run_hook_env(tmp_path / "home"),
+        input=_pre_push_stdin(head),
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 1
+    assert "IDENTIFIERS" in result.stderr
