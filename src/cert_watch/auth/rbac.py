@@ -230,8 +230,10 @@ class AuthContext:
         if self.may_write():
             return True
         order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
+        # Tags match case-insensitively, as everywhere else in scope (#69).
+        folded = {t.casefold(): tier for t, tier in self.tag_tiers.items()}
         return any(
-            order.get(self.tag_tiers.get(t, ROLE_VIEWER), 0) >= 1
+            order.get(folded.get(t.casefold(), ROLE_VIEWER), 0) >= 1
             for t in resource_tags
         )
 

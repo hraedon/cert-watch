@@ -220,3 +220,40 @@ def test_callback_happy_path_mints_session(monkeypatch, tmp_path):
     # …and the one-time state cookie is cleared.
     set_cookie = " ".join(r.headers.get_list("set-cookie"))
     assert STATE_COOKIE in set_cookie
+
+
+# ── #58: the OAuth start route is reachable and its state cookie survives ───
+
+
+def test_oauth_start_is_public_and_state_cookie_is_lax(monkeypatch, tmp_path):
+    """An unauthenticated GET /auth/login must reach the IdP redirect.
+
+    It used to fall into the auth middleware's unauthenticated branch and
+    bounce to /login -- the only "Sign in with ..." entry point looped. The
+    state cookie must be SameSite=Lax: the IdP's redirect back to
+    /auth/callback is a cross-site top-level GET, on which browsers withhold a
+    Strict cookie (TestClient does not enforce SameSite, so assert the
+    attribute itself).
+    """
+    provider = FakeOAuthProvider(AuthResult(success=True, username="x"))
+    app_mod = _make_app(monkeypatch, tmp_path, provider)
+    with TestClient(app_mod.app) as client:
+        r = client.get("/auth/login", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == "https://idp.example/authorize"
+    state_cookies = [
+        c for c in r.headers.get_list("set-cookie") if c.startswith(f"{STATE_COOKIE}=")
+    ]
+    assert len(state_cookies) == 1
+    attrs = [a.strip().lower() for a in state_cookies[0].split(";")]
+    assert "samesite=lax" in attrs
+    assert "httponly" in attrs
+
+
+def test_only_listed_auth_paths_are_public():
+    """/auth/login is opened explicitly, not by a blanket /auth/ prefix."""
+    from cert_watch.middleware import is_public_path
+
+    assert is_public_path("/auth/login")
+    assert is_public_path("/auth/callback")
+    assert not is_public_path("/auth/anything-else")

@@ -44,6 +44,25 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Accounts created in Settings → Users can log in (#59).** The auth provider
+  was built without the database path, so the users table was never consulted
+  and every locally created account was rejected. A local user's role tier
+  applies through `CERT_WATCH_ROLE_MAP`, like any other role.
+- **OAuth/Entra sign-in works (#58).** `/auth/login` was not a public path, so
+  the "Sign in with …" button bounced back to `/login`; and the OAuth state
+  cookie was `SameSite=Strict`, which browsers withhold on the IdP's cross-site
+  redirect back to `/auth/callback`. The route is now public and the cookie is
+  `SameSite=Lax` (still `HttpOnly`, 10-minute lifetime).
+- **Tag scopes match case-insensitively everywhere (#69).** The per-resource
+  read/write gates and the per-tag write tier compared tags case-sensitively,
+  so a role scoped to `Payments` saw a host tagged `payments` in lists but could
+  not open or edit it.
+- **Pending hosts appear in the scoped fleet-pivot drill-down (#69).** The
+  drill-down dropped every never-scanned host for a tag-scoped user, so the
+  group count and its rows disagreed.
+- **The owner and renewal-method pivot drill-downs no longer fail.** The
+  loader's host filter referenced an un-aliased table and raised an SQL error
+  (`GET /api/pivot/owner/…`, `/api/pivot/renewal_method/…`).
 - **A genuine renewal now resolves the PagerDuty incident the trigger actually
   opened.** The dedup key was derived from the certificate row id, but an
   unchanged rescan rewrites that row (#57) and carries the alert to the new
@@ -310,6 +329,13 @@ All notable changes to cert-watch are documented in this file.
   `deploy/iis/README.md`.
 
 ### Security
+- **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
+  and `POST /trust-anchors/{id}/delete` required only write access on some tag,
+  so a tag-scoped operator could install or remove a fleet-wide trust anchor.
+  They now require an administrator (with CSRF), matching the settings page.
+- **Scan history is scope-filtered.** `/scan-history` showed every host's
+  name, port and scan error to tag-scoped users; it now lists only scans of
+  hosts inside the user's scope.
 - **Cryptography security floor.** `cryptography` now requires 50.0.0, which
   fixes CVE-2026-69247 / PYSEC-2026-3552. cert-watch does not use the affected
   PKCS#7 decryption APIs, but the update keeps the locked closure and strict

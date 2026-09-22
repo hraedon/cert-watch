@@ -199,7 +199,10 @@ def oauth_start(request: Request) -> RedirectResponse:
             "cw_oauth_state",
             result.oauth_state,
             httponly=True,
-            samesite="strict",
+            # #58: Lax, not Strict. The IdP's redirect to /auth/callback is a
+            # cross-site top-level GET, on which browsers withhold a Strict
+            # cookie; Lax still withholds it from cross-site subrequests/POSTs.
+            samesite="lax",
             max_age=600,
             secure=_COOKIE_SECURE,
             path="/",
@@ -222,7 +225,7 @@ def oauth_callback(
             url=f"/login?error={quote(error)}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     if not code:
@@ -230,7 +233,7 @@ def oauth_callback(
             url="/login?error=no+authorization+code", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     signed_state = request.cookies.get("cw_oauth_state", "")
@@ -246,7 +249,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     cookie_raw, _nonce, _verifier = verify_result
@@ -255,7 +258,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     base = _get_base_url(request)
@@ -271,7 +274,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     # Authorization gate: check group/role membership
@@ -284,7 +287,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     # BC-081: embed current session version in the token
@@ -317,7 +320,7 @@ def oauth_callback(
         secure=_COOKIE_SECURE, path="/",
     )
     response.delete_cookie(
-        "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response

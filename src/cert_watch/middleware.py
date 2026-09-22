@@ -516,9 +516,13 @@ def get_csrf_context(request: Request) -> dict[str, Any]:
 
 # ---------- Middleware functions ----------
 
+# Every /auth/* route is part of the pre-session login flow and is listed here
+# explicitly (#58: /auth/login, the OAuth start, was missing, so the only OAuth
+# entry point bounced to /login). No /auth/ prefix rule, so a future /auth/*
+# route is private until it is added deliberately.
 _PUBLIC_PATHS = frozenset({
-    "/healthz", "/readyz", "/login", "/auth/callback", "/auth/logout", "/setup",
-    "/favicon.ico",
+    "/healthz", "/readyz", "/login", "/auth/login", "/auth/callback", "/auth/logout",
+    "/setup", "/favicon.ico",
 })
 
 _METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None

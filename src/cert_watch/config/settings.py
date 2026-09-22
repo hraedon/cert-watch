@@ -436,6 +436,9 @@ class Settings:
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,
             local_admin_password_hash=local_admin_password_hash,
+            # #59: without the DB path the provider never consults the users
+            # table, so accounts created in /settings/users could never log in.
+            db_path=str(self.db_path),
             security=security,
         )
 

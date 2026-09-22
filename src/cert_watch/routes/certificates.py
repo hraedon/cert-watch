@@ -32,6 +32,7 @@ from cert_watch.middleware import (
     check_rate_limit,
     get_auth_context,
     get_csrf_context,
+    require_admin_write_form,
     require_auth,
     require_write_form,
 )
@@ -593,9 +594,11 @@ async def add_trust_anchor(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+    # #65: a trust anchor changes chain validation for the whole fleet, so it
+    # is admin-only (like the /settings/trust-anchors page), not write-gated.
+    admin_err = await require_admin_write_form(request)
+    if admin_err:
+        return admin_err
     db = _db_path(request)
     allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
     raw_suffix = Path(file.filename or "uploaded").suffix.lower()
@@ -655,9 +658,9 @@ async def add_trust_anchor(
 
 @router.post("/trust-anchors/{anchor_id}/delete")
 async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+    admin_err = await require_admin_write_form(request)  # #65: admin-only
+    if admin_err:
+        return admin_err
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
     with get_write_lock():
