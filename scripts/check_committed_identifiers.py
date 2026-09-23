@@ -407,12 +407,9 @@ def collect_tracked_paths() -> list[Path]:
 def collect_tree_paths(root: Path) -> list[Path]:
     """Return the files under *root* (an unpacked tree), as root-relative Paths.
 
-    The ``--tree`` mode exists for pull_request_target CI: the workflow checks
-    out the PR's tree so this script — the BASE ref's copy, the only copy that
-    may see the denylist secret — can scan content that is not (yet) in the
-    repository's git database. Nothing from the tree is executed; it is read
-    as bytes. The ``.git`` directory, if the checkout produced one, is never
-    followed.
+    The ``--tree`` mode supports scanning an unpacked tree without relying on
+    its git metadata. Nothing from the tree is executed; it is read as bytes.
+    The ``.git`` directory, if the checkout produced one, is never followed.
     """
     if not root.is_dir():
         raise GateError(f"--tree target {root} is not a directory")
@@ -522,12 +519,33 @@ def scan_staged_blobs(
     return violations
 
 
-def print_report(violations: list[Violation]) -> None:
+def _denylist_entry_numbers(identifiers: frozenset[str]) -> dict[str, int]:
+    """Return deterministic, non-secret labels for configured denylist entries."""
+    return {
+        identifier: index
+        for index, identifier in enumerate(sorted(identifiers), start=1)
+    }
+
+
+def print_report(
+    violations: list[Violation],
+    *,
+    identifiers: frozenset[str] = frozenset(),
+    redact_output: bool = False,
+) -> None:
     violations.sort(key=lambda v: (str(v.path), v.line_number, v.identifier))
     print("Committed identifier violations detected:", file=sys.stderr)
+    entry_numbers = _denylist_entry_numbers(identifiers)
     for v in violations:
-        print(f"  {v.path}:{v.line_number}: {v.identifier!r}", file=sys.stderr)
-        print(f"      {v.line.rstrip()}", file=sys.stderr)
+        if redact_output:
+            entry_number = entry_numbers[v.identifier]
+            print(
+                f"  {v.path}:{v.line_number}: denylist entry #{entry_number}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  {v.path}:{v.line_number}: {v.identifier!r}", file=sys.stderr)
+            print(f"      {v.line.rstrip()}", file=sys.stderr)
     print(f"\nTotal: {len(violations)} violation(s)", file=sys.stderr)
 
 
@@ -688,11 +706,25 @@ def _resolve_identifiers(*, staged: bool = False) -> frozenset[str] | None:
     return identifiers
 
 
-def _report_message_violations(label: str, violations: list[Violation]) -> None:
+def _report_message_violations(
+    label: str,
+    violations: list[Violation],
+    *,
+    identifiers: frozenset[str],
+    redact_output: bool,
+) -> None:
     print(f"Forbidden identifier in {label}:", file=sys.stderr)
+    entry_numbers = _denylist_entry_numbers(identifiers)
     for v in sorted(violations, key=lambda v: (v.line_number, v.identifier)):
-        print(f"  line {v.line_number}: {v.identifier!r}", file=sys.stderr)
-        print(f"      {v.line.rstrip()}", file=sys.stderr)
+        if redact_output:
+            entry_number = entry_numbers[v.identifier]
+            print(
+                f"  line {v.line_number}: denylist entry #{entry_number}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  line {v.line_number}: {v.identifier!r}", file=sys.stderr)
+            print(f"      {v.line.rstrip()}", file=sys.stderr)
     print(
         "\nA commit message is published with the commit. Rewrite the message "
         "without the identifier (the canonical denylist is the authority on what "
@@ -701,7 +733,7 @@ def _report_message_violations(label: str, violations: list[Violation]) -> None:
     )
 
 
-def _scan_message_file(path: Path) -> int:
+def _scan_message_file(path: Path, *, redact_output: bool = False) -> int:
     """commit-msg hook mode: scan the proposed commit message."""
     identifiers = _resolve_identifiers()
     if identifiers is None:
@@ -715,12 +747,17 @@ def _scan_message_file(path: Path) -> int:
     kept = [ln for ln in text.splitlines() if not ln.startswith("#")]
     violations = list(scan_text("\n".join(kept), identifiers))
     if violations:
-        _report_message_violations("the proposed commit message", violations)
+        _report_message_violations(
+            "the proposed commit message",
+            violations,
+            identifiers=identifiers,
+            redact_output=redact_output,
+        )
         return 1
     return 0
 
 
-def _scan_rev_range(rev_range: str) -> int:
+def _scan_rev_range(rev_range: str, *, redact_output: bool = False) -> int:
     """pre-push mode: scan every commit message about to be published."""
     identifiers = _resolve_identifiers()
     if identifiers is None:
@@ -729,16 +766,23 @@ def _scan_rev_range(rev_range: str) -> int:
     for sha, body in collect_range_messages(rev_range):
         violations = list(scan_text(body, identifiers))
         if violations:
-            _report_message_violations(f"commit message {sha[:9]}", violations)
+            _report_message_violations(
+                f"commit message {sha[:9]}",
+                violations,
+                identifiers=identifiers,
+                redact_output=redact_output,
+            )
             failed = True
     return 1 if failed else 0
 
 
 def _run(args: argparse.Namespace) -> int:
     if args.message_file is not None:
-        return _scan_message_file(Path(args.message_file))
+        return _scan_message_file(
+            Path(args.message_file), redact_output=args.redact_output,
+        )
     if args.rev_range is not None:
-        return _scan_rev_range(args.rev_range)
+        return _scan_rev_range(args.rev_range, redact_output=args.redact_output)
 
     tree_root = Path(args.tree) if args.tree is not None else None
     if tree_root is not None:
@@ -781,8 +825,8 @@ def _run(args: argparse.Namespace) -> int:
     scan_paths = [p for p in paths if not any(part in _SKIP_DIRS for part in p.parts)]
     unreadable: list[Path] = []
     # --staged judges the index blobs (what the commit records), never the
-    # worktree; --tree reads a checked-out tree by path (fork-PR scan); the CI
-    # default scans the checked-out tracked tree (WI-031).
+    # worktree; --tree reads an unpacked tree by path; the CI default scans the
+    # checked-out tracked tree (WI-031).
     if tree_root is not None:
         unreadable_abs: list[Path] = []
         violations_abs = scan_files(
@@ -797,7 +841,11 @@ def _run(args: argparse.Namespace) -> int:
     else:
         violations = scan_files(identifiers, scan_paths, unreadable=unreadable)
     if violations:
-        print_report(violations)
+        print_report(
+            violations,
+            identifiers=identifiers,
+            redact_output=args.redact_output,
+        )
         return 1
     if unreadable:
         what = (
@@ -829,14 +877,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Scan only staged files (for the pre-commit hook) instead of the "
         "full tracked tree (the CI default).",
     )
+    parser.add_argument(
+        "--redact-output",
+        action="store_true",
+        help="Report only file/line and denylist entry number, without echoing "
+        "the matched identifier or source line. Intended for CI logs.",
+    )
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument(
         "--tree",
         metavar="DIR",
         help="Scan a checked-out tree by path instead of the repository's git "
-        "state. Used by the pull_request_target CI job so the BASE ref's copy "
-        "of this script — the only copy that may see the denylist secret — "
-        "can gate an untrusted PR tree without executing any of it.",
+        "state without executing content from that tree.",
     )
     mode.add_argument(
         "--message-file",
