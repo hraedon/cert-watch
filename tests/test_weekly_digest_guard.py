@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock
 
 from cert_watch.alerting.digest.engine import DigestRunResult
@@ -98,3 +99,83 @@ def test_expiry_digest_runs_each_alert_cycle_and_lets_claims_dedupe(
     assert context.run_alerts()["sent"] == 1
     assert context.run_alerts()["sent"] == 0
     assert run.call_count == 2
+
+
+def test_all_digest_kinds_share_the_alert_cycle_deadline(monkeypatch, tmp_path):
+    now = [100.0]
+    stopped = threading.Event()
+    context = SchedulerContext(
+        settings=MagicMock(
+            db_path=tmp_path / "digest.sqlite3",
+            alert_digest_only=True,
+            renewal_window_days=30,
+        ),
+        alert_cfg=None,
+        webhook_cfg=None,
+        stop_event=stopped,
+    )
+    monkeypatch.setattr("cert_watch.scheduler_context.monotonic", lambda: now[0])
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", MagicMock())
+    monkeypatch.setattr(
+        "cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock()
+    )
+
+    def process(*args, **kwargs):
+        assert kwargs["budget_seconds"] == 300.0
+        now[0] = 145.0
+        return {"sent": 0, "failed": 0, "deferred": 0}
+
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
+    calls = []
+
+    def run(config, kind, cadence_days, *, deadline, stop_event):
+        calls.append((kind.name, deadline, stop_event))
+        return DigestRunResult()
+
+    monkeypatch.setattr(context, "_run_digest", run)
+
+    context.run_alerts()
+    context.maybe_run_weekly_digest()
+
+    assert calls == [
+        ("expiry", 400.0, stopped),
+        ("renewal", 400.0, stopped),
+        ("orphan", 400.0, stopped),
+    ]
+
+
+def test_digest_engine_receives_only_the_shared_budget_remaining(
+    monkeypatch, tmp_path
+):
+    context = _context(tmp_path / "digest.sqlite3")
+    stopped = threading.Event()
+    captured = {}
+
+    class Engine:
+        def __init__(self, db_path, transports, budget_seconds, **kwargs):
+            captured.update(
+                db_path=db_path,
+                transports=transports,
+                budget_seconds=budget_seconds,
+                kwargs=kwargs,
+            )
+
+        def run(self, kind, period_key):
+            captured.update(kind=kind, period_key=period_key)
+            return DigestRunResult()
+
+    monkeypatch.setattr("cert_watch.scheduler_context.monotonic", lambda: 175.0)
+    monkeypatch.setattr("cert_watch.alerting.digest.engine.DigestEngine", Engine)
+    kind = MagicMock(name="kind")
+    kind.name = "renewal"
+
+    context._run_digest(
+        context._snapshot(),
+        kind,
+        7,
+        deadline=400.0,
+        stop_event=stopped,
+    )
+
+    assert captured["budget_seconds"] == 225.0
+    assert captured["kwargs"]["stop_event"] is stopped

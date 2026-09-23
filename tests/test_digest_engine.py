@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+import threading
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -183,3 +184,93 @@ def test_pre_engine_sent_claim_suppresses_upgrade_week_resend(
     assert result.sent == 0
     assert result.skipped == 1
     assert smtp.messages == []
+
+
+@pytest.mark.parametrize(
+    ("first_cadence", "second_cadence"),
+    [(7, 14), (14, 7), (30, 7)],
+    ids=["cadence-increases", "cadence-decreases", "first-group-created"],
+)
+def test_cadence_change_does_not_resend_within_the_same_iso_week(
+    first_cadence, second_cadence, tmp_path, fake_transport
+) -> None:
+    db = tmp_path / "digest.sqlite3"
+    smtp = fake_transport(channel="smtp")
+    engine = DigestEngine(db, [smtp], clock=lambda: NOW)
+
+    first = engine.run(
+        _kind(recipients=("ops@test",)),
+        digest_period_key("expiry", first_cadence, now=NOW),
+    )
+    repeated = engine.run(
+        _kind(recipients=("ops@test",)),
+        digest_period_key("expiry", second_cadence, now=NOW),
+    )
+
+    assert first.sent == 1
+    assert repeated.sent == 0
+    assert repeated.skipped == 1
+    assert len(smtp.messages) == 1
+
+
+def test_cadence_change_still_sends_in_a_new_iso_week(
+    tmp_path, fake_transport
+) -> None:
+    db = tmp_path / "digest.sqlite3"
+    smtp = fake_transport(channel="smtp")
+    engine = DigestEngine(db, [smtp], clock=lambda: NOW)
+
+    first = engine.run(
+        _kind(recipients=("ops@test",)),
+        digest_period_key("expiry", 7, now=NOW),
+    )
+    next_week = engine.run(
+        _kind(recipients=("ops@test",)),
+        digest_period_key("expiry", 14, now=NOW + timedelta(days=7)),
+    )
+
+    assert first.sent == next_week.sent == 1
+    assert len(smtp.messages) == 2
+
+
+def test_stop_after_claim_abandons_lease_for_later_recovery(
+    tmp_path, fake_transport, monkeypatch
+) -> None:
+    import cert_watch.alerting.digest.engine as engine_module
+
+    db = tmp_path / "digest.sqlite3"
+    stopped = threading.Event()
+    smtp = fake_transport(channel="smtp")
+    real_renew = engine_module.renew_digest_delivery
+
+    def renew_then_stop(*args, **kwargs):
+        renewed = real_renew(*args, **kwargs)
+        stopped.set()
+        return renewed
+
+    monkeypatch.setattr(engine_module, "renew_digest_delivery", renew_then_stop)
+    result = DigestEngine(
+        db, [smtp], clock=lambda: NOW, stop_event=stopped
+    ).run(_kind(recipients=("ops@test",)), _period())
+
+    assert result.cancelled
+    assert smtp.messages == []
+
+    reclaimed = claim_digest_delivery(
+        db,
+        _period(),
+        "smtp",
+        "ops@test",
+        now=datetime.now(UTC) + timedelta(minutes=16),
+    )
+    assert reclaimed.acquired
+    assert complete_digest_delivery(db, reclaimed, succeeded=False)
+
+    monkeypatch.setattr(engine_module, "renew_digest_delivery", real_renew)
+    stopped.clear()
+    recovered = DigestEngine(
+        db, [smtp], clock=lambda: NOW, stop_event=stopped
+    ).run(_kind(recipients=("ops@test",)), _period())
+
+    assert recovered.sent == 1
+    assert len(smtp.messages) == 1
