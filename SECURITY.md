@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-cert-watch is pre-1.0. Security fixes are applied to the latest released 0.9.x
-version and to `main`; older releases do not receive backports.
+Security fixes are applied to the latest 1.x release and to `main`. Older
+releases do not receive backports; upgrade to the latest 1.x.
 
 | Version | Supported |
 | --- | --- |
 | `main` | Yes |
-| Latest `0.9.x` release | Yes |
+| Latest `1.x` release | Yes |
 | Older releases | No |
 
 Upgrade to the latest release before reporting behavior that may already have

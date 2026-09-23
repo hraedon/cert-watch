@@ -166,6 +166,11 @@ def _dynamic_replacements(db: Path) -> list[tuple[str, str]]:
 def _normalize_html(html: str, replacements: list[tuple[str, str]]) -> str:
     normalized = html.replace("\r\n", "\n")
     normalized = re.sub(r'(\bnonce=")[^"]*(")', r"\1{{CSP_NONCE}}\2", normalized)
+    # The release version is not page structure; a version bump must not
+    # rewrite every golden.
+    normalized = re.sub(
+        r'(<span class="cw-ver">)[^<]*(</span>)', r"\1{{VERSION}}\2", normalized
+    )
     normalized = re.sub(
         r'(<input\b[^>]*\bname="_csrf_token"[^>]*\bvalue=")[^"]*(")',
         r"\1{{CSRF_TOKEN}}\2",

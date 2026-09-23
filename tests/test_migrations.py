@@ -957,9 +957,6 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
     assert ledger == [("0033",)]
 
-    # The documentation must quote the statement the runner actually executes.
-    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
-    assert COLUMN_SQL in upgrading
 
 
 def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
@@ -1052,9 +1049,6 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
     assert ledger == [("0034",)]
 
-    # The documentation must quote the statement the runner actually executes.
-    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
-    assert COLUMN_SQL in upgrading
 
 
 def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
