@@ -31,6 +31,35 @@ class JsonBodyError(ValueError):
     400 message."""
 
 
+def _strict_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise JsonBodyError("invalid JSON")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> Any:
+    raise JsonBodyError("invalid JSON")
+
+
+def _has_lone_surrogate(value: Any) -> bool:
+    """Inspect decoded JSON iteratively so hostile nesting cannot recurse here."""
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str):
+            if any(0xD800 <= ord(char) <= 0xDFFF for char in item):
+                return True
+        elif isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False
+
+
 def json_body(raw: bytes, *, require_object: bool = True) -> Any:
     """Parse a request body as ``Request.json()`` would, raising
     :class:`JsonBodyError` with the message the API has always returned.
@@ -39,9 +68,15 @@ def json_body(raw: bytes, *, require_object: bool = True) -> Any:
     judged only after the caller's scope on the target has been checked.
     """
     try:
-        body = json.loads(raw)
-    except ValueError:
+        body = json.loads(
+            raw,
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_json_constant,
+        )
+    except (ValueError, RecursionError):
         raise JsonBodyError("invalid JSON") from None
+    if _has_lone_surrogate(body):
+        raise JsonBodyError("invalid JSON")
     if require_object and not isinstance(body, dict):
         raise JsonBodyError("JSON body must be an object")
     return body

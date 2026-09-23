@@ -128,6 +128,27 @@ def test_open_mode_allows_configured_base_url_host(reload_app):
     assert response.status_code == 200
 
 
+@pytest.mark.parametrize("method", ["GET", "HEAD"])
+@pytest.mark.parametrize("path", ["/healthz", "/readyz"])
+def test_open_mode_kubernetes_probes_accept_pod_ip_host(
+    reload_app, method: str, path: str
+):
+    app_mod = reload_app()
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        response = client.request(method, path, headers={"Host": "10.42.0.7:8000"})
+    assert response.status_code != 400
+
+
+def test_open_mode_probe_exemption_is_exact(reload_app):
+    app_mod = reload_app()
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        assert client.get("/", headers={"Host": "10.42.0.7:8000"}).status_code == 400
+        assert (
+            client.post("/healthz", headers={"Host": "10.42.0.7:8000"}).status_code
+            == 400
+        )
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [
@@ -183,6 +204,110 @@ def test_json_writes_reject_non_object_bodies_without_500(
         else:
             response = client.request(method, path, json=body)
     assert response.status_code in {400, 422}
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/api/alert-groups", b'{"name":"\\ud800","recipients":[]}'),
+        ("/api/policy", b'{"default_severity":"\\ud800"}'),
+        ("/api/hosts", b'{"hostname":"\\ud800","port":443}'),
+        ("/api/api-keys", b'{"name":"\\ud800","scope":"read"}'),
+    ],
+)
+def test_json_writes_reject_lone_surrogates_without_500(reload_app, path, body):
+    app_mod = reload_app()
+    with TestClient(
+        app_mod.app, base_url="http://localhost", raise_server_exceptions=False
+    ) as client:
+        response = client.request(
+            "PUT" if path == "/api/policy" else "POST",
+            path,
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid JSON"
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("POST", "/api/alert-groups"),
+        ("PUT", "/api/policy"),
+        ("POST", "/api/hosts"),
+        ("POST", "/api/api-keys"),
+    ],
+)
+def test_json_writes_reject_extreme_nesting_without_500(
+    reload_app, method: str, path: str
+):
+    app_mod = reload_app()
+    body = b'{"value":' + (b"[" * 100_000) + b"0" + (b"]" * 100_000) + b"}"
+    with TestClient(
+        app_mod.app, base_url="http://localhost", raise_server_exceptions=False
+    ) as client:
+        response = client.request(
+            method,
+            path,
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid JSON"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"name":"first","name":"second"}',
+        b'{"name":"group","threshold_days":NaN}',
+        b'{"name":"group","threshold_days":Infinity}',
+        b'{"name":"group","threshold_days":-Infinity}',
+    ],
+)
+def test_json_writes_reject_duplicate_keys_and_non_finite_numbers(
+    reload_app, body: bytes
+):
+    app_mod = reload_app()
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        response = client.post(
+            "/api/alert-groups",
+            content=body,
+            headers={"Content-Type": "application/json"},
+        )
+    assert response.status_code == 400
+    assert response.json()["error"] == "invalid JSON"
+
+
+def test_open_mode_browser_mutations_require_csrf(reload_app, csrf_strict):
+    app_mod = reload_app()
+    with TestClient(app_mod.app, base_url="http://localhost") as client:
+        # A normal page visit establishes the open-mode browser's CSRF session.
+        client.get("/")
+        for path in ("/api/hosts/scan", "/api/alerts/mark-all-read"):
+            response = client.post(
+                path,
+                content=b"",
+                headers={
+                    "Content-Type": "text/plain",
+                    "Origin": "https://attacker.example",
+                },
+            )
+            assert response.status_code == 403
+            assert response.json()["detail"] == "missing CSRF token"
+
+        form_response = client.post(
+            "/hosts",
+            data={"hostname": "csrf.example.test", "port": "443"},
+            headers={"Origin": "https://attacker.example"},
+            follow_redirects=False,
+        )
+        assert form_response.status_code == 303
+        assert "missing%20CSRF%20token" in form_response.headers["location"]
+
+        inventory = client.get("/api/hosts")
+        assert "csrf.example.test" not in inventory.text
 
 
 def test_admin_api_key_cannot_create_or_revoke_api_keys(
@@ -246,7 +371,13 @@ def test_admin_api_key_cannot_use_html_key_management(reload_app, tmp_path):
 
 @pytest.mark.parametrize(
     ("address", "allow_private"),
-    [("fd00:ec2::254", True), ("100.64.0.1", False)],
+    [
+        ("fd00:ec2::253", True),
+        ("fd00:ec2::254", True),
+        ("fd00:ec2::1234", True),
+        ("64:ff9b:1::a9fe:a9fe", True),
+        ("100.64.0.1", False),
+    ],
 )
 def test_scan_blocks_new_sensitive_ranges(monkeypatch, address, allow_private):
     import cert_watch.scan_resolver as resolver
@@ -264,13 +395,28 @@ def test_scan_blocks_new_sensitive_ranges(monkeypatch, address, allow_private):
     assert pinned is None
 
 
-def test_ipv6_imds_is_always_blocked_for_scans_and_webhooks():
+@pytest.mark.parametrize("address", ["fd00:ec2::253", "fd00:ec2::254", "fd00:ec2::1234"])
+def test_ipv6_imds_is_always_blocked_for_scans_and_webhooks(address):
     from cert_watch.http_client import validate_webhook_url
     from cert_watch.scan_resolver import _is_blocked_ip
 
-    address = ipaddress.ip_address("fd00:ec2::254")
-    assert _is_blocked_ip(address, allow_private=True)
-    assert validate_webhook_url("http://[fd00:ec2::254]/latest", allow_private=True)
+    parsed = ipaddress.ip_address(address)
+    assert _is_blocked_ip(parsed, allow_private=True)
+    assert validate_webhook_url(f"http://[{address}]/latest", allow_private=True)
+
+
+def test_local_use_nat64_unwraps_embedded_ipv4_for_scans_and_webhooks():
+    from cert_watch.http_client import validate_webhook_url
+    from cert_watch.scan_resolver import _is_blocked_ip
+
+    metadata = ipaddress.ip_address("64:ff9b:1::a9fe:a9fe")
+    cgnat = ipaddress.ip_address("64:ff9b:1::6440:1")
+    assert _is_blocked_ip(metadata, allow_private=True)
+    assert validate_webhook_url(
+        "http://[64:ff9b:1::a9fe:a9fe]/latest", allow_private=True
+    )
+    assert _is_blocked_ip(cgnat, allow_private=False)
+    assert not _is_blocked_ip(cgnat, allow_private=True)
 
 
 def test_cgnat_follows_private_policy_for_webhooks():

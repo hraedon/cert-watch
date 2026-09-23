@@ -55,6 +55,15 @@ async def open_mode_host_middleware(
     if auth is not None and not isinstance(auth, NoAuthProvider):
         return await call_next(request)
 
+    # Kubernetes HTTP probes address the pod directly, so kubelet supplies the
+    # pod IP as Host rather than the public/base URL. These two read-only,
+    # unauthenticated endpoints expose no state-changing surface.
+    if request.method in {"GET", "HEAD"} and request.url.path in {
+        "/healthz",
+        "/readyz",
+    }:
+        return await call_next(request)
+
     host_values = request.headers.getlist("host")
     settings = getattr(request.app.state, "settings", None)
     base_url = getattr(settings, "base_url", "") if settings else ""

@@ -69,17 +69,23 @@ restore the pre-migration backup.
     existing 10 MiB certificate upload limit while bounding multipart parsing.
   - Login throttling is now keyed by normalized username and client IP (10
     attempts per five minutes), plus a 50-attempt per-IP ceiling. Users behind
-    one untrusted proxy no longer consume the same tight account bucket.
+    one untrusted proxy no longer consume the same tight account bucket. The
+    higher aggregate ceiling is deliberate: focused guessing remains capped
+    by the 10-attempt account-and-IP bucket, while shared-NAT users avoid the
+    former 10-attempt collective lockout.
   - Plain `ldap://` simple binds are refused unless StartTLS is enabled. Prefer
     `ldaps://` or set `LDAP_START_TLS=1`. If a trusted legacy deployment must
     remain plaintext temporarily, set
     `CERT_WATCH_LDAP_ALLOW_INSECURE=1`; this transmits directory credentials in
     cleartext and should be treated as a migration escape hatch.
-  - Scans and webhooks always reject the AWS IPv6 metadata address
-    `fd00:ec2::254`. Carrier-grade NAT `100.64.0.0/10` now follows the private
-    address policy, so deployments intentionally targeting CGNAT addresses
-    must allow private destinations (and include the range in
-    `CERT_WATCH_ALLOWED_SUBNETS` when that allowlist is configured).
+  - Scans and webhooks always reject the AWS IPv6 service range
+    `fd00:ec2::/32`, including the `.253` DNS resolver and `.254` metadata
+    endpoint. Local-use NAT64 addresses under `64:ff9b:1::/48` are unwrapped
+    before policy checks, like the well-known NAT64 prefix. Carrier-grade NAT
+    `100.64.0.0/10` now follows the private address policy, so deployments
+    intentionally targeting CGNAT addresses must allow private destinations
+    (and include the range in `CERT_WATCH_ALLOWED_SUBNETS` when that allowlist
+    is configured).
 
 - **Digest delivery is synchronous and claim-ledger driven.** Expiry, renewal
   and orphan summaries now use one engine and one three-wave retry policy.

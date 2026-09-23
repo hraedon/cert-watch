@@ -320,8 +320,9 @@ class MutationGuard:
     except on ``browser_only`` forms, which hold them to the check -- and so
     refuse them -- exactly like a cookie request without a token.
 
-    JSON guards raise 401/403 and check CSRF only when an auth provider is
-    configured; HTML form guards redirect and check CSRF always.
+    JSON guards raise 401/403. They check CSRF whenever authentication is
+    configured and for cookie-carrying/browser requests in open mode. HTML
+    form guards redirect and check CSRF always.
     """
 
     def __init__(
@@ -377,7 +378,10 @@ class MutationGuard:
             _raise_json(result.error)
         if self.session_only and result.api_key_auth:
             raise HTTPException(status_code=403, detail="admin browser session required")
-        if _is_auth_enabled(request):
+        browser_request = bool(request.cookies) or any(
+            header in request.headers for header in ("origin", "sec-fetch-site")
+        )
+        if _is_auth_enabled(request) or browser_request:
             csrf_err = await self._csrf_error(request)
             if csrf_err:
                 raise HTTPException(status_code=403, detail=csrf_err)

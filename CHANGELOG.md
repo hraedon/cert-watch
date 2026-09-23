@@ -74,14 +74,20 @@ All notable changes to cert-watch are documented in this file.
   loopback `Host` or the host configured by `CERT_WATCH_BASE_URL`. An ASGI
   request-body limit rejects declared and streamed bodies above 12 MiB before
   multipart parsing. Login throttling now uses a normalized username plus
-  client IP, with a separate looser per-IP ceiling.
+  client IP, with a separate looser per-IP ceiling. The per-IP ceiling is
+  deliberately 50 attempts per five minutes (up from 10): the tight
+  10-attempt account-and-IP bucket still limits focused guessing, while the
+  looser aggregate ceiling avoids locking out many users behind one NAT or
+  untrusted proxy.
 - **Plain LDAP simple binds are refused by default.** Use `ldaps://` or
   `LDAP_START_TLS=1`. A legacy deployment can explicitly retain plaintext
   binds with `CERT_WATCH_LDAP_ALLOW_INSECURE=1`; login and the Settings test
   action report a clear refusal when the transport is unsafe.
 - **Outbound address classification covers cloud and carrier ranges.** The AWS
-  IPv6 instance-metadata address `fd00:ec2::254` is always blocked for scans
-  and webhook HTTP. `100.64.0.0/10` is treated as private and follows
+  IPv6 service range `fd00:ec2::/32` is always blocked for scans and webhook
+  HTTP, including the `.253` DNS resolver and `.254` metadata endpoint. The
+  local-use NAT64 prefix `64:ff9b:1::/48` is unwrapped before address-policy
+  checks, matching the well-known NAT64 prefix. `100.64.0.0/10` is treated as private and follows
   `CERT_WATCH_ALLOW_PRIVATE_IPS` / `CERT_WATCH_ALLOWED_SUBNETS` policy.
 - **JSON write routes now enforce the same per-action budgets and scope as the
   HTML forms.** HTML and JSON calls share one client budget for host creation,
