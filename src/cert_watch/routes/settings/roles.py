@@ -291,11 +291,14 @@ async def create_user(request: Request) -> RedirectResponse:
         role_id=role_id,
     )
     db = _db_path(request)
+    # Revoke any residual session for this username (a renamed or deleted
+    # account's cookie must not bind to the new account; S2) BEFORE the row
+    # becomes visible, so no instant exists where an old cookie meets the new
+    # account; bump again after, for any session minted in between.
     with get_write_lock():
+        bump_session_version(db, username)
         SqliteUserRepository(db).add(user)
-    # Revoke any residual session minted for this username (a renamed or
-    # deleted account's cookie must not bind to the new account; S2).
-    bump_session_version(db, username)
+        bump_session_version(db, username)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
@@ -344,15 +347,19 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
                 status_code=303,
             )
         user.password_hash = _scrypt_hash(password)
-    with get_write_lock():
-        repo.update(user)
     # Invalidate active sessions for this user — a password change or role
     # reassignment must take effect immediately, not at TTL expiry. On a
     # rename the old name's cookies are revoked too, or they would bind to a
-    # future account created under that name (PR #78 review, S2).
-    bump_session_version(db, username)
-    if old_username != username:
-        bump_session_version(db, old_username)
+    # future account created under that name (PR #78 review, S2). Bumped
+    # before the change becomes visible (a residual cookie for the new name
+    # must never see the renamed row) and again after it.
+    affected = {username, old_username}
+    with get_write_lock():
+        for name in affected:
+            bump_session_version(db, name)
+        repo.update(user)
+        for name in affected:
+            bump_session_version(db, name)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
@@ -372,8 +379,8 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
     # Invalidate the user's active sessions BEFORE deleting the row — after
     # deletion there's no username to bump. A deleted user's cookie must not
     # keep working until TTL expiry.
-    if user:
-        bump_session_version(db, user.username)
     with get_write_lock():
+        if user:
+            bump_session_version(db, user.username)
         repo.delete(user_id)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)

@@ -694,3 +694,79 @@ def test_oauth_state_is_not_a_valid_session_token():
     state = _sign_state("alice:1:1790000000", nonce="0123456789abcdef")
     assert _verify_state(state) is not None  # control: it is a valid state
     assert decode_session(state) is None
+
+
+# ---------- Sol re-verification: no instant where a new identity meets an old cookie ----------
+
+
+def _residual_cookie(client, db: Path, username: str) -> str:
+    """A current-format local-user cookie for *username* at its current
+    session version -- e.g. left over from a renamed or deleted account."""
+    from cert_watch.auth.rbac import LOCAL_USER_CLAIM
+    from cert_watch.auth.session import create_session
+    from cert_watch.database import get_session_version
+
+    version = get_session_version(str(db), username)
+    return create_session(
+        username, client.app.state.security, version=version, roles=[LOCAL_USER_CLAIM],
+    )
+
+
+def _probe_in_write(monkeypatch, method: str, client, db: Path, token: str, seen: list):
+    """Run the real repository write, then -- before the route continues --
+    check whether *token* still validates. Deterministic interleaving."""
+    from cert_watch.auth.session import validate_session
+
+    real = getattr(SqliteUserRepository, method)
+
+    def probed(self, *args, **kwargs):
+        result = real(self, *args, **kwargs)
+        seen.append(validate_session(token, client.app.state.security, db_path=str(db)))
+        return result
+
+    monkeypatch.setattr(SqliteUserRepository, method, probed)
+
+
+def test_create_user_never_exposes_new_row_to_a_residual_cookie(env, login_csrf, monkeypatch):
+    admin_role = SqliteRoleRepository(env).add(Role(name="admins", permission_tier="admin"))
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        stale = _residual_cookie(client, env, "alice")
+        seen: list = []
+        _probe_in_write(monkeypatch, "add", client, env, stale, seen)
+        r = client.post(
+            "/settings/users",
+            data={"username": "alice", "password": "password123", "email": "",
+                  "role_id": admin_role},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+    assert seen == [None], "old cookie validated against the freshly inserted account"
+
+
+def test_rename_never_exposes_new_name_to_a_residual_cookie(env, login_csrf, monkeypatch):
+    _add_user(env, "carol", tier="admin")
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        stale = _residual_cookie(client, env, "bob")
+        seen: list = []
+        _probe_in_write(monkeypatch, "update", client, env, stale, seen)
+        uid = SqliteUserRepository(env).get_by_username("carol").id
+        r = client.post(
+            f"/settings/users/{uid}", data={"username": "bob", "email": ""},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+    assert seen == [None], "old 'bob' cookie validated against the renamed account"
+
+
+def test_delete_revokes_before_the_row_goes(env, login_csrf, monkeypatch):
+    _add_user(env, "dave", tier="admin")
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        live = _residual_cookie(client, env, "dave")
+        seen: list = []
+        _probe_in_write(monkeypatch, "delete", client, env, live, seen)
+        uid = SqliteUserRepository(env).get_by_username("dave").id
+        client.post(f"/settings/users/{uid}/delete", follow_redirects=False)
+    assert seen == [None]

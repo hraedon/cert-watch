@@ -362,7 +362,9 @@ All notable changes to cert-watch are documented in this file.
 - **A renamed account's cookie cannot attach to a new account.** Renaming a
   local user revokes sessions for the old and new names, and creating a user
   revokes any residual session for that name; previously an old `alice`
-  cookie resolved to a later account created as `alice`.
+  cookie resolved to a later account created as `alice`. The revocation happens
+  before the new or renamed account becomes visible (and again after), so
+  there is no window in which an old cookie matches it.
 - **A role-map read error no longer grants full access.** A database error
   while reading the Settings → Roles mapping (e.g. `database is locked`
   during a settings rebuild) used to produce an empty role map, which means
