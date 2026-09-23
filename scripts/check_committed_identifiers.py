@@ -527,20 +527,60 @@ def _denylist_entry_numbers(identifiers: frozenset[str]) -> dict[str, int]:
     }
 
 
+def _redact_path(path: Path, identifiers: frozenset[str]) -> str:
+    """Replace each identifier-bearing path component with its denylist label."""
+    if not identifiers:
+        raise GateError("path redaction requires the identifier set")
+    entry_numbers = _denylist_entry_numbers(identifiers)
+    redacted_parts: list[str] = []
+    for part in path.parts:
+        entry_number = next(
+            (
+                entry_numbers[identifier]
+                for identifier in sorted(identifiers)
+                if _phrase_pattern(identifier).search(part)
+            ),
+            None,
+        )
+        redacted_parts.append(
+            f"<redacted:entry #{entry_number}>" if entry_number is not None else part
+        )
+    return str(Path(*redacted_parts))
+
+
+def _reported_path(
+    path: Path,
+    *,
+    identifiers: frozenset[str] | None,
+    redact_output: bool,
+) -> str:
+    """Format a path safely when redaction was requested and a denylist is available."""
+    if redact_output and identifiers:
+        return _redact_path(path, identifiers)
+    return str(path)
+
+
 def print_report(
     violations: list[Violation],
     *,
-    identifiers: frozenset[str] = frozenset(),
+    identifiers: frozenset[str] | None = None,
     redact_output: bool = False,
 ) -> None:
+    if redact_output and not identifiers:
+        raise GateError("redacted reports require the identifier set")
+    if redact_output and identifiers:
+        missing = {violation.identifier for violation in violations} - identifiers
+        if missing:
+            raise GateError("redacted reports require every violation in the identifier set")
     violations.sort(key=lambda v: (str(v.path), v.line_number, v.identifier))
     print("Committed identifier violations detected:", file=sys.stderr)
-    entry_numbers = _denylist_entry_numbers(identifiers)
+    entry_numbers = _denylist_entry_numbers(identifiers or frozenset())
     for v in violations:
         if redact_output:
             entry_number = entry_numbers[v.identifier]
+            reported_path = _redact_path(v.path, identifiers or frozenset())
             print(
-                f"  {v.path}:{v.line_number}: denylist entry #{entry_number}",
+                f"  {reported_path}:{v.line_number}: denylist entry #{entry_number}",
                 file=sys.stderr,
             )
         else:
@@ -792,13 +832,25 @@ def _run(args: argparse.Namespace) -> int:
     else:
         paths = collect_tracked_paths()
 
+    redaction_identifiers: frozenset[str] | None = None
+    if args.redact_output:
+        raw_identifiers = os.environ.get("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "")
+        if raw_identifiers.strip():
+            parsed_identifiers = parse_identifier_set(raw_identifiers)
+            redaction_identifiers = parsed_identifiers or None
+
     # 1. Always-on: no tracked file under a guarded (gitignored) data dir. This
     #    catches a ``git add -f samples/...`` leak regardless of secret config.
     leaked = leaked_tracked_files(paths, _GUARDED_DIRS)
     if leaked:
         print("Tracked paths that must never be committed:", file=sys.stderr)
         for p in sorted(leaked, key=str):
-            print(f"  {p}", file=sys.stderr)
+            reported_path = _reported_path(
+                p,
+                identifiers=redaction_identifiers,
+                redact_output=args.redact_output,
+            )
+            print(f"  {reported_path}", file=sys.stderr)
         print(
             "\nThese are gitignored by convention, and .gitignore is advisory — "
             "git add -f walks straight past it. A guarded data directory holds "
@@ -855,7 +907,10 @@ def _run(args: argparse.Namespace) -> int:
         )
         print(f"{what} could not be read; the gate cannot clear them:", file=sys.stderr)
         for p in sorted(unreadable, key=str):
-            print(f"  {p}", file=sys.stderr)
+            print(
+                f"  {_reported_path(p, identifiers=identifiers, redact_output=args.redact_output)}",
+                file=sys.stderr,
+            )
         print(
             "\nAn unreadable tracked file may contain a forbidden identifier. Fix the "
             "permissions (or untrack the file) and re-run; the gate will not pass a "
