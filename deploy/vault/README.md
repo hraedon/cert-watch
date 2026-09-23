@@ -1,8 +1,9 @@
 # Vault wiring for cert-watch
 
 Operational runbook for sourcing every cert-watch secret from Vault — runtime,
-CI, and the agentic E2E layer — on one issuance + audit plane. Design rationale
-lives in `plans/034-...md` Appendix A.2; this is the how-to.
+CI, and the agentic E2E layer — on one issuance + audit plane. The design rationale
+is in the archived plan 034 (see [docs/history.md](../../docs/history.md)); this
+is the how-to.
 
 > **Assumptions** (this cluster): KV v2 mounted at `kv/`, Vault at
 > `https://vault.k8s.hraedon.com`, app namespace `cert-watch`, k8s auth mount
