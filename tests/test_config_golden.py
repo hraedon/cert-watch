@@ -1,0 +1,147 @@
+"""Golden behaviour captured before Plan 057 W2's config-table refactor."""
+
+from __future__ import annotations
+
+import os
+
+
+def test_representative_env_and_kv_settings_golden(monkeypatch, tmp_path):
+    """A representative mixed-source configuration keeps its exact shape."""
+    from cert_watch.config import Settings
+    from cert_watch.database import init_schema
+    from cert_watch.database.kv_store import kv_set_multi
+
+    data_dir = tmp_path / "configured-data"
+    db_path = data_dir / "cert-watch.sqlite3"
+
+    prefixes = ("CERT_WATCH_", "ALERT_", "SMTP_", "LDAP_", "OAUTH_")
+    for name in tuple(os.environ):
+        if name == "AUTH_PROVIDER" or name.startswith(prefixes):
+            monkeypatch.delenv(name, raising=False)
+
+    env = {
+        "CERT_WATCH_DATA_DIR": str(data_dir),
+        "CERT_WATCH_SCHED_HOUR": "8",
+        "SMTP_HOST": "smtp.env.example",
+        "SMTP_PASSWORD": "env-smtp-secret",
+        "ALERT_RECIPIENTS": "ops@example.com, security@example.com",
+        "ALERT_WEBHOOK_HEADERS": '{"Authorization": "Bearer env"}',
+        "ALERT_WEBHOOK_KIND": "teams",
+        "ALERT_DIGEST_ONLY": "1",
+        "CERT_WATCH_ALLOW_PRIVATE_IPS": "0",
+        "CERT_WATCH_ALLOWED_SUBNETS": "10.20.0.0/16,fd00::/8",
+        "CERT_WATCH_DNS_SERVERS": "10.20.0.53,10.20.0.54",
+        "CERT_WATCH_AUDIT_RETENTION_DAYS": "120",
+        "CERT_WATCH_HISTORY_RETENTION_DAYS": "730",
+        "CERT_WATCH_SCAN_TIMEOUT": "4.5",
+        "CERT_WATCH_SCAN_RETRIES": "4",
+        "CERT_WATCH_SCAN_RETRY_BACKOFF": "0.25",
+        "CERT_WATCH_SCAN_MAX_OUTPUT_BYTES": "2097152",
+        "CERT_WATCH_HSTS_TIMEOUT": "2.5",
+        "AUTH_PROVIDER": "ldap",
+        "LDAP_BIND_PASSWORD": "env-ldap-secret",
+        "LDAP_START_TLS": "1",
+        "CERT_WATCH_ALLOWED_GROUPS": "cert-readers,cert-admins",
+        "CERT_WATCH_ADMINS": "alice,bob",
+        "CERT_WATCH_SESSION_TTL": "14400",
+        "CERT_WATCH_WRITE_USERS": "carol,dave",
+        "CERT_WATCH_ROLE_MAP": '{"ops": {"permission_tier": "operator"}}',
+        "CERT_WATCH_BASE_URL": "https://certs.example.test/",
+        "CERT_WATCH_ALLOW_UNAUTH": "1",
+        "CERT_WATCH_JWKS_CACHE_TTL": "43200",
+        "CERT_WATCH_RENEWAL_WEBHOOK_URL": "https://renew.example.test/hook",
+        "CERT_WATCH_RENEWAL_WEBHOOK_HEADERS": '{"X-Renewal": "token"}',
+    }
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    init_schema(db_path)
+    kv_set_multi(
+        db_path,
+        {
+            "sched_min": "15",
+            "smtp_port": "2525",
+            "smtp_user": "mailer",
+            "alert_from": "cert-watch@example.com",
+            "webhook_url": "https://alerts.example.test/hook",
+            "webhook_headers": '{"X-Source": "kv"}',
+            "pagerduty_routing_key": "pd-secret",
+            "drift_alerts": "0",
+            "check_revocation": "1",
+            "renewal_window_days": "21",
+            "alert_retention_days": "180",
+            "ldap_server": "ldaps://dc.example.test",
+            "ldap_base_dn": "DC=example,DC=test",
+            "ldap_bind_dn": "CN=svc,DC=example,DC=test",
+            "ldap_required_groups": (
+                "CN=Readers,OU=Groups,DC=example,DC=test;"
+                "CN=Admins,OU=Groups,DC=example,DC=test"
+            ),
+            "ldap_connect_timeout": "12",
+            "ldap_group_filter": "(memberOf:1.2.3:={group})",
+            "oauth_client_id": "client-from-kv",
+            "oauth_client_secret": "oauth-secret-from-kv",
+            "local_admin_user": "breakglass",
+            "local_admin_password_hash": "scrypt-hash-from-kv",
+        },
+    )
+
+    actual = Settings.from_env_with_kv(db_path)
+
+    assert actual == Settings(
+        db_path=db_path,
+        data_dir=data_dir,
+        sched_hour=8,
+        sched_min=15,
+        smtp_host="smtp.env.example",
+        smtp_port=2525,
+        smtp_user="mailer",
+        smtp_password="env-smtp-secret",
+        alert_from="cert-watch@example.com",
+        alert_recipients=("ops@example.com", "security@example.com"),
+        webhook_url="https://alerts.example.test/hook",
+        webhook_headers={"Authorization": "Bearer env"},
+        webhook_kind="teams",
+        pagerduty_routing_key="pd-secret",
+        alert_digest_only=True,
+        allow_private=False,
+        allowed_subnets=("10.20.0.0/16", "fd00::/8"),
+        dns_servers=("10.20.0.53", "10.20.0.54"),
+        audit_retention_days=120,
+        history_retention_days=730,
+        alert_retention_days=180,
+        drift_alerts=False,
+        renewal_window_days=21,
+        check_revocation=True,
+        scan_timeout=4.5,
+        scan_retries=4,
+        scan_retry_backoff=0.25,
+        scan_max_output_bytes=2097152,
+        hsts_timeout=2.5,
+        auth_provider="ldap",
+        ldap_server="ldaps://dc.example.test",
+        ldap_base_dn="DC=example,DC=test",
+        ldap_bind_dn="CN=svc,DC=example,DC=test",
+        ldap_bind_password="env-ldap-secret",
+        ldap_start_tls=True,
+        ldap_required_groups=(
+            "CN=Readers,OU=Groups,DC=example,DC=test",
+            "CN=Admins,OU=Groups,DC=example,DC=test",
+        ),
+        ldap_connect_timeout=12,
+        ldap_group_filter="(memberOf:1.2.3:={group})",
+        oauth_client_id="client-from-kv",
+        oauth_client_secret="oauth-secret-from-kv",
+        allowed_groups=("cert-readers", "cert-admins"),
+        admin_users=("alice", "bob"),
+        session_ttl=14400,
+        write_users=("carol", "dave"),
+        role_map={"ops": {"permission_tier": "operator"}},
+        local_admin_user="breakglass",
+        local_admin_password_hash="scrypt-hash-from-kv",
+        base_url="https://certs.example.test",
+        allow_unauth=True,
+        jwks_cache_ttl=43200,
+        renewal_webhook_url="https://renew.example.test/hook",
+        renewal_webhook_headers={"X-Renewal": "token"},
+    )
