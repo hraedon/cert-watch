@@ -370,11 +370,19 @@ points back to the relevant step in this document.
 
 Follow [UPGRADING.md](../../UPGRADING.md), including its 0.9-to-1.0 checklist.
 For IIS, take the WAL-safe database backup with the CLI inside the installation
-venv, preserve both files under `<data dir>\secrets`, recover the existing IIS
-binding and installer switches before running the new source tree's installer,
-and remember that a shell command does not inherit settings from `web.config`.
-The upgrade guide includes the exact PowerShell commands and the warning about
-running `-ConfigureIIS` without the existing host name.
+venv, preserve both files under `<data dir>\secrets`, and recover the live
+site's physical path, application pool, application overrides, data directory,
+Python path, and TLS binding before running the new source tree's installer.
+Installers from 1.0.1 on record their supplied, non-secret arguments in
+`<InstallDir>\install-args.json` for the next run; older installations require
+the IIS inspection described in the upgrade guide.
+
+The installer stops only the pool named by `-AppPool`. With `-ConfigureIIS`, it
+also assigns the existing site to that pool and sets its physical path to
+`-SitePath`, so accepting defaults from a customized installation can repoint
+the live site. A shell command also does not inherit settings from
+`web.config`. The upgrade guide includes exact PowerShell recovery and schema
+verification commands, plus the HTTPS-binding warning.
 
 ## Uninstall / teardown
 

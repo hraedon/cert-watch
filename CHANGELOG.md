@@ -15,11 +15,13 @@ All notable changes to cert-watch are documented in this file.
 
 ### Documentation
 
-- Correct the 0.9-to-1.0 migration list and expand the Windows/IIS upgrade
-  procedure: back up IIS secret files, recover installer arguments and TLS
-  binding details, use a tagged source archive, verify the migration without
-  relying on logs, account for PyPI dependency resolution, and recycle the app
-  pool after editing `web.config`.
+- Correct the 0.9-to-1.0 migration behavior and ranges, including preservation
+  of unmatched certificate notes. Expand the upgrade procedure with
+  Docker/Compose, Kubernetes, Linux, and IIS backup and verification commands;
+  live IIS path, pool, binding, and installer-argument recovery; the 1.0.1
+  installer argument record; warnings about defaults repointing an IIS site;
+  pip's actual dependency/index behavior; and the required recycle after a
+  `web.config` edit.
 
 ## [1.0.0] - 2026-09-23
 

@@ -33,11 +33,56 @@ items can lock someone out or change who gets alerted.
 
 - [ ] **Back up the database and its secrets.** On a command-line install, run
       `cert-watch backup /backups/cert-watch-pre-1.0.sqlite3` and keep the data
-      directory's `.auth_secret` if cert-watch generated it. A Windows/IIS
-      install instead uses `secrets\auth_secret` and `secrets\csrf_secret`
-      through the `*_FILE` settings in `web.config`. Its CLI is inside the
-      data directory and does not inherit the environment variables from
-      `web.config`; for a default install, use an elevated PowerShell:
+      directory's `.auth_secret` if cert-watch generated it.
+
+      For Docker Compose, first write the WAL-safe backup inside the persistent
+      `/var/lib/cert-watch` mount, then copy it out of the volume:
+
+      ```bash
+      docker compose exec cert-watch cert-watch backup \
+        /var/lib/cert-watch/cert-watch-pre-1.0.sqlite3
+      docker compose cp \
+        cert-watch:/var/lib/cert-watch/cert-watch-pre-1.0.sqlite3 \
+        ./cert-watch-pre-1.0.sqlite3
+      # If the app generated its signing key in the data directory, copy it too.
+      docker compose cp cert-watch:/var/lib/cert-watch/.auth_secret ./.auth_secret
+      ```
+
+      With plain Docker, the equivalent commands are `docker exec cert-watch
+      cert-watch backup /var/lib/cert-watch/cert-watch-pre-1.0.sqlite3` and
+      `docker cp cert-watch:/var/lib/cert-watch/cert-watch-pre-1.0.sqlite3 .`;
+      copy `.auth_secret` too if it exists. If the signing key is supplied by
+      container configuration instead, preserve it in that secret store.
+
+      On Kubernetes, target the pod, write the backup inside the PVC mount, and
+      copy it out:
+
+      ```bash
+      pod=$(kubectl get pod -n cert-watch \
+        -l app.kubernetes.io/name=cert-watch \
+        -o jsonpath='{.items[0].metadata.name}')
+      kubectl exec -n cert-watch "$pod" -- cert-watch backup \
+        /var/lib/cert-watch/cert-watch-pre-1.0.sqlite3
+      kubectl cp -n cert-watch \
+        "${pod}:/var/lib/cert-watch/cert-watch-pre-1.0.sqlite3" \
+        ./cert-watch-pre-1.0.sqlite3
+      ```
+
+      The supplied Kubernetes deployment reads its signing keys from the
+      `cert-watch-secrets` Kubernetes Secret, not from the data directory. Keep
+      that Secret in your secret-management system, or export it separately
+      and protect the exported file; never commit it:
+
+      ```bash
+      kubectl get secret -n cert-watch cert-watch-secrets -o yaml \
+        > cert-watch-secrets.yaml
+      ```
+
+      A Windows/IIS install instead uses `secrets\auth_secret` and
+      `secrets\csrf_secret` through the `*_FILE` settings in `web.config`. Its
+      CLI is inside the install directory and does not inherit the environment
+      variables from `web.config`; for a default install, use an elevated
+      PowerShell:
 
       ```powershell
       $dataDir = "C:\ProgramData\cert-watch"
@@ -103,13 +148,33 @@ items can lock someone out or change who gets alerted.
   tree with your original arguments. The release workflow publishes container
   images; it does not attach a Windows installer asset.
 
-  If the original command was not recorded, recover the important IIS values
-  before re-running it:
+  Recover the values the live IIS site actually uses before re-running the
+  installer. The following also shows child applications, because one can
+  override the root site's pool or physical path:
 
   ```powershell
-  $dataDir = "C:\ProgramData\cert-watch" # change if -InstallDir was used
-  & "$dataDir\venv\Scripts\python.exe" -m pip show ldap3 authlib
   Import-Module WebAdministration
+  $site = Get-Website -Name "cert-watch"
+  $site | Select-Object Name, physicalPath, applicationPool
+  Get-WebApplication -Site "cert-watch" |
+      Select-Object Path, physicalPath, applicationPool
+  $pool = [string]$site.applicationPool
+  Get-Item "IIS:\AppPools\$pool" | Select-Object Name, State
+
+  $sitePath = [Environment]::ExpandEnvironmentVariables([string]$site.physicalPath)
+  [xml]$webConfig = Get-Content (Join-Path $sitePath "web.config")
+  $httpPlatform = $webConfig.configuration.'system.webServer'.httpPlatform
+  $python = [Environment]::ExpandEnvironmentVariables([string]$httpPlatform.processPath)
+  $installDir = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $python))
+  $dataSetting = $httpPlatform.environmentVariables.environmentVariable |
+      Where-Object name -eq "CERT_WATCH_DATA_DIR"
+  $dataDir = [Environment]::ExpandEnvironmentVariables([string]$dataSetting.value)
+  [pscustomobject]@{ InstallDir = $installDir; DataDir = $dataDir; AppPool = $pool; SitePath = $sitePath }
+
+  $argsRecord = Join-Path $installDir "install-args.json"
+  if (Test-Path $argsRecord) { Get-Content $argsRecord }
+
+  & $python -m pip show ldap3 authlib
   Get-WebBinding -Name cert-watch -Protocol https |
       Select-Object bindingInformation, sslFlags
   netsh http show sslcert ipport=0.0.0.0:443
@@ -117,14 +182,28 @@ items can lock someone out or change who gets alerted.
   netsh http show sslcert hostnameport=certs.example.com:443
   ```
 
-  If both Python packages are present, retain `-WithAuthExtras`. An IIS binding
-  such as `*:443:certs.example.com` supplies `-HostName certs.example.com`;
+  The Python path identifies `-InstallDir`; the root site's `physicalPath` is
+  `-SitePath`; and its `applicationPool` is `-AppPool`. If the cert-watch
+  application is a child application, use the corresponding
+  `Get-WebApplication` row instead. If both Python packages are present,
+  retain `-WithAuthExtras`. An IIS binding such as
+  `*:443:certs.example.com` supplies `-HostName certs.example.com`;
   `sslFlags=1` supplies `-SharePort443`. The matching `netsh` entry reports the
-  certificate hash to pass as `-TlsCertThumbprint`. Also retain any non-default
-  `-InstallDir`, `-AppPool`, or `-SitePath`. **Do not re-run `-ConfigureIIS`
-  with the default binding arguments: with no `-HostName` or `-SharePort443`,
-  the installer rewrites the HTTPS binding to `*:443:` (and switches out of
-  SNI mode).** (`-SharePort443` by itself is rejected.)
+  certificate hash to pass as `-TlsCertThumbprint`.
+
+  Installers from 1.0.1 on also write the supplied, non-secret installer
+  arguments and a reusable command to `<InstallDir>\install-args.json`; use
+  that record on later upgrades when it is present. Older installs have no
+  record, so use the live IIS values above.
+
+  The script stops only the pool supplied as `-AppPool`. With `-ConfigureIIS`,
+  it then assigns the existing `cert-watch` site to the supplied pool and sets
+  its physical path to `-SitePath`. **Omitting custom values can therefore
+  leave the real pool running during the install and repoint the site to the
+  default pool or path.** Also keep the existing binding arguments: with no
+  `-HostName` or `-SharePort443`, the installer rewrites the HTTPS binding to
+  `*:443:` and switches out of SNI mode. (`-SharePort443` by itself is
+  rejected.)
 
   The installer stops the application pool, which releases the database,
   updates the code, and starts the pool again. It does not replace the database,
@@ -133,17 +212,44 @@ items can lock someone out or change who gets alerted.
   restoring a backup, stop the pool first; Windows won't let you replace an
   open database.
 
-  The script installs cert-watch from the extracted source tree, but resolves
-  and upgrades its dependencies from PyPI at install time; it does not install
-  from `uv.lock`. Dependency versions can therefore differ between installer
-  runs unless your environment supplies a constrained package mirror.
+  The script upgrades pip, then runs `pip install --upgrade` for the cert-watch
+  project in the extracted source tree; it does not install from `uv.lock`.
+  With pip's default `only-if-needed` upgrade strategy, already-installed
+  dependencies remain in place unless they no longer satisfy cert-watch's
+  declared ranges. Any dependency resolution uses pip's configured package
+  index, which is not necessarily PyPI.
 
 Then watch the log for `backed up …` and `applying migration …` lines, and open
 the web interface. Those lines are visible from 1.0.1 onward. Independently of
 the application version, confirm that a new
 `cert-watch-pre-migration-*.sqlite3` file appeared beside the database and
-inspect the database's `schema_version` table: every migration through the
-target release's head must have a row. For 1.0, that final row is `0037`.
+inspect the database's `schema_version` table. Windows does not include a
+`sqlite3` executable, so use the installation's Python. Reuse `$python` and
+`$dataDir` from the live IIS inspection above (the default `$python` is
+`C:\ProgramData\cert-watch\venv\Scripts\python.exe`):
+
+```powershell
+& $python -c "import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('select max(id), count(*) from schema_version').fetchone())" (Join-Path $dataDir "cert-watch.sqlite3")
+```
+
+The default bare-metal Linux install uses `/opt/cert-watch/venv`; run:
+
+```bash
+sudo /opt/cert-watch/venv/bin/python -c \
+  'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("select max(id), count(*) from schema_version").fetchone())' \
+  /var/lib/cert-watch/cert-watch.sqlite3
+```
+
+Inside a Compose container, the equivalent check is:
+
+```bash
+docker compose exec cert-watch python -c \
+  'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute("select max(id), count(*) from schema_version").fetchone())' \
+  /var/lib/cert-watch/cert-watch.sqlite3
+```
+
+Every migration registered by the target release must have a row. For 1.0,
+an unmodified ledger prints `('0037', 37)`.
 
 ### What to expect afterwards
 
@@ -156,7 +262,9 @@ now honoured; reload the page.
 
 - **0029** adds the durable digest-delivery claim ledger.
 - **0030** adds per-tag permission tiers to roles.
-- **0031** merges certificate notes into host notes and drops the old column.
+- **0031** merges certificate notes into matching host notes. If any note has
+  no matching host, it remains in the deprecated `certificates.notes` column;
+  that column is dropped only when no unmatched notes remain.
 - **0032** adds append-only alert-delivery evidence.
 - **0033** adds the clock used to bound alert-evidence deferral.
 - **0034** records the certificate that triggered each alert.
@@ -165,9 +273,15 @@ now honoured; reload the page.
 - **0036** gives alerts a delivery lifecycle.
 - **0037** gives each alert a dedupe key and a saved routing snapshot.
 
-Earlier 0.9.x databases can run additional migrations according to the highest
-ID already present in `schema_version`; for example, the supported v0.9.0
-fixture ends at `0023`, so it runs `0024`–`0037`.
+The runner applies every registered migration whose ID is absent from
+`schema_version`, in registry order; it does not assume that every ID at or
+below the highest recorded ID is present. For the unchanged schemas in the
+0.9.x release tags, the pending ranges are:
+
+- **v0.9.0:** 0024–0037.
+- **v0.9.1 and v0.9.2:** 0026–0037.
+- **v0.9.3:** 0027–0037.
+- **v0.9.4 and v0.9.5:** 0029–0037.
 
 **Alerting behaves better, and slightly differently.** See
 [alerting.md](docs/alerting.md) for the whole picture.
