@@ -12,9 +12,23 @@ Two complementary checks:
    whitespace-separated list of real identifiers — hostnames, emails, service
    accounts, principal handles, personal names), every tracked text file
    outside ``samples/`` is scanned for those identifiers. This catches real
-   names that leaked into docs, tests, or reflections. It is a no-op (exit 0)
-   until the secret is configured, so it never blocks a fresh clone or a fork
-   without the secret.
+   names that leaked into docs, tests, or reflections.
+
+   Unconfigured behaviour depends on ``publication.toml``. In a repo declaring
+   ``private-until-review`` (or with no declaration at all) a missing secret is a
+   no-op (exit 0), so a fresh clone or a fork without the secret is never
+   blocked. In a repo declaring ``visibility = "public"`` it is a **failure**
+   (exit 1): an unconfigured gate there prints "skipping" and exits 0, which is
+   indistinguishable from a clean tree — a silent pass on exactly the repos where
+   a leak is irreversible. That asymmetry was documented in publication.toml for
+   months before it was implemented here.
+
+   In ``--staged`` mode (the pre-commit hook) the scan reads the **staged index
+   blobs** (``git show :0:<path>``), never the working tree: the commit records
+   the index, and worktree bytes can legitimately differ from it (``git add
+   -p``, staging then editing). Scanning the worktree let a staged forbidden
+   identifier hide behind a clean unstaged copy — and blocked clean commits
+   whose worktree copy was dirty (WI-031).
 
    **Multi-word identifiers are double-quoted** (``"two words"``) and match any
    separator run — spaced, hyphenated, underscored, dotted, or wrapped across a
@@ -35,6 +49,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tomllib
 from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -55,6 +70,26 @@ _SKIP_DIRS = frozenset({".venv"})
 # guard matches the first path component so a legitimate nested code dir named
 # ``samples`` (e.g. ``tests/samples/``) is not a false positive.
 _GUARDED_DIRS = frozenset({"samples"})
+
+# The plumbing declaration. Read here for ONE purpose: deciding whether an
+# unconfigured gate is a benign no-op or a silent pass. check_publication_plumbing.py
+# remains the authority on everything else in this file.
+# Always-on guards that need no denylist and no configuration.
+#
+# An editor swap file holds the BUFFER of the file being edited -- a secret typed
+# and not yet saved is in there. Vim's collision sequence (.swo, .swn, ... after
+# .swp is taken) means suffix matching alone misses the ones a busy session
+# leaves behind.
+#
+# A root-level .env is the classic credential leak; .env.example is the
+# deliberately tracked template and is exempt. Scoped to the ROOT so a fixture
+# like tests/fixtures/.env.broken stays possible.
+#
+# From touchstone, which had both while the template guarded only samples/.
+_EDITOR_SWAP_SUFFIXES = frozenset({".swp", ".swo"})
+_VIM_COLLISION_SUFFIX = re.compile(r"\.s[a-w][a-z]\Z")
+
+_DECLARATION_FILENAME = "publication.toml"
 
 
 @dataclass(frozen=True)
@@ -198,6 +233,21 @@ def _is_binary(chunk: bytes) -> bool:
     return b"\x00" in chunk
 
 
+def _strip_bom(text: str) -> str:
+    """Drop a leading U+FEFF left by an explicit-endian UTF-16 decode.
+
+    The ``utf-16-le`` / ``utf-16-be`` codecs do not consume the byte-order mark,
+    so it survives as a stray character at the start of line 1 and lands in
+    violation reports. (``utf-8-sig`` strips its own.) It does not hide anything
+    -- matching is substring-based, so an identifier at offset 0 is still found,
+    verified against both variants -- but a report that prints an invisible
+    character before the offending text is a report people mistrust.
+
+    From vitrine, which had it and the template did not.
+    """
+    return text[1:] if text.startswith("\ufeff") else text
+
+
 def scan_files(
     identifiers: frozenset[str],
     paths: list[Path],
@@ -215,6 +265,12 @@ def scan_files(
     unreadable file lets one containing a forbidden identifier pass, which is
     precisely the fails-open case this gate exists to prevent.
 
+    **Fail-closed default**: when the caller omits *unreadable*, the function
+    owns an internal collector and raises :class:`GateError` after scanning if
+    any path was unreadable. Callers that supply their own list (the CLI, for
+    detailed reporting) retain full control and receive the paths without an
+    exception.
+
     The out-parameter is deliberate. This script is COPIED into every repo in the
     estate and several of them test ``scan_files`` directly, so returning a tuple
     instead of a list broke seven repositories' test suites at once. An optional
@@ -222,6 +278,7 @@ def scan_files(
     the CLI fail closed on an unreadable file.
     """
     violations: list[Violation] = []
+    owns_collector = unreadable is None
     if unreadable is None:
         unreadable = []
     for path in paths:
@@ -231,7 +288,11 @@ def scan_files(
         # looks like an unreadable file. The target itself can carry a forbidden
         # identifier, so it is scanned rather than skipped.
         if path.is_symlink():
-            target = os.readlink(path)
+            try:
+                target = os.readlink(path)
+            except OSError:
+                unreadable.append(path)
+                continue
             for violation in scan_text(target, identifiers):
                 violations.append(replace(violation, path=path, line=target))
             continue
@@ -249,8 +310,15 @@ def scan_files(
         except OSError:
             unreadable.append(path)
             continue
+        text = _strip_bom(text)
         for violation in scan_text(text, identifiers):
             violations.append(replace(violation, path=path))
+    if owns_collector and unreadable:
+        names = ", ".join(str(p) for p in unreadable[:5])
+        raise GateError(
+            f"{len(unreadable)} tracked file(s) could not be read ({names}); "
+            "the gate cannot clear a tree it could not fully scan"
+        )
     return violations
 
 
@@ -286,6 +354,36 @@ def _run_git(args: list[str]) -> str:
     return result.stdout
 
 
+def _run_git_bytes(args: list[str]) -> bytes:
+    """Run a git command and return raw stdout bytes.
+
+    The bytes twin of _run_git, for blob content: ``text=True`` would translate
+    newlines and force a decode before the binary/BOM sniff can run, so blob
+    reads must stay binary. Same GateError contract — a failure is a clean
+    refusal, never a traceback.
+    """
+    try:
+        result = subprocess.run(args, capture_output=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
+        raise GateError(
+            f"git command failed ({' '.join(args)}): exit {exc.returncode}: {stderr.strip()}"
+        ) from exc
+    except OSError as exc:
+        raise GateError(f"could not run git ({' '.join(args)}): {exc}") from exc
+    return result.stdout
+
+
+def _read_staged_blob(path: Path) -> bytes:
+    """Content of the stage-0 index blob for *path* — the bytes a commit records.
+
+    ``:0:<path>`` names the index entry explicitly (the bare ``:<path>`` form is
+    ambiguous with rev-syntax magic like ``:/text``). For a staged symlink the
+    blob is the link's target string, matching the scan_files symlink semantics.
+    """
+    return _run_git_bytes(["git", "show", f":0:{path.as_posix()}"])
+
+
 def _paths_from_git(args: list[str]) -> list[Path]:
     """Run a NUL-delimited git path command and return Paths.
 
@@ -304,6 +402,25 @@ def _paths_from_git(args: list[str]) -> list[Path]:
 def collect_tracked_paths() -> list[Path]:
     """Return tracked file paths from ``git ls-files``, excluding obvious skips."""
     return _paths_from_git(["git", "ls-files", "-z"])
+
+
+def collect_tree_paths(root: Path) -> list[Path]:
+    """Return the files under *root* (an unpacked tree), as root-relative Paths.
+
+    The ``--tree`` mode supports scanning an unpacked tree without relying on
+    its git metadata. Nothing from the tree is executed; it is read as bytes.
+    The ``.git`` directory, if the checkout produced one, is never followed.
+    """
+    if not root.is_dir():
+        raise GateError(f"--tree target {root} is not a directory")
+    paths: list[Path] = []
+    for candidate in root.rglob("*"):
+        rel = candidate.relative_to(root)
+        if ".git" in rel.parts:
+            continue
+        if candidate.is_symlink() or candidate.is_file():
+            paths.append(rel)
+    return sorted(paths)
 
 
 def collect_range_messages(rev_range: str) -> list[tuple[str, str]]:
@@ -336,70 +453,278 @@ def collect_staged_paths() -> list[Path]:
 
     Scans only what is about to be committed rather than the whole tree, so the
     local gate is fast enough to run on every commit. Deletions are excluded
-    (``--diff-filter=ACM``) because there is nothing to scan. ``--no-renames``
+    (``--diff-filter=ACMT``) because there is nothing to scan; type-changes
+    (``T``) are INCLUDED, because re-staging a regular file as a symlink whose
+    target names an identifier — or whose path enters a guarded directory —
+    would otherwise slip through. ``--no-renames``
     decomposes renames into add+delete so the new path (e.g. a file moved into
     ``samples/``) is included as an addition and caught by the always-on guard.
     """
     return _paths_from_git(
         [
             "git", "diff", "--cached", "--name-only",
-            "--diff-filter=ACM", "--no-renames", "-z",
+            "--diff-filter=ACMT", "--no-renames", "-z",
         ]
     )
 
 
-def print_report(violations: list[Violation]) -> None:
+def scan_staged_blobs(
+    identifiers: frozenset[str],
+    paths: list[Path],
+    *,
+    unreadable: list[Path] | None = None,
+) -> list[Violation]:
+    """Scan the staged (stage-0) index blobs at *paths* for forbidden identifiers.
+
+    The pre-commit twin of scan_files, reading ``git show :0:<path>`` instead of
+    the working tree. The distinction is the point (WI-031): a commit records
+    the INDEX, and worktree bytes legitimately diverge from it (``git add -p``
+    partial stages, staging then editing). Scanning worktree bytes let a staged
+    forbidden identifier be hidden by overwriting the file with clean unstaged
+    content — the hook cleared bytes no commit was going to record and let the
+    forbidden blob into history. The inverse also held: a clean index under a
+    dirty or deleted worktree copy was blocked for content that was never being
+    committed.
+
+    Binary and BOM handling match scan_files. A staged symlink needs no special
+    case: its index blob IS the target string, which is exactly what scan_files
+    scans via os.readlink.
+
+    Same fail-closed contract as scan_files: a staged path whose blob cannot be
+    read is collected into *unreadable* when a list is supplied; otherwise the
+    function owns the collector and raises :class:`GateError` after scanning.
+    """
+    violations: list[Violation] = []
+    owns_collector = unreadable is None
+    if unreadable is None:
+        unreadable = []
+    for path in paths:
+        try:
+            blob = _read_staged_blob(path)
+        except GateError:
+            unreadable.append(path)
+            continue
+        chunk = blob[:_BINARY_SNIFF_LEN]
+        if _is_binary(chunk):
+            continue
+        text = _strip_bom(blob.decode(_sniff_encoding(chunk) or "utf-8", errors="replace"))
+        for violation in scan_text(text, identifiers):
+            violations.append(replace(violation, path=path))
+    if owns_collector and unreadable:
+        names = ", ".join(str(p) for p in unreadable[:5])
+        raise GateError(
+            f"{len(unreadable)} staged blob(s) could not be read ({names}); "
+            "the gate cannot clear an index it could not fully scan"
+        )
+    return violations
+
+
+def _denylist_entry_numbers(identifiers: frozenset[str]) -> dict[str, int]:
+    """Return deterministic, non-secret labels for configured denylist entries."""
+    return {
+        identifier: index
+        for index, identifier in enumerate(sorted(identifiers), start=1)
+    }
+
+
+def print_report(
+    violations: list[Violation],
+    *,
+    identifiers: frozenset[str] = frozenset(),
+    redact_output: bool = False,
+) -> None:
     violations.sort(key=lambda v: (str(v.path), v.line_number, v.identifier))
     print("Committed identifier violations detected:", file=sys.stderr)
+    entry_numbers = _denylist_entry_numbers(identifiers)
     for v in violations:
-        print(f"  {v.path}:{v.line_number}: {v.identifier!r}", file=sys.stderr)
-        print(f"      {v.line.rstrip()}", file=sys.stderr)
+        if redact_output:
+            entry_number = entry_numbers[v.identifier]
+            print(
+                f"  {v.path}:{v.line_number}: denylist entry #{entry_number}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  {v.path}:{v.line_number}: {v.identifier!r}", file=sys.stderr)
+            print(f"      {v.line.rstrip()}", file=sys.stderr)
     print(f"\nTotal: {len(violations)} violation(s)", file=sys.stderr)
 
 
 def leaked_tracked_files(paths: list[Path], guarded: frozenset[str]) -> list[Path]:
-    """Tracked files whose root component is a guarded (gitignored) data dir.
+    """Tracked paths reserved for runtime data, operator secrets, or editor swap files.
 
-    Matches only the first path component so a nested code directory that happens
-    to be named ``samples`` (e.g. ``tests/samples/``) is not a false positive.
+    Three always-on rules, none of which needs a denylist:
+
+    * an **editor swap file** anywhere -- it holds the buffer of the file being
+      edited, so a secret typed and not yet saved is inside it;
+    * a first path component in *guarded* -- matched on the root only, so a
+      nested code directory named ``samples`` (e.g. ``tests/samples/``) is not a
+      false positive;
+    * a **root-level ``.env``** or ``.env.<something>``, except the deliberately
+      tracked ``.env.example``.
     """
-    return [p for p in paths if p.parts and p.parts[0] in guarded]
+    leaked: list[Path] = []
+    for path in paths:
+        is_vim_collision = bool(
+            path.name.startswith(".") and _VIM_COLLISION_SUFFIX.fullmatch(path.suffix)
+        )
+        if path.suffix in _EDITOR_SWAP_SUFFIXES or is_vim_collision:
+            leaked.append(path)
+            continue
+        if path.parts and path.parts[0] in guarded:
+            leaked.append(path)
+            continue
+        if len(path.parts) == 1 and (
+            path.name == ".env"
+            or (path.name.startswith(".env.") and path.name != ".env.example")
+        ):
+            leaked.append(path)
+    return leaked
 
 
-def _resolve_identifiers() -> frozenset[str] | None:
+def _declares_public(*, staged: bool = False) -> bool:
+    """True when this repo's publication.toml declares public visibility.
+
+    Governs whether a missing denylist is a no-op or a hard failure. The
+    distinction is the whole point: a private-until-review repo must stay
+    clonable and committable without the secret, but a PUBLIC repo whose gate is
+    unconfigured is a silent pass — the scan prints "skipping" and exits 0, and
+    nothing downstream can tell that apart from a clean tree.
+
+    In staged mode the declaration is read from the INDEX (the bytes the commit
+    records via ``:0:publication.toml``), never the worktree: a gate that judges
+    the index must take its verdict from the index, or an unstaged edit to the
+    declaration — or one staged but not yet saved — flips the verdict for bytes
+    it is not scanning. Not-present-in-index (or not a git blob at all) means
+    nothing being committed declares visibility: False.
+
+    In the other modes the worktree copy is the checkout under test, so it is
+    the declaration.
+
+    Failure to even resolve the repository root is a GateError (fail closed):
+    the hooks only ever run inside a git repo, and a gate that cannot tell
+    where it is pointing must not quietly pass — the previous "return False"
+    let a broken git turn every commit-msg invocation into a skip.
+
+    Absence of the declaration file is False (fail-open): a repo that never
+    opted into the publication system is not suddenly blocked. A declaration
+    that is PRESENT but unparseable is a GateError, not False — that repo did
+    opt in, and guessing its visibility is exactly the coin-flip this function
+    exists to remove.
+    """
+    try:
+        repo_root = Path(_run_git(["git", "rev-parse", "--show-toplevel"]).strip())
+    except GateError as exc:
+        raise GateError(
+            "could not resolve the repository root, so the gate cannot read the "
+            f"publication declaration and will not pass: {exc}"
+        ) from exc
+
+    raw_text: str | None
+    if staged:
+        try:
+            raw_text = _read_staged_blob(Path(_DECLARATION_FILENAME)).decode(
+                "utf-8", errors="replace",
+            )
+        except GateError:
+            return False
+    else:
+        path = repo_root / _DECLARATION_FILENAME
+        if not path.is_file():
+            return False
+        try:
+            raw_text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise GateError(
+                f"{_DECLARATION_FILENAME} is present but unreadable ({exc}); "
+                "the gate cannot tell whether this repo is public, so it will not pass."
+            ) from exc
+
+    if raw_text is None:
+        return False
+    try:
+        raw = tomllib.loads(raw_text)
+    except tomllib.TOMLDecodeError as exc:
+        raise GateError(
+            f"{_DECLARATION_FILENAME} is present but could not be parsed ({exc}); "
+            "the gate cannot tell whether this repo is public, so it will not pass."
+        ) from exc
+
+    section = raw.get("publication")
+    if not isinstance(section, dict):
+        raise GateError(
+            f"{_DECLARATION_FILENAME} has no [publication] table; the gate cannot "
+            "tell whether this repo is public, so it will not pass."
+        )
+    return str(section.get("visibility", "")).strip() == "public"
+
+
+def _unconfigured(reason: str, *, staged: bool = False) -> None:
+    """Handle a denylist that is unset or unusable.
+
+    Returns quietly (caller no-ops) for a non-public repo; raises GateError for a
+    public one.
+    """
+    if _declares_public(staged=staged):
+        raise GateError(
+            f"{reason} but {_DECLARATION_FILENAME} declares visibility=\"public\". "
+            "A public repo with an unconfigured gate is a silent pass, so this is "
+            # The env-name placeholder below sits on a line of its own. The longest
+            # name in the estate is 52 characters, and folding it into a prose line
+            # pushes the SUBSTITUTED file past 100 columns while the template itself
+            # still looks clean. (This comment may not name the placeholder: it would
+            # be substituted too, and would itself go over.)
+            "a failure, not a skip. Provide the denylist via the "
+            "CERT_WATCH_FORBIDDEN_IDENTIFIERS environment variable "
+            "(in CI, the secret of that name: org-level where the repo is in an "
+            "org, otherwise a repo-level secret), or locally via "
+            ".identifiers-denylist.local (gitignored) or "
+            "~/.config/agent-suite/forbidden-identifiers in the user profile."
+        )
+    print(f"{reason}; skipping identifier gate.", file=sys.stderr)
+
+
+def _resolve_identifiers(*, staged: bool = False) -> frozenset[str] | None:
     """Return the configured denylist, or None if the gate should no-op.
 
     Shared by the message-scanning modes so they honor exactly the same
-    configured/unconfigured semantics as the tracked-tree scan.
+    configured/unconfigured semantics as the tracked-tree scan. The *staged*
+    flag exists for the pre-commit path, whose publication verdict must come
+    from the index, not the worktree.
     """
     raw = os.environ.get("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "")
     if not raw.strip():
-        # Split so the line still fits at 100 columns after the per-repo env-var
-        # substitution: the longest name in the estate is 52 characters, 19 more
-        # than the canonical one, which pushed this over the limit in two repos.
-        print(
-            "CERT_WATCH_FORBIDDEN_IDENTIFIERS is empty or unset; "
-            "skipping identifier gate.",
-            file=sys.stderr,
-        )
+        _unconfigured("CERT_WATCH_FORBIDDEN_IDENTIFIERS is empty or unset", staged=staged)
         return None
     identifiers = parse_identifier_set(raw)
     if not identifiers:
-        print(
-            "CERT_WATCH_FORBIDDEN_IDENTIFIERS contained no usable "
-            f"identifiers (minimum length is {MIN_IDENTIFIER_LENGTH} "
-            "characters); skipping gate.",
-            file=sys.stderr,
+        _unconfigured(
+            "CERT_WATCH_FORBIDDEN_IDENTIFIERS contained no usable identifiers "
+            f"(minimum length is {MIN_IDENTIFIER_LENGTH} characters)",
+            staged=staged,
         )
         return None
     return identifiers
 
 
-def _report_message_violations(label: str, violations: list[Violation]) -> None:
+def _report_message_violations(
+    label: str,
+    violations: list[Violation],
+    *,
+    identifiers: frozenset[str],
+    redact_output: bool,
+) -> None:
     print(f"Forbidden identifier in {label}:", file=sys.stderr)
+    entry_numbers = _denylist_entry_numbers(identifiers)
     for v in sorted(violations, key=lambda v: (v.line_number, v.identifier)):
-        print(f"  line {v.line_number}: {v.identifier!r}", file=sys.stderr)
-        print(f"      {v.line.rstrip()}", file=sys.stderr)
+        if redact_output:
+            entry_number = entry_numbers[v.identifier]
+            print(
+                f"  line {v.line_number}: denylist entry #{entry_number}",
+                file=sys.stderr,
+            )
+        else:
+            print(f"  line {v.line_number}: {v.identifier!r}", file=sys.stderr)
+            print(f"      {v.line.rstrip()}", file=sys.stderr)
     print(
         "\nA commit message is published with the commit. Rewrite the message "
         "without the identifier (the canonical denylist is the authority on what "
@@ -408,7 +733,7 @@ def _report_message_violations(label: str, violations: list[Violation]) -> None:
     )
 
 
-def _scan_message_file(path: Path) -> int:
+def _scan_message_file(path: Path, *, redact_output: bool = False) -> int:
     """commit-msg hook mode: scan the proposed commit message."""
     identifiers = _resolve_identifiers()
     if identifiers is None:
@@ -422,12 +747,17 @@ def _scan_message_file(path: Path) -> int:
     kept = [ln for ln in text.splitlines() if not ln.startswith("#")]
     violations = list(scan_text("\n".join(kept), identifiers))
     if violations:
-        _report_message_violations("the proposed commit message", violations)
+        _report_message_violations(
+            "the proposed commit message",
+            violations,
+            identifiers=identifiers,
+            redact_output=redact_output,
+        )
         return 1
     return 0
 
 
-def _scan_rev_range(rev_range: str) -> int:
+def _scan_rev_range(rev_range: str, *, redact_output: bool = False) -> int:
     """pre-push mode: scan every commit message about to be published."""
     identifiers = _resolve_identifiers()
     if identifiers is None:
@@ -436,66 +766,94 @@ def _scan_rev_range(rev_range: str) -> int:
     for sha, body in collect_range_messages(rev_range):
         violations = list(scan_text(body, identifiers))
         if violations:
-            _report_message_violations(f"commit message {sha[:9]}", violations)
+            _report_message_violations(
+                f"commit message {sha[:9]}",
+                violations,
+                identifiers=identifiers,
+                redact_output=redact_output,
+            )
             failed = True
     return 1 if failed else 0
 
 
 def _run(args: argparse.Namespace) -> int:
     if args.message_file is not None:
-        return _scan_message_file(Path(args.message_file))
+        return _scan_message_file(
+            Path(args.message_file), redact_output=args.redact_output,
+        )
     if args.rev_range is not None:
-        return _scan_rev_range(args.rev_range)
+        return _scan_rev_range(args.rev_range, redact_output=args.redact_output)
 
-    paths = collect_staged_paths() if args.staged else collect_tracked_paths()
+    tree_root = Path(args.tree) if args.tree is not None else None
+    if tree_root is not None:
+        paths = collect_tree_paths(tree_root)
+    elif args.staged:
+        paths = collect_staged_paths()
+    else:
+        paths = collect_tracked_paths()
 
     # 1. Always-on: no tracked file under a guarded (gitignored) data dir. This
     #    catches a ``git add -f samples/...`` leak regardless of secret config.
     leaked = leaked_tracked_files(paths, _GUARDED_DIRS)
     if leaked:
-        print("Tracked files under a gitignored data directory detected:", file=sys.stderr)
+        print("Tracked paths that must never be committed:", file=sys.stderr)
         for p in sorted(leaked, key=str):
             print(f"  {p}", file=sys.stderr)
         print(
-            "\nThese paths are gitignored by convention (samples/ holds real "
-            "identifier-bearing data — hostnames, service accounts, principal "
-            "handles). Remove them from the index: git rm --cached -r <path>.",
+            "\nThese are gitignored by convention, and .gitignore is advisory — "
+            "git add -f walks straight past it. A guarded data directory holds "
+            "real identifier-bearing data (hostnames, service accounts, principal "
+            "handles); an editor swap file holds the BUFFER of the file being "
+            "edited, secrets typed but not yet saved included; a root-level .env "
+            "holds credentials (.env.example is the exempt template).\n\n"
+            "Remove them from the index: git rm --cached -r <path>.",
             file=sys.stderr,
         )
         return 1
 
     # 2. Secret-driven: scan tracked text files (outside guarded dirs) for
-    #    forbidden identifiers. No-op until the secret is configured.
-    raw = os.environ.get("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "")
-    if not raw.strip():
-        # Split so the line still fits at 100 columns after the per-repo env-var
-        # substitution: the longest name in the estate is 52 characters, 19 more
-        # than the canonical one, which pushed this over the limit in two repos.
-        print(
-            "CERT_WATCH_FORBIDDEN_IDENTIFIERS is empty or unset; "
-            "skipping identifier gate.",
-            file=sys.stderr,
-        )
-        return 0
-
-    identifiers = parse_identifier_set(raw)
-    if not identifiers:
-        print(
-            "CERT_WATCH_FORBIDDEN_IDENTIFIERS contained no usable "
-            f"identifiers (minimum length is {MIN_IDENTIFIER_LENGTH} "
-            "characters); skipping gate.",
-            file=sys.stderr,
-        )
+    #    forbidden identifiers. A no-op until the secret is configured — EXCEPT in
+    #    a repo declaring public visibility, where _resolve_identifiers raises
+    #    rather than let an unconfigured gate report a green pass.
+    #
+    #    This path used to duplicate the resolver inline, so the tree scan and the
+    #    message scans could drift apart in exactly the semantics that matter.
+    identifiers = _resolve_identifiers(staged=args.staged)
+    if identifiers is None:
         return 0
 
     scan_paths = [p for p in paths if not any(part in _SKIP_DIRS for part in p.parts)]
     unreadable: list[Path] = []
-    violations = scan_files(identifiers, scan_paths, unreadable=unreadable)
+    # --staged judges the index blobs (what the commit records), never the
+    # worktree; --tree reads an unpacked tree by path; the CI default scans the
+    # checked-out tracked tree (WI-031).
+    if tree_root is not None:
+        unreadable_abs: list[Path] = []
+        violations_abs = scan_files(
+            identifiers, [tree_root / p for p in scan_paths], unreadable=unreadable_abs,
+        )
+        violations = [
+            replace(v, path=Path(v.path).relative_to(tree_root)) for v in violations_abs
+        ]
+        unreadable.extend(p.relative_to(tree_root) for p in unreadable_abs)
+    elif args.staged:
+        violations = scan_staged_blobs(identifiers, scan_paths, unreadable=unreadable)
+    else:
+        violations = scan_files(identifiers, scan_paths, unreadable=unreadable)
     if violations:
-        print_report(violations)
+        print_report(
+            violations,
+            identifiers=identifiers,
+            redact_output=args.redact_output,
+        )
         return 1
     if unreadable:
-        print("Tracked files could not be read; the gate cannot clear them:", file=sys.stderr)
+        what = (
+            "Staged blobs" if args.staged
+            else "Tree files" if tree_root is not None
+            else "Tracked files"
+        )
+        print(f"{what} could not be read; the gate cannot clear them:", file=sys.stderr)
         for p in sorted(unreadable, key=str):
             print(f"  {p}", file=sys.stderr)
         print(
@@ -519,7 +877,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Scan only staged files (for the pre-commit hook) instead of the "
         "full tracked tree (the CI default).",
     )
+    parser.add_argument(
+        "--redact-output",
+        action="store_true",
+        help="Report only file/line and denylist entry number, without echoing "
+        "the matched identifier or source line. Intended for CI logs.",
+    )
     mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--tree",
+        metavar="DIR",
+        help="Scan a checked-out tree by path instead of the repository's git "
+        "state without executing content from that tree.",
+    )
     mode.add_argument(
         "--message-file",
         metavar="PATH",
@@ -533,6 +903,8 @@ def main(argv: list[str] | None = None) -> int:
         "hook), e.g. origin/main..HEAD.",
     )
     args = parser.parse_args(argv)
+    if args.staged and args.tree is not None:
+        parser.error("--staged and --tree choose different scan sources")
 
     try:
         return _run(args)

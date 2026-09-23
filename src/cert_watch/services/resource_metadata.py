@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from cert_watch.audit import record_audit
+from cert_watch.audit import export_audit, record_audit
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
@@ -53,7 +53,7 @@ def _run_transaction(
         try:
             if not persist(conn):
                 raise ResourceMetadataNotFoundError(f"{target_type} not found")
-            record_audit(
+            audit_event = record_audit(
                 db_path,
                 actor=actor,
                 action=action,
@@ -67,6 +67,7 @@ def _run_transaction(
         except Exception:
             conn.rollback()
             raise
+    export_audit(audit_event)
 
 
 def update_host_notes(

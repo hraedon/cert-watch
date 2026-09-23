@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-from cert_watch.audit import record_audit
+from cert_watch.audit import export_audit, record_audit
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.host_ops import (
     resolve_host_target,
@@ -151,7 +151,7 @@ def update_host_ownership(
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")
-            record_audit(
+            audit_event = record_audit(
                 db_path,
                 actor=actor,
                 action="owner.update",
@@ -165,6 +165,7 @@ def update_host_ownership(
         except Exception:
             conn.rollback()
             raise
+    export_audit(audit_event)
 
     return HostOwnership(
         host_id=host_id,

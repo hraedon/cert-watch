@@ -11,8 +11,9 @@
 # Activate (once per clone):   scripts/install-git-hooks.sh
 #
 # Denylist resolution is identical to pre-commit (see that hook for the order).
-# Fail-open if no denylist is found so a fresh clone is not bricked; CI remains
-# the hard gate.
+# The gate is ALWAYS invoked: with no denylist configured the script treats a
+# repo declaring visibility="public" as a hard failure (fail closed) and any
+# other repo as a no-op — it must not be short-circuited here.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -28,11 +29,6 @@ if [ -z "${CERT_WATCH_FORBIDDEN_IDENTIFIERS:-}" ]; then
       break
     fi
   done
-fi
-
-if [ -z "${CERT_WATCH_FORBIDDEN_IDENTIFIERS:-}" ]; then
-  echo "cert-watch commit-msg: identifier gate INACTIVE — no denylist found." >&2
-  exit 0
 fi
 
 python_bin="$repo_root/.venv/bin/python"
