@@ -252,7 +252,7 @@ def test_oauth_start_is_public_and_state_cookie_is_lax(monkeypatch, tmp_path):
 
 def test_only_listed_auth_paths_are_public():
     """/auth/login is opened explicitly, not by a blanket /auth/ prefix."""
-    from cert_watch.middleware import is_public_path
+    from cert_watch.auth.request_context import is_public_path
 
     assert is_public_path("/auth/login")
     assert is_public_path("/auth/callback")

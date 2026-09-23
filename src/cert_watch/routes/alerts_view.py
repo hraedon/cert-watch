@@ -10,16 +10,21 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.alert_delivery import FAILURE_LABELS
-from cert_watch.alerts import UNDELIVERED_AFTER_HOURS, delivery_is_configured
+from cert_watch.alerting.evidence import FAILURE_LABELS
+from cert_watch.alerting.model import (
+    UNDELIVERED_AFTER_HOURS,
+    delivery_is_configured,
+    normalize_channel,
+)
+from cert_watch.auth.guards import get_auth_context
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,
 )
 from cert_watch.database.delivery_evidence import latest_outcomes, list_attempts
-from cert_watch.middleware import get_auth_context, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.security.csrf import get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.alerts_view")
 
@@ -101,6 +106,9 @@ def alerts_view(
     # Recipient evidence is admin-only, and IDs come exclusively from the
     # existing scope-filtered page. Do not preload this data for other viewers.
     attempts = list_attempts(db, [row["id"] for row in rows]) if auth["is_admin"] else {}
+    for alert_attempts in attempts.values():
+        for attempt in alert_attempts:
+            attempt["channel"] = normalize_channel(attempt["channel"])
     outcomes = latest_outcomes(db, [row["id"] for row in rows])
     delivery_configured = delivery_is_configured(_get_settings(request))
     undelivered = _undelivered_ids(rows, delivery_configured=delivery_configured)

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from cert_watch.middleware import require_admin_form
+from cert_watch.auth.guards import admin_page_guard
 from cert_watch.routes._deps import get_templates
 from cert_watch.routes.settings.render import LEGACY_TAB_MAP, _render_settings
 
@@ -30,10 +30,8 @@ def settings_page(
     saved: str | None = None,
     error: str | None = None,
     password_changed: str | None = None,
+    _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
     section = LEGACY_TAB_MAP.get(tab or "auth", "auth")
     query = "&".join(
         f"{k}={v}"
@@ -54,10 +52,8 @@ def _section_route(section: str) -> Any:
         saved: str | None = None,
         error: str | None = None,
         password_changed: str | None = None,
+        _auth: str = Depends(admin_page_guard),
     ) -> HTMLResponse | RedirectResponse:
-        redirect_resp = require_admin_form(request)
-        if redirect_resp:
-            return redirect_resp
         return _render_settings(
             request,
             section,

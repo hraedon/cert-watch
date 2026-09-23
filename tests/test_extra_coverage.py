@@ -595,23 +595,23 @@ def test_distinct_tags(tmp_path):
 
 
 def test_csrf_token_with_invalid_timestamp():
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
-    mw.set_csrf_secret("test")
+    csrf_mod.set_csrf_secret("test")
     # Token with non-numeric timestamp
     token = "session:abc:sig"
-    assert mw.validate_csrf_token(token, "session") is False
+    assert csrf_mod.validate_csrf_token(token, "session") is False
 
 
 def test_session_id_cookie_priority():
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     req = MagicMock()
     req.cookies = {"cw_sid": "cookie-sid"}
     req.scope = {"session_id": "scope-sid"}
-    assert mw.get_session_id(req) == "cookie-sid"
+    assert csrf_mod.get_session_id(req) == "cookie-sid"
 
 
 # ---------- database/connection.py ----------

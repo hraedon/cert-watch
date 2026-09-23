@@ -610,9 +610,6 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
     from cert_watch.routes.dashboard import flush_alert_queue
     from cert_watch.scheduler import _cycle_lock
 
-    async def allow_write(_request):
-        return None
-
     async def run_in_worker(fn, *args):
         result = []
         worker = threading.Thread(target=lambda: result.append(fn(*args)))
@@ -621,7 +618,6 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
         return result[0]
 
     process = Mock(return_value={"sent": 0, "failed": 0, "deferred": 0})
-    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
     monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
     monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
     monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
@@ -630,7 +626,7 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerts.process_pending", process)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
     request = Request(
         {
             "type": "http",
@@ -666,10 +662,6 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
 
     thread_ids = {}
 
-    async def allow_write(_request):
-        thread_ids["event_loop"] = threading.get_ident()
-        return None
-
     def process_pending(*_args, **_kwargs):
         thread_ids["delivery"] = threading.get_ident()
         return {"sent": 0, "failed": 0, "deferred": 0}
@@ -681,7 +673,6 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         worker.join()
         return result[0]
 
-    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
     monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
     monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
     monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
@@ -690,7 +681,7 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerts.process_pending", process_pending)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process_pending)
     request = Request(
         {
             "type": "http",
@@ -701,7 +692,11 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         }
     )
 
-    response = asyncio.run(flush_alert_queue(request))
+    async def call_on_event_loop():
+        thread_ids["event_loop"] = threading.get_ident()
+        return await flush_alert_queue(request)
+
+    response = asyncio.run(call_on_event_loop())
 
     assert response.status_code == 303
     assert thread_ids["delivery"] != thread_ids["event_loop"]

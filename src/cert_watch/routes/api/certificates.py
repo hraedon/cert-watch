@@ -8,24 +8,25 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_auth, write_guard
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     SqliteCertificateRepository,
     list_cert_history,
     list_dashboard_page,
 )
-from cert_watch.middleware import require_auth, require_write
 from cert_watch.posture import check_revocation_endpoints
-from cert_watch.routes._deps import IdParam, _db_path, _get_settings
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
+    JsonBodyError,
     _normalize_pagination,
     _pagination_links,
-    _tags_from_body,
+    tags_from_json_body,
 )
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
     update_certificate_tags,
 )
 from cert_watch.tags import parse_tags
@@ -193,39 +194,23 @@ def api_list_tags(request: Request, _auth: str = Depends(require_auth)) -> JSONR
 
 @router.put("/api/certificates/{cert_id}/tags")
 async def api_set_cert_tags(
-    cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    cert_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
-    tags = _tags_from_body(body)
-    if tags is None:
-        return JSONResponse(
-            content={"error": "tags must be a string or list of strings"}, status_code=400
-        )
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return JSONResponse(content={"error": str(exc)}, status_code=400)
-
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return JSONResponse(status_code=403, content={"error": new_tags_denied})
+    raw = await request.body()
     try:
         result = update_certificate_tags(
             db,
             cert_id,
-            normalized,
+            lambda: tags_from_json_body(raw),
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except (JsonBodyError, ResourceMetadataValidationError) as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
     except ResourceMetadataNotFoundError:
         return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(

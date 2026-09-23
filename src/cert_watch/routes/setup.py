@@ -17,8 +17,8 @@ from cert_watch.config import (
     Settings,
 )
 from cert_watch.database import bump_session_version, get_write_lock, kv_set
-from cert_watch.middleware import check_csrf, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
+from cert_watch.security.csrf import check_csrf, get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.setup")
 

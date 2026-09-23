@@ -61,3 +61,46 @@ def test_legacy_blank_default_exceptions_are_declarative(monkeypatch):
     assert settings.instance_id == socket.gethostname()
     assert FIELD_SPECS["data_dir"].empty_uses_default
     assert FIELD_SPECS["instance_id"].empty_uses_default
+
+
+def test_every_env_backed_sensitive_spec_supports_file(monkeypatch, tmp_path):
+    sensitive_specs = {
+        name: spec
+        for name, spec in FIELD_SPECS.items()
+        if spec.sensitive and spec.env_names
+    }
+    assert set(sensitive_specs) == {
+        "smtp_password",
+        "webhook_headers",
+        "pagerduty_routing_key",
+        "ldap_bind_password",
+        "ldap_ca_cert",
+        "oauth_client_secret",
+        "local_admin_password_hash",
+        "renewal_webhook_headers",
+        "auth_secret",
+        "csrf_secret",
+        "metrics_token",
+        "hec_token",
+    }
+
+    expected = {}
+    for field_name, spec in sensitive_specs.items():
+        for env_name in spec.env_names:
+            monkeypatch.delenv(env_name, raising=False)
+            monkeypatch.delenv(f"{env_name}_FILE", raising=False)
+        env_name = spec.env_names[0]
+        secret_file = tmp_path / field_name
+        if spec.parser == "json":
+            secret_file.write_text('{"token": "from-file"}\n')
+            expected[field_name] = {"token": "from-file"}
+        else:
+            value = f"{field_name}-from-file"
+            secret_file.write_text(f"  {value}  \n")
+            expected[field_name] = value
+        monkeypatch.setenv(f"{env_name}_FILE", str(secret_file))
+
+    settings = Settings.from_env()
+
+    for field_name, value in expected.items():
+        assert getattr(settings, field_name) == value, field_name

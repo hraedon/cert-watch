@@ -1,16 +1,20 @@
 """Host ownership application service.
 
-Both the server-rendered form and JSON API use this service so validation,
-persistence, and audit behavior cannot drift between route adapters.
+Both the server-rendered form and JSON API use this service so authorization
+(tag scope), validation, persistence, and audit behavior cannot drift between
+route adapters. Scope is checked inside the write lock, before validation.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from cert_watch.audit import export_audit, record_audit
+from cert_watch.auth.scope import ensure_write_scope
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.host_ops import (
     resolve_host_target,
@@ -51,7 +55,15 @@ class HostOwnership:
 @dataclass(frozen=True)
 class HostOwnershipTarget:
     host_id: str
-    source: str
+    source: str  # "host" or "certificate": what resource_id named
+    resource_id: str = ""
+
+    def scope_target(self) -> dict[str, str]:
+        """What tag scope is judged against: the host, or -- when the route
+        named a certificate -- that certificate's effective (cert ∪ host) tags."""
+        if self.source == "host" or not self.resource_id:
+            return {"host_id": self.host_id}
+        return {"cert_id": self.resource_id}
 
 
 class HostOwnershipValidationError(ValueError):
@@ -130,22 +142,37 @@ def resolve_host_ownership_target(
     lookup = resolve_host_target(_connect(db_path), resource_id)
     if lookup.host is None:
         raise HostOwnershipTargetError(lookup.status)
-    return HostOwnershipTarget(host_id=lookup.host.id, source=lookup.status)
+    return HostOwnershipTarget(
+        host_id=lookup.host.id, source=lookup.status, resource_id=resource_id,
+    )
 
 
 def update_host_ownership(
     db_path: str | Path,
-    host_id: str,
-    update: HostOwnershipUpdate,
+    target: str | HostOwnershipTarget,
+    update: HostOwnershipUpdate | Callable[[], HostOwnershipUpdate],
     *,
+    auth: Any,
     actor: str,
     source_ip: str | None,
 ) -> HostOwnership:
-    """Validate, persist, and audit one host ownership update atomically."""
-    _validate(update)
-    detail = asdict(update)
+    """Authorize, validate, persist, and audit one host ownership update atomically.
 
+    *target* is a host id, or a resolved :class:`HostOwnershipTarget` (whose
+    scope may be judged through the certificate the route named). *update*
+    may be a callable -- e.g. a JSON body parser raising
+    :class:`HostOwnershipValidationError` -- run after the scope check.
+    *auth* is the acting AuthContext (``None``: unrestricted).
+    """
+    if isinstance(target, str):
+        target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
+    host_id = target.host_id
     with get_write_lock():
+        ensure_write_scope(auth, db_path, **target.scope_target())
+        if callable(update):
+            update = update()
+        _validate(update)
+        detail = asdict(update)
         conn = _connect(db_path)
         try:
             updated = persist_host_ownership(conn, host_id, **detail)

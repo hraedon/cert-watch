@@ -25,7 +25,7 @@ def setting_env_source(field_name: str, env: Mapping[str, str] | None = None) ->
     for name in spec.env_names:
         if name in environ:
             return name
-        if spec.parser == "secret-file" and f"{name}_FILE" in environ:
+        if spec.sensitive and f"{name}_FILE" in environ:
             return f"{name}_FILE"
     return None
 
@@ -35,7 +35,7 @@ def setting_env_is_set(field_name: str, env: Mapping[str, str] | None = None) ->
 
 
 def _read_env(spec: FieldSpec, source: str, env: Mapping[str, str]) -> str:
-    if source.endswith("_FILE") and spec.parser == "secret-file":
+    if source.endswith("_FILE") and spec.sensitive:
         path = env[source]
         try:
             return Path(path).read_text().strip()

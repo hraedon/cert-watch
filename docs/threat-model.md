@@ -108,7 +108,7 @@ consumers use address validation, DNS pinning, and redirect revalidation.
 OIDC validates issuer, audience, nonce, and algorithm. SMTP uses verified TLS
 when configured (`src/cert_watch/http_client.py:33-257`,
 `src/cert_watch/auth/oauth_provider.py:224-332`,
-`src/cert_watch/alerts.py:586-653`).
+`src/cert_watch/alerting/transports/smtp.py:38-105`).
 
 ### Uploaded data to parsers and trust decisions
 
@@ -152,28 +152,27 @@ compromised release job remains capable of publishing trusted artifacts.
 
 ## Deployment assumptions and unresolved questions
 
+The IIS CSRF-secret mismatch is resolved: `CERT_WATCH_CSRF_SECRET_FILE` is read
+through the declarative settings loader. All environment-backed sensitive
+settings now uniformly accept a `<NAME>_FILE` source, with the direct variable
+taking precedence when both are set.
+
 These items are not accepted risks. They require an operator decision or a
 follow-up code/documentation change:
 
-1. `deploy/iis/web.config` declares `CERT_WATCH_CSRF_SECRET_FILE`, but
-   `_resolve_security` reads only `CERT_WATCH_CSRF_SECRET` and otherwise derives
-   the CSRF secret from the authentication secret
-   (`deploy/iis/web.config:43-46`, `src/cert_watch/app.py:102-117`). Decide
-   whether IIS needs a separately loaded CSRF file or whether the configuration
-   should document derivation.
-2. The startup metrics warning says an absent metrics token leaves metrics
+1. The startup metrics warning says an absent metrics token leaves metrics
    unauthenticated, while the middleware keeps `/metrics` behind normal
    authentication when the token is absent
-   (`src/cert_watch/app.py:290-301`, `src/cert_watch/middleware.py:524-554`).
+   (`src/cert_watch/app.py`, `src/cert_watch/auth/request_context.py`).
    Align the warning with effective behavior.
-3. Decide whether Kubernetes should trust selected ingress proxy peers so audit
+2. Decide whether Kubernetes should trust selected ingress proxy peers so audit
    records and rate limits identify end clients. The current safe default uses
    the ingress peer.
-4. Confirm that administrator fallback for an empty role map and operator-level
+3. Confirm that administrator fallback for an empty role map and operator-level
    trust-anchor changes match the long-term authorization model.
-5. Record production filesystem/PVC ACLs, backup destinations, retention, and
+4. Record production filesystem/PVC ACLs, backup destinations, retention, and
    encryption-at-rest controls in the environment runbook.
-6. Confirm whether ingress-to-Service HTTP is inside the deployment's trusted
+5. Confirm whether ingress-to-Service HTTP is inside the deployment's trusted
    cluster boundary.
 
 ## Review triggers

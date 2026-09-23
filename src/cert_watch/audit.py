@@ -211,7 +211,7 @@ def resolve_source_ip(request: typing.Any) -> str | None:
     Returns None when the source IP cannot be determined.
     """
     try:
-        from cert_watch.middleware import _extract_client_ip
+        from cert_watch.security.ratelimit import _extract_client_ip
 
         ip = _extract_client_ip(request)
         return ip if ip != "unknown" else None

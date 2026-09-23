@@ -1,7 +1,7 @@
 """Tests for API-key auth (Plan 039 / BC-104).
 
 Covers the repository (create/verify/revoke/list, hashing, scope validation)
-and the middleware dependencies (require_auth / require_write / require_admin)
+and the middleware dependencies (require_auth / write_guard / require_admin)
 authenticating via an ``Authorization: Bearer cwk_…`` token.
 """
 
@@ -15,14 +15,10 @@ import pytest
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 
+from cert_watch.auth.guards import require_admin, require_auth, write_guard
+from cert_watch.auth.request_context import authenticate_api_key
 from cert_watch.database import init_schema
 from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
-from cert_watch.middleware import (
-    authenticate_api_key,
-    require_admin,
-    require_auth,
-    require_write,
-)
 from cert_watch.security import SecurityContext
 
 # ── repository ───────────────────────────────────────────────────────────
@@ -278,7 +274,7 @@ async def test_require_write_allows_write_scope_without_csrf(seeded):
     _, raw = repo.create_key("svc", "write")
     request = _make_request(db, bearer=raw)
     # No CSRF token on the request — must still succeed for the bearer path.
-    assert await require_write(request) == "svc"
+    assert await write_guard(request) == "svc"
 
 
 @pytest.mark.anyio
@@ -287,7 +283,7 @@ async def test_require_write_denies_read_scope(seeded):
     _, raw = repo.create_key("svc", "read")
     request = _make_request(db, bearer=raw)
     with pytest.raises(HTTPException) as exc:
-        await require_write(request)
+        await write_guard(request)
     assert exc.value.status_code == 403
 
 

@@ -40,32 +40,32 @@ def test_rate_limit_in_memory_fallback(monkeypatch, tmp_path):
     """Test in-memory rate limit fallback when no DB is configured."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    mw._rate_db_path = None
-    mw._clear_rate_caches()
-    assert mw.check_rate_limit("test:key", 2, 60) is True
-    assert mw.check_rate_limit("test:key", 2, 60) is True
-    assert mw.check_rate_limit("test:key", 2, 60) is False
-    mw._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._clear_rate_caches()
+    assert ratelimit_mod.check_rate_limit("test:key", 2, 60) is True
+    assert ratelimit_mod.check_rate_limit("test:key", 2, 60) is True
+    assert ratelimit_mod.check_rate_limit("test:key", 2, 60) is False
+    ratelimit_mod._clear_rate_caches()
 
 
 def test_rate_limit_db_path(monkeypatch, tmp_path):
     """Test SQLite-backed rate limiting."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     db_path = tmp_path / "rate.sqlite3"
-    mw._init_rate_db(db_path)
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
-    assert mw.check_rate_limit("test:db", 2, 60) is True
-    assert mw.check_rate_limit("test:db", 2, 60) is True
-    assert mw.check_rate_limit("test:db", 2, 60) is False
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    ratelimit_mod._init_rate_db(db_path)
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
+    assert ratelimit_mod.check_rate_limit("test:db", 2, 60) is True
+    assert ratelimit_mod.check_rate_limit("test:db", 2, 60) is True
+    assert ratelimit_mod.check_rate_limit("test:db", 2, 60) is False
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
 
 
 def test_rate_limit_stale_rows_purged(monkeypatch, tmp_path):
@@ -76,13 +76,13 @@ def test_rate_limit_stale_rows_purged(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
     import json
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
     from cert_watch.database.connection import _connect
 
     db_path = tmp_path / "rate.sqlite3"
-    mw._init_rate_db(db_path)
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
+    ratelimit_mod._init_rate_db(db_path)
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
 
     # Ensure the rate_limits table exists (normally created by init_schema on
     # first check_rate_limit) so we can seed a stale row directly.
@@ -100,31 +100,31 @@ def test_rate_limit_stale_rows_purged(monkeypatch, tmp_path):
         conn.commit()
 
     # Force cleanup to run (bypass the throttle).
-    mw._last_rate_cleanup = 0.0
-    assert mw.check_rate_limit("fresh:key", 2, 60) is True
+    ratelimit_mod._last_rate_cleanup = 0.0
+    assert ratelimit_mod.check_rate_limit("fresh:key", 2, 60) is True
 
     with _connect(db_path) as conn:
         keys = [r[0] for r in conn.execute("SELECT key FROM rate_limits")]
     assert "stale:key" not in keys
 
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
 
 
 def test_rate_limit_db_error_fallback(monkeypatch, tmp_path):
     """Test fallback to in-memory when DB errors."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    mw._rate_db_path = tmp_path / "nonexistent" / "dir" / "rate.sqlite3"
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
-    assert mw.check_rate_limit("test:fallback", 2, 60) is True
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    ratelimit_mod._rate_db_path = tmp_path / "nonexistent" / "dir" / "rate.sqlite3"
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
+    assert ratelimit_mod.check_rate_limit("test:fallback", 2, 60) is True
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
 
 
 def test_rate_limit_db_error_logs_error_with_marker(monkeypatch, tmp_path):
@@ -133,23 +133,23 @@ def test_rate_limit_db_error_logs_error_with_marker(monkeypatch, tmp_path):
 
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     db_path = tmp_path / "rate.sqlite3"
-    mw._init_rate_db(db_path)
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
+    ratelimit_mod._init_rate_db(db_path)
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
 
     def _boom(*a: object, **kw: object):
         raise sqlite3.Error("simulated DB failure")
 
     monkeypatch.setattr("cert_watch.database.connection._connect", _boom)
     captured: list[str] = []
-    monkeypatch.setattr(mw.logger, "error", lambda msg, *a, **kw: captured.append(msg))
-    mw.check_rate_limit("test:marker", 2, 60)
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    monkeypatch.setattr(ratelimit_mod.logger, "error", lambda msg, *a, **kw: captured.append(msg))
+    ratelimit_mod.check_rate_limit("test:marker", 2, 60)
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
     assert any("RATE_LIMIT_DEGRADED" in msg for msg in captured), \
         "Expected RATE_LIMIT_DEGRADED marker in ERROR log"
 
@@ -159,19 +159,19 @@ def test_rate_limit_cache_hit(monkeypatch, tmp_path):
     the in-memory cache mirror is consulted (the decision always reads SQLite)."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     db_path = tmp_path / "rate.sqlite3"
-    mw._init_rate_db(db_path)
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
+    ratelimit_mod._init_rate_db(db_path)
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
     # First request populates cache + DB row
-    assert mw.check_rate_limit("test:cache", 5, 60) is True
+    assert ratelimit_mod.check_rate_limit("test:cache", 5, 60) is True
     # Second request is still under the limit
-    assert mw.check_rate_limit("test:cache", 5, 60) is True
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    assert ratelimit_mod.check_rate_limit("test:cache", 5, 60) is True
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
 
 
 def test_rate_limit_reads_db_not_stale_cache(monkeypatch, tmp_path):
@@ -189,17 +189,17 @@ def test_rate_limit_reads_db_not_stale_cache(monkeypatch, tmp_path):
 
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     db_path = tmp_path / "rate.sqlite3"
-    mw._init_rate_db(db_path)
-    mw._rate_db_initialized = False
-    mw._clear_rate_caches()
+    ratelimit_mod._init_rate_db(db_path)
+    ratelimit_mod._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
     init_schema(db_path)
 
     key = "cross:worker"
     # First request from "this" worker: seeds the cache + DB with 1 timestamp.
-    assert mw.check_rate_limit(key, 2, 60) is True
+    assert ratelimit_mod.check_rate_limit(key, 2, 60) is True
 
     # Another worker records a second hit directly in SQLite, bringing the real
     # count to the limit (2). The in-memory cache on this worker still holds 1.
@@ -215,43 +215,45 @@ def test_rate_limit_reads_db_not_stale_cache(monkeypatch, tmp_path):
 
     # Old code: served the stale 1-entry cache → True (over the limit, undetected).
     # Fixed code: reads SQLite fresh → count is 2 → denied.
-    assert mw.check_rate_limit(key, 2, 60) is False
+    assert ratelimit_mod.check_rate_limit(key, 2, 60) is False
 
-    mw._clear_rate_caches()
-    mw._rate_db_path = None
-    mw._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
 
 
 def test_get_rate_remaining(monkeypatch, tmp_path):
     """Test get_rate_remaining returns correct values."""
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    mw._rate_db_path = None
-    mw._clear_rate_caches()
-    remaining, retry_after = mw.get_rate_remaining("test:remaining", 5, 60)
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._clear_rate_caches()
+    remaining, retry_after = ratelimit_mod.get_rate_remaining("test:remaining", 5, 60)
     assert remaining == 5
     assert retry_after >= 0  # 60 when empty (default=now gives full window)
-    mw._clear_rate_caches()
+    ratelimit_mod._clear_rate_caches()
 
 
 def test_rate_limit_concurrent_same_key_no_race():
     """Concurrent checks for the same key must not exceed the limit."""
     import concurrent.futures
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    mw._rate_db_path = None
-    mw._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._clear_rate_caches()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
-        futures = [ex.submit(mw.check_rate_limit, "race:key", 50, 60) for _ in range(200)]
+        futures = [
+            ex.submit(ratelimit_mod.check_rate_limit, "race:key", 50, 60) for _ in range(200)
+        ]
         results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
     assert results.count(True) == 50
     assert results.count(False) == 150
-    mw._clear_rate_caches()
+    ratelimit_mod._clear_rate_caches()
 
 
 def test_rate_limit_concurrent_different_keys_no_deadlock():
@@ -259,21 +261,24 @@ def test_rate_limit_concurrent_different_keys_no_deadlock():
     import concurrent.futures
     import time
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    mw._rate_db_path = None
-    mw._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._clear_rate_caches()
 
     start = time.perf_counter()
     with concurrent.futures.ThreadPoolExecutor(max_workers=32) as ex:
-        futures = [ex.submit(mw.check_rate_limit, f"key:{i % 128}", 100, 60) for i in range(256)]
+        futures = [
+            ex.submit(ratelimit_mod.check_rate_limit, f"key:{i % 128}", 100, 60)
+            for i in range(256)
+        ]
         results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
     assert all(results)
     # 256 cheap in-memory checks should complete in well under a second; the old
     # global-lock design would still pass, but a deadlock or severe contention fails.
     assert time.perf_counter() - start < 5.0
-    mw._clear_rate_caches()
+    ratelimit_mod._clear_rate_caches()
 
 
 # ---------- CSRF ----------
@@ -282,23 +287,23 @@ def test_rate_limit_concurrent_different_keys_no_deadlock():
 def test_csrf_token_roundtrip(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
-    mw.set_csrf_secret("test-secret")
-    token = mw.make_csrf_token("session123")
-    assert mw.validate_csrf_token(token, "session123") is True
-    assert mw.validate_csrf_token(token, "wrong_session") is False
-    assert mw.validate_csrf_token("invalid", "session123") is False
-    assert mw.validate_csrf_token("a:b", "session123") is False
+    csrf_mod.set_csrf_secret("test-secret")
+    token = csrf_mod.make_csrf_token("session123")
+    assert csrf_mod.validate_csrf_token(token, "session123") is True
+    assert csrf_mod.validate_csrf_token(token, "wrong_session") is False
+    assert csrf_mod.validate_csrf_token("invalid", "session123") is False
+    assert csrf_mod.validate_csrf_token("a:b", "session123") is False
 
 
 def test_csrf_token_expired(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     secret = "test-secret-expired"
-    mw.set_csrf_secret(secret)
+    csrf_mod.set_csrf_secret(secret)
     # Create an expired token by manipulating timestamp
     import hashlib
     import hmac as hmac_mod
@@ -307,7 +312,7 @@ def test_csrf_token_expired(monkeypatch, tmp_path):
     payload = f"session:{old_ts}"
     sig = hmac_mod.new(secret.encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
     expired_token = f"{payload}:{sig}"
-    assert mw.validate_csrf_token(expired_token, "session") is False
+    assert csrf_mod.validate_csrf_token(expired_token, "session") is False
 
 
 # ---------- Trusted proxy ----------
@@ -316,182 +321,182 @@ def test_csrf_token_expired(monkeypatch, tmp_path):
 def test_extract_client_ip_no_proxy(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", False)
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", False)
     req = MagicMock()
     req.client.host = "10.0.0.1"
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_no_client(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", False)
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", False)
     req = MagicMock()
     req.client = None
-    assert mw._extract_client_ip(req) == "unknown"
+    assert ratelimit_mod._extract_client_ip(req) == "unknown"
 
 
 def test_extract_client_ip_xff(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "203.0.113.1, 10.0.0.1"}
     # BC-029 C: when TRUSTED_PROXIES is empty, use the rightmost (proxy) entry
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_xff_trusted_proxy(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset(["10.0.0.1"]))
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset(["10.0.0.1"]))
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "203.0.113.1, 10.0.0.1"}
-    assert mw._extract_client_ip(req) == "203.0.113.1"
+    assert ratelimit_mod._extract_client_ip(req) == "203.0.113.1"
 
 
 def test_extract_client_ip_rejects_headers_from_untrusted_peer(monkeypatch):
     """A proxy allowlist applies to the TCP peer, not merely XFF chain entries."""
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     req = MagicMock()
     req.client.host = "198.51.100.9"
     req.headers = {
         "x-forwarded-for": "203.0.113.1, 10.0.0.1",
         "x-real-ip": "203.0.113.2",
     }
-    assert mw._extract_client_ip(req) == "198.51.100.9"
+    assert ratelimit_mod._extract_client_ip(req) == "198.51.100.9"
 
 
 def test_extract_client_ip_rejects_malformed_trusted_chain(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "attacker-controlled, 10.0.0.1"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     # X-Real-IP is only trusted when TRUSTED_PROXIES is configured.
     # Without TRUSTED_PROXIES, X-Real-IP is client-controlled and must
     # not be used for rate limiting.
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "203.0.113.2"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
-    assert mw._extract_client_ip(req) == "203.0.113.2"
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    assert ratelimit_mod._extract_client_ip(req) == "203.0.113.2"
 
 
 def test_extract_client_ip_real_ip_no_xff(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "198.51.100.5"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip_single_xff(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-forwarded-for": "203.0.113.1", "x-real-ip": "198.51.100.5"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip_disabled(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", False)
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", False)
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "203.0.113.2"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_real_ip_validated(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset({"10.0.0.1"}))
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {"x-real-ip": "not-an-ip"}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
     req.headers = {"x-real-ip": "203.0.113.2"}
-    assert mw._extract_client_ip(req) == "203.0.113.2"
+    assert ratelimit_mod._extract_client_ip(req) == "203.0.113.2"
 
     req.headers = {"x-real-ip": "::1"}
-    assert mw._extract_client_ip(req) == "::1"
+    assert ratelimit_mod._extract_client_ip(req) == "::1"
 
 
 def test_extract_client_ip_fallback(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client.host = "10.0.0.1"
     req.headers = {}
-    assert mw._extract_client_ip(req) == "10.0.0.1"
+    assert ratelimit_mod._extract_client_ip(req) == "10.0.0.1"
 
 
 def test_extract_client_ip_xff_empty(monkeypatch):
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.ratelimit as ratelimit_mod
 
-    monkeypatch.setattr(mw, "_TRUST_PROXY", True)
-    monkeypatch.setattr(mw, "_TRUSTED_PROXIES", frozenset())
+    monkeypatch.setattr(ratelimit_mod, "_TRUST_PROXY", True)
+    monkeypatch.setattr(ratelimit_mod, "_TRUSTED_PROXIES", frozenset())
     req = MagicMock()
     req.client = None
     req.headers = {"x-forwarded-for": ""}
-    assert mw._extract_client_ip(req) == "unknown"
+    assert ratelimit_mod._extract_client_ip(req) == "unknown"
 
 
 # ---------- CSRF edge cases ----------
@@ -501,9 +506,9 @@ def test_check_csrf_form_parse_exception_ignored(monkeypatch):
     import asyncio
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(mw, "_CSRF_BYPASS", False)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
     req = MagicMock()
     req.headers = {}
     req.cookies = {}
@@ -515,7 +520,7 @@ def test_check_csrf_form_parse_exception_ignored(monkeypatch):
     req.form = _bad_form
     loop = asyncio.new_event_loop()
     try:
-        err = loop.run_until_complete(mw.check_csrf(req))
+        err = loop.run_until_complete(csrf_mod.check_csrf(req))
     finally:
         loop.close()
     assert err == "missing CSRF token"
@@ -527,9 +532,9 @@ def test_check_csrf_rejects_invalid_form_token(monkeypatch):
 
     from starlette.datastructures import FormData
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(mw, "_CSRF_BYPASS", False)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
     req = MagicMock()
     req.headers = {}
     req.cookies = {}
@@ -541,7 +546,7 @@ def test_check_csrf_rejects_invalid_form_token(monkeypatch):
     req.form = fake_form
     loop = asyncio.new_event_loop()
     try:
-        err = loop.run_until_complete(mw.check_csrf(req))
+        err = loop.run_until_complete(csrf_mod.check_csrf(req))
     finally:
         loop.close()
     assert err == "invalid or expired CSRF token"
@@ -550,11 +555,11 @@ def test_check_csrf_rejects_invalid_form_token(monkeypatch):
 def test_request_db_path_no_settings_returns_none():
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.auth.request_context as reqctx_mod
 
     req = MagicMock()
     del req.app.state.settings
-    assert mw._request_db_path(req) is None
+    assert reqctx_mod._request_db_path(req) is None
 
 
 # ---------- Metrics token ----------
@@ -562,9 +567,9 @@ def test_request_db_path_no_settings_returns_none():
 
 def test_metrics_token_gate(reload_app, monkeypatch):
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.auth.request_context as reqctx_mod
 
-    monkeypatch.setattr(mw, "_METRICS_TOKEN", "my-secret")
+    monkeypatch.setattr(reqctx_mod, "_METRICS_TOKEN", "my-secret")
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 401
@@ -578,9 +583,9 @@ def test_metrics_token_gate(reload_app, monkeypatch):
 
 def test_metrics_token_wrong_bearer(reload_app, monkeypatch):
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.auth.request_context as reqctx_mod
 
-    monkeypatch.setattr(mw, "_METRICS_TOKEN", "my-secret")
+    monkeypatch.setattr(reqctx_mod, "_METRICS_TOKEN", "my-secret")
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics", headers={"Authorization": "Bearer wrong"})
     assert r.status_code == 401
@@ -596,7 +601,7 @@ def test_csrf_rejected_when_missing(csrf_strict, monkeypatch, tmp_path):
     import asyncio
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     req = MagicMock()
     req.headers = {}
@@ -610,7 +615,7 @@ def test_csrf_rejected_when_missing(csrf_strict, monkeypatch, tmp_path):
     req.form = fake_form
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(mw.check_csrf(req))
+        result = loop.run_until_complete(csrf_mod.check_csrf(req))
     finally:
         loop.close()
     assert result is not None  # "missing CSRF token"
@@ -622,34 +627,34 @@ def test_csrf_rejected_when_missing(csrf_strict, monkeypatch, tmp_path):
 def test_get_session_id_from_cookie():
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     req = MagicMock()
     req.cookies = {"cw_sid": "abc123"}
     req.scope = {}
-    assert mw.get_session_id(req) == "abc123"
+    assert csrf_mod.get_session_id(req) == "abc123"
 
 
 def test_get_session_id_from_scope():
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     req = MagicMock()
     req.cookies = {}
     req.scope = {"session_id": "scope_id"}
-    assert mw.get_session_id(req) == "scope_id"
+    assert csrf_mod.get_session_id(req) == "scope_id"
 
 
 def test_get_session_id_generated():
     from unittest.mock import MagicMock
 
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
     req = MagicMock()
     req.cookies = {}
     req.scope = {}
-    sid = mw.get_session_id(req)
+    sid = csrf_mod.get_session_id(req)
     assert len(sid) == 32  # hex of 16 bytes
 
 
@@ -659,9 +664,9 @@ def test_get_session_id_generated():
 def test_hsts_present_when_secure(reload_app, monkeypatch):
     """HSTS header is set when CERT_WATCH_COOKIE_SECURE=1."""
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.security.headers as headers_mod
 
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", True)
+    monkeypatch.setattr(headers_mod, "_COOKIE_SECURE", True)
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     hsts = r.headers.get("strict-transport-security", "")
@@ -673,9 +678,9 @@ def test_hsts_present_when_secure(reload_app, monkeypatch):
 def test_hsts_absent_when_insecure(reload_app, monkeypatch):
     """HSTS header is omitted when CERT_WATCH_COOKIE_SECURE=0."""
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.security.headers as headers_mod
 
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    monkeypatch.setattr(headers_mod, "_COOKIE_SECURE", False)
     with TestClient(app_mod.app) as client:
         r = client.get("/")
     assert "strict-transport-security" not in r.headers

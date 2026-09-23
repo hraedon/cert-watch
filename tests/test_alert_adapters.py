@@ -7,6 +7,7 @@ integration via ``send_webhook``.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -27,6 +28,7 @@ from cert_watch.alert_adapters import (
     _status_urgency,
     get_adapter,
 )
+from cert_watch.alerting.model import OutboundMessage
 from cert_watch.alerts import WebhookConfig, send_webhook
 from cert_watch.database import Alert
 
@@ -38,15 +40,16 @@ def _alert(
     message: str = "Certificate 'web.example.com' expires in 5 days.",
     hostname: str = "",
     subject: str = "",
-) -> Alert:
-    return Alert(
+) -> OutboundMessage:
+    return OutboundMessage(
+        subject=f"[cert-watch] {alert_type}: {message[:60]}",
+        body=message,
+        severity=alert_type,
         cert_id=cert_id,
-        alert_type=alert_type,
         status="pending",
-        message=message,
         threshold_days=threshold_days,
         hostname=hostname,
-        subject=subject,
+        cert_subject=subject,
     )
 
 
@@ -98,8 +101,14 @@ class TestGenericAdapter:
 
     def test_extra_recipients_in_payload(self):
         adapter = GenericAdapter()
-        alert = _alert()
-        alert.extra_recipients = ["team@example.com"]
+        alert = OutboundMessage(
+            subject="subject",
+            body="body",
+            severity="expiry_warning",
+            cert_id="cert-abc123",
+            recipients=("team@example.com",),
+            queued_recipients=("team@example.com",),
+        )
         config = _config()
         req = adapter.build(alert, config)
         body = json.loads(req.body)
@@ -130,7 +139,7 @@ class TestDiscordAdapter:
         assert len(body["embeds"]) == 1
         embed = body["embeds"][0]
         assert "expiry warning" in embed["title"].lower()
-        assert embed["description"] == alert.message
+        assert embed["description"] == alert.body
         assert isinstance(embed["color"], int)
 
     def test_expired_color_red(self):
@@ -310,14 +319,14 @@ class TestSendWebhookWithAdapters:
     def test_discord_delivery(self):
         config = _config(kind="discord")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
             ok = send_webhook(alert, config)
-        assert ok is True
+        assert ok.delivered
         call_kwargs = mock_urlopen.call_args
         body = json.loads(call_kwargs.kwargs["data"])
         assert body["username"] == "cert-watch"
@@ -325,14 +334,14 @@ class TestSendWebhookWithAdapters:
     def test_teams_delivery(self):
         config = _config(kind="teams")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
             ok = send_webhook(alert, config)
-        assert ok is True
+        assert ok.delivered
         call_kwargs = mock_urlopen.call_args
         body = json.loads(call_kwargs.kwargs["data"])
         assert body["type"] == "message"
@@ -340,39 +349,39 @@ class TestSendWebhookWithAdapters:
     def test_pagerduty_delivery_202(self):
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
             ok = send_webhook(alert, config)
-        assert ok is True
+        assert ok.delivered
         assert mock_urlopen.call_args[0][0] == _PAGERDUTY_EVENTS_URL
 
     def test_pagerduty_delivery_non_202_is_failure(self):
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
             ok = send_webhook(alert, config)
-        assert ok is False
+        assert not ok.delivered
 
     def test_generic_delivery_still_works(self):
         config = _config(kind="generic")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
             mock_resp.__exit__ = MagicMock(return_value=False)
             mock_urlopen.return_value = mock_resp
             ok = send_webhook(alert, config)
-        assert ok is True
+        assert ok.delivered
         call_kwargs = mock_urlopen.call_args
         body = json.loads(call_kwargs.kwargs["data"])
         assert body["alert_type"] == "expiry_warning"
@@ -384,13 +393,13 @@ class TestSendWebhookWithAdapters:
         )
         alert = _alert()
         with patch(
-            "cert_watch.alerts.ssrf_safe_urlopen",
+            "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
             side_effect=Exception("POST failed: routing_key=super-secret-key-1234567890"),
         ):
             ok = send_webhook(alert, config)
-        assert ok is False
-        assert "super-secret-key-1234567890" not in (alert.error_message or "")
-        assert "***" in (alert.error_message or "")
+        assert not ok.delivered
+        assert "super-secret-key-1234567890" not in ok.operator_message
+        assert "***" in ok.operator_message
 
     def test_ssrf_blocked(self):
         from cert_watch.http_client import SSRFBlockedError
@@ -398,12 +407,12 @@ class TestSendWebhookWithAdapters:
         config = _config(kind="discord")
         alert = _alert()
         with patch(
-            "cert_watch.alerts.ssrf_safe_urlopen",
+            "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
             side_effect=SSRFBlockedError("blocked IP: 127.0.0.1"),
         ):
             ok = send_webhook(alert, config)
-        assert ok is False
-        assert "blocked" in (alert.error_message or "")
+        assert not ok.delivered
+        assert "blocked" in ok.operator_message
 
 
 # ---------------------------------------------------------------------------
@@ -452,7 +461,7 @@ class TestPagerDutyResolve:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -467,7 +476,7 @@ class TestPagerDutyResolve:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -492,7 +501,7 @@ class TestPagerDutyResolve:
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -531,7 +540,7 @@ class TestSlackAdapter:
         assert len(body["attachments"]) == 1
         att = body["attachments"][0]
         assert att["footer"] == "cert-watch"
-        assert att["text"] == alert.message
+        assert att["text"] == alert.body
 
     def test_expired_color_danger(self):
         assert _slack_color("expired") == "danger"
@@ -596,7 +605,7 @@ class TestAlertmanagerAdapter:
         assert entry["labels"]["host"] == "web.example.com"
         assert entry["labels"]["cert_subject"] == "CN=web.example.com"
         assert entry["labels"]["urgency"] == "expiry_warning"
-        assert entry["annotations"]["summary"] == alert.message
+        assert entry["annotations"]["summary"] == alert.body
         assert entry["generatorURL"] == config.url
 
     def test_url_uses_config_url(self):
@@ -720,7 +729,7 @@ class TestAlertmanagerAdapter:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -739,7 +748,7 @@ class TestAlertmanagerAdapter:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 500
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -771,7 +780,7 @@ class TestAlertmanagerAdapter:
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -814,7 +823,7 @@ class TestPagerDutyDedupKeyStability:
         adapter = PagerDutyAdapter()
         config = _config(kind="pagerduty", routing_key="rk")
         alert = _alert(cert_id="cert-2", threshold_days=7)
-        alert.trigger_cert_id = "cert-1"
+        alert = replace(alert, trigger_cert_id="cert-1")
         body = json.loads(adapter.build(alert, config).body)
         assert body["dedup_key"] == _pd_dedup_key("cert-1", "expiry_warning", 7)
 
@@ -832,11 +841,11 @@ class TestPagerDutyDedupKeyStability:
         adapter = PagerDutyAdapter()
         config = _config(kind="pagerduty", routing_key="rk")
         alert = _alert(cert_id="cert-2", threshold_days=7)
-        alert.trigger_cert_id = "cert-1"
+        alert = replace(alert, trigger_cert_id="cert-1")
         trigger_key = json.loads(adapter.build(alert, config).body)["dedup_key"]
         resolve = adapter.build_resolve(
             alert.trigger_cert_id or alert.cert_id,
-            alert.alert_type,
+            alert.severity,
             alert.threshold_days,
             config,
         )

@@ -21,6 +21,30 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.x509.oid import NameOID
 
 
+class FakeTransport:
+    """Deterministic transport for dispatcher/evidence contract tests."""
+
+    def __init__(self, *results, channel: str = "webhook:generic") -> None:
+        from cert_watch.alerting.model import SendResult
+
+        self.channel = channel
+        self.destination_id = "fake-destination"
+        self.results = list(results) or [SendResult("accepted")]
+        self.messages = []
+
+    def send(self, msg):
+        self.messages.append(msg)
+        if len(self.results) > 1:
+            return self.results.pop(0)
+        return self.results[0]
+
+
+@pytest.fixture
+def fake_transport():
+    """Factory fixture returning a protocol-compatible recording transport."""
+    return FakeTransport
+
+
 @pytest.fixture(autouse=True)
 def _resolve_synthetic_smtp_hosts(monkeypatch):
     """Give the suite's reserved SMTP hostnames a stable public address."""
@@ -256,22 +280,23 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
     monkeypatch.setenv("CERT_WATCH_CSRF_SECRET", "test-csrf-secret-for-tests")
 
-    from cert_watch import middleware as _mw
+    import cert_watch.security.csrf as csrf_mod
+    import cert_watch.security.ratelimit as ratelimit_mod
     from cert_watch.auth import set_signing_key
-    from cert_watch.middleware import set_csrf_secret
+    from cert_watch.security.csrf import set_csrf_secret
 
     set_signing_key("test-auth-secret-for-tests")
     set_csrf_secret("test-csrf-secret-for-tests")
-    monkeypatch.setattr(_mw, "_CSRF_BYPASS", True)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", True)
     # Reset rate-limit state between tests. The limiter's in-memory cache and
     # SQLite-path globals are process-wide; without this, calls accumulate
     # across the whole session and trip the 60/min /api cap on a fast (no
     # coverage) run — flaky, order/timing-dependent CI failures. Each test that
     # needs to exercise rate limiting bursts within its own body, so a clean
     # window at the start is correct.
-    _mw._clear_rate_caches()
-    _mw._rate_db_path = None
-    _mw._rate_db_initialized = False
+    ratelimit_mod._clear_rate_caches()
+    ratelimit_mod._rate_db_path = None
+    ratelimit_mod._rate_db_initialized = False
     yield
 
 
@@ -287,9 +312,9 @@ def csrf_strict(monkeypatch):
     In bypass mode ``check_csrf`` auto-mints and validates a token; this fixture
     disables that auto-minting to test the real rejection path (WI-099).
     """
-    from cert_watch import middleware as _mw
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(_mw, "_CSRF_BYPASS", False)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
 
 
 @pytest.fixture(autouse=True)

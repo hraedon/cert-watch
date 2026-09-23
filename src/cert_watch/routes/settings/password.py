@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.auth import _scrypt_hash, verify_scrypt_hash
@@ -15,9 +15,8 @@ from cert_watch.config import (
     setting_env_is_set,
 )
 from cert_watch.database import bump_session_version, get_write_lock, kv_set, kv_set_secret
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import _db_path, _get_settings
-from cert_watch.routes.settings.core import _rebuild_settings
+from cert_watch.routes.settings.core import _rebuild_settings, settings_tab_form
 
 logger = logging.getLogger("cert_watch.routes.settings")
 
@@ -25,15 +24,9 @@ router = APIRouter()
 
 
 @router.post("/settings/change-password")
-async def change_local_admin_password(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
-
+async def change_local_admin_password(
+    request: Request, _auth: str = Depends(settings_tab_form("auth")),
+) -> RedirectResponse:
     db = _db_path(request)
     s = _get_settings(request)
     form = await request.form()
