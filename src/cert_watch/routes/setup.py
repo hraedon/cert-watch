@@ -10,7 +10,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
-from cert_watch.config import LOCAL_ADMIN_PASSWORD_HASH, LOCAL_ADMIN_USER, SETUP_COMPLETE
+from cert_watch.config import (
+    LOCAL_ADMIN_PASSWORD_HASH,
+    LOCAL_ADMIN_USER,
+    SETUP_COMPLETE,
+    Settings,
+)
 from cert_watch.database import bump_session_version, get_write_lock, kv_set
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.security.csrf import check_csrf, get_csrf_context
@@ -101,7 +106,6 @@ async def setup_submit(
         # Optional: scan-allowlist of private CIDRs (SSRF policy). Validate before
         # persisting so a typo doesn't half-complete setup.
         import ipaddress
-        from dataclasses import replace as _dc_replace
 
         subnet_list = [c.strip() for c in allowed_subnets.split(",") if c.strip()]
         for cidr in subnet_list:
@@ -131,16 +135,16 @@ async def setup_submit(
             if subnet_list:
                 kv_set(db, "allowed_subnets", ",".join(subnet_list))
             kv_set(db, SETUP_COMPLETE, "1")
+        # Re-resolve through the canonical env + kv loader so both the new local
+        # admin and optional allowlist are visible to every runtime consumer.
+        # Settings is frozen; replacing just allowed_subnets here used to work
+        # only because build_auth_provider performed its own hidden kv reads.
+        s = Settings.from_env_with_kv(db, encryption_key=enc_key)
+        request.app.state.settings = s
+        context = getattr(request.app.state, "scheduler_context", None)
+        if context is not None:
+            context.update_settings(s)
         if subnet_list:
-            # Apply immediately to the running app (Settings is frozen).
-            request.app.state.settings = _dc_replace(s, allowed_subnets=tuple(subnet_list))
-            s = request.app.state.settings
-            # Publish to the running scheduler too. Assigning app.state alone left
-            # scheduled scans on the pre-wizard allowlist until the next restart --
-            # the exact UI/runtime divergence this plan exists to remove.
-            context = getattr(request.app.state, "scheduler_context", None)
-            if context is not None:
-                context.update_settings(s)
             logger.info("setup wizard: scan allowlist set to %s", subnet_list)
 
         # Rebuild auth provider with the new local admin

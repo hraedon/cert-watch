@@ -12,14 +12,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from cert_watch.auth.rbac import AuthContext
+
 
 class MissingAuthContextError(RuntimeError):
     """A service mutation was attempted without an explicit principal."""
 
 
-def require_auth_context(auth_ctx: Any) -> Any:
-    """Fail closed when a service caller omits its acting principal."""
-    if auth_ctx is None:
+def require_auth_context(auth_ctx: Any) -> AuthContext:
+    """Fail closed unless a service caller supplies a real acting principal."""
+    if not isinstance(auth_ctx, AuthContext):
         raise MissingAuthContextError("auth context is required")
     return auth_ctx
 

@@ -39,6 +39,46 @@ def test_put_api_policy_saves_and_reloads(reload_app):
     assert rsa_rule["severity"] == "critical"
 
 
+def test_put_api_policy_merges_against_kv_not_stale_snapshot(reload_app, tmp_path):
+    import json
+
+    from cert_watch.config import Settings, publish_settings
+    from cert_watch.database import kv_get, kv_set
+    from cert_watch.policy import PolicyRule, PolicySet, _serialize_policy_set
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    stale = Settings.from_env_with_kv(db)
+    persisted = PolicySet(
+        rules=[PolicyRule("persisted_rule", "custom", "warning", True)],
+        default_severity="warning",
+    )
+
+    with TestClient(app_mod.app) as client:
+        kv_set(db, "policy_set", _serialize_policy_set(persisted))
+        publish_settings(stale)
+        response = client.put(
+            "/api/policy",
+            json={
+                "default_severity": "critical",
+                "rules": [{
+                    "rule_id": "incoming_rule",
+                    "category": "custom",
+                    "severity": "critical",
+                    "enabled": True,
+                    "parameters": {},
+                }],
+            },
+        )
+
+    assert response.status_code == 200
+    stored = json.loads(kv_get(db, "policy_set") or "{}")
+    assert {rule["rule_id"] for rule in stored["rules"]} == {
+        "persisted_rule",
+        "incoming_rule",
+    }
+
+
 def test_get_api_policy_violations_empty(reload_app):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:

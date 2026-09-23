@@ -912,6 +912,44 @@ def test_env_still_overrides_kv_store(monkeypatch, tmp_path):
     assert s.ldap_server == "ldap://env.example.com", "env should override kv_store"
 
 
+def test_blank_local_admin_hash_env_preserves_stored_admin(monkeypatch, tmp_path):
+    """A blank Compose placeholder must never trigger break-glass replacement."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import LocalAdminProvider, _scrypt_hash
+    from cert_watch.database import derive_encryption_key, init_schema
+    from cert_watch.database.kv_store import kv_get, kv_set, kv_set_secret
+
+    data_dir = tmp_path / "bc159-blank-local-admin"
+    data_dir.mkdir()
+    db_path = data_dir / "cert-watch.sqlite3"
+    auth_secret = "a" * 64
+    encryption_key = derive_encryption_key(auth_secret)
+    init_schema(db_path)
+    original_hash = _scrypt_hash("original-password")
+    kv_set(db_path, "local_admin_user", "breakglass")
+    kv_set_secret(db_path, "local_admin_password_hash", original_hash, encryption_key)
+    kv_set(db_path, "setup_complete", "1")
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", auth_secret)
+    monkeypatch.setenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", "")
+
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/login").status_code == 200
+
+    assert isinstance(app.state.auth_provider, LocalAdminProvider)
+    assert app.state.settings.local_admin_user == "breakglass"
+    assert app.state.settings.local_admin_password_hash == original_hash
+    assert kv_get(db_path, "local_admin_user") == "breakglass"
+    assert (
+        kv_get(db_path, "local_admin_password_hash", encryption_key=encryption_key)
+        == original_hash
+    )
+    assert not (data_dir / "initial-admin-password").exists()
+
+
 def test_no_kv_store_falls_back_to_env_only(monkeypatch, tmp_path):
     """When kv_store is empty, boot uses env-only settings (no crash)."""
     from cert_watch.app import create_app

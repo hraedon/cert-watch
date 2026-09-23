@@ -38,7 +38,7 @@ async def setup_redirect_middleware(
     if not needs_setup:
         return await call_next(request)
     path = request.url.path
-    if is_public_path(path) or path.startswith("/setup") or path.startswith("/api/"):
+    if is_public_path(path, request) or path.startswith("/setup") or path.startswith("/api/"):
         return await call_next(request)
     return RedirectResponse(url="/setup", status_code=303)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -248,7 +249,7 @@ def test_api_host_settings_rejects_type_confusion_without_calling_service(
     assert "TypeError" not in response.text
 
 
-def test_invalid_api_add_host_does_not_consume_action_budget(
+def test_invalid_api_add_host_consumes_action_budget(
     reload_app, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     api_hosts = importlib.import_module("cert_watch.routes.api.hosts")
@@ -259,18 +260,72 @@ def test_invalid_api_add_host_does_not_consume_action_budget(
 
     monkeypatch.setattr(api_hosts, "create_hosts", created)
     with TestClient(reload_app().app) as client:
-        for _ in range(25):
+        for _ in range(20):
             invalid = client.post("/api/hosts", json={"hostname": "example.test", "port": True})
             assert invalid.status_code in {400, 422}
-        for _ in range(20):
-            allowed = client.post(
-                "/api/hosts", json={"hostname": "example.test", "port": 443}
-            )
-            assert allowed.status_code == 201
         blocked = client.post(
+            "/api/hosts", json={"hostname": "example.test", "port": True}
+        )
+        valid_after_flood = client.post(
             "/api/hosts", json={"hostname": "example.test", "port": 443}
         )
     assert blocked.status_code == 429
+    assert valid_after_flood.status_code == 429
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [("/upload", 303), ("/api/certificates/upload", 400)],
+)
+def test_upload_parse_details_are_logged_but_not_returned(
+    path: str,
+    expected_status: int,
+    reload_app,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="cert_watch.services.certificate_management")
+    with TestClient(reload_app().app) as client:
+        response = client.post(
+            path,
+            files={"file": ("bad.der", b"not a certificate", "application/pkix-cert")},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == expected_status
+    if path == "/upload":
+        assert response.headers["location"] == "/?error=could%20not%20parse%20certificate%20file"
+    else:
+        assert response.json() == {"error": "could not parse certificate file"}
+    assert "ParseError" not in response.text
+    assert "ShortData" not in response.text
+    assert "failed to parse DER:" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("path", "expected_status"),
+    [("/upload", 303), ("/api/certificates/upload", 422)],
+)
+def test_non_file_upload_details_are_logged_but_not_returned(
+    path: str,
+    expected_status: int,
+    reload_app,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="cert_watch.routes.upload_validation")
+    with TestClient(reload_app().app) as client:
+        response = client.post(path, data={"file": "not-a-file"}, follow_redirects=False)
+
+    assert response.status_code == expected_status
+    if path == "/upload":
+        assert response.headers["location"] == (
+            "/?error=upload%20must%20include%20a%20certificate%20file"
+        )
+    else:
+        assert response.json() == {"error": "upload must include a certificate file"}
+    assert "UploadFile" not in response.text
+    assert "<class 'str'>" not in response.text
+    assert "Expected UploadFile" in caplog.text
+    assert "not-a-file" not in caplog.text
 
 
 @pytest.mark.anyio

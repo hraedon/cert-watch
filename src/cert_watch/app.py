@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 import typing
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -23,6 +22,7 @@ from cert_watch.config import (
     LOCAL_ADMIN_USER,
     SETUP_COMPLETE,
     Settings,
+    publish_settings,
 )
 from cert_watch.database import (
     check_encrypted_values,
@@ -34,6 +34,7 @@ from cert_watch.filters import register_filters
 from cert_watch.firstrun import FirstRunPosture, first_run_action, is_network_exposed
 from cert_watch.middleware import install_middleware
 from cert_watch.routes import api as route_modules
+from cert_watch.routes.upload_validation import install_upload_validation_handler
 from cert_watch.scheduler import start_scheduler, stop_scheduler
 from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.security import SecurityContext
@@ -102,10 +103,11 @@ def _resolve_security(s: Settings) -> SecurityContext:
     """
     from cert_watch.config import resolve_or_persist_secret
 
-    auth_secret = resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
-    csrf_env = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
-    if csrf_env and csrf_env.strip():
-        csrf_secret = csrf_env.strip()
+    auth_secret = s.auth_secret or resolve_or_persist_secret(
+        "CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret"
+    )
+    if s.csrf_secret and s.csrf_secret.strip():
+        csrf_secret = s.csrf_secret.strip()
     else:
         csrf_secret = hashlib.sha256((auth_secret + "csrf").encode()).hexdigest()
     return SecurityContext(signing_key=auth_secret, csrf_secret=csrf_secret)
@@ -211,9 +213,27 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     else:
         security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
         init_schema(s.db_path)
+        encryption_key = derive_encryption_key(security.signing_key)
+        # Preserve the historical create_app(Settings.from_env()) contract for
+        # a persisted local admin without making the auth provider perform
+        # hidden database reads. Other injected values stay exactly as supplied;
+        # callers wanting the complete persisted snapshot use from_env_with_kv.
+        from dataclasses import replace
+
+        persisted = s.with_kv(s.db_path, encryption_key)
+        s = replace(
+            s,
+            local_admin_user=persisted.local_admin_user,
+            local_admin_password_hash=persisted.local_admin_password_hash,
+        )
+    assert s is not None
+    encryption_key = derive_encryption_key(security.signing_key)
 
     _setup_logging(log_format=s.log_format)
     _init_rate_db(s.db_path)
+    from cert_watch.siem import configure_exporter
+
+    configure_exporter(s)
 
     auth = getattr(app.state, "_injected_auth", None) or s.build_auth_provider(security=security)
 
@@ -222,9 +242,9 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     # detection can't diverge from the real bind (BC-090). The decision itself is
     # the pure first_run_action (BC-114), kept out of this side-effecting lifespan
     # so it can be table-tested.
-    bind_host = os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
-    trust_proxy = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
-    trusted_proxies = os.environ.get("CERT_WATCH_TRUSTED_PROXIES", "")
+    bind_host = s.bind_host
+    trust_proxy = s.trust_proxy
+    trusted_proxies = s.trusted_proxies
     if trust_proxy and not trusted_proxies:
         logger.warning(
             "CERT_WATCH_TRUST_PROXY=1 but CERT_WATCH_TRUSTED_PROXIES is empty. "
@@ -232,11 +252,12 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
             "Set CERT_WATCH_TRUSTED_PROXIES if you have multiple proxy hops."
         )
     exposed = is_network_exposed(bind_host, trust_proxy)
+    allow_unauth = s.allow_unauth
 
     def _posture() -> FirstRunPosture:
         return first_run_action(
             has_provider=not isinstance(auth, NoAuthProvider),
-            allow_unauth=s.allow_unauth,
+            allow_unauth=allow_unauth,
             network_exposed=exposed,
         )
 
@@ -250,6 +271,10 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         getattr(app.state, "_injected_auth", None) is None
     ):
         _provision_initial_admin(s, security=security)
+        # Provisioning writes the same kv keys as /setup. Re-resolve through the
+        # one config path so the new account is visible without a special
+        # build_auth_provider kv fallback.
+        s = Settings.from_env_with_kv(s.db_path, encryption_key)
         auth = s.build_auth_provider(security=security)
         posture = _posture()
 
@@ -261,6 +286,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     app.state.auth_provider = auth
     app.state.settings = s
     app.state.security = security
+    publish_settings(s)
 
     encryption_key = derive_encryption_key(security.signing_key)
     undecryptable = check_encrypted_values(s.db_path, encryption_key)
@@ -286,7 +312,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
             )
     logger.info("cert-watch starting, db=%s, sched=%02d:%02d, tls_verify=%s, auth=%s",
                 s.db_path, s.sched_hour, s.sched_min, s.tls_verify, auth.provider_name)
-    if os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") != "1":
+    if not s.cookie_secure:
         logger.warning(
             "Session cookie Secure flag is DISABLED via CERT_WATCH_COOKIE_SECURE=0. "
             "Cookies will be sent over plain HTTP — never use in production."
@@ -295,9 +321,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     # L1: warn when auth is enabled but /metrics is open (no token gate).
     # The default behavior is intentionally unchanged (breaking it would
     # affect existing deployments); this is an operator-awareness warning.
-    if not isinstance(auth, NoAuthProvider) and not os.environ.get(
-        "CERT_WATCH_METRICS_TOKEN"
-    ):
+    if not isinstance(auth, NoAuthProvider) and not s.metrics_token:
         logger.warning(
             "AUTH_PROVIDER is configured but CERT_WATCH_METRICS_TOKEN is not set. "
             "The /metrics endpoint is accessible without authentication and exposes "
@@ -377,6 +401,7 @@ def create_app(
 
     install_middleware(application)
     install_guard_handler(application)
+    install_upload_validation_handler(application)
 
     # Mount route modules
     for router in route_modules:

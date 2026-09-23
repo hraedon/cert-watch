@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,8 @@ from cert_watch.database import (
 )
 from cert_watch.tags import format_tags, merge_tags
 from cert_watch.upload import ParseError, UploadedEntry, store_uploaded, upload_certificate
+
+logger = logging.getLogger("cert_watch.services.certificate_management")
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 CERTIFICATE_SUFFIXES = frozenset({".pem", ".crt", ".cer", ".der", ".pfx", ".p12", ".p7b", ".p7c"})
@@ -79,7 +82,14 @@ def upload_certificate_bytes(
     scope = getattr(auth, "scope_tag", "") if auth is not None else ""
     tags = format_tags(merge_tags(tags, scope or ""))
     ensure_new_tags_in_scope(auth, tags)
-    entry = _parse_upload(content, filename, password, CERTIFICATE_SUFFIXES)
+    try:
+        entry = _parse_upload(content, filename, password, CERTIFICATE_SUFFIXES)
+    except CertificateValidationError as exc:
+        logger.warning("certificate upload parsing failed for %r: %s", filename, exc)
+        message = str(exc)
+        if message.startswith(("failed to parse DER:", "failed to parse PEM:")):
+            message = "could not parse certificate file"
+        raise CertificateValidationError(message) from None
     with get_write_lock():
         cert_id = store_uploaded(entry, db_path, tags=tags)
     record_audit(

@@ -569,8 +569,12 @@ def test_settings_reads_kv_store_values(reload_app, tmp_path):
     init_schema(db)
     kv_set(db, "auth_provider", "ldap")
     kv_set(db, "ldap_server", "ldap://dc1.example.com")
+    kv_set(db, "ldap_base_dn", "DC=example,DC=com")
 
-    app_mod = reload_app()
+    # This test inspects a saved provider before activating it. Production-path
+    # loading would correctly activate LDAP and redirect the unauthenticated
+    # request to login, so use the fixture's explicit env-only opt-out here.
+    app_mod = reload_app(_pure_env=True)
     with TestClient(app_mod.app) as client:
         r = client.get("/settings?tab=auth")
     assert r.status_code == 200
@@ -1158,6 +1162,7 @@ def test_pin_ldap_ca_success(reload_app, tmp_path, chain_triplet):
             "/settings/pin-ldap-ca",
             data={"ldap_ca_cert": pem},
         )
+        assert app_mod.app.state.settings.ldap_ca_cert == pem.strip()
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True

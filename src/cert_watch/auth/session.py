@@ -20,6 +20,7 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 
 from cert_watch.config import read_secret
 from cert_watch.security import SecurityContext
@@ -90,6 +91,15 @@ def _decode_list(encoded: str) -> list[str]:
 # Session cookie config
 SESSION_COOKIE = "cw_auth"
 SESSION_TTL = 8 * 3600  # 8 hours, matches CSRF token TTL
+
+
+@lru_cache(maxsize=16)
+def _session_ttl_from_env_value(raw: str) -> int:
+    """Resolve a stable process env value once instead of on every request."""
+    del raw  # cache key; Settings remains the canonical parser and validator
+    from cert_watch.config import Settings
+
+    return Settings.from_env().session_ttl
 # Browsers cap a single cookie at ~4096 bytes (name + value + attributes); past
 # that the cookie is silently dropped. Warn before a session token gets close.
 _MAX_SAFE_SESSION_BYTES = 3500
@@ -364,8 +374,14 @@ def validate_session(
     if session_ttl is not None:
         ttl = session_ttl
     else:
-        env_ttl = int(os.environ.get("CERT_WATCH_SESSION_TTL", "0"))
-        ttl = env_ttl or getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
+        from cert_watch.config import setting_env_is_set
+
+        if setting_env_is_set("session_ttl"):
+            ttl = _session_ttl_from_env_value(
+                os.environ.get("CERT_WATCH_SESSION_TTL", "")
+            )
+        else:
+            ttl = getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
     if (time.time() - info.timestamp) > ttl:
         return None
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import secrets
 from urllib.parse import urlparse
 
@@ -17,10 +16,19 @@ logger = logging.getLogger("cert_watch.middleware")
 
 # HSTS is emitted only for HTTPS deployments (same switch as the Secure flag
 # on the session and CSRF cookies).
-_COOKIE_SECURE = os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") == "1"
+_COOKIE_SECURE = True  # Direct-call/test fallback; request paths use Settings.
 
 
-def _build_csp(nonce: str) -> str:
+def _cookie_secure(request: Request | None = None) -> bool:
+    if not _COOKIE_SECURE:
+        return False
+    app = request.scope.get("app") if request is not None else None
+    settings = getattr(getattr(app, "state", None), "settings", None)
+    configured = getattr(settings, "cookie_secure", True)
+    return configured if isinstance(configured, bool) else _COOKIE_SECURE
+
+
+def _build_csp(nonce: str, report_uri: str = "") -> str:
     """Build the Content-Security-Policy header for a request.
 
     ``script-src`` uses a per-request nonce — inline ``on*=`` event-handler
@@ -44,7 +52,6 @@ def _build_csp(nonce: str) -> str:
         "form-action 'self'; "
         "frame-ancestors 'none'"
     )
-    report_uri = os.environ.get("CERT_WATCH_CSP_REPORT_URI", "")
     if report_uri:
         parsed = urlparse(report_uri)
         if parsed.scheme in ("http", "https") and parsed.netloc:
@@ -77,9 +84,15 @@ class CSPNonceMiddleware:
         await self.app(scope, receive, send)
 
 
-def _apply_security_headers(response: Response, nonce: str) -> None:
+def _apply_security_headers(
+    response: Response,
+    nonce: str,
+    *,
+    report_uri: str = "",
+    cookie_secure: bool = _COOKIE_SECURE,
+) -> None:
     """Apply security headers to a response (shared by normal + error paths)."""
-    response.headers["Content-Security-Policy"] = _build_csp(nonce)
+    response.headers["Content-Security-Policy"] = _build_csp(nonce, report_uri)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -87,7 +100,7 @@ def _apply_security_headers(response: Response, nonce: str) -> None:
         "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
     )
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
-    if _COOKIE_SECURE:
+    if cookie_secure:
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
@@ -117,6 +130,11 @@ async def security_headers_middleware(
             content={"detail": "Internal Server Error"},
             status_code=500,
         )
-    _apply_security_headers(response, nonce)
+    settings = getattr(request.app.state, "settings", None)
+    _apply_security_headers(
+        response,
+        nonce,
+        report_uri=getattr(settings, "csp_report_uri", ""),
+        cookie_secure=_cookie_secure(request),
+    )
     return response
-

@@ -8,7 +8,6 @@ import contextlib
 import ipaddress
 import json
 import logging
-import os
 import sqlite3
 import threading
 from datetime import UTC, datetime
@@ -50,10 +49,24 @@ def _clear_rate_caches() -> None:
     for cache in _rate_caches:
         cache.clear()
 
-_TRUST_PROXY = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
-_TRUSTED_PROXIES = frozenset(
-    p.strip() for p in os.environ.get("CERT_WATCH_TRUSTED_PROXIES", "").split(",") if p.strip()
-)
+_TRUST_PROXY = False  # Direct-call/test fallbacks; request paths use Settings.
+_TRUSTED_PROXIES: frozenset[str] = frozenset()
+
+
+def _proxy_settings(request: Request) -> tuple[bool, frozenset[str]]:
+    app = request.scope.get("app")
+    settings = getattr(getattr(app, "state", None), "settings", None)
+    configured_trust = getattr(settings, "trust_proxy", False)
+    configured_proxies = getattr(settings, "trusted_proxies", ())
+    trust_proxy = _TRUST_PROXY or (
+        configured_trust if isinstance(configured_trust, bool) else False
+    )
+    trusted_proxies = _TRUSTED_PROXIES or (
+        frozenset(configured_proxies)
+        if isinstance(configured_proxies, (tuple, list, set, frozenset))
+        else frozenset()
+    )
+    return trust_proxy, trusted_proxies
 
 
 def _extract_client_ip(request: Request) -> str:
@@ -75,29 +88,30 @@ def _extract_client_ip(request: Request) -> str:
     well-formed IP address to prevent garbage injection.
     """
     peer = request.client.host if request.client else "unknown"
-    if not _TRUST_PROXY:
+    trust_proxy, trusted_proxies = _proxy_settings(request)
+    if not trust_proxy:
         return peer
 
     # A configured allowlist describes which immediate TCP peers may supply
     # forwarding headers. Without this check, merely setting TRUSTED_PROXIES
     # caused headers from every peer to be trusted (WI-144).
-    if _TRUSTED_PROXIES and peer not in _TRUSTED_PROXIES:
+    if trusted_proxies and peer not in trusted_proxies:
         return peer
 
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         parts = [p.strip() for p in xff.split(",")]
-        if _TRUSTED_PROXIES:
+        if trusted_proxies:
             for part in reversed(parts):
                 try:
                     ipaddress.ip_address(part)
                 except ValueError:
                     return peer
-                if part not in _TRUSTED_PROXIES:
+                if part not in trusted_proxies:
                     return part
         elif len(parts) > 1:
             return parts[-1]
-    if _TRUSTED_PROXIES:
+    if trusted_proxies:
         real_ip = request.headers.get("x-real-ip", "")
         if real_ip:
             try:
@@ -353,4 +367,3 @@ async def rate_limit_headers_middleware(
     response.headers["X-RateLimit-Remaining"] = str(remaining)
     response.headers["X-RateLimit-Limit"] = "60"
     return response
-

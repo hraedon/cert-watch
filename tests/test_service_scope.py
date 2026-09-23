@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -53,7 +55,7 @@ def estate(tmp_path: Path) -> dict[str, object]:
     return {"db": db, "in": in_scope, "out": out_of_scope, "cert_b": cert_b}
 
 
-def _call(kind: str, db: Path, target: str, auth: AuthContext | None, value: object = "x"):
+def _call(kind: str, db: Path, target: str, auth: Any, value: object = "x"):
     kw = {"auth": auth, "actor": "t", "source_ip": None}
     if kind == "notes":
         return update_host_notes(db, target, value, **kw)
@@ -116,9 +118,13 @@ def test_deferred_input_is_not_evaluated_for_a_refused_caller(estate, kind):
         _call(kind, estate["db"], estate["out"], SCOPED_OPERATOR, value=parser)
 
 
-def test_no_auth_context_fails_closed(estate):
+@pytest.mark.parametrize(
+    "invalid_auth",
+    [None, object(), SimpleNamespace(is_admin=True, scope_tag="")],
+)
+def test_invalid_auth_context_fails_closed(estate, invalid_auth):
     with pytest.raises(RuntimeError, match="auth context is required"):
-        _call("notes", estate["db"], estate["out"], None)
+        _call("notes", estate["db"], estate["out"], invalid_auth)
 
 
 def test_explicit_system_principal_is_unrestricted(estate):

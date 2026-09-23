@@ -404,6 +404,7 @@ async def pin_ldap_ca(
             kv_set_secret(db, "ldap_ca_cert", pem, enc_key)
         else:
             kv_set(db, "ldap_ca_cert", pem)
+    _rebuild_settings(request, db)
 
     from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
     from cert_watch.certificate_model import extract_chain_from_pem

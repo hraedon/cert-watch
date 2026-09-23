@@ -336,6 +336,8 @@ async def add_host(
     starttls_mode: str = Form(""),
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
+    # Once framework parsing and guards complete, both adapters charge the
+    # shared budget before application validation, so malformed attempts count.
     if not check_rate_limit(f"add_host:{_extract_client_ip(request)}", 20, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303

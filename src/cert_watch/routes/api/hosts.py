@@ -114,16 +114,16 @@ def _service_error(exc: Exception, *, not_found: bool = False) -> JSONResponse:
 async def api_create_host(
     request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
+    # Once framework parsing and guards complete, both adapters charge the
+    # shared budget before application validation, so malformed attempts count.
+    if _action_rate_limited(request, "add_host", 20, 60):
+        return JSONResponse(status_code=429, content={"detail": "rate limited"})
     try:
         body = HostCreateBody.model_validate(json_body(await request.body()))
     except JsonBodyError as exc:
         return _service_error(exc)
     except PydanticValidationError as exc:
         return _validation_error(exc)
-    # Body validation deliberately precedes budget consumption: malformed
-    # requests cannot exhaust the legitimate add-host action allowance.
-    if _action_rate_limited(request, "add_host", 20, 60):
-        return JSONResponse(status_code=429, content={"detail": "rate limited"})
     try:
         result = await create_hosts(
             _db_path(request),
