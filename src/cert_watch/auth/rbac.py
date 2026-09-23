@@ -188,6 +188,10 @@ class AuthContext:
     # with no role map, so the legacy write_users/admin_users lists (which
     # only apply to the no-role-map directory path) must not widen it.
     local_account: bool = False
+    # Explicit marker for trusted request-less work (scheduler/CLI) and for
+    # auth-disabled requests. Services reject a missing context, so privileged
+    # internal work must be intentional rather than represented by ``None``.
+    is_system: bool = False
 
     @classmethod
     def from_roles(cls, username: str, roles: list[str]) -> AuthContext:
@@ -227,6 +231,17 @@ class AuthContext:
             roles=[ROLE_ADMIN],
             permissions=frozenset(Permission),
             tier=ROLE_ADMIN,
+        )
+
+    @classmethod
+    def system(cls) -> AuthContext:
+        """Build the explicit unrestricted principal for trusted internal work."""
+        return cls(
+            username="system",
+            roles=[ROLE_ADMIN],
+            permissions=frozenset(Permission),
+            tier=ROLE_ADMIN,
+            is_system=True,
         )
 
     def has_permission(self, perm: Permission) -> bool:

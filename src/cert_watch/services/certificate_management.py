@@ -8,7 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.audit import record_audit
-from cert_watch.auth.scope import ensure_new_tags_in_scope, ensure_write_scope
+from cert_watch.auth.scope import (
+    ensure_new_tags_in_scope,
+    ensure_write_scope,
+    require_auth_context,
+)
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.database import (
     SqliteTrustAnchorRepository,
@@ -71,6 +75,7 @@ def upload_certificate_bytes(
     source_ip: str | None,
     tags: str = "",
 ) -> UploadResult:
+    require_auth_context(auth)
     scope = getattr(auth, "scope_tag", "") if auth is not None else ""
     tags = format_tags(merge_tags(tags, scope or ""))
     ensure_new_tags_in_scope(auth, tags)
@@ -97,6 +102,7 @@ def delete_certificate(
     actor: str,
     source_ip: str | None,
 ) -> bool:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         deleted = delete_certificate_cascade(db_path, cert_id)
@@ -120,6 +126,7 @@ def add_trust_anchor(
     actor: str,
     source_ip: str | None,
 ) -> UploadResult:
+    require_auth_context(auth)
     if auth is not None and not getattr(auth, "is_admin", False):
         raise PermissionError("admin required")
     entry = _parse_upload(content, filename, None, ANCHOR_SUFFIXES)
@@ -153,6 +160,7 @@ def delete_trust_anchor(
     actor: str,
     source_ip: str | None,
 ) -> bool:
+    require_auth_context(auth)
     if auth is not None and not getattr(auth, "is_admin", False):
         raise PermissionError("admin required")
     with get_write_lock():

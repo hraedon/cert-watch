@@ -14,7 +14,11 @@ from typing import Any, Literal
 from cert_watch import scheduler
 from cert_watch.alerting import WebhookConfig
 from cert_watch.audit import record_audit
-from cert_watch.auth.scope import ensure_new_tags_in_scope, ensure_write_scope
+from cert_watch.auth.scope import (
+    ensure_new_tags_in_scope,
+    ensure_write_scope,
+    require_auth_context,
+)
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
 from cert_watch.host_validation import hostname_is_valid
@@ -165,6 +169,7 @@ async def create_hosts(
     _resolve_fn: Callable[..., tuple[str | None, str | None]] = resolve_and_validate_host,
     _scan_fn: RouteScan | None = None,
 ) -> HostCreateResult:
+    require_auth_context(auth)
     if not isinstance(hostname, str):
         raise HostValidationError("hostname must be a string")
     hostname = hostname.strip()
@@ -260,6 +265,7 @@ async def import_hosts_csv(
     _resolve_fn: Callable[..., tuple[str | None, str | None]] = resolve_and_validate_host,
     _scan_fn: RouteScan | None = None,
 ) -> HostImportResult:
+    require_auth_context(auth)
     try:
         text = content.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -389,18 +395,20 @@ async def scan_all_hosts(
     source_ip: str | None,
     _scan_fn: RouteScan | None = None,
 ) -> tuple[int, int]:
+    require_auth_context(auth)
     scope_tags: tuple[str, ...] = ()
     if auth is not None and not getattr(auth, "is_admin", False):
         scope_tags = tuple(parse_tags(getattr(auth, "scope_tag", "") or ""))
     hosts = SqliteHostRepository(db_path).list_scoped(scope_tags)
-    record_audit(
-        db_path,
-        actor=actor,
-        action="host.scan_all",
-        target_type="host",
-        target_id="all",
-        source_ip=source_ip,
-    )
+    if hosts:
+        record_audit(
+            db_path,
+            actor=actor,
+            action="host.scan_all",
+            target_type="host",
+            target_id="all",
+            source_ip=source_ip,
+        )
     semaphore = asyncio.Semaphore(10)
 
     async def scan(host: HostEntry) -> ScanResult:
@@ -443,6 +451,7 @@ def update_host_settings(
     actor: str,
     source_ip: str | None,
 ) -> HostEntry:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         repo = SqliteHostRepository(db_path)
@@ -497,6 +506,7 @@ def update_expected_issuers(
     source_ip: str | None,
     audit_action: str = "host.update_expected_issuers",
 ) -> tuple[str, ...]:
+    require_auth_context(auth)
     raw_values = issuers.split(",") if isinstance(issuers, str) else issuers
     values = [part.strip() for part in raw_values]
     values = [part for part in values if part]
@@ -532,6 +542,7 @@ def delete_host(
     actor: str,
     source_ip: str | None,
 ) -> bool:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         deleted = SqliteHostRepository(db_path).delete(host_id)
@@ -556,6 +567,7 @@ async def scan_host_now(
     source_ip: str | None,
     _scan_fn: Callable[..., Awaitable[tuple[str, str | None]]] | None = None,
 ) -> ScanResult:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         host = SqliteHostRepository(db_path).get(host_id)

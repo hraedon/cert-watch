@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cert_watch.audit import list_audit
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.services import host_ownership
@@ -18,6 +19,8 @@ from cert_watch.services.host_ownership import (
     update_host_ownership,
 )
 from tests._helpers import seed_certificate
+
+SYSTEM = AuthContext.system()
 
 
 def _certificate() -> Certificate:
@@ -48,7 +51,7 @@ def test_ownership_update_is_partial_and_audited(tmp_path: Path) -> None:
             owner_name="After",
             runbook_url="https://wiki.example.test/renewal",
         ),
-        auth=None,
+        auth=SYSTEM,
         actor="operator",
         source_ip="192.0.2.10",
     )
@@ -75,7 +78,7 @@ def test_ownership_validation_precedes_mutation(tmp_path: Path) -> None:
             db,
             host_id,
             HostOwnershipUpdate(owner_name="After", owner_email="not-an-email"),
-            auth=None,
+            auth=SYSTEM,
             actor="operator",
             source_ip=None,
         )
@@ -103,7 +106,7 @@ def test_audit_failure_rolls_back_ownership_update(
             db,
             host_id,
             HostOwnershipUpdate(owner_name="After"),
-            auth=None,
+            auth=SYSTEM,
             actor="operator",
             source_ip=None,
         )

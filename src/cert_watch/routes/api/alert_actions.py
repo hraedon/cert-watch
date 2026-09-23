@@ -11,6 +11,7 @@ from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import write_guard
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.routes._deps import IdParam, _db_path, acting_auth
+from cert_watch.security.ratelimit import rate_limit
 from cert_watch.services.alert_state import (
     AlertNotFoundError,
     mark_all_alerts_read,
@@ -41,7 +42,9 @@ async def mark_alert_read(
 
 @router.post("/api/alerts/mark-all-read")
 async def api_mark_all_alerts_read(
-    request: Request, _auth: str = Depends(write_guard)
+    request: Request,
+    _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("mark_all_read", 10, 300)),
 ) -> JSONResponse:
     count = mark_all_alerts_read(
         _db_path(request),

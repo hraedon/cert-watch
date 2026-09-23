@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
+from pydantic import ValidationError as PydanticValidationError
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
@@ -20,6 +23,7 @@ from cert_watch.routes.api._shared import (
     json_body,
     tags_from_json_body,
 )
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit, rate_limit
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
 )
@@ -57,6 +61,46 @@ router = APIRouter()
 MAX_CSV_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
+class HostCreateBody(BaseModel):
+    """Strict JSON shape matching the add-host form's accepted values."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hostname: StrictStr
+    port: StrictInt = Field(default=443, ge=1, le=65535)
+    threshold_days: StrictInt | None = Field(default=None, ge=1, le=2**63 - 1)
+    tags: StrictStr = ""
+    scan_interval_hours: StrictInt | None = Field(default=None, ge=1, le=8760)
+    common_ports: StrictBool = False
+    notes: StrictStr = Field(default="", max_length=10_000)
+    starttls_mode: StrictStr = ""
+
+
+class HostSettingsBody(BaseModel):
+    """Strict JSON shape matching endpoint-settings form constraints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scan_interval_hours: StrictInt | None = Field(ge=1, le=8760)
+    threshold_days: StrictInt | None = Field(ge=1, le=2**63 - 1)
+    renewal_status: Literal["pending", "in_progress", "renewed"]
+
+
+def _validation_error(exc: PydanticValidationError) -> JSONResponse:
+    first = exc.errors(include_url=False, include_context=False)[0]
+    field = ".".join(str(part) for part in first["loc"])
+    message = str(first["msg"])
+    return JSONResponse(status_code=422, content={"error": f"{field}: {message}"})
+
+
+def _action_rate_limited(
+    request: Request, prefix: str, max_requests: int, window_seconds: int
+) -> bool:
+    return not check_rate_limit(
+        f"{prefix}:{_extract_client_ip(request)}", max_requests, window_seconds
+    )
+
+
 def _service_error(exc: Exception, *, not_found: bool = False) -> JSONResponse:
     if isinstance(exc, ScopeDeniedError):
         return JSONResponse(status_code=403, content={"error": str(exc)})
@@ -71,23 +115,32 @@ async def api_create_host(
     request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     try:
-        body = json_body(await request.body())
+        body = HostCreateBody.model_validate(json_body(await request.body()))
+    except JsonBodyError as exc:
+        return _service_error(exc)
+    except PydanticValidationError as exc:
+        return _validation_error(exc)
+    # Body validation deliberately precedes budget consumption: malformed
+    # requests cannot exhaust the legitimate add-host action allowance.
+    if _action_rate_limited(request, "add_host", 20, 60):
+        return JSONResponse(status_code=429, content={"detail": "rate limited"})
+    try:
         result = await create_hosts(
             _db_path(request),
             _get_settings(request),
-            hostname=body.get("hostname", ""),
-            port=body.get("port", 443),
-            threshold_days=body.get("threshold_days"),
-            tags=body.get("tags", ""),
-            scan_interval_hours=body.get("scan_interval_hours"),
-            common_ports=body.get("common_ports", False),
-            notes=body.get("notes", ""),
-            starttls_mode=body.get("starttls_mode", ""),
+            hostname=body.hostname,
+            port=body.port,
+            threshold_days=body.threshold_days,
+            tags=body.tags,
+            scan_interval_hours=body.scan_interval_hours,
+            common_ports=body.common_ports,
+            notes=body.notes,
+            starttls_mode=body.starttls_mode,
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
-    except (JsonBodyError, HostValidationError, ScopeDeniedError, TypeError) as exc:
+    except (HostValidationError, ScopeDeniedError) as exc:
         return _service_error(exc)
     return JSONResponse(
         status_code=201,
@@ -100,6 +153,7 @@ async def api_import_hosts(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008
     _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("import_hosts", 5, 60)),
 ) -> JSONResponse:
     content = await file.read(MAX_CSV_UPLOAD_BYTES + 1)
     if len(content) > MAX_CSV_UPLOAD_BYTES:
@@ -128,7 +182,9 @@ async def api_import_hosts(
 
 @router.post("/api/hosts/scan")
 async def api_scan_all_hosts(
-    request: Request, _auth: str = Depends(write_guard)
+    request: Request,
+    _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("scan_all", 3, 300)),
 ) -> JSONResponse:
     scanned, failures = await scan_all_hosts(
         _db_path(request),
@@ -254,26 +310,26 @@ async def api_update_host_owner(
 
 @router.patch("/api/hosts/{host_id}/settings")
 async def api_update_host_settings(
-    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    host_id: IdParam,
+    request: Request,
+    _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("host_settings", 30, 60)),
 ) -> JSONResponse:
     try:
-        body = json_body(await request.body())
-        required = {"scan_interval_hours", "threshold_days", "renewal_status"}
-        if not required <= set(body):
-            raise JsonBodyError(
-                "scan_interval_hours, threshold_days, and renewal_status are required"
-            )
+        body = HostSettingsBody.model_validate(json_body(await request.body()))
         updated = update_host_settings(
             _db_path(request),
             host_id,
             HostSettingsUpdate(
-                body["scan_interval_hours"], body["threshold_days"], body["renewal_status"]
+                body.scan_interval_hours, body.threshold_days, body.renewal_status
             ),
             auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
-    except (JsonBodyError, HostValidationError, ScopeDeniedError, TypeError) as exc:
+    except PydanticValidationError as exc:
+        return _validation_error(exc)
+    except (JsonBodyError, HostValidationError, ScopeDeniedError) as exc:
         return _service_error(exc)
     except ManagedHostNotFoundError as exc:
         return _service_error(exc, not_found=True)
@@ -405,7 +461,10 @@ async def api_delete_host(
 
 @router.post("/api/hosts/{host_id}/scan")
 async def api_scan_host(
-    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    host_id: IdParam,
+    request: Request,
+    _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("scan_host", 10, 60)),
 ) -> JSONResponse:
     try:
         result = await scan_host_now_service(

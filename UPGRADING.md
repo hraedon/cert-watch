@@ -50,6 +50,11 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Scoped writers can no longer create or import hosts with out-of-scope
+  tags.** This closes a scope-widening path: a writer scoped to `A` who submits
+  `B` is refused instead of storing `B,A`. Remove out-of-scope tags from the
+  add-host form or CSV before retrying; the writer's own scope tag is added
+  automatically.
 - **API seam additions; no existing endpoint paths changed.** The operational
   UI mutations now have first-class JSON equivalents. Added paths are
   `POST /api/hosts`, `POST /api/hosts/import`, `POST /api/hosts/scan`,

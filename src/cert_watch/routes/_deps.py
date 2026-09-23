@@ -43,9 +43,12 @@ def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
 
 
-def acting_auth(request: Request) -> AuthContext | None:
-    """The request's AuthContext, handed to services that enforce scope."""
-    return getattr(request.state, "auth_context", None)
+def acting_auth(request: Request) -> AuthContext:
+    """Return the request principal handed to scope-enforcing services."""
+    context = getattr(request.state, "auth_context", None)
+    if not isinstance(context, AuthContext):
+        raise RuntimeError("request auth context is required")
+    return context
 
 
 def _csv_safe(value: object) -> str:

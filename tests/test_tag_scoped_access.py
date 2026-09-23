@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from cert_watch.auth.rbac import AuthContext
 from cert_watch.database import (
     Role,
@@ -437,33 +439,62 @@ def _scoped_client(app, groups):
 class TestScanAllHostsRoute:
     """WI-078: POST /hosts/all/scan only scans the caller's in-scope hosts."""
 
-    def _run(self, db, tmp_path, monkeypatch, scope_tag):
+    def _run(self, db, tmp_path, monkeypatch, scope_tag, path):
         _seed_two_teams(db)
 
         scanned: list[str] = []
 
-        async def _fake_scan(hostname, port, **kwargs):
-            from cert_watch.scan import ScanError
+        async def _fake_route_scan(hostname, port, *_args, **_kwargs):
+            scanned.append(hostname)
+            return "scan_error", "stub"
+
+        async def _fake_service_scan(hostname, port, *_args, **_kwargs):
+            from cert_watch.services.host_management import ScanResult
 
             scanned.append(hostname)
-            return ScanError(hostname=hostname, port=port, error_message="stub")
+            return ScanResult("scan_error", "stub")
 
+        monkeypatch.setattr("cert_watch.routes.hosts._scan_and_store", _fake_route_scan)
         monkeypatch.setattr(
-            "cert_watch.routes.hosts.scan_host_async", _fake_scan
+            "cert_watch.services.host_management._scan_and_store", _fake_service_scan
         )
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
-            r = client.post("/hosts/all/scan", follow_redirects=False)
-        assert r.status_code == 303
+            r = client.post(path, follow_redirects=False)
+        assert r.status_code == (200 if path.startswith("/api/") else 303)
         return scanned
 
-    def test_scoped_operator_scans_only_team_hosts(self, db, tmp_path, monkeypatch):
-        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="team-a")
+    @pytest.mark.parametrize("path", ["/hosts/all/scan", "/api/hosts/scan"])
+    def test_scoped_operator_scans_only_team_hosts(
+        self, db, tmp_path, monkeypatch, path
+    ):
+        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="team-a", path=path)
         assert scanned == ["host-a.example.com"]
 
-    def test_unscoped_operator_scans_all_hosts(self, db, tmp_path, monkeypatch):
-        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="")
+    @pytest.mark.parametrize("path", ["/hosts/all/scan", "/api/hosts/scan"])
+    def test_unscoped_operator_scans_all_hosts(self, db, tmp_path, monkeypatch, path):
+        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="", path=path)
         assert set(scanned) == {"host-a.example.com", "host-b.example.com"}
+
+
+class TestScopedCertificateUpload:
+    """Both adapters persist the scoped caller's tag on offline uploads."""
+
+    @pytest.mark.parametrize("path", ["/upload", "/api/certificates/upload"])
+    def test_scoped_upload_is_tagged_in_scope(self, db, tmp_path, leaf_pem_file, path):
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client, open(leaf_pem_file, "rb") as handle:
+            response = client.post(
+                path,
+                files={"file": ("leaf.pem", handle, "application/x-pem-file")},
+                follow_redirects=False,
+            )
+        assert response.status_code == (201 if path.startswith("/api/") else 303)
+        with _connect(db) as conn:
+            rows = conn.execute(
+                "SELECT tags FROM certificates WHERE source = 'uploaded' AND is_leaf = 1"
+            ).fetchall()
+        assert [row["tags"] for row in rows] == ["team-a"]
 
 
 class TestMarkAllAlertsReadRoute:

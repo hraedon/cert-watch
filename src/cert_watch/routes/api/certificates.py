@@ -24,6 +24,7 @@ from cert_watch.routes.api._shared import (
     _pagination_links,
     tags_from_json_body,
 )
+from cert_watch.security.ratelimit import rate_limit
 from cert_watch.services.certificate_management import (
     MAX_UPLOAD_BYTES,
     CertificateValidationError,
@@ -50,6 +51,7 @@ async def api_upload_certificate(
     file: UploadFile = File(...),  # noqa: B008
     password: str | None = Form(None),
     _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("upload", 10, 60)),
 ) -> JSONResponse:
     try:
         result = upload_certificate_bytes(

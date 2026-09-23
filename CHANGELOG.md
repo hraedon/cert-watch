@@ -56,6 +56,17 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Security
+- **JSON write routes now enforce the same per-action budgets and scope as the
+  HTML forms.** HTML and JSON calls share one client budget for host creation,
+  import, scans, endpoint settings, certificate upload, and mark-all-read.
+  Host JSON bodies are strictly typed and bounded before service execution.
+  Application services now reject a missing acting principal; trusted
+  request-less work uses an explicit system principal instead of `None`.
+- **Scoped host creation and CSV import reject tags outside the caller's
+  scope.** Earlier versions could accept a scoped user's extra tag and persist
+  the union (for example `B,A` for an `A`-scoped user). The caller's scope tag
+  is still attached automatically, but every additionally submitted tag must
+  be within that scope.
 - **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
   every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
   read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped

@@ -173,7 +173,7 @@ def _check_auth(
     admin_legacy: bool = False,
 ) -> SessionUser:
     if not _is_auth_enabled(request):
-        request.state.auth_context = AuthContext.full_access("")
+        request.state.auth_context = AuthContext.system()
         return SessionUser(user="")
 
     if resolve_session:
@@ -284,6 +284,7 @@ class ReadGuard:
         # HTML page (admin only in practice): relies on auth_middleware having
         # authenticated the request; the legacy CERT_WATCH_ADMINS list applies.
         if not _is_auth_enabled(request):
+            _check_auth(request, resolve_session=False, require_admin=self.admin)
             return ""
         result = _check_auth(
             request, resolve_session=False, require_admin=self.admin, admin_legacy=True,
@@ -374,6 +375,8 @@ class MutationGuard:
                         _bounce(_admin_redirect_target(request), result.error)
                     )
                 user = result.user or ""
+            else:
+                _check_auth(request, resolve_session=False, require_admin=True)
             default_bounce = _admin_redirect_target(request)
         csrf_err = await self._csrf_error(request)
         if csrf_err:

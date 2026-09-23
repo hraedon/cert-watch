@@ -238,3 +238,59 @@ def test_both_adapters_reach_the_inventory_service(
     assert html_response.status_code < 500
     assert api_response.status_code < 500
     assert calls == ["service", "service"]
+
+
+@pytest.mark.parametrize("concept", ["host scan all", "certificate upload"])
+def test_scope_sensitive_adapters_pass_the_request_principal(
+    concept: str, tmp_path, monkeypatch
+) -> None:
+    """The seam must carry the signed-in identity and scope, never None/system."""
+    from tests import test_authz_characterization as authz
+
+    contract = next(row for row in _contracts() if row["concept"] == concept)
+    principal = next(p for p in authz.PRINCIPALS if p.name == "operator-scoped-A")
+    seeded = authz._seed(tmp_path / "cert-watch.sqlite3", principal)
+    app = authz._build_app(principal, tmp_path, monkeypatch)
+    routes = _route_map(app)
+    endpoints = (routes[contract["html"]], routes[contract["api"]])
+    received: list[Any] = []
+    result = _result(contract["service"], "00000000-0000-4000-8000-000000000001")
+
+    async def async_marker(*_args, **kwargs):
+        received.append(kwargs.get("auth"))
+        return result
+
+    def sync_marker(*_args, **kwargs):
+        received.append(kwargs.get("auth"))
+        return result
+
+    for endpoint in endpoints:
+        for name, value in list(endpoint.__globals__.items()):
+            module = getattr(value, "__module__", "")
+            symbol = f"{module.rsplit('.', 1)[-1]}.{getattr(value, '__name__', name)}"
+            if symbol == contract["service"]:
+                marker = async_marker if inspect.iscoroutinefunction(value) else sync_marker
+                monkeypatch.setitem(endpoint.__globals__, name, marker)
+
+    with TestClient(app) as client:
+        headers = authz._authenticate(client, principal, seeded)
+        headers.update(authz._csrf_header(client))
+        form, api = _request_pair(concept)
+        html_method, html_path = contract["html"].split(" ", 1)
+        api_method, api_path = contract["api"].split(" ", 1)
+        html_response = client.request(
+            html_method, html_path, headers=headers, follow_redirects=False, **form
+        )
+        api_response = client.request(
+            api_method, api_path, headers=headers, follow_redirects=False, **api
+        )
+
+    assert html_response.status_code < 500
+    assert api_response.status_code < 500
+    assert all(ctx is not None for ctx in received)
+    assert [
+        (ctx.username, ctx.scope_tag, getattr(ctx, "is_system", False)) for ctx in received
+    ] == [
+        ("otto", "A", False),
+        ("otto", "A", False),
+    ]

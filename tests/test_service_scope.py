@@ -116,8 +116,13 @@ def test_deferred_input_is_not_evaluated_for_a_refused_caller(estate, kind):
         _call(kind, estate["db"], estate["out"], SCOPED_OPERATOR, value=parser)
 
 
-def test_no_auth_context_is_unrestricted(estate):
-    _call("notes", estate["db"], estate["out"], None)
+def test_no_auth_context_fails_closed(estate):
+    with pytest.raises(RuntimeError, match="auth context is required"):
+        _call("notes", estate["db"], estate["out"], None)
+
+
+def test_explicit_system_principal_is_unrestricted(estate):
+    _call("notes", estate["db"], estate["out"], AuthContext.system())
     assert SqliteHostRepository(estate["db"]).get(estate["out"]).notes == "x"
 
 

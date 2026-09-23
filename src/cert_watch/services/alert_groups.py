@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.audit import record_audit
+from cert_watch.auth.scope import require_auth_context
 from cert_watch.database import SqliteAlertGroupRepository, get_write_lock
 from cert_watch.database.repo import AlertGroup
 
@@ -19,6 +20,7 @@ class AlertGroupConflictError(ValueError):
 
 
 def _ensure_admin(auth: Any) -> None:
+    require_auth_context(auth)
     if auth is not None and not getattr(auth, "is_admin", False):
         raise PermissionError("admin required")
 
@@ -36,6 +38,7 @@ def create_alert_group(
     actor: str,
     source_ip: str | None,
 ) -> AlertGroup:
+    require_auth_context(auth)
     _ensure_admin(auth)
     repo = SqliteAlertGroupRepository(db_path)
     with get_write_lock():
@@ -83,6 +86,7 @@ def update_alert_group(
     actor: str,
     source_ip: str | None,
 ) -> AlertGroup:
+    require_auth_context(auth)
     _ensure_admin(auth)
     repo = SqliteAlertGroupRepository(db_path)
     with get_write_lock():
@@ -135,6 +139,7 @@ def delete_alert_group(
     actor: str,
     source_ip: str | None,
 ) -> AlertGroup:
+    require_auth_context(auth)
     _ensure_admin(auth)
     repo = SqliteAlertGroupRepository(db_path)
     with get_write_lock():
