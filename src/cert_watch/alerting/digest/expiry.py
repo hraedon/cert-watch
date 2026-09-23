@@ -16,6 +16,7 @@ from cert_watch.alerting.model import (
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
     AlertConfig,
+    OutboundMessage,
     WebhookConfig,
 )
 from cert_watch.alerting.transports.smtp import (
@@ -105,21 +106,16 @@ def _send_digest_webhook(
 ) -> bool:
     """Dispatch expiry digest through the adapter registry.
 
-    Creates a synthetic ``Alert`` so the digest is formatted correctly for
-    Discord, Teams, PagerDuty, Alertmanager, and Slack (not raw JSON).
+    Creates a transport message so every adapter formats the digest correctly.
     """
-    from cert_watch.database import Alert
-
     message, subject = _build_digest_message(certs)
-    alert = Alert(
-        cert_id=idempotency_key,
-        alert_type="expiry_digest",
-        status="pending",
-        message=message,
-        threshold_days=None,
+    msg = OutboundMessage.from_digest(
         subject=subject,
+        body=message,
+        severity="expiry_digest",
+        idempotency_key=idempotency_key,
     )
-    return send_webhook(alert, webhook_config)
+    return bool(send_webhook(msg, webhook_config))
 
 
 def send_expiry_digest(

@@ -11,7 +11,11 @@ from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.alerting.evidence import FAILURE_LABELS
-from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
+from cert_watch.alerting.model import (
+    UNDELIVERED_AFTER_HOURS,
+    delivery_is_configured,
+    normalize_channel,
+)
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,
@@ -101,6 +105,9 @@ def alerts_view(
     # Recipient evidence is admin-only, and IDs come exclusively from the
     # existing scope-filtered page. Do not preload this data for other viewers.
     attempts = list_attempts(db, [row["id"] for row in rows]) if auth["is_admin"] else {}
+    for alert_attempts in attempts.values():
+        for attempt in alert_attempts:
+            attempt["channel"] = normalize_channel(attempt["channel"])
     outcomes = latest_outcomes(db, [row["id"] for row in rows])
     delivery_configured = delivery_is_configured(_get_settings(request))
     undelivered = _undelivered_ids(rows, delivery_configured=delivery_configured)

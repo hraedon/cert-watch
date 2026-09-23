@@ -101,3 +101,15 @@ def test_digest_period_key_rolls_over_at_iso_week_boundary():
     assert digest_period_key("renewal", 7, now=sunday) != digest_period_key(
         "renewal", 7, now=monday
     )
+
+
+def test_digest_claim_idempotency_key_format_is_upgrade_stable(tmp_path):
+    claim = claim_digest_delivery(
+        tmp_path / "claims.sqlite3",
+        "renewal:2026-W34:cadence=7",
+        "webhook:slack:0123456789abcdef",
+        "owner@example.com",
+    )
+    assert claim.idempotency_key == (
+        "4252e96e6c501d804f332b45fb98dc70ede1453c9a5dd4c68170d7e9f0ebb078"
+    )

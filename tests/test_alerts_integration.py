@@ -6,6 +6,7 @@ import json
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler
 
+from cert_watch.alerting.model import OutboundMessage
 from cert_watch.alerts import WebhookConfig, send_webhook
 from cert_watch.database import Alert
 from cert_watch.http_client import validate_webhook_url
@@ -67,7 +68,7 @@ def test_send_webhook_delivers_generic_json_to_local_server(monkeypatch):
         url = server_url(srv, path="/webhook")
         config = WebhookConfig(url=url, kind="generic", allow_private=True)
         alert = _alert()
-        assert send_webhook(alert, config) is True
+        assert send_webhook(OutboundMessage.from_alert(alert), config).delivered
         assert len(router.requests) == 1
         payload = json.loads(router.requests[0]["body"])
         assert payload["alert_type"] == "expiry_warning"
@@ -81,6 +82,7 @@ def test_send_webhook_blocked_when_loopback_always_blocked(monkeypatch):
         url = server_url(srv, path="/webhook")
         config = WebhookConfig(url=url, kind="generic", allow_private=True)
         alert = _alert()
-        assert send_webhook(alert, config) is False
-        assert "SSRF" in (alert.error_message or "")
+        result = send_webhook(OutboundMessage.from_alert(alert), config)
+        assert not result.delivered
+        assert "SSRF" in result.operator_message
         assert len(router.requests) == 0
