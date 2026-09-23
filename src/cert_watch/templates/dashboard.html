@@ -85,10 +85,10 @@
 {% macro freshness_cell(e) %}
   {% if e.kind == 'grouped' %}
     {# Coverage counts are assembled by the Browse presenter. #}
-    {% for h in e.hosts %}
-      {# Preserve one render-time row per deployment; no counting here. #}
-      {# The typed child already carries its own freshness classification. #}
-    {% endfor %}
+
+
+
+
     <div class="cw-sub {{ e.freshness_tone }}">{{ e.freshness_label }}</div>
   {% elif e.host_id and e.freshness_total %}
     {% set scan = e %}

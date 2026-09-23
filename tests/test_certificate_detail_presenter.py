@@ -49,6 +49,30 @@ def test_presenter_degrades_unparseable_crypto_and_surfaces_chain_issue() -> Non
     assert view.urgency == "warning"
 
 
+def test_presenter_labels_and_grades_a_real_certificate_chain(
+    chain_pem_file, chain_triplet,
+) -> None:
+    uploaded = upload_certificate(chain_pem_file)
+    assert isinstance(uploaded, UploadedEntry)
+    assert len(uploaded.chain) == 2
+    now = uploaded.chain[0].not_after - timedelta(days=3)
+
+    view = present_certificate_technical_details(
+        uploaded.leaf,
+        [("intermediate-id", uploaded.chain[0]), ("root-id", uploaded.chain[1])],
+        "private",
+        now=now,
+    )
+
+    assert [item.role_label for item in view.chain] == [
+        "Intermediate CA",
+        "Root CA (self-issued)",
+    ]
+    assert [item.urgency for item in view.chain] == ["critical", "healthy"]
+    assert view.chain[0].subject_cn == chain_triplet["intermediate"].subject_cn
+    assert view.chain[1].self_issued is True
+
+
 def _host() -> HostEntry:
     return HostEntry(
         id="host-1",

@@ -21,7 +21,18 @@ from cryptography import x509
 from fastapi.testclient import TestClient
 from freezegun import freeze_time
 
-from cert_watch.database import Alert, SqliteAlertRepository, SqliteHostRepository, _connect
+from cert_watch.app import create_app
+from cert_watch.auth import SESSION_COOKIE, NoAuthProvider, create_session
+from cert_watch.config import Settings
+from cert_watch.database import (
+    Alert,
+    Role,
+    SqliteAlertRepository,
+    SqliteHostRepository,
+    SqliteRoleRepository,
+    _connect,
+    init_schema,
+)
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from tests.e2e._seed import seed_demo_certs
 
@@ -51,6 +62,15 @@ _PAGES = {
     "settings_events": "/settings/events",
     "settings_policy": "/settings/policy",
     "settings_trust_anchors": "/settings/trust-anchors",
+}
+
+_VARIANT_PAGES = {
+    "home_scoped_production",
+    "browse_scoped_production",
+    "home_scoped_edge",
+    "browse_scoped_edge",
+    "home_empty",
+    "browse_empty",
 }
 
 
@@ -165,30 +185,88 @@ def characterized_pages(tmp_path: Path, reload_app) -> Iterator[dict[str, str]]:
     app_mod = reload_app()
     frozen_now = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
     cert_id, pending_host_id = _seed_characterization_estate(tmp_path, now=frozen_now)
-    replacements = _dynamic_replacements(tmp_path / "cert-watch.sqlite3")
-    with freeze_time(_FROZEN_NOW, ignore=["cryptography"]), TestClient(app_mod.app) as client:
+    db = tmp_path / "cert-watch.sqlite3"
+    replacements = _dynamic_replacements(db)
+    rendered: dict[str, str] = {}
+    with freeze_time(_FROZEN_NOW, ignore=["cryptography"]):
         pages = {
             **_PAGES,
             "certificate_detail": f"/certificates/{cert_id}",
             "pending_host_detail": f"/certificates/{pending_host_id}",
         }
-        rendered: dict[str, str] = {}
-        for name, path in pages.items():
-            if name == "certificate_detail":
-                SqliteAlertRepository(tmp_path / "cert-watch.sqlite3").create(
-                    Alert(
-                        cert_id=cert_id,
-                        alert_type="expiry_warning",
-                        status="sending",
-                        message="Certificate expires in 60 days",
-                        threshold_days=60,
-                        created_at=frozen_now,
+        with TestClient(app_mod.app) as client:
+            for name, path in pages.items():
+                if name == "certificate_detail":
+                    SqliteAlertRepository(db).create(
+                        Alert(
+                            cert_id=cert_id,
+                            alert_type="expiry_warning",
+                            status="sending",
+                            message="Certificate expires in 60 days",
+                            threshold_days=60,
+                            created_at=frozen_now,
+                        )
                     )
+                response = client.get(path)
+                assert response.status_code == 200, (name, path, response.status_code)
+                assert response.headers["content-type"].startswith("text/html")
+                rendered[name] = _normalize_html(response.text, replacements)
+
+        roles = SqliteRoleRepository(db)
+        roles.add(
+            Role(
+                name="production-viewer",
+                permission_tier="viewer",
+                scope_tag="production",
+            )
+        )
+        roles.add(Role(name="edge-viewer", permission_tier="viewer", scope_tag="edge"))
+        role_map = {
+            "production-viewer": {"groups": ["production-group"]},
+            "edge-viewer": {"groups": ["edge-group"]},
+        }
+
+        class _Provider:
+            provider_name = "golden"
+
+        scoped_app = create_app(
+            settings=Settings(db_path=db, data_dir=tmp_path, role_map=role_map),
+            auth_provider=_Provider(),
+        )
+        with TestClient(scoped_app) as client:
+            for scope_name, group in (
+                ("production", "production-group"),
+                ("edge", "edge-group"),
+            ):
+                client.cookies.clear()
+                client.cookies.set(
+                    SESSION_COOKIE,
+                    create_session(
+                        f"{scope_name}-viewer",
+                        client.app.state.security,
+                        groups=[group],
+                    ),
                 )
-            response = client.get(path)
-            assert response.status_code == 200, (name, path, response.status_code)
-            assert response.headers["content-type"].startswith("text/html")
-            rendered[name] = _normalize_html(response.text, replacements)
+                for page_name, path in (("home", "/"), ("browse", "/browse")):
+                    name = f"{page_name}_scoped_{scope_name}"
+                    response = client.get(path)
+                    assert response.status_code == 200, (name, path, response.status_code)
+                    rendered[name] = _normalize_html(response.text, replacements)
+
+        empty_dir = tmp_path / "empty-estate"
+        empty_dir.mkdir()
+        empty_db = empty_dir / "cert-watch.sqlite3"
+        init_schema(empty_db)
+        empty_app = create_app(
+            settings=Settings(db_path=empty_db, data_dir=empty_dir, allow_unauth=True),
+            auth_provider=NoAuthProvider(),
+        )
+        with TestClient(empty_app) as client:
+            for name, path in (("home_empty", "/"), ("browse_empty", "/browse")):
+                response = client.get(path)
+                assert response.status_code == 200, (name, path, response.status_code)
+                rendered[name] = _normalize_html(response.text, [])
+
         yield rendered
 
 
@@ -199,7 +277,7 @@ def test_all_page_html_matches_characterization_goldens(
     if update:
         _GOLDEN_DIR.mkdir(parents=True, exist_ok=True)
 
-    assert set(characterized_pages) == set(_PAGES) | {
+    assert set(characterized_pages) == set(_PAGES) | _VARIANT_PAGES | {
         "certificate_detail",
         "pending_host_detail",
     }

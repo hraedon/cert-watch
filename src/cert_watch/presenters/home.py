@@ -12,8 +12,6 @@ class Tone(StrEnum):
     """Template-safe status tone names."""
 
     NEUTRAL = ""
-    MUTED = "t-muted"
-    OK = "t-ok"
     WARNING = "t-warn"
     CRITICAL = "t-crit"
 
