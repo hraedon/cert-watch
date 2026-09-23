@@ -15,4 +15,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE certificates ADD COLUMN tags TEXT NOT NULL DEFAULT ''"
         )
-    conn.commit()

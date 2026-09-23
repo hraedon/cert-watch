@@ -120,7 +120,6 @@ playwright_visual_snapshot_threshold = "0.2"
 source = ["cert_watch"]
 omit = [
     "cert_watch/__main__",
-    "cert_watch/migrations/*",
 ]
 
 [tool.coverage.report]

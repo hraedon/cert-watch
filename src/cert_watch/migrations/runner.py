@@ -26,7 +26,7 @@ logger = logging.getLogger("cert_watch.migrations")
 # ---------- Migration definitions ----------
 # Each entry: (id: str, description: str, fn: callable(conn) -> None)
 # Ids must be monotonically increasing strings.
-# The first migration (0001) is the baseline that snapshots the current schema.
+# The first migration (0001) creates the frozen pre-runner baseline.
 _MIGRATIONS: list[tuple[str, str, Callable[[sqlite3.Connection], None]]] = []
 
 
@@ -52,17 +52,25 @@ def _ensure_schema_version_table(conn: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS schema_version"
         " (id TEXT PRIMARY KEY, description TEXT NOT NULL, applied_at TEXT NOT NULL)"
     )
-    conn.commit()
 
 
 def _applied_ids(conn: sqlite3.Connection) -> set[str]:
     """Return the set of migration ids already applied."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_version'"
+    ).fetchone()
+    if exists is None:
+        return set()
     rows = conn.execute("SELECT id FROM schema_version ORDER BY id").fetchall()
     return {r[0] for r in rows}
 
 
 def _backup(db_path: str | Path, backup_path: str | Path | None = None) -> Path:
     """WAL-safe backup using VACUUM INTO. Works while the app is running.
+
+    ``VACUUM INTO`` cannot run inside a transaction, so the runner calls this
+    before opening any migration transaction. It is backup plumbing, not part
+    of a migration's atomic DDL/DML unit.
 
     Returns the backup file path.
     """
@@ -85,25 +93,6 @@ def _backup(db_path: str | Path, backup_path: str | Path | None = None) -> Path:
     return backup_path
 
 
-def _stamp_baseline(conn: sqlite3.Connection) -> None:
-    """Mark the baseline migration as applied for existing databases.
-
-    Called when the schema_version table is new (no rows) but the database
-    already has all the tables — i.e., this is an upgrade from a pre-migration
-    version of cert-watch.
-    """
-    baseline_id = "0001"
-    ids = _applied_ids(conn)
-    if baseline_id not in ids:
-        ts = datetime.now(UTC).isoformat()
-        conn.execute(
-            "INSERT INTO schema_version (id, description, applied_at) VALUES (?, ?, ?)",
-            (baseline_id, "baseline: snapshot of pre-migration schema", ts),
-        )
-        conn.commit()
-        logger.info("stamped baseline migration %s for existing database", baseline_id)
-
-
 # ---------- Runner ----------
 
 
@@ -120,14 +109,7 @@ def run_pending_migrations(
     """
     db_path = Path(db_path)
     with _connect(db_path) as conn:
-        _ensure_schema_version_table(conn)
         applied = _applied_ids(conn)
-
-        # If schema_version exists but has no rows, this is an upgrade from
-        # a pre-migration version. Stamp the baseline so 0001 doesn't re-run.
-        if not applied:
-            _stamp_baseline(conn)
-            applied = _applied_ids(conn)
 
     pending = [
         (mid, desc, fn) for mid, desc, fn in get_migrations() if mid not in applied
@@ -143,13 +125,23 @@ def run_pending_migrations(
     with _connect(db_path) as conn:
         for mid, desc, fn in pending:
             logger.info("applying migration %s: %s", mid, desc)
-            fn(conn)
-            ts = datetime.now(UTC).isoformat()
-            conn.execute(
-                "INSERT INTO schema_version (id, description, applied_at) VALUES (?, ?, ?)",
-                (mid, desc, ts),
-            )
-            conn.commit()
+            try:
+                # sqlite3's legacy transaction control does not automatically
+                # begin a transaction for DDL. An explicit BEGIN makes the
+                # migration's DDL/DML and ledger row one atomic unit.
+                conn.execute("BEGIN IMMEDIATE")
+                _ensure_schema_version_table(conn)
+                fn(conn)
+                ts = datetime.now(UTC).isoformat()
+                conn.execute(
+                    "INSERT INTO schema_version (id, description, applied_at) "
+                    "VALUES (?, ?, ?)",
+                    (mid, desc, ts),
+                )
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
             applied_ids.append(mid)
             logger.info("migration %s applied", mid)
 

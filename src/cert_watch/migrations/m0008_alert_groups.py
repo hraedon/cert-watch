@@ -27,4 +27,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_alert_group_certs_cert"
         " ON alert_group_certs(cert_id)"
     )
-    conn.commit()

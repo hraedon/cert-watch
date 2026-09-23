@@ -16,4 +16,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE hosts ADD COLUMN starttls_mode TEXT NOT NULL DEFAULT ''"
         )
-    conn.commit()

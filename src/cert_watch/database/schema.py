@@ -1,13 +1,4 @@
-"""Schema DDL and migration logic.
-
-The entry point is ``init_schema(db_path)`` which:
-1. Calls ``ensure_base(db_path)`` to create all core tables and indexes.
-2. Calls ``run_pending_migrations(db_path)`` to apply numbered migrations.
-
-For existing databases (upgraded from pre-migration versions), the runner
-stamps the baseline (0001) automatically so subsequent migrations apply
-cleanly.
-"""
+"""Database schema initialization through the numbered migration chain."""
 from __future__ import annotations
 
 import contextlib
@@ -15,207 +6,12 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from cert_watch.database.delivery_evidence import DELIVERY_EVENTS_DDL
+from cert_watch.migrations.m0001_baseline import BASELINE_INDEXES, BASELINE_TABLES
+from cert_watch.migrations.m0001_baseline import upgrade as create_baseline
 
-_BASE_TABLES = """
-CREATE TABLE IF NOT EXISTS certificates (
-    id TEXT PRIMARY KEY,
-    subject TEXT NOT NULL,
-    issuer TEXT NOT NULL,
-    not_before TEXT NOT NULL,
-    not_after TEXT NOT NULL,
-    san_dns_names TEXT NOT NULL,
-    fingerprint_sha256 TEXT NOT NULL,
-    raw_der BLOB NOT NULL,
-    source TEXT NOT NULL DEFAULT 'unknown',
-    hostname TEXT,
-    port INTEGER,
-    is_leaf INTEGER NOT NULL DEFAULT 1,
-    parent_cert_id TEXT,
-    chain_valid INTEGER,
-    replaces_cert_id TEXT,
-    tags TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS alerts (
-    id TEXT PRIMARY KEY,
-    cert_id TEXT NOT NULL,
-    alert_type TEXT NOT NULL,
-    status TEXT NOT NULL,
-    message TEXT NOT NULL,
-    threshold_days INTEGER,
-    extra_recipients TEXT NOT NULL DEFAULT '[]',
-    created_at TEXT NOT NULL,
-    sent_at TEXT,
-    error_message TEXT,
-    hostname TEXT NOT NULL DEFAULT '',
-    subject TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS scan_history (
-    id TEXT PRIMARY KEY,
-    hostname TEXT NOT NULL,
-    port INTEGER NOT NULL,
-    status TEXT NOT NULL,
-    scanned_at TEXT NOT NULL,
-    error_message TEXT
-);
-
-CREATE TABLE IF NOT EXISTS hosts (
-    id TEXT PRIMARY KEY,
-    hostname TEXT NOT NULL,
-    port INTEGER NOT NULL DEFAULT 443,
-    threshold_days INTEGER,
-    tags TEXT NOT NULL DEFAULT '',
-    scan_interval_hours INTEGER,
-    owner_name TEXT NOT NULL DEFAULT '',
-    owner_email TEXT NOT NULL DEFAULT '',
-    owner_slack TEXT NOT NULL DEFAULT '',
-    renewal_status TEXT NOT NULL DEFAULT 'pending',
-    renewal_method TEXT NOT NULL DEFAULT '',
-    runbook_url TEXT NOT NULL DEFAULT '',
-    notes TEXT NOT NULL DEFAULT '',
-    expected_issuers TEXT NOT NULL DEFAULT '',
-    added_at TEXT NOT NULL,
-    UNIQUE(hostname, port)
-);
-
-CREATE TABLE IF NOT EXISTS trust_anchors (
-    id TEXT PRIMARY KEY,
-    subject TEXT NOT NULL,
-    issuer TEXT NOT NULL,
-    not_before TEXT NOT NULL,
-    not_after TEXT NOT NULL,
-    san_dns_names TEXT NOT NULL,
-    fingerprint_sha256 TEXT NOT NULL,
-    raw_der BLOB NOT NULL,
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS scan_posture (
-    id TEXT PRIMARY KEY,
-    cert_id TEXT NOT NULL,
-    hostname TEXT,
-    port INTEGER,
-    grade TEXT NOT NULL,
-    protocol_version TEXT,
-    ocsp_stapling INTEGER,
-    hsts INTEGER,
-    must_staple INTEGER DEFAULT 0,
-    verify_requested INTEGER,
-    findings TEXT NOT NULL,
-    scanned_at TEXT NOT NULL,
-    FOREIGN KEY (cert_id) REFERENCES certificates(id)
-);
-
-CREATE TABLE IF NOT EXISTS audit_log (
-    id TEXT PRIMARY KEY,
-    ts TEXT NOT NULL,
-    actor TEXT,
-    action TEXT NOT NULL,
-    target_type TEXT,
-    target_id TEXT,
-    detail TEXT,
-    source_ip TEXT
-);
-
-CREATE TABLE IF NOT EXISTS kv_store (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS api_keys (
-    id TEXT PRIMARY KEY,
-    key_hash TEXT NOT NULL UNIQUE,
-    name TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    last_used_at TEXT,
-    revoked INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS alert_groups (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL UNIQUE,
-    recipients TEXT NOT NULL DEFAULT '',
-    webhook_url TEXT NOT NULL DEFAULT '',
-    match_tags TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS alert_group_certs (
-    group_id TEXT NOT NULL,
-    cert_id TEXT NOT NULL,
-    PRIMARY KEY (group_id, cert_id)
-);
-
-CREATE TABLE IF NOT EXISTS cert_history (
-    id TEXT PRIMARY KEY,
-    hostname TEXT,
-    port INTEGER,
-    fingerprint_sha256 TEXT NOT NULL,
-    issuer TEXT NOT NULL,
-    not_after TEXT NOT NULL,
-    key_algo TEXT,
-    sig_algo TEXT,
-    posture_grade TEXT,
-    protocol_version TEXT,
-    san_count INTEGER,
-    scanned_at TEXT NOT NULL,
-    not_before TEXT
-);
-
-CREATE TABLE IF NOT EXISTS session_versions (
-    username TEXT PRIMARY KEY,
-    version INTEGER NOT NULL DEFAULT 1,
-    updated_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS digest_deliveries (
-    digest_key TEXT NOT NULL,
-    channel TEXT NOT NULL,
-    target TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('claimed', 'failed', 'sent')),
-    lease_owner TEXT,
-    lease_expires_at TEXT,
-    idempotency_key TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    sent_at TEXT,
-    PRIMARY KEY (digest_key, channel, target)
-);
-"""
-
-_BASE_TABLES += DELIVERY_EVENTS_DDL
-
-_BASE_INDEXES = """
-CREATE INDEX IF NOT EXISTS idx_cert_fp ON certificates(fingerprint_sha256);
-CREATE INDEX IF NOT EXISTS idx_cert_parent ON certificates(parent_cert_id);
-CREATE INDEX IF NOT EXISTS idx_cert_replaces ON certificates(replaces_cert_id);
-CREATE INDEX IF NOT EXISTS idx_alert_cert ON alerts(cert_id);
-CREATE INDEX IF NOT EXISTS idx_alert_status ON alerts(status);
-CREATE INDEX IF NOT EXISTS idx_scan_history_scanned_at ON scan_history(scanned_at DESC);
-CREATE INDEX IF NOT EXISTS idx_alerts_created_at ON alerts(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_alerts_status_created ON alerts(status, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_scan_posture_cert_scanned ON scan_posture(cert_id, scanned_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cert_host_port_leaf
-    ON certificates(hostname, port, is_leaf);
-CREATE INDEX IF NOT EXISTS idx_scan_history_host_port_ts
-    ON scan_history(hostname, port, scanned_at DESC);
-CREATE INDEX IF NOT EXISTS idx_alert_group_certs_cert
-    ON alert_group_certs(cert_id);
-CREATE INDEX IF NOT EXISTS idx_cert_history_host_port_ts
-    ON cert_history(hostname, port, scanned_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cert_history_fp
-    ON cert_history(fingerprint_sha256);
-CREATE UNIQUE INDEX IF NOT EXISTS ux_digest_deliveries_idempotency
-    ON digest_deliveries(idempotency_key);
-CREATE INDEX IF NOT EXISTS idx_digest_deliveries_lease
-    ON digest_deliveries(status, lease_expires_at);
-"""
+# Backward-compatible private re-exports; the sole definitions live in 0001.
+_BASE_TABLES = BASELINE_TABLES
+_BASE_INDEXES = BASELINE_INDEXES
 
 # Maps resolved path → (st_ino, st_size, st_mtime) from the last successful
 # init. Keyed on the file's identity tuple (not just the path string) so a
@@ -234,151 +30,41 @@ def _stat_tuple(db_path: str | Path) -> tuple[int, int, float] | None:
 
 
 def ensure_base(db_path: str | Path) -> None:
-    """Create all core tables and indexes if they don't exist.
+    """Create or repair only the frozen migration-0001 baseline.
 
-    This is the "base schema" — the tables and columns that existed before
-    the migration system was introduced. For fresh databases, this creates
-    everything. For existing databases, this is a no-op (IF NOT EXISTS).
-
-    Also handles column migrations for databases created before certain columns
-    were added — these are idempotent ALTER TABLE ADD COLUMN statements that
-    are no-ops if the column already exists.
+    This compatibility helper intentionally does not create current-schema
+    objects. Normal startup uses :func:`init_schema`, which applies 0001 and
+    every later migration through the runner.
     """
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    # closing(): a sqlite3 ``with`` block commits but does not close; the handle
-    # then lingers until GC (which on 3.14 may not be prompt), keeping the -wal
-    # open and blocking a later file replace on Windows.
     with contextlib.closing(sqlite3.connect(str(path))) as conn:
-        # Enable WAL mode and set pragmas matching _connect() so that
-        # initial schema creation doesn't leave the DB in rollback journal
-        # mode (finding 26).
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA foreign_keys=ON")
-        # 1. Create tables (no-op if they already exist)
-        conn.executescript(_BASE_TABLES)
-
-        # 2. Migrate columns that may be missing on existing databases.
-        # These are the pre-migration PRAGMA guards carried forward for
-        # backward compatibility with DBs created before the column was added.
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
-        if "chain_valid" not in cols:
-            conn.execute("ALTER TABLE certificates ADD COLUMN chain_valid INTEGER")
-        if "replaces_cert_id" not in cols:
-            conn.execute("ALTER TABLE certificates ADD COLUMN replaces_cert_id TEXT")
-        # certificates.notes was removed by migration 0031 (merged into
-        # hosts.notes) — never re-add it here.
-        host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
-        if "threshold_days" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN threshold_days INTEGER")
-        if "tags" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
-        if "scan_interval_hours" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN scan_interval_hours INTEGER")
-        if "owner_name" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN owner_name TEXT NOT NULL DEFAULT ''")
-        if "owner_email" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN owner_email TEXT NOT NULL DEFAULT ''")
-        if "owner_slack" not in host_cols:
-            conn.execute("ALTER TABLE hosts ADD COLUMN owner_slack TEXT NOT NULL DEFAULT ''")
-        if "renewal_status" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN renewal_status"
-                " TEXT NOT NULL DEFAULT 'pending'"
-            )
-        if "renewal_method" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN renewal_method"
-                " TEXT NOT NULL DEFAULT ''"
-            )
-        if "runbook_url" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN runbook_url"
-                " TEXT NOT NULL DEFAULT ''"
-            )
-        if "notes" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN notes"
-                " TEXT NOT NULL DEFAULT ''"
-            )
-        if "expected_issuers" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN expected_issuers"
-                " TEXT NOT NULL DEFAULT ''"
-            )
-        if "starttls_mode" not in host_cols:
-            conn.execute(
-                "ALTER TABLE hosts ADD COLUMN starttls_mode"
-                " TEXT NOT NULL DEFAULT ''"
-            )
-        sp_cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
-        if "chain_incomplete" not in sp_cols:
-            conn.execute(
-                "ALTER TABLE scan_posture ADD COLUMN chain_incomplete INTEGER"
-            )
-        if "chain_status" not in sp_cols:
-            conn.execute(
-                "ALTER TABLE scan_posture ADD COLUMN chain_status TEXT"
-            )
-        if "caa_present" not in sp_cols:
-            conn.execute(
-                "ALTER TABLE scan_posture ADD COLUMN caa_present INTEGER"
-            )
-        if "caa_records" not in sp_cols:
-            conn.execute(
-                "ALTER TABLE scan_posture ADD COLUMN caa_records TEXT"
-            )
-
-        # 3. Create indexes
-        conn.executescript(_BASE_INDEXES)
-
-        # 4. Ensure unique index on hosts(hostname, port) — BC-019
-        indexes = {r[1] for r in conn.execute("PRAGMA index_list('hosts')").fetchall()}
-        if "ux_hosts_hostname_port" not in indexes:
-            conn.execute(
-                """
-                DELETE FROM hosts
-                WHERE rowid NOT IN (
-                    SELECT MIN(rowid)
-                    FROM hosts
-                    GROUP BY hostname, port
-                )
-                """
-            )
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS ux_hosts_hostname_port ON hosts(hostname, port)"
-            )
+        create_baseline(conn)
         conn.commit()
 
 
 def init_schema(db_path: str | Path) -> None:
-    """Initialize the database schema and run pending migrations.
+    """Apply the complete numbered migration chain to *db_path*.
 
     Idempotent: repeat calls for the same path return immediately after the
     first successful initialization, as long as the database file has not been
-    replaced (e.g. by a restore from backup). File replacement is detected by
-    comparing the inode/size/mtime tuple (WI-091), mirroring the connection
-    layer. Creates core tables via ``ensure_base``, then applies any pending
-    numbered migrations via the migration runner.
+    replaced (for example by a restore).
     """
-    path_str = str(Path(db_path).resolve())
+    path = Path(db_path)
+    path_str = str(path.resolve())
     with _init_lock:
         cached = _initialized.get(path_str)
         if cached is not None:
-            current = _stat_tuple(db_path)
+            current = _stat_tuple(path)
             if current is not None and current == cached:
                 return
 
-        ensure_base(db_path)
-
-        # Import the registry to register all migrations, then run pending.
-        import cert_watch.migrations.registry  # noqa: F401 — side-effect: registers migrations
+        path.parent.mkdir(parents=True, exist_ok=True)
+        import cert_watch.migrations.registry  # noqa: F401
         from cert_watch.migrations.runner import run_pending_migrations
 
-        run_pending_migrations(db_path, backup=True)
-
-        # Recompute the stat tuple AFTER migrations complete (the file now
-        # exists and may have been written to), so subsequent calls match
-        # and no-op.
-        _initialized[path_str] = _stat_tuple(db_path)
+        run_pending_migrations(path, backup=True)
+        _initialized[path_str] = _stat_tuple(path)

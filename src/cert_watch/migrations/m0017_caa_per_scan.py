@@ -15,4 +15,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE scan_posture ADD COLUMN caa_present INTEGER")
     if "caa_records" not in cols:
         conn.execute("ALTER TABLE scan_posture ADD COLUMN caa_records TEXT")
-    conn.commit()

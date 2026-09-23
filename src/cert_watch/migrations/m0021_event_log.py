@@ -29,4 +29,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS ix_event_log_delivery_status ON event_log (delivery_status)"
     )
-    conn.commit()

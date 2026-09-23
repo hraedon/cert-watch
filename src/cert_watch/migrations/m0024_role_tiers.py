@@ -20,4 +20,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE roles ADD COLUMN scope_tag TEXT NOT NULL DEFAULT ''"
         )
-    conn.commit()
