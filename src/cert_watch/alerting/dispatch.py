@@ -73,8 +73,8 @@ def _attempt_once(
         try:
             result = attempt_delivery(evidence_db, alert.id, smtp_transport, smtp_msg)
             item.delivered = result.delivered
-            if not item.delivered:
-                item.last_error = result.operator_message or "unknown"
+            if not item.delivered and result.operator_message:
+                item.last_error = result.operator_message
             item.reached_transport = True
             item.attempts_made += 1
         except DeliveryEvidenceUnavailable:
@@ -88,8 +88,8 @@ def _attempt_once(
         try:
             result = attempt_delivery(evidence_db, alert.id, webhook_transport, webhook_msg)
             item.delivered = result.delivered
-            if not item.delivered:
-                item.last_error = result.operator_message or "unknown"
+            if not item.delivered and result.operator_message:
+                item.last_error = result.operator_message
             item.reached_transport = True
             item.attempts_made += 1
         except DeliveryEvidenceUnavailable:
@@ -220,7 +220,8 @@ def process_pending(
             # A real delivery failure, and the alert had its full run of waves.
             plural = "attempt" if item.attempts_made == 1 else "attempts"
             alert_repo.mark_failed(
-                alert.id, f"{item.last_error} (after {item.attempts_made} {plural})"
+                alert.id,
+                f"{item.last_error or 'unknown'} (after {item.attempts_made} {plural})",
             )
             failed += 1
         elif item.evidence_unavailable:

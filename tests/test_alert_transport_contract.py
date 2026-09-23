@@ -208,7 +208,7 @@ def test_transport_failure_mode_contract(monkeypatch, case):
         ("teams", "webhook:teams"),
         ("pagerduty", "webhook:pagerduty"),
         ("alertmanager", "webhook:alertmanager"),
-        ("webhook", "webhook:generic"),
+        ("webhook", "webhook:unspecified"),
         ("webhook:teams", "webhook:teams"),
     ],
 )
@@ -224,6 +224,61 @@ def test_alertmanager_transport_uses_unified_channel_name():
     assert transport.channel == "webhook:alertmanager"
     assert len(transport.destination_id) == 16
     assert transport.destination_id not in url
+
+
+def test_unknown_webhook_kind_has_distinct_ledger_channel():
+    transport = WebhookTransport(
+        WebhookConfig(url="https://hooks.example.invalid/path", kind="typo")
+    )
+
+    assert transport.channel == "webhook:unknown"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Invalid header value b'bad\\r\\nvalue'",
+        "'latin-1' codec can't encode character '\u2603'",
+        "unknown url type: 'not-a-url'",
+    ],
+)
+def test_webhook_value_errors_after_adapter_selection_are_transport_failures(
+    monkeypatch, message,
+):
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
+        Mock(side_effect=ValueError(message)),
+    )
+
+    result = WebhookTransport(
+        WebhookConfig(url="https://hooks.example.invalid/path", kind="generic")
+    ).send(_message())
+
+    assert result.reason == "transport"
+    assert result.operator_message == message
+
+
+def test_unknown_webhook_kind_is_the_only_invalid_channel_failure():
+    result = WebhookTransport(
+        WebhookConfig(url="https://hooks.example.invalid/path", kind="typo")
+    ).send(_message())
+
+    assert result.reason == "invalid_channel"
+    assert result.reached_transport is False
+
+
+def test_deprecated_observation_names_are_not_silently_exported():
+    import cert_watch.alert_delivery as shim
+
+    for name in (
+        "_Observation",
+        "_active",
+        "observe_exception",
+        "observe_failure",
+        "observe_http",
+        "observe_smtp",
+    ):
+        assert not hasattr(shim, name)
 
 
 def test_send_result_is_frozen_and_rejects_unknown_labels():

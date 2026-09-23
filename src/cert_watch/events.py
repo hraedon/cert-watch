@@ -319,9 +319,10 @@ def _deliver_webhook(
             if result.delivered:
                 success = True
                 break
-            last_error = result.operator_message or "unknown"
+            if result.operator_message:
+                last_error = result.operator_message
         new_status = "delivered" if success else "failed"
-        err = None if success else last_error
+        err = None if success else (last_error or "unknown")
     except Exception as exc:  # noqa: BLE001 — external webhook failures become delivery status
         logger.warning("event webhook delivery failed: %s", exc)
         new_status = "failed"

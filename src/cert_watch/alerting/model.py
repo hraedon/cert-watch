@@ -148,7 +148,10 @@ def normalize_channel(channel: str) -> str:
     if channel in _LEGACY_WEBHOOK_CHANNELS:
         return f"webhook:{channel}"
     if channel == "webhook":
-        return "webhook:generic"
+        # Before unified channel names, this was the fallback for Alertmanager
+        # and unrecognized kinds. Generic webhooks were stored as ``generic``,
+        # so guessing generic here would rewrite the historical meaning.
+        return "webhook:unspecified"
     return channel
 
 

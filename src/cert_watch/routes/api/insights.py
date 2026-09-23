@@ -44,13 +44,13 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
         message="[cert-watch] Webhook test — verify your webhook configuration.",
         threshold_days=0,
     )
-    success = await asyncio.to_thread(send_webhook, test_alert, webhook_cfg)
-    if success:
+    result = await asyncio.to_thread(send_webhook, test_alert, webhook_cfg)
+    if result:
         return JSONResponse(content={"status": "ok", "message": "webhook test delivered"})
     return JSONResponse(
         content={
             "status": "error",
-            "message": test_alert.error_message or "webhook delivery failed",
+            "message": result.operator_message or "webhook delivery failed",
         },
         status_code=502,
     )

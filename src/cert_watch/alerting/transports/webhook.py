@@ -42,7 +42,7 @@ _WEBHOOK_KINDS = {"generic", "slack", "discord", "teams", "pagerduty", "alertman
 class WebhookTransport:
     def __init__(self, config: WebhookConfig) -> None:
         self.config = config
-        kind = config.kind if config.kind in _WEBHOOK_KINDS else "generic"
+        kind = config.kind if config.kind in _WEBHOOK_KINDS else "unknown"
         self.channel = f"webhook:{kind}"
         endpoint = config.routing_key if config.kind == "pagerduty" else config.url
         self.destination_id = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
@@ -69,6 +69,14 @@ def send_webhook(msg: OutboundMessage | Any, config: WebhookConfig | None) -> Se
         )
     try:
         adapter = get_adapter(config.kind)
+    except ValueError as exc:
+        return SendResult(
+            "failed",
+            "invalid_channel",
+            reached_transport=False,
+            operator_message=_sanitize_webhook_error(str(exc), config),
+        )
+    try:
         req = adapter.build(msg, config)
         resp = ssrf_safe_urlopen(
             req.url,
@@ -96,13 +104,6 @@ def send_webhook(msg: OutboundMessage | Any, config: WebhookConfig | None) -> Se
             operator_message=_sanitize_webhook_error(
                 f"webhook URL blocked by SSRF policy: {exc}", config
             ),
-        )
-    except ValueError as exc:
-        return SendResult(
-            "failed",
-            "invalid_channel",
-            reached_transport=False,
-            operator_message=_sanitize_webhook_error(str(exc), config),
         )
     except Exception as exc:  # noqa: BLE001 — webhook is an external service with unpredictable failure modes
         if isinstance(exc, HTTPError):

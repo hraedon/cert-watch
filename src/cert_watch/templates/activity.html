@@ -144,10 +144,10 @@
                 <p class="cw-sub">Email addresses combine global recipients at the attempt with recipients saved when this notification was queued. Group matches describe configuration at the attempt; they do not prove which group supplied a queued address.</p>
                 {% for attempt in attempts %}
                   {% set result = attempt.result %}
-                  {% set channel_names = {'smtp': 'Email (SMTP)', 'generic': 'Webhook', 'slack': 'Slack webhook', 'discord': 'Discord webhook', 'teams': 'Teams webhook', 'pagerduty': 'PagerDuty webhook'} %}
+                  {% set channel_names = {'smtp': 'Email (SMTP)', 'webhook:generic': 'Webhook', 'webhook:slack': 'Slack webhook', 'webhook:discord': 'Discord webhook', 'webhook:teams': 'Teams webhook', 'webhook:pagerduty': 'PagerDuty webhook', 'webhook:alertmanager': 'Alertmanager webhook', 'webhook:unspecified': 'Webhook (unspecified)', 'webhook:unknown': 'Webhook (unknown kind)'} %}
                   <div class="cw-panel-body" data-testid="delivery-attempt">
                     <div class="cw-chiprow">
-                      <strong>{{ channel_names.get(attempt.channel, 'Webhook') }}</strong>
+                      <strong>{{ channel_names.get(attempt.channel, 'Delivery channel') }}</strong>
                       {% if result %}
                         {{ ui.status(label=result.outcome, tone='t-ok' if result.outcome == 'accepted' else 't-warn' if result.outcome == 'partial' else 't-crit') }}
                       {% else %}

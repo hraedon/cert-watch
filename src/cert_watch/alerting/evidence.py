@@ -15,30 +15,6 @@ from cert_watch.database.delivery_evidence import begin_attempt, complete_attemp
 
 logger = logging.getLogger("cert_watch.alert_delivery")
 
-# The deprecated ``cert_watch.alert_delivery`` shim still imports these names
-# until plan 058 PR 5 removes that module. They are inert compatibility tokens;
-# the ContextVar observation mechanism itself is gone and no delivery path
-# calls them.
-_Observation = None
-_active = None
-
-
-def observe_failure(*_args: Any, **_kwargs: Any) -> None:
-    return None
-
-
-def observe_exception(*_args: Any, **_kwargs: Any) -> None:
-    return None
-
-
-def observe_smtp(*_args: Any, **_kwargs: Any) -> None:
-    return None
-
-
-def observe_http(*_args: Any, **_kwargs: Any) -> None:
-    return None
-
-
 REFUSED_NO_EVIDENCE = "Delivery attempt evidence could not be recorded"
 
 

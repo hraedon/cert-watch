@@ -486,6 +486,68 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message
 
 
+def test_empty_webhook_diagnostic_does_not_erase_smtp_failure(monkeypatch, tmp_path):
+    from cert_watch.alerting.dispatch import _attempt_once, _Delivery
+    from cert_watch.alerting.model import SendResult
+
+    _db, _repo, alert = _pending(tmp_path)
+    results = Mock(side_effect=[
+        SendResult("failed", "transport", operator_message="SMTP relay refused"),
+        SendResult("failed", "http_rejected", http_status=200),
+    ])
+    monkeypatch.setattr("cert_watch.alerting.dispatch.attempt_delivery", results)
+    item = _Delivery(alert)
+
+    _attempt_once(
+        item,
+        evidence_db=None,
+        config=_config(),
+        webhook_config=WebhookConfig(
+            url="https://events.pagerduty.com/v2/enqueue",
+            kind="pagerduty",
+            routing_key="routing-key",
+        ),
+    )
+
+    assert item.last_error == "SMTP relay refused"
+
+
+def test_activity_labels_new_and_legacy_delivery_channels(
+    monkeypatch, tmp_path, reload_app,
+):
+    import re
+
+    db, _repo, alert = _pending(tmp_path)
+    channels = ["smtp", "webhook", "webhook:unknown", "future-channel"]
+    kinds = ("generic", "slack", "discord", "teams", "pagerduty", "alertmanager")
+    channels.extend(kinds)
+    channels.extend(f"webhook:{kind}" for kind in kinds)
+    for channel in channels:
+        begin_attempt(db, alert.id, channel, {})
+
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    labels = re.findall(r"<strong>([^<]+)</strong>", response.text)
+    expected = {
+        "Email (SMTP)": 1,
+        "Webhook (unspecified)": 1,
+        "Webhook (unknown kind)": 1,
+        "Delivery channel": 1,
+        "Webhook": 2,
+        "Slack webhook": 2,
+        "Discord webhook": 2,
+        "Teams webhook": 2,
+        "PagerDuty webhook": 2,
+        "Alertmanager webhook": 2,
+    }
+    for label, count in expected.items():
+        assert labels.count(label) == count
+
+
 def _age_alert(db, alert_id, *, hours):
     with _connect(db) as conn:
         conn.execute(
