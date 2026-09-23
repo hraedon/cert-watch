@@ -83,9 +83,8 @@ def evaluate_thresholds(
 
     # Collect existing alerts scoped to the current alert_type so that
     # renewal_stalled / policy_violation rows don't interfere with expiry
-    # thresholds. M4: Include failed alerts in the dedup set so a delivery
-    # failure doesn't produce a duplicate row on the next cycle; instead the
-    # failed alert is reset to pending for retry (see below).
+    # thresholds. Failed alerts remain in the dedup set: ``failed`` now means
+    # the give-up policy was reached and only an operator may retry the row.
     current_type = "expired" if days < 0 else "expiry_warning"
     cert_alerts = alert_repo.list_for_cert(cid)
     existing_for_type: set[int] = {
@@ -93,13 +92,6 @@ def evaluate_thresholds(
         for a in cert_alerts
         if a.threshold_days is not None
         and a.alert_type == current_type
-    }
-    failed_for_type: dict[int, Alert] = {
-        a.threshold_days: a
-        for a in cert_alerts
-        if a.threshold_days is not None
-        and a.alert_type == current_type
-        and a.status == "failed"
     }
 
     # Find the most urgent (smallest) threshold the cert has now crossed.
@@ -113,13 +105,6 @@ def evaluate_thresholds(
 
     # Each (alert_type, threshold) fires exactly once.
     if most_urgent in existing_for_type:
-        # M4: If the existing alert failed delivery, reset it to pending so
-        # process_pending retries it instead of creating a duplicate row.
-        failed_alert = failed_for_type.get(most_urgent)
-        if failed_alert:
-            alert_repo.reset_to_pending(failed_alert.id)
-            failed_alert.status = "pending"
-            return [failed_alert]
         return []
 
     # Don't go backwards: if a more urgent threshold was already alerted

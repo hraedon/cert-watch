@@ -10,15 +10,16 @@ from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
+    AlertStore,
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
     _total_alerts,
     get_write_lock,
     list_alerts_with_subject,
 )
-from cert_watch.middleware import require_admin, require_admin_write, require_auth
+from cert_watch.middleware import require_admin, require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import (
     _alert_group_json,
     _normalize_pagination,
@@ -42,6 +43,17 @@ def api_list_alerts(
     rows = list_alerts_with_subject(db, page=page, limit=limit, scope_tags=scope_tags)
     for row in rows:
         row.pop("historical_cert", None)  # Internal Activity presentation, not an API field.
+        # Dispatch bookkeeping is internal state, not part of the public alert
+        # representation.  The public status still exposes the new ``sending``
+        # lifecycle state.
+        for field in (
+            "attempt_count",
+            "next_attempt_at",
+            "last_attempt_at",
+            "lease_expires_at",
+            "failure_reason",
+        ):
+            row.pop(field, None)
     return JSONResponse(
         content={
             "alerts": rows,
@@ -54,6 +66,42 @@ def api_list_alerts(
             },
         }
     )
+
+
+@router.post("/api/alerts/{alert_id}/retry")
+def api_retry_failed_alert(
+    request: Request,
+    alert_id: IdParam,
+    _auth: str = Depends(require_write),
+) -> JSONResponse:
+    db = _db_path(request)
+    from cert_watch.database import _connect
+
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT cert_id, status FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+    if row is None:
+        return JSONResponse(content={"error": "alert not found"}, status_code=404)
+    denied = scope_write_denied(request, db, cert_id=row["cert_id"])
+    if denied:
+        return JSONResponse(content={"error": denied}, status_code=403)
+    with get_write_lock():
+        retried = AlertStore(db).operator_retry(alert_id)
+    if not retried:
+        return JSONResponse(
+            content={"error": "only failed alerts can be retried"}, status_code=409
+        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.retry_failed",
+        target_type="alert",
+        target_id=alert_id,
+        detail={"previous_status": row["status"]},
+        source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={"ok": True, "id": alert_id, "status": "pending"})
 
 
 # ---------- Alert Groups ----------

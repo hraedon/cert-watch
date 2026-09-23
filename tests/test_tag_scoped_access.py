@@ -495,11 +495,16 @@ class TestFlushAlertQueueRoute:
 
         seen: list[str] = []
 
-        def _fake_process(alert_repo, alert_config, webhook_config):
-            seen.extend(a.id for a in alert_repo.list_pending())
+        def _fake_process(dispatcher):
+            from cert_watch.database import SqliteAlertRepository
+
+            repo = SqliteAlertRepository(dispatcher.db_path)
+            seen.extend(a.id for a in repo.list_pending_scoped(dispatcher.scope_tags))
             return {"sent": len(seen), "failed": 0}
 
-        monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", _fake_process)
+        monkeypatch.setattr(
+            "cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process
+        )
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
             r = client.post("/alerts/flush", follow_redirects=False)
@@ -516,17 +521,12 @@ class TestFlushAlertQueueRoute:
 
 
 class TestScopedFlushFullContract:
-    """WI-078: drive the REAL process_pending through ScopedAlertRepository with
-    only the SMTP transport stubbed, proving the whole wrapper contract
-    (scoped list_pending + mark_sent on in-scope IDs) — not just list_pending.
-    The route test stubs process_pending entirely, so it can't cover this."""
+    """WI-078: drive the real Dispatcher with its SQL claim scope."""
 
     def test_real_process_pending_sends_and_marks_only_in_scope(
         self, db: Path, monkeypatch
     ):
         from cert_watch.alerting import dispatch as alerts_mod
-        from cert_watch.database import ScopedAlertRepository
-
         _seed_two_teams(db)
 
         sent_cert_ids: list[str] = []
@@ -540,16 +540,17 @@ class TestScopedFlushFullContract:
         # Stub delivery at the transport boundary; process_pending itself is real.
         monkeypatch.setattr(alerts_mod.SmtpTransport, "send", _fake_send)
 
-        repo = ScopedAlertRepository(db, ("team-a",))
         config = alerts_mod.AlertConfig(
             smtp_host="relay.example.invalid", smtp_user="", smtp_password="",
             from_addr="watch@example.invalid", recipients=["team@example.invalid"],
         )
-        result = alerts_mod.process_pending(repo, config=config, webhook_config=None)
+        result = alerts_mod.Dispatcher(
+            db, config=config, webhook_config=None, scope_tags=("team-a",)
+        ).process_pending()
 
         assert sent_cert_ids == ["cert-a"]
         assert result == {"sent": 1, "failed": 0, "deferred": 0}
-        # mark_sent went through the wrapper → only the in-scope alert flipped.
+        # The atomic claim selected and completed only the in-scope row.
         with _connect(db) as conn:
             statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())
         assert statuses["alert-a"] == "sent"

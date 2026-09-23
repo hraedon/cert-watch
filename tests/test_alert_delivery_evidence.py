@@ -133,10 +133,10 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
     assert alert.message not in raw
 
 
-def test_failed_retries_append_each_attempt(monkeypatch, tmp_path):
+def test_failed_round_appends_each_attempt_before_backoff(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=TimeoutError("do not retain this diagnostic"))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     attempts = list_attempts(db, [alert.id])[alert.id]
     assert len(attempts) == ALERT_MAX_RETRIES
@@ -190,14 +190,17 @@ def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
     assert len(list_attempts(db, [alert.id])[alert.id]) == 1
 
 
-def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
-    """Guard the other half: deferral must not swallow genuine delivery failures."""
+def test_a_real_transport_failure_schedules_backoff(monkeypatch, tmp_path):
+    """A genuine delivery failure spends attempts and schedules another round."""
     _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     connection.send_message.side_effect = smtplib.SMTPException("mailbox unavailable")
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
-    assert repo.list_for_cert(alert.cert_id)[0].status == "failed"
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending"
+    assert stored.attempt_count == ALERT_MAX_RETRIES
+    assert stored.next_attempt_at is not None
 
 
 def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path):
@@ -440,7 +443,7 @@ def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch
     """The operator-visible count must not overstate what was tried."""
     _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {connection.send_message.call_count} attempts" in stored.error_message
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
@@ -480,7 +483,7 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     )
     webhook = WebhookConfig(url="https://hooks.example.invalid/path")
 
-    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message
@@ -763,6 +766,29 @@ def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_pa
     assert response.status_code == 200
     assert "Not yet delivered" in response.text
     assert "Still queued past the cycle that should have sent it." in response.text
+
+
+def test_activity_marks_an_abandoned_sending_lease_as_undelivered(
+    monkeypatch, tmp_path, reload_app
+):
+    db, _, alert = _pending(tmp_path)
+    from cert_watch.database import AlertStore
+
+    now = datetime.now(UTC)
+    AlertStore(db).claim(
+        lease_owner="dead-worker",
+        lease_expires_at=now - timedelta(minutes=1),
+        now=now - timedelta(minutes=2),
+    )
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Sending" in response.text
+    assert "Not yet delivered" in response.text
+    assert f'data-alert-id="{alert.id}"' in response.text
 
 
 def test_activity_does_not_call_a_queued_alert_late_when_nothing_sends(

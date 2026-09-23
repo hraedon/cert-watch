@@ -50,6 +50,18 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Alert delivery has a persisted retry lifecycle (migration 0036).** Alerts
+  are atomically claimed as `sending` under a lease. A failed round is returned
+  to `pending` with a 1-hour, 4-hour, then 12-hour backoff instead of becoming
+  immediately terminal. After 12 transport-reaching attempts, `failed` means
+  cert-watch has given up; expiry evaluation no longer revives that row on
+  every cycle. An operator with write access can use **Retry failed** in
+  Activity or `POST /api/alerts/{id}/retry` to reset the attempt count and queue
+  it again. Manual **Flush queue** ignores scheduled backoff, but still claims
+  rows and is serialized with scheduled delivery. The Activity and certificate
+  detail pages may briefly show the new `sending` status; an expired sending
+  lease is reported as undelivered by health/readiness checks.
+
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions
   minted by earlier releases are rejected: they cannot say whether they
@@ -131,8 +143,8 @@ restore the pre-migration backup.
   under `CERT_WATCH_ALERT_RETENTION_DAYS`. Two side effects worth knowing: a
   pending alert now keeps its original `created_at` across rescans, so the
   "undelivered for more than 24h" signal can actually reach its threshold on a
-  daily-scan estate; and a `failed` alert is now retried on the next cycle
-  instead of being stranded and duplicated.
+  daily-scan estate. A `failed` alert now remains terminal until an operator
+  explicitly retries it; expiry evaluation will not revive it indefinitely.
 
 - **Per-certificate notes are merged into host notes (migration 0031).** Every
   non-empty `certificates.notes` value is concatenated into the matching

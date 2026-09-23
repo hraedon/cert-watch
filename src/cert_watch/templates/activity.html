@@ -101,12 +101,21 @@
             {% if not a.read %}
             <button type="button" class="cw-btn ghost sm" data-mark-read="{{ a.id }}" data-csrf="{{ csrf_token }}">{{ icons.svg_icon('check', 11) }}Mark read</button>
             {% endif %}
+            {% if may_write and a.status == 'failed' %}
+            <form method="post" action="/alerts/{{ a.id }}/retry" class="cw-inline">
+              <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="cw-btn ghost sm" data-action="retry-failed">{{ icons.svg_icon('refresh', 11) }}Retry failed</button>
+            </form>
+            {% endif %}
           </div>
           <div class="cw-sub">{{ a.message }}</div>
           <div class="cw-chiprow cw-metarow" data-testid="alert-channels">
             {% set outcome = delivery_outcomes.get(a.id) %}
             {% set undelivered = a.id in undelivered_alert_ids|default([]) %}
-            {% if outcome %}
+            {% if a.status == 'sending' %}
+              {{ ui.status(label='Sending', tone='t-muted') }}
+              <span class="cw-sub">Claimed by a delivery worker.</span>
+            {% elif outcome %}
               {% set outcome_labels = {'accepted': 'Transport accepted', 'partial': 'Partial acceptance', 'failed': 'Attempt failed', 'unknown': 'Delivery outcome unknown'} %}
               {{ ui.status(label=outcome_labels.get(outcome, 'Delivery outcome unknown'), tone='t-ok' if outcome == 'accepted' else 't-warn' if outcome == 'partial' else 't-crit' if outcome == 'failed' else 't-muted') }}
               <span class="cw-sub">Recorded state: {{ a.status }}</span>

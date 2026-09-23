@@ -21,6 +21,7 @@ from cert_watch.alerting.digest.expiry import (
     send_expiry_digest,
 )
 from cert_watch.alerting.dispatch import (
+    Dispatcher,
     _attempt_once,
     _Delivery,
     _settle_evidence_deferral,
@@ -32,6 +33,7 @@ from cert_watch.alerting.messages import (
 )
 from cert_watch.alerting.model import (
     ALERT_CYCLE_BUDGET_SECONDS,
+    ALERT_MAX_ATTEMPTS,
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
     CHAIN_THRESHOLDS,
@@ -106,6 +108,7 @@ from cert_watch.retry import (
 
 __all__ = [
     "ALERT_CYCLE_BUDGET_SECONDS",
+    "ALERT_MAX_ATTEMPTS",
     "ALERT_MAX_RETRIES",
     "ALERT_RETRY_DELAY",
     "CHAIN_THRESHOLDS",
@@ -119,6 +122,7 @@ __all__ = [
     "Alert",
     "AlertConfig",
     "AlertRepository",
+    "Dispatcher",
     "SSRFBlockedError",
     "WebhookConfig",
     "_Delivery",

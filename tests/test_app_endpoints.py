@@ -148,10 +148,30 @@ def test_alerts_view_lists_existing(tmp_path, reload_app):
             threshold_days=7,
         )
     )
+    SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="fp2",
+            alert_type="expiry_warning",
+            status="sending",
+            message="being sent",
+            threshold_days=3,
+        )
+    )
+    SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="fp3",
+            alert_type="expiry_warning",
+            status="failed",
+            message="gave up",
+            threshold_days=1,
+        )
+    )
     with TestClient(app_mod.app) as client:
         r = client.get("/alerts")
     assert r.status_code == 200
     assert "m" in r.text  # alert message is displayed
+    assert "Sending" in r.text
+    assert "Retry failed" in r.text
 
 
 def _seed_alert(db):
@@ -596,6 +616,67 @@ def test_flush_alert_queue(tmp_path, reload_app):
     assert r.headers["location"].startswith("/alerts?")
 
 
+def test_retry_failed_alert_html_resets_budget_and_audits(tmp_path, reload_app):
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    alert_id = SqliteAlertRepository(db).create(
+        Alert(cert_id="retry-html", alert_type="expiry_warning", status="failed", message="m")
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET attempt_count = 12, failure_reason = 'timeout', "
+            "last_attempt_at = '2026-09-22T10:00:00+00:00' WHERE id = ?",
+            (alert_id,),
+        )
+        conn.commit()
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        response = client.post(f"/alerts/{alert_id}/retry", follow_redirects=False)
+
+    assert response.status_code == 303
+    with sqlite3.connect(db) as conn:
+        lifecycle = conn.execute(
+            "SELECT status, attempt_count, failure_reason, last_attempt_at "
+            "FROM alerts WHERE id = ?",
+            (alert_id,),
+        ).fetchone()
+        audit = conn.execute(
+            "SELECT action, target_id FROM audit_log ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert lifecycle == ("pending", 0, None, "2026-09-22T10:00:00+00:00")
+    assert audit == ("alert.retry_failed", alert_id)
+
+
+def test_retry_failed_alert_json_resets_budget(tmp_path, reload_app):
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    alert_id = SqliteAlertRepository(db).create(
+        Alert(cert_id="retry-api", alert_type="expiry_warning", status="failed", message="m")
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE alerts SET attempt_count = 12 WHERE id = ?", (alert_id,))
+        conn.commit()
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        response = client.post(f"/api/alerts/{alert_id}/retry")
+        conflict = client.post(f"/api/alerts/{alert_id}/retry")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "id": alert_id, "status": "pending"}
+    assert conflict.status_code == 409
+    with sqlite3.connect(db) as conn:
+        lifecycle = conn.execute(
+            "SELECT status, attempt_count FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+    assert lifecycle == ("pending", 0)
+
+
 def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
     tmp_path, monkeypatch
 ):
@@ -630,7 +711,7 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.Dispatcher.process_pending", process)
     request = Request(
         {
             "type": "http",
@@ -690,7 +771,9 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process_pending)
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.Dispatcher.process_pending", process_pending
+    )
     request = Request(
         {
             "type": "http",

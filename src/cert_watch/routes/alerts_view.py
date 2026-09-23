@@ -33,7 +33,7 @@ templates = get_templates()
 
 
 def _undelivered_ids(rows: list[dict[str, Any]], *, delivery_configured: bool = True) -> set[str]:
-    """Pending alerts that have missed the cycle that should have sent them.
+    """Queued alerts or stale sending leases that are still undelivered.
 
     Derived at render time rather than stored on the row. ``process_pending``
     defers precisely when the database refuses a write, so the reason cannot be
@@ -51,12 +51,20 @@ def _undelivered_ids(rows: list[dict[str, Any]], *, delivery_configured: bool = 
     if not delivery_configured:
         return set()
     cutoff = datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)
+    now = datetime.now(UTC)
     stale: set[str] = set()
     for row in rows:
-        if row.get("status") != "pending":
-            continue
+        status = row.get("status")
         raised = _parse_timestamp(row.get("created_at"))
-        if raised is not None and raised <= cutoff:
+        lease_expires = _parse_timestamp(row.get("lease_expires_at"))
+        if (
+            status == "pending"
+            and raised is not None
+            and raised <= cutoff
+        ) or (
+            status == "sending"
+            and (lease_expires is None or lease_expires <= now)
+        ):
             stale.add(row["id"])
     return stale
 

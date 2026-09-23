@@ -137,17 +137,19 @@ def test_every_alert_is_tried_once_before_any_is_tried_twice(tmp_path, monkeypat
 
 
 def test_each_alert_still_gets_its_full_run_of_attempts(tmp_path, monkeypatch):
-    """Waves change when attempts happen, not how many, nor the terminal state."""
+    """Waves give every alert a full round before persisted backoff."""
     _, repo = _queue(tmp_path, 3)
     connection = _failing_smtp(monkeypatch)
     monkeypatch.setattr("cert_watch.retry.time.sleep", lambda _s: None)
 
     result = process_pending(repo, _config())
 
-    assert result == {"sent": 0, "failed": 3, "deferred": 0}
+    assert result == {"sent": 0, "failed": 0, "deferred": 3}
     assert connection.send_message.call_count == 3 * ALERT_MAX_RETRIES
     stored = repo.list_for_cert("cert-0")[0]
-    assert stored.status == "failed"
+    assert stored.status == "pending"
+    assert stored.attempt_count == ALERT_MAX_RETRIES
+    assert stored.next_attempt_at is not None
     assert f"after {ALERT_MAX_RETRIES} attempts" in stored.error_message
 
 

@@ -49,6 +49,40 @@ def test_readyz_with_scan_history(tmp_path, reload_app):
     assert data["checks"]["last_scan_status"] == "success"
 
 
+def test_readyz_degrades_for_a_sending_alert_with_an_expired_lease(
+    tmp_path, reload_app
+):
+    app_mod = reload_app(SMTP_HOST="relay.example.invalid")
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, AlertStore, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    alert_id = SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="ready-lease",
+            alert_type="expiry_warning",
+            status="pending",
+            message="m",
+        )
+    )
+    now = datetime.now(UTC)
+    AlertStore(db).claim(
+        lease_owner="dead-worker",
+        lease_expires_at=now - timedelta(minutes=1),
+        now=now - timedelta(minutes=2),
+    )
+
+    with TestClient(app_mod.app) as client:
+        response = client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["checks"]["undelivered_alerts"] == "1"
+    with sqlite3.connect(db) as conn:
+        assert conn.execute(
+            "SELECT status FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone() == ("sending",)
+
+
 def test_readyz_db_error(monkeypatch, reload_app):
     """Degraded readiness must be HTTP 503 — the status code is the probe
     contract (kubelet/blackbox judge on it, not on the body)."""
@@ -339,6 +373,29 @@ def test_api_health_counts_undelivered_when_only_a_webhook_is_configured(reload_
 
     assert data["alert_delivery_configured"] is True
     assert data["undelivered_alerts"] == 1
+
+
+def test_api_health_counts_a_sending_alert_with_an_expired_lease(reload_app, tmp_path):
+    app_mod = reload_app(SMTP_HOST="relay.example.invalid")
+    db = str(tmp_path / "cert-watch.sqlite3")
+    with TestClient(app_mod.app) as client:
+        _insert_alert(
+            db,
+            alert_id="abandoned-claim",
+            status="sending",
+            created_at=datetime.now(UTC) - timedelta(minutes=5),
+        )
+        with sqlite3.connect(db) as conn:
+            conn.execute(
+                "UPDATE alerts SET lease_owner = 'dead-worker', lease_expires_at = ? "
+                "WHERE id = 'abandoned-claim'",
+                ((datetime.now(UTC) - timedelta(minutes=1)).isoformat(),),
+            )
+            conn.commit()
+        data = client.get("/api/health").json()
+
+    assert data["undelivered_alerts"] == 1
+    assert data["overall"] == "warning"
 
 
 def test_api_health_does_not_flag_an_alert_still_inside_its_delivery_window(

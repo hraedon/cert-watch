@@ -5,6 +5,10 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Durable alert dispatch claims and operator retry.** Migration 0036 adds
+  atomic claims, expiring leases, attempt counters and scheduled retry times.
+  Activity shows the new `sending` state and offers an audited **Retry failed**
+  action (HTML and JSON API) that resets a terminal alert's attempt budget.
 - **Published container images are signed and attested, and verified before
   deploy.** The release workflow signs the pushed digest with keyless cosign,
   attaches an SPDX SBOM and max-detail SLSA provenance, then re-verifies the
@@ -34,6 +38,12 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Changed
+- **Alert delivery failures back off before giving up.** A failed delivery
+  round returns to `pending` for 1 hour, then 4 hours, then 12 hours; after 12
+  transport-reaching attempts the row becomes terminal `failed`. Expiry rules
+  no longer revive failed alerts indefinitely. Manual flush ignores the delay
+  but uses the same atomic claim path, so concurrent scheduler/flush workers do
+  not both send the same queued row.
 - **Schema creation now has one source of truth.** Fresh databases and upgrades
   both traverse the numbered migration chain, each migration commits its schema
   work and version row atomically, and migration 0035 reconciles objects that

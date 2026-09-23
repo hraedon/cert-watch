@@ -292,8 +292,7 @@ def test_process_pending_ssrf_blocked_does_not_crash(alert_repo, expiring_cert):
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         counts = process_pending(alert_repo, config)
     mock_smtp.assert_not_called()
-    assert counts["sent"] == 0
-    assert counts["failed"] > 0
+    assert counts == {"sent": 0, "failed": 0, "deferred": 1}
 
 
 def test_open_smtp_connection_ssrf_blocked_returns_none():
@@ -959,9 +958,8 @@ def test_expired_fires_after_expiry_warning_at_same_threshold(alert_repo):
     assert expired_alerts[0].alert_type == "expired"
 
 
-def test_failed_alert_does_not_block_refire(alert_repo, expiring_cert):
-    """Regression: a failed delivery (status='failed') must not permanently
-    suppress the threshold — it should re-fire on the next evaluation."""
+def test_failed_alert_stays_terminal_until_operator_retry(alert_repo, expiring_cert):
+    """A gave-up alert is not silently revived by threshold evaluation."""
     # First evaluation creates a pending alert
     alerts = evaluate_thresholds(expiring_cert, alert_repo)
     assert len(alerts) == 1
@@ -969,9 +967,9 @@ def test_failed_alert_does_not_block_refire(alert_repo, expiring_cert):
     # Simulate delivery failure
     alert_repo.mark_failed(alerts[0].id, "SMTP connection refused")
 
-    # Re-evaluate — should create a new alert because the old one is 'failed'
+    # Re-evaluate — failed now means gave up, so the row stays terminal.
     second = evaluate_thresholds(expiring_cert, alert_repo)
-    assert len(second) == 1
+    assert second == []
 
 
 # ---------- send_expiry_digest (Plan 002 WI-2) ----------

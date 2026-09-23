@@ -275,16 +275,16 @@ def test_http_failure_and_later_success_reuse_the_persisted_alert(db, monkeypatc
         capturing_http_target("/unavailable", "/negative", statuses={"/unavailable": 503}) as http,
     ):
         webhook = WebhookConfig(url=http.url("/unavailable"), allow_private=True)
-        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 1, "deferred": 0}
+        assert process_pending(repo, None, webhook) == {"sent": 0, "failed": 0, "deferred": 1}
         assert len(http.requests) == ALERT_MAX_RETRIES
         assert all(request.path == "/unavailable" for request in http.requests)
         assert all(json.loads(request.body)["cert_id"] == cert_id for request in http.requests)
         assert http.received("/negative") == []
     rows = repo.list_for_cert(cert_id)
-    assert len(rows) == 1 and rows[0].id == alert_id and rows[0].status == "failed"
+    assert len(rows) == 1 and rows[0].id == alert_id and rows[0].status == "pending"
     assert "503" in rows[0].error_message
     assert rows[0].sent_at is None
-    assert [alert.id for alert in evaluate_all_certs(db, repo)] == [alert_id]
+    assert evaluate_all_certs(db, repo) == []
     assert len(repo.list_all()) == 1
 
     with (
@@ -292,7 +292,9 @@ def test_http_failure_and_later_success_reuse_the_persisted_alert(db, monkeypatc
         capturing_http_target("/recovered", "/negative") as http,
     ):
         webhook = WebhookConfig(url=http.url("/recovered"), allow_private=True)
-        assert process_pending(repo, None, webhook) == {"sent": 1, "failed": 0, "deferred": 0}
+        assert process_pending(repo, None, webhook, ignore_backoff=True) == {
+            "sent": 1, "failed": 0, "deferred": 0,
+        }
         assert len(http.requests) == 1
         assert json.loads(http.requests[0].body)["cert_id"] == cert_id
         assert http.received("/negative") == []
@@ -310,9 +312,9 @@ def test_orphan_without_global_recipients_is_failed_without_smtp_data(db, tmp_pa
     evaluate_all_certs(db, repo)
     with allow_loopback_transport(monkeypatch), smtp_target(tmp_path, monkeypatch) as smtp:
         assert process_pending(repo, _smtp_config(smtp, recipients=[])) == {
-            "sent": 0, "failed": 1, "deferred": 0,
+            "sent": 0, "failed": 0, "deferred": 1,
         }
         assert smtp.messages == []
         assert smtp.auth_attempts == []
     row = repo.list_for_cert(cert_id)[0]
-    assert row.status == "failed" and row.sent_at is None
+    assert row.status == "pending" and row.sent_at is None

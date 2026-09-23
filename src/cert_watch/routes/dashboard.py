@@ -15,8 +15,7 @@ from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.database import (
-    AlertRepository,
-    ScopedAlertRepository,
+    AlertStore,
     SqliteAlertRepository,
     dashboard_urgency_stats,
     distinct_tags,
@@ -339,21 +338,20 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
 
-    # Scoped users flush only their in-scope alerts; everyone else flushes all.
-    alert_repo: AlertRepository = (
-        ScopedAlertRepository(db, scope_tags)
-        if scope_tags
-        else SqliteAlertRepository(db)
-    )
-
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
-    from cert_watch.alerting.dispatch import process_pending
+    from cert_watch.alerting.dispatch import Dispatcher
     from cert_watch.scheduler import try_run_alert_delivery
 
     result = await run_in_threadpool(
         try_run_alert_delivery,
-        lambda: process_pending(alert_repo, alert_config, webhook_config),
+        lambda: Dispatcher(
+            db,
+            alert_config,
+            webhook_config,
+            scope_tags=scope_tags,
+            ignore_backoff=True,
+        ).process_pending(),
     )
     if result is None:
         return RedirectResponse(
@@ -378,7 +376,7 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
         # describe an outage as a successful flush.
         detail = f"Flushed {sent} alert(s), {failed} failed"
         if deferred:
-            detail += f", {deferred} deferred (delivery evidence unavailable)"
+            detail += f", {deferred} deferred"
         return RedirectResponse(
             url=f"/alerts?warning={quote(detail)}",
             status_code=303,
@@ -387,6 +385,40 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
         url=f"/alerts?saved={quote(f'{sent} alert(s) sent')}",
         status_code=303,
     )
+
+
+@router.post("/alerts/{alert_id}/retry")
+async def retry_failed_alert(request: Request, alert_id: IdParam) -> RedirectResponse:
+    """Return one terminal failed alert to the eligible queue."""
+    write_err = await require_write_form(request)
+    if write_err:
+        return write_err
+    db = _db_path(request)
+    with _connect(db) as conn:
+        row = conn.execute(
+            "SELECT cert_id, status FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+    if row is None:
+        return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
+    denied = scope_write_denied(request, db, cert_id=row["cert_id"])
+    if denied:
+        return RedirectResponse(url=f"/alerts?error={quote(denied)}", status_code=303)
+    with get_write_lock():
+        retried = AlertStore(db).operator_retry(alert_id)
+    if not retried:
+        return RedirectResponse(
+            url="/alerts?warning=only+failed+alerts+can+be+retried", status_code=303
+        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.retry_failed",
+        target_type="alert",
+        target_id=alert_id,
+        detail={"previous_status": row["status"]},
+        source_ip=resolve_source_ip(request),
+    )
+    return RedirectResponse(url="/alerts?saved=alert+queued+for+retry", status_code=303)
 
 
 @router.post("/alerts/mark-all-read")

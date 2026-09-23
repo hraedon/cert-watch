@@ -21,7 +21,7 @@ from cert_watch.host_validation import hostname_is_valid
 class Alert:
     cert_id: str
     alert_type: str  # "expiry_warning" | "expired" | "scan_failure"
-    status: str  # "pending" | "sent" | "failed"
+    status: str  # "pending" | "sending" | "sent" | "failed" | "cancelled"
     message: str
     id: str = ""
     threshold_days: int | None = None
@@ -43,6 +43,12 @@ class Alert:
     # refused the write that precedes a send; cleared by any recorded attempt
     # and by every status change (migration 0033, #38).
     deferred_since: datetime | None = None
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    failure_reason: str | None = None
 
 
 @dataclass
@@ -450,41 +456,49 @@ class SqliteAlertRepository(AlertRepository):
             return cur.rowcount
 
     def mark_sent(self, alert_id: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'sent', sent_at = ?, deferred_since = NULL "
-                "WHERE id = ?",
-                (_iso(datetime.now(UTC)), alert_id),
-            )
-            conn.commit()
+        from cert_watch.database.alert_store import AlertStore
+
+        AlertStore(self.db_path).set_sent(alert_id)
 
     def mark_failed(self, alert_id: str, error_message: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'failed', error_message = ?, deferred_since = NULL "
-                "WHERE id = ?",
-                (error_message, alert_id),
+        from cert_watch.database.alert_store import AlertStore
+
+        store = AlertStore(self.db_path)
+        owner = getattr(self, "_dispatch_lease_owner", None)
+        if owner:
+            store.complete_failed(
+                alert_id,
+                lease_owner=owner,
+                attempts=getattr(self, "_dispatch_attempts", 0),
+                now=getattr(self, "_dispatch_now", datetime.now(UTC)),
+                failure_reason=getattr(self, "_dispatch_failure_reason", "unknown"),
+                error_message=error_message,
             )
-            conn.commit()
+        else:
+            store.set_failed(alert_id, error_message)
 
     def reset_to_pending(self, alert_id: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'pending', error_message = NULL, "
-                "deferred_since = NULL WHERE id = ?",
-                (alert_id,),
-            )
-            conn.commit()
+        from cert_watch.database.alert_store import AlertStore
+
+        AlertStore(self.db_path).reset_pending_compat(alert_id)
 
     def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
-        assignment = "?" if restart else "COALESCE(deferred_since, ?)"
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                f"UPDATE alerts SET deferred_since = {assignment} "
-                "WHERE id = ? AND status = 'pending'",
-                (_iso(when), alert_id),
+        from cert_watch.database.alert_store import AlertStore
+
+        store = AlertStore(self.db_path)
+        owner = getattr(self, "_dispatch_lease_owner", None)
+        if owner:
+            store.complete_pending(
+                alert_id,
+                lease_owner=owner,
+                attempts=getattr(self, "_dispatch_attempts", 0),
+                now=when,
+                next_attempt_at=None,
+                deferred_since=when,
+                preserve_deferral=not restart,
             )
-            conn.commit()
+        else:
+            store.note_pending_deferral(alert_id, when, restart=restart)
 
     @staticmethod
     def _row_to_alert(row: sqlite3.Row) -> Alert:
@@ -501,6 +515,13 @@ class SqliteAlertRepository(AlertRepository):
             # its deferral clock, and the age-based health check still applies.
             with contextlib.suppress(ValueError, TypeError):
                 deferred_since = _parse_iso(deferred_raw)
+        def optional_datetime(name: str) -> datetime | None:
+            raw = row_dict.get(name)
+            if not raw:
+                return None
+            with contextlib.suppress(ValueError, TypeError):
+                return _parse_iso(raw)
+            return None
         return Alert(
             id=row["id"],
             cert_id=row["cert_id"],
@@ -516,17 +537,20 @@ class SqliteAlertRepository(AlertRepository):
             subject=row["subject"] if "subject" in row_dict else "",
             deferred_since=deferred_since,
             trigger_cert_id=row_dict.get("trigger_cert_id"),
+            attempt_count=int(row_dict.get("attempt_count") or 0),
+            next_attempt_at=optional_datetime("next_attempt_at"),
+            last_attempt_at=optional_datetime("last_attempt_at"),
+            lease_owner=row_dict.get("lease_owner"),
+            lease_expires_at=optional_datetime("lease_expires_at"),
+            failure_reason=row_dict.get("failure_reason"),
         )
 
 
 class ScopedAlertRepository(AlertRepository):
     """Tag-scope decorator over SqliteAlertRepository (WI-078).
 
-    Used by ``flush_alert_queue`` so ``process_pending`` only sends alerts a
-    scoped user is allowed to see. ``list_pending`` is narrowed to the scope;
-    every other operation delegates unchanged to the wrapped repository. Because
-    ``mark_sent`` / ``mark_failed`` only ever receive alert IDs returned by the
-    scoped ``list_pending``, the mutating surface stays in-scope by construction.
+    Retained for compatible repository callers. Flush now passes its scope to
+    ``Dispatcher``, whose atomic claim applies the same effective-tag filter.
     """
 
     def __init__(self, db_path: str | Path, scope_tags: tuple[str, ...]) -> None:
