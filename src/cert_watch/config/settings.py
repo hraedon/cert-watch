@@ -32,7 +32,7 @@ class Settings:
     smtp_password: str | None = field(default=None, repr=False)
     alert_from: str | None = None
     alert_recipients: tuple[str, ...] = ()
-    webhook_url: str | None = None
+    webhook_url: str | None = field(default=None, repr=False)
     webhook_headers: dict[str, str] | None = field(default=None, repr=False)
     webhook_template: str = ""
     webhook_kind: str = "generic"
@@ -84,9 +84,9 @@ class Settings:
     base_url: str = ""
     allow_unauth: bool = False
     jwks_cache_ttl: int = 86400
-    renewal_webhook_url: str = ""
+    renewal_webhook_url: str = field(default="", repr=False)
     renewal_webhook_headers: dict[str, str] | None = field(default=None, repr=False)
-    event_stream_config: dict[str, Any] | None = None
+    event_stream_config: dict[str, Any] | None = field(default=None, repr=False)
     event_stream_pagerduty_routing_key: str = field(default="", repr=False)
     policy_config: dict[str, Any] | None = None
     auth_secret: str = field(default="", repr=False)
@@ -101,7 +101,7 @@ class Settings:
     syslog_host: str = ""
     syslog_port: int = 514
     syslog_proto: str = "udp"
-    hec_url: str = ""
+    hec_url: str = field(default="", repr=False)
     hec_token: str = field(default="", repr=False)
     hec_index: str = ""
     hec_sourcetype: str = "cert_watch"

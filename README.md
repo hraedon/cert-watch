@@ -441,6 +441,11 @@ full (including key management). Revoke a key from the same page or
 `DELETE /api/api-keys/{id}`. Key use is recorded in the audit log under the key's
 name. API-key requests are exempt from CSRF (CSRF protects the cookie session
 only); they remain subject to the same per-IP rate limits as the rest of `/api/*`.
+The API-key HMAC pepper is loaded once per process. If
+`CERT_WATCH_AUTH_SECRET_FILE` points at a rotated file, restart cert-watch after
+replacing the file; changing its contents alone does not refresh the cached
+pepper. Reissue API keys as part of an auth-secret rotation because keys hashed
+under the old secret no longer authenticate under the new one.
 
 ### Secrets, sessions & CSRF
 

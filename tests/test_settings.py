@@ -1162,6 +1162,7 @@ def test_pin_ldap_ca_success(reload_app, tmp_path, chain_triplet):
             "/settings/pin-ldap-ca",
             data={"ldap_ca_cert": pem},
         )
+        assert app_mod.app.state.settings.ldap_ca_cert == pem.strip()
     assert r.status_code == 200
     data = r.json()
     assert data["ok"] is True
