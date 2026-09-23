@@ -5,6 +5,28 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **The JSON API is now the operational presentation seam.** Every inventory
+  mutation has a JSON counterpart over the same application service as its
+  server-rendered form. New endpoints are:
+
+  | Action | JSON endpoint |
+  |---|---|
+  | Create or import hosts | `POST /api/hosts`, `POST /api/hosts/import` |
+  | Scan all or one host | `POST /api/hosts/scan`, `POST /api/hosts/{id}/scan` |
+  | Edit host settings | `PATCH /api/hosts/{id}/settings` |
+  | Delete a host | `DELETE /api/hosts/{id}` |
+  | Upload or delete a certificate | `POST /api/certificates/upload`, `DELETE /api/certificates/{id}` |
+  | Add or delete a trust anchor | `POST /api/trust-anchors`, `DELETE /api/trust-anchors/{id}` |
+  | Mark all visible alerts read | `POST /api/alerts/mark-all-read` |
+
+  Existing `/api/health`, `/api/audit`, certificate-posture, host-export, and
+  alert-read URLs are unchanged but their route definitions now live under
+  `routes/api/`. No endpoint path moved or redirects were added.
+- **Host ownership has a coherent UI write path.** The detail form now posts to
+  `POST /hosts/{id}/owner` instead of the certificate-namespaced path. The old
+  `POST /certificates/{id}/owner` path remains callable for compatibility and
+  uses the same service; API clients continue to use
+  `PATCH /api/hosts/{id}/owner`.
 - **Published container images are signed and attested, and verified before
   deploy.** The release workflow signs the pushed digest with keyless cosign,
   attaches an SPDX SBOM and max-detail SLSA provenance, then re-verifies the
@@ -43,6 +65,9 @@ All notable changes to cert-watch are documented in this file.
   unchanged. See UPGRADING.md.
 
 ### Changed
+- **Host creation exposes the fields it accepts.** The add-host drawer now
+  includes optional tags, notes, and scan cadence, and the CSV help lists every
+  supported optional column. This closes the prior route/UI contract mismatch.
 - **One way to guard a route; every write guard checks CSRF.** Routes declared
   authorization four different ways, and one of them (`require_admin_form`)
   left CSRF to a separate call each handler had to remember. Every route now

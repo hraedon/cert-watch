@@ -9,6 +9,7 @@ programmatic use; this exposes it in the Settings UI (vanilla forms, no JS).
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -16,13 +17,26 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import admin_page_guard
-from cert_watch.database import SqliteAlertGroupRepository, get_write_lock
-from cert_watch.routes._deps import IdParam, _db_path, get_templates
+from cert_watch.database import SqliteAlertGroupRepository
+from cert_watch.routes._deps import IdParam, _db_path, acting_auth, get_templates
 from cert_watch.routes.api._shared import _validate_webhook_url
 from cert_watch.routes.settings.core import settings_tab_form
 from cert_watch.routes.settings.render import _settings_context
+from cert_watch.services.alert_groups import (
+    AlertGroupConflictError,
+    AlertGroupNotFoundError,
+)
+from cert_watch.services.alert_groups import (
+    create_alert_group as create_alert_group_service,
+)
+from cert_watch.services.alert_groups import (
+    delete_alert_group as delete_alert_group_service,
+)
+from cert_watch.services.alert_groups import (
+    update_alert_group as update_alert_group_service,
+)
 from cert_watch.tags import parse_tags
 
 templates = get_templates()
@@ -215,22 +229,21 @@ async def create_alert_group(
     assert values is not None  # err is None here, so _parse_form returned values
 
     db = _db_path(request)
-    repo = SqliteAlertGroupRepository(db)
-    if repo.get_by_name(values["name"]):
-        return _redirect_err(f"alert group '{values['name']}' already exists")
-
-    with get_write_lock():
-        group_id = repo.create(
-            values["name"], values["recipients"], values["match_tags"],
-            values["webhook_url"], threshold_days=values["threshold_days"],
+    try:
+        create_alert_group_service(
+            db,
+            name=values["name"],
+            recipients=values["recipients"],
+            match_tags=values["match_tags"],
+            webhook_url=values["webhook_url"],
+            threshold_days=values["threshold_days"],
             digest_cadence_days=values["digest_cadence_days"],
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    record_audit(
-        db, actor=resolve_actor(request), action="alert_group.create",
-        target_type="alert_group", target_id=group_id,
-        detail={"name": values["name"], "match_tags": values["match_tags"]},
-        source_ip=resolve_source_ip(request),
-    )
+    except AlertGroupConflictError as exc:
+        return _redirect_err(str(exc))
     return _redirect_ok()
 
 
@@ -239,22 +252,15 @@ async def update_alert_group(
     group_id: IdParam, request: Request, _auth: str = Depends(_FORM),
 ) -> RedirectResponse:
     db = _db_path(request)
-    repo = SqliteAlertGroupRepository(db)
-    if repo.get(group_id) is None:
-        return _redirect_err("alert group not found")
-
     form = await request.form()
     values, err = _parse_form(form)
     if err:
         return _redirect_err(err)
     assert values is not None  # err is None here, so _parse_form returned values
 
-    existing = repo.get_by_name(values["name"])
-    if existing is not None and existing.id != group_id:
-        return _redirect_err(f"alert group '{values['name']}' already exists")
-
-    with get_write_lock():
-        repo.update(
+    try:
+        update_alert_group_service(
+            db,
             group_id, name=values["name"], recipients=values["recipients"],
             match_tags=values["match_tags"],
             # The UI no longer offers this inert control. Preserve a legacy
@@ -262,13 +268,12 @@ async def update_alert_group(
             webhook_url=values["webhook_url"] if "webhook_url" in form else None,
             threshold_days=values["threshold_days"],
             digest_cadence_days=values["digest_cadence_days"],
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    record_audit(
-        db, actor=resolve_actor(request), action="alert_group.update",
-        target_type="alert_group", target_id=group_id,
-        detail={"name": values["name"], "match_tags": values["match_tags"]},
-        source_ip=resolve_source_ip(request),
-    )
+    except (AlertGroupConflictError, AlertGroupNotFoundError) as exc:
+        return _redirect_err(str(exc))
     return _redirect_ok()
 
 
@@ -277,12 +282,12 @@ async def delete_alert_group(
     group_id: IdParam, request: Request, _auth: str = Depends(_FORM),
 ) -> RedirectResponse:
     db = _db_path(request)
-    with get_write_lock():
-        deleted = SqliteAlertGroupRepository(db).delete(group_id)
-    if deleted:
-        record_audit(
-            db, actor=resolve_actor(request), action="alert_group.delete",
-            target_type="alert_group", target_id=group_id, detail={},
+    with contextlib.suppress(AlertGroupNotFoundError):
+        delete_alert_group_service(
+            db,
+            group_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
     return _redirect_ok()

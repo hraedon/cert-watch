@@ -167,12 +167,21 @@ def _seed(db: Path, principal: Principal) -> Seeded:
 # Session-ending routes run last: a password change, then logout (which
 # revokes the session every later request would need).
 _DESTRUCTIVE_LAST = ("/settings/change-password", "/auth/logout")
+_NEW_DESTRUCTIVE_API = {
+    "/api/certificates/{cert_id}",
+    "/api/hosts/{host_id}",
+    "/api/trust-anchors/{anchor_id}",
+}
 
 
 def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
     method, path, _ = item
     if path in _DESTRUCTIVE_LAST:
-        rank = 2 + _DESTRUCTIVE_LAST.index(path)
+        rank = 3 + _DESTRUCTIVE_LAST.index(path)
+    elif method == "DELETE" and path in _NEW_DESTRUCTIVE_API:
+        # The new API equivalents run after their existing HTML adapters so
+        # adding coverage cannot mutate the established golden observations.
+        rank = 2
     elif method == "DELETE" or path.endswith(("/delete", "/revoke")):
         rank = 1
     else:
@@ -336,11 +345,17 @@ def run_matrix_for(
 ) -> dict[str, str]:
     import cert_watch.routes.hosts as hosts_routes
     import cert_watch.security.ratelimit as ratelimit_mod
+    import cert_watch.services.host_management as host_management
 
     async def _no_scan(*_a: Any, **_k: Any) -> tuple[str, str]:
         return "scan_error", "scanning disabled in the authz matrix"
 
     monkeypatch.setattr(hosts_routes, "_scan_and_store", _no_scan)
+
+    async def _no_service_scan(*_a: Any, **_k: Any):
+        return host_management.ScanResult("scan_error", "scanning disabled in the authz matrix")
+
+    monkeypatch.setattr(host_management, "_scan_and_store", _no_service_scan)
     ratelimit_mod._clear_rate_caches()
     db = tmp_path / "cert-watch.sqlite3"
     seeded = _seed(db, principal)

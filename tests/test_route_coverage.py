@@ -1145,6 +1145,27 @@ def test_certificate_notes_route_removed(reload_app):
 # ---------- certificate owner ----------
 
 
+def test_update_owner_via_host_path(reload_app, tmp_path):
+    app_mod = reload_app()
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    host_id = repo.add("owner-host.example.com", 443)
+    with TestClient(app_mod.app) as client:
+        response = client.post(
+            f"/hosts/{host_id}/owner",
+            data={"owner_name": "Platform", "owner_email": "platform@example.com"},
+            follow_redirects=False,
+        )
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/certificates/{host_id}"
+    host = repo.get(host_id)
+    assert host is not None
+    assert (host.owner_name, host.owner_email) == ("Platform", "platform@example.com")
+
+
 def test_update_owner_via_certificate(reload_app, tmp_path, leaf_pem_file):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

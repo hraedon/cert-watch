@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from cert_watch.routes.api.alert_actions import router as alert_actions_router
 from cert_watch.routes.api.alerts import router as alerts_router
+from cert_watch.routes.api.audit import router as audit_router
 from cert_watch.routes.api.certificates import router as certificates_router
 from cert_watch.routes.api.events import router as events_router
 from cert_watch.routes.api.hosts import router as hosts_router
@@ -27,17 +29,21 @@ from cert_watch.routes.api.keys import router as keys_router
 from cert_watch.routes.api.policy import router as policy_router
 from cert_watch.routes.api.renewal_analytics import router as renewal_analytics_router
 from cert_watch.routes.api.reports import router as reports_router
+from cert_watch.routes.api.system import router as system_router
 
 router = APIRouter()
 
 # Include all sub-routers.  Prefixes are empty because each sub-router already
 # declares its full path (e.g.  @router.get("/api/certificates"))
 router.include_router(certificates_router)
+router.include_router(audit_router)
 router.include_router(hosts_router)
 router.include_router(alerts_router)
+router.include_router(alert_actions_router)
 router.include_router(reports_router)
 router.include_router(insights_router)
 router.include_router(keys_router)
 router.include_router(events_router)
 router.include_router(policy_router)
 router.include_router(renewal_analytics_router)
+router.include_router(system_router)

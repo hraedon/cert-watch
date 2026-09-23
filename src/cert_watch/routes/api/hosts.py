@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
 from cert_watch.auth.scope import ScopeDeniedError
-from cert_watch.database import SqliteHostRepository, get_write_lock
-from cert_watch.routes._deps import IdParam, _db_path, acting_auth
+from cert_watch.database import SqliteHostRepository
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
     JsonBodyError,
@@ -19,6 +19,24 @@ from cert_watch.routes.api._shared import (
     _pagination_links,
     json_body,
     tags_from_json_body,
+)
+from cert_watch.services.host_management import (
+    HostNotFoundError as ManagedHostNotFoundError,
+)
+from cert_watch.services.host_management import (
+    HostSettingsUpdate,
+    HostValidationError,
+    create_hosts,
+    import_hosts_csv,
+    scan_all_hosts,
+    update_expected_issuers,
+    update_host_settings,
+)
+from cert_watch.services.host_management import (
+    delete_host as delete_host_service,
+)
+from cert_watch.services.host_management import (
+    scan_host_now as scan_host_now_service,
 )
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
@@ -36,6 +54,90 @@ from cert_watch.services.resource_metadata import (
 logger = logging.getLogger("cert_watch.routes.api.hosts")
 
 router = APIRouter()
+MAX_CSV_UPLOAD_BYTES = 10 * 1024 * 1024
+
+
+def _service_error(exc: Exception, *, not_found: bool = False) -> JSONResponse:
+    if isinstance(exc, ScopeDeniedError):
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    return JSONResponse(
+        status_code=404 if not_found else 400,
+        content={"error": str(exc)},
+    )
+
+
+@router.post("/api/hosts")
+async def api_create_host(
+    request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    try:
+        body = json_body(await request.body())
+        result = await create_hosts(
+            _db_path(request),
+            _get_settings(request),
+            hostname=body.get("hostname", ""),
+            port=body.get("port", 443),
+            threshold_days=body.get("threshold_days"),
+            tags=body.get("tags", ""),
+            scan_interval_hours=body.get("scan_interval_hours"),
+            common_ports=body.get("common_ports", False),
+            notes=body.get("notes", ""),
+            starttls_mode=body.get("starttls_mode", ""),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except (JsonBodyError, HostValidationError, ScopeDeniedError, TypeError) as exc:
+        return _service_error(exc)
+    return JSONResponse(
+        status_code=201,
+        content={"ids": list(result.host_ids), "scanned": result.scanned},
+    )
+
+
+@router.post("/api/hosts/import")
+async def api_import_hosts(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008
+    _auth: str = Depends(write_guard),
+) -> JSONResponse:
+    content = await file.read(MAX_CSV_UPLOAD_BYTES + 1)
+    if len(content) > MAX_CSV_UPLOAD_BYTES:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "CSV file too large (max 10 MB)"},
+        )
+    try:
+        result = await import_hosts_csv(
+            _db_path(request),
+            _get_settings(request),
+            content,
+            file.filename or "unknown",
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except HostValidationError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    status = 201 if result.imported else 400 if result.errors else 200
+    return JSONResponse(
+        status_code=status,
+        content={"imported": result.imported, "errors": list(result.errors)},
+    )
+
+
+@router.post("/api/hosts/scan")
+async def api_scan_all_hosts(
+    request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    scanned, failures = await scan_all_hosts(
+        _db_path(request),
+        _get_settings(request),
+        auth=acting_auth(request),
+        actor=resolve_actor(request),
+        source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={"scanned": scanned, "failures": failures})
 
 
 @router.get("/api/hosts")
@@ -150,6 +252,41 @@ async def api_update_host_owner(
     )
 
 
+@router.patch("/api/hosts/{host_id}/settings")
+async def api_update_host_settings(
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    try:
+        body = json_body(await request.body())
+        required = {"scan_interval_hours", "threshold_days", "renewal_status"}
+        if not required <= set(body):
+            raise JsonBodyError(
+                "scan_interval_hours, threshold_days, and renewal_status are required"
+            )
+        updated = update_host_settings(
+            _db_path(request),
+            host_id,
+            HostSettingsUpdate(
+                body["scan_interval_hours"], body["threshold_days"], body["renewal_status"]
+            ),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except (JsonBodyError, HostValidationError, ScopeDeniedError, TypeError) as exc:
+        return _service_error(exc)
+    except ManagedHostNotFoundError as exc:
+        return _service_error(exc, not_found=True)
+    return JSONResponse(
+        content={
+            "id": updated.id,
+            "scan_interval_hours": updated.scan_interval_hours,
+            "threshold_days": updated.threshold_days,
+            "renewal_status": updated.renewal_status,
+        }
+    )
+
+
 @router.patch("/api/hosts/{host_id}/notes")
 async def api_update_host_notes(
     host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
@@ -224,48 +361,67 @@ async def api_set_host_issuers(
     Accepts ``{"issuers": ["R3", "R4"]}`` or ``{"issuers": "R3,R4"}``.
     Admin-gated because mis-configuration suppresses issuer drift detection.
     """
-    db = _db_path(request)
-    repo = SqliteHostRepository(db)
     try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+        body = json_body(await request.body())
+        raw = body.get("issuers")
+        if not isinstance(raw, (str, list)) or (
+            isinstance(raw, list) and not all(isinstance(item, str) for item in raw)
+        ):
+            raise JsonBodyError("issuers must be a string or list of strings")
+        issuers = update_expected_issuers(
+            _db_path(request),
+            host_id,
+            raw,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+            audit_action="host.set_expected_issuers",
+        )
+    except (JsonBodyError, HostValidationError, ScopeDeniedError) as exc:
+        return _service_error(exc)
+    except ManagedHostNotFoundError as exc:
+        return _service_error(exc, not_found=True)
+    return JSONResponse(content={"id": host_id, "expected_issuers": list(issuers)})
 
-    raw = body.get("issuers")
-    if isinstance(raw, list):
-        if not all(isinstance(i, str) for i in raw):
-            return JSONResponse(
-                content={"error": "issuers must be a list of strings"}, status_code=400
-            )
-        issuers_list = [i.strip() for i in raw if i.strip()]
-    elif isinstance(raw, str):
-        issuers_list = [i.strip() for i in raw.split(",") if i.strip()]
-    else:
-        return JSONResponse(
-            content={"error": "issuers must be a string or list of strings"}, status_code=400
-        )
 
-    issuers_csv = ",".join(issuers_list)
-    if len(issuers_csv) > 2000:
-        return JSONResponse(
-            content={"error": "expected issuers too long (max 2000 chars)"}, status_code=400
+@router.delete("/api/hosts/{host_id}")
+async def api_delete_host(
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    try:
+        deleted = delete_host_service(
+            _db_path(request),
+            host_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    if len(issuers_list) > 50:
-        return JSONResponse(
-            content={"error": "too many issuers (max 50)"}, status_code=400
+    except ScopeDeniedError as exc:
+        return _service_error(exc)
+    if not deleted:
+        return JSONResponse(status_code=404, content={"error": "host not found"})
+    return JSONResponse(content={"status": "deleted", "id": host_id})
+
+
+@router.post("/api/hosts/{host_id}/scan")
+async def api_scan_host(
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    try:
+        result = await scan_host_now_service(
+            _db_path(request),
+            host_id,
+            _get_settings(request),
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    with get_write_lock():
-        host = repo.get(host_id)
-        if host is None:
-            return JSONResponse(content={"error": "host not found"}, status_code=404)
-        repo.set_expected_issuers(host_id, issuers_csv)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="host.set_expected_issuers",
-        target_type="host",
-        target_id=host_id,
-        detail={"expected_issuers": issuers_list},
-        source_ip=resolve_source_ip(request),
+    except ScopeDeniedError as exc:
+        return _service_error(exc)
+    except ManagedHostNotFoundError as exc:
+        return _service_error(exc, not_found=True)
+    status = 200 if result.status == "success" else 502
+    return JSONResponse(
+        status_code=status,
+        content={"status": result.status, "error": result.error},
     )
-    return JSONResponse(content={"id": host_id, "expected_issuers": issuers_list})
