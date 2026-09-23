@@ -76,7 +76,7 @@ class SchedulerContext:
         with self._config_lock:
             return self._job_config
 
-    def update_settings(self, settings: Settings) -> None:
+    def update_settings(self, settings: Settings, *, publish: bool = True) -> None:
         """Publish a complete configuration; running jobs keep their snapshot."""
         config = _JobConfig(
             settings, settings.build_alert_config(), settings.build_webhook_config(),
@@ -88,7 +88,8 @@ class SchedulerContext:
             self.settings = settings
             self.alert_cfg = config.alert_cfg
             self.webhook_cfg = config.webhook_cfg
-        publish_settings(settings)
+        if publish:
+            publish_settings(settings)
         wake_scheduler()
 
     def schedule_time(self) -> tuple[int, int]:

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.kv_store import kv_set
+from cert_watch.database.kv_store import kv_get, kv_set
 from cert_watch.posture import GRADE_WORST_ORDER, Finding
 
 logger = logging.getLogger("cert_watch.policy")
@@ -454,6 +454,18 @@ def load_policy_set(db_path: str) -> PolicySet:
         return default_policy_set()
     try:
         return _deserialize_policy_set(json.dumps(stored))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        logger.warning("Malformed policy data in kv_store, falling back to defaults")
+        return default_policy_set()
+
+
+def load_policy_set_from_store(db_path: str) -> PolicySet:
+    """Load policy directly from kv_store for locked read-modify-write paths."""
+    stored = kv_get(db_path, _POLICY_KV_KEY)
+    if stored is None:
+        return default_policy_set()
+    try:
+        return _deserialize_policy_set(stored)
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         logger.warning("Malformed policy data in kv_store, falling back to defaults")
         return default_policy_set()

@@ -282,6 +282,61 @@ def test_standalone_current_settings_resolves_once_until_invalidated(
     assert calls == 2
 
 
+def test_rebuild_retries_when_invalidated_after_resolving(monkeypatch, tmp_path):
+    """An older rebuild cannot publish after a policy save invalidates it."""
+    import threading
+    from types import SimpleNamespace
+
+    from cert_watch.config import Settings, current_settings, publish_settings
+    from cert_watch.database import init_schema
+    from cert_watch.policy import PolicySet, load_policy_set, save_policy_set
+    from cert_watch.routes.settings.core import _rebuild_settings
+
+    db_path = tmp_path / "cert-watch.sqlite3"
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    init_schema(db_path)
+    publish_settings(Settings.from_env_with_kv(db_path))
+
+    resolved = threading.Event()
+    resume = threading.Event()
+    original = Settings.from_env_with_kv.__func__
+    calls = 0
+
+    def gated(cls, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        settings = original(cls, *args, **kwargs)
+        if calls == 1:
+            resolved.set()
+            assert resume.wait(timeout=5)
+        return settings
+
+    monkeypatch.setattr(Settings, "from_env_with_kv", classmethod(gated))
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace()))
+    errors: list[BaseException] = []
+
+    def rebuild() -> None:
+        try:
+            _rebuild_settings(request, db_path)
+        except BaseException as exc:  # noqa: BLE001 - surfaced in the test thread
+            errors.append(exc)
+
+    worker = threading.Thread(target=rebuild)
+    worker.start()
+    assert resolved.wait(timeout=5)
+    save_policy_set(
+        str(db_path), PolicySet(rules=[], default_severity="critical")
+    )
+    resume.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert errors == []
+    assert calls == 2
+    assert current_settings(db_path).policy_config is not None
+    assert load_policy_set(str(db_path)).default_severity == "critical"
+
+
 def test_upgrade_config_semantics_golden(monkeypatch, tmp_path):
     """Pin every operator-visible merge change called out in UPGRADING."""
     from cert_watch.config import Settings
