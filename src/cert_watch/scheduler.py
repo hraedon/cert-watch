@@ -332,10 +332,7 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
-        from cert_watch.alerting.digest.pool import start_digest_pool
-
         _start_renewal_webhook_pool()
-        start_digest_pool()
 
         def _loop() -> None:
             next_cycle_allowed = 0.0
@@ -400,15 +397,11 @@ def stop_scheduler() -> None:
     _scheduler_stop.set()
     _scheduler_wake.set()
     # Close submission gates before waiting for a potentially long scan. The
-    # cycle checks the stop event between stages, and neither pool is recreated
-    # until the next explicit start_scheduler() call.
+    # cycle checks the stop event between stages, and the remaining renewal
+    # webhook pool is not recreated until the next explicit start_scheduler().
     renewal_pool = _detach_renewal_webhook_pool()
-    from cert_watch.alerting.digest.pool import _detach_digest_pool
-    digest_pool = _detach_digest_pool()
     if renewal_pool is not None:
         renewal_pool.shutdown(wait=True, cancel_futures=True)
-    if digest_pool is not None:
-        digest_pool.shutdown(wait=True, cancel_futures=True)
     if _scheduler_thread is not None:
         _scheduler_thread.join(timeout=30)
 

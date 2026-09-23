@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cert_watch.alerts import evaluate_all_certs
+from cert_watch.alerting import evaluate_all_certs
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
 from cert_watch.database.cert_ops import replace_scanned

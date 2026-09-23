@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from cert_watch.alerts import evaluate_all_certs, resolve_group_recipients
+from cert_watch.alerting import evaluate_all_certs, resolve_group_recipients
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     Role,

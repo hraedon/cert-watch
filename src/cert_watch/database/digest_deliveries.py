@@ -36,6 +36,23 @@ def digest_period_key(kind: str, cadence_days: int, *, now: datetime | None = No
     return f"{kind}:{iso.year:04d}-W{iso.week:02d}:cadence={cadence_days}"
 
 
+def digest_delivery_is_sent(
+    db_path: str | Path,
+    digest_key: str,
+    channel: str,
+    target: str,
+) -> bool:
+    """Return whether one exact transport claim already completed."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT status FROM digest_deliveries "
+            "WHERE digest_key = ? AND channel = ? AND target = ?",
+            (digest_key, channel, target),
+        ).fetchone()
+    return row is not None and row["status"] == "sent"
+
+
 def _idempotency_key(digest_key: str, channel: str, target: str) -> str:
     raw = f"{digest_key}\0{channel}\0{target}".encode()
     return hashlib.sha256(raw).hexdigest()

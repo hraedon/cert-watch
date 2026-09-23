@@ -11,7 +11,7 @@ from unittest.mock import Mock
 import pytest
 from starlette.testclient import TestClient
 
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     ALERT_MAX_RETRIES,
     EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
     UNDELIVERED_AFTER_HOURS,
@@ -356,7 +356,7 @@ def test_historical_notification_uses_captured_subject(monkeypatch, tmp_path, re
 def test_group_snapshot_resolver_limits_resolution_to_requested_certificate(
     tmp_path, self_signed_leaf,
 ):
-    from cert_watch.alerts import _resolve_group_config
+    from cert_watch.alerting import _resolve_group_config
     from cert_watch.certificate_model import parse_certificate
     from cert_watch.database import SqliteAlertGroupRepository, SqliteCertificateRepository
     from tests.conftest import _make_cert

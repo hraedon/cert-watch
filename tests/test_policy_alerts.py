@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cert_watch.alerts import evaluate_policy_alerts
+from cert_watch.alerting import evaluate_policy_alerts
 from cert_watch.database import SqliteAlertRepository, init_schema
 from cert_watch.policy import PolicyViolation
 

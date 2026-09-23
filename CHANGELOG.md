@@ -149,12 +149,21 @@ All notable changes to cert-watch are documented in this file.
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
   SIEM filters on the old names need updating.
-- **Alerting code moved into the `cert_watch.alerting` package** (plan 058,
-  step 1; internal, no behaviour change). Rules, routing, transports, delivery
-  evidence, the delivery cycle and digests each have their own module. The old
-  module paths `cert_watch.alerts`, `cert_watch.alert_delivery`,
-  `cert_watch.alert_adapters` and `cert_watch.digest` are deprecated re-export
-  shims and will be removed in a later release; logger names are unchanged.
+- **Alerting code now lives exclusively in the `cert_watch.alerting` package.**
+  Rules, routing, transports, delivery evidence, the delivery cycle and the
+  unified digest engine each have their own module. The deprecated module paths
+  `cert_watch.alerts`, `cert_watch.alert_delivery`, `cert_watch.alert_adapters`
+  and `cert_watch.digest` have been removed for 1.0; external Python imports
+  must use `cert_watch.alerting` or its public submodules.
+- **One synchronous, claimed digest engine handles expiry, renewal and orphan
+  summaries.** SMTP refusal maps retry only refused recipients, webhook
+  fallback runs only after SMTP failure when no claim is busy, and expiry and
+  renewal webhooks share the same three-wave retry policy. Renewal webhooks now
+  run synchronously within the alert-cycle budget. Orphan notices are claimed
+  once per ISO-week period. The old scheduler `kv_store` week keys remain in
+  existing databases but are no longer read or written; `digest_deliveries`
+  claims are the sole cadence guard. Expiry digest headers now state the actual
+  configured cadence window instead of always saying 30 days.
 - **Activity uses one alert-channel vocabulary.** New delivery attempts are
   recorded as `smtp` or `webhook:<kind>` (for example `webhook:teams` and
   `webhook:alertmanager`); legacy ledger names are normalized on read and the
@@ -402,14 +411,9 @@ All notable changes to cert-watch are documented in this file.
   can produce one duplicate after lease expiry. Scheduler executor shutdown is
   now terminal until explicit startup; stopping during a long scan prevents
   later cycle stages from submitting new work or recreating an executor.
-- **Renewal digest cadence.** The scheduler's nominally weekly renewal digest
-  was guarded by weekday changes and therefore ran daily. It is now guarded by
-  a durable ISO year/week ledger in the existing `kv_store`; both renewal and
-  expiry digest ledgers advance only after successful delivery, survive
-  restarts, and retry failures. Asynchronous completion reports both success
-  and failure, clears failed in-flight weeks for same-week retry, ignores stale
-  or duplicate callbacks, and drains completion during shutdown. Production-
-  code tests cover success, failure/retry, restart, rollover, and shutdown.
+- **Renewal digest cadence.** Durable per-recipient/channel claims now provide
+  the weekly guard directly; the older scheduler-wide ISO-week key and
+  in-memory in-flight state are no longer part of delivery correctness.
 - **Status-colour separation under colour-vision deficiency (WI-145).**
   The dark-theme `--expired` (pink `#fb6f92`) collapsed onto `--ok` under
   deuteranopia (dE76 2.7) and onto `--crit` under tritanopia (dE76 2.7) —

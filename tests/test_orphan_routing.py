@@ -9,15 +9,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
-import pytest
-
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     AlertConfig,
+    DigestEngine,
     find_orphan_certs,
     resolve_cert_recipients,
 )
+from cert_watch.alerting.digest.orphan import OrphanDigestKind, _admin_emails
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     Role,
@@ -26,17 +25,8 @@ from cert_watch.database import (
     SqliteHostRepository,
     SqliteRoleRepository,
 )
+from cert_watch.database.digest_deliveries import digest_period_key
 from cert_watch.database.users_roles import SqliteUserRepository, User
-from cert_watch.digest import _admin_emails, send_orphan_notice, send_renewal_digest
-
-
-@pytest.fixture(autouse=True)
-def _reset_digest_pool():
-    from cert_watch.digest import _flush_digest_pool, start_digest_pool
-
-    start_digest_pool()
-    yield
-    _flush_digest_pool()
 
 
 def _add_leaf(db: Path, hostname: str, *, port: int = 443, tags: str = "",
@@ -147,130 +137,24 @@ def test_admin_emails_empty_when_none(db: Path):
     assert _admin_emails(db) == []
 
 
-# ---------- send_orphan_notice ----------
-
-
-def _patch_smtp() -> MagicMock:
-    """Return a recording fake connection for _open_smtp_connection."""
-    conn = MagicMock()
-    conn.send_message = MagicMock()
-    conn.quit = MagicMock()
-    return conn
-
-
-def _cfg() -> AlertConfig:
-    return AlertConfig(
-        smtp_host="smtp.example", smtp_user="u", smtp_password="p",
-        from_addr="cert-watch@co.com", recipients=["fallback@co.com"],
-    )
-
-
-def test_orphan_notice_none_when_no_orphans(db: Path):
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "owned.example.com", owner_email="owner@co.com")
-    assert send_orphan_notice(db, _cfg()) is None
-
-
-def test_orphan_notice_none_when_no_admins(db: Path):
-    _add_leaf(db, "lonely.example.com")  # an orphan, but no admins
-    assert send_orphan_notice(db, _cfg()) is None
-
-
-def test_orphan_notice_none_when_config_not_alertconfig(db: Path):
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")
-    assert send_orphan_notice(db, None) is None
-
-
-def test_orphan_notice_sends_to_admins_and_flags(db: Path):
+def test_orphan_digest_is_claimed_once_per_period(db: Path, fake_transport) -> None:
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com", subject="CN=lonely")
-    conn = _patch_smtp()
-    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn):
-        assert send_orphan_notice(db, _cfg()) is True
-    conn.send_message.assert_called_once()
-    sent = conn.send_message.call_args[0][0]
-    assert sent["To"] == "boss@co.com"
-    assert "orphan" in sent["Subject"].lower()
-    body = sent.get_content()
-    assert "lonely.example.com" in body
-    assert "[orphan]" in body
+    config = AlertConfig(
+        smtp_host="smtp.example",
+        smtp_user="u",
+        smtp_password="p",
+        from_addr="cert-watch@co.com",
+        recipients=["fallback@co.com"],
+    )
+    smtp = fake_transport(channel="smtp")
+    engine = DigestEngine(db, [smtp])
+    period = digest_period_key("orphan", 7)
 
+    assert engine.run(OrphanDigestKind(config), period).sent == 1
+    assert engine.run(OrphanDigestKind(config), period).sent == 0
 
-def test_successful_orphan_notice_is_not_resent_in_same_period(db: Path):
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")
-    conn = _patch_smtp()
-    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn):
-        assert send_orphan_notice(db, _cfg()) is True
-        assert send_orphan_notice(db, _cfg()) is True
-    conn.send_message.assert_called_once()
-
-
-def test_orphan_notice_smtp_failure_returns_false(db: Path):
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")
-    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=None):
-        assert send_orphan_notice(db, _cfg()) is False
-
-
-# ---------- integration: digest run triggers the orphan notice ----------
-
-
-def test_send_renewal_digest_invokes_orphan_notice(db: Path):
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")  # orphan, no renewal activity
-    with patch("cert_watch.alerting.digest.renewal.send_orphan_notice") as spy:
-        send_renewal_digest(db, _cfg(), None, days=7)
-        from cert_watch.digest import _flush_digest_pool
-        _flush_digest_pool()
-    spy.assert_called_once()
-    assert spy.call_args[0][0] == db
-
-
-def test_orphan_notice_offloaded_to_pool_not_blocking(db: Path):
-    """The orphan notice SMTP delivery must not block the scheduler thread.
-
-    Same bug class as WI-134 (webhook path): if send_orphan_notice runs
-    synchronously in send_renewal_digest, a slow SMTP server stalls the
-    scheduler. Verify the call is submitted to the thread pool.
-    """
-    from cert_watch.digest import _flush_digest_pool
-
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")
-    submit_mock = MagicMock(wraps=lambda *a, **kw: None)
-    with patch("cert_watch.alerting.digest.pool._digest_pool.submit", new=submit_mock):
-        send_renewal_digest(db, _cfg(), None, days=7)
-        _flush_digest_pool()
-    assert submit_mock.called, "orphan notice must be submitted to the thread pool"
-
-
-def test_orphan_notice_pool_submit_fallback_inline(db: Path):
-    """When the pool submit fails, orphan notice falls back to inline delivery."""
-    from cert_watch.digest import _flush_digest_pool
-
-    _make_admin(db, "boss@co.com")
-    _add_leaf(db, "lonely.example.com")
-    conn = _patch_smtp()
-    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn), \
-         patch(
-             "cert_watch.alerting.digest.pool._digest_pool.submit",
-             side_effect=RuntimeError("pool closed"),
-         ):
-        send_renewal_digest(db, _cfg(), None, days=7)
-        _flush_digest_pool()
-    conn.send_message.assert_called_once()
-
-
-def test_orphan_notice_task_exception_is_logged(db: Path, caplog):
-    from cert_watch.digest import _flush_digest_pool
-
-    with patch(
-        "cert_watch.alerting.digest.renewal.send_orphan_notice",
-        side_effect=RuntimeError("orphan lookup failed"),
-    ):
-        assert send_renewal_digest(db, _cfg(), None, days=7) is True
-        _flush_digest_pool()
-
-    assert "orphan notice delivery task failed" in caplog.text
+    assert len(smtp.messages) == 1
+    message = smtp.messages[0]
+    assert message.recipients == ("boss@co.com",)
+    assert "[orphan] lonely.example.com:443 — CN=lonely" in message.body

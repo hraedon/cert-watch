@@ -26,7 +26,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
     AlertConfig,

@@ -30,11 +30,12 @@ def test_expiry_digest_body_golden() -> None:
             },
         ],
         owner_name="Ada Lovelace",
+        cadence_days=14,
     )
 
     assert subject == "[cert-watch] Expiry Digest: 2 cert(s) expiring soon"
     assert body == (
-        "[cert-watch] Expiry Digest — 2 certificate(s) expiring within 30 days\n"
+        "[cert-watch] Expiry Digest — 2 certificate(s) expiring within 14 days\n"
         "You are receiving this digest as the owner of the following certificates.\n"
         "\n"
         "\n"
