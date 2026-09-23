@@ -36,7 +36,10 @@ All notable changes to cert-watch are documented in this file.
 ### Security
 - **Sensitive settings uniformly support secret files.** Every environment-backed
   sensitive setting accepts a `<NAME>_FILE` source (including CSRF and metrics
-  tokens), with the direct environment variable taking precedence.
+  tokens), with the direct environment variable taking precedence. An explicitly
+  configured secret file that is missing, unreadable, a directory, or empty now
+  stops startup with a configuration error naming the variable; its contents are
+  never logged. Empty `_FILE` variables remain unset.
 - **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
   every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
   read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped
@@ -49,7 +52,12 @@ All notable changes to cert-watch are documented in this file.
 - **Configuration now has one source of truth.** A declarative field table drives
   defaults, env/kv precedence, parsing, bounds, and sensitivity; runtime
   consumers use the resolved `Settings` snapshot instead of re-reading env or
-  `kv_store` independently.
+  `kv_store` independently. Blank environment placeholders do not mask saved GUI
+  values or lock their controls. Environment values now consistently beat saved
+  values for `SMTP_PORT`, `LDAP_CONNECT_TIMEOUT`, and `ALERT_DIGEST_ONLY`; saved
+  `oauth_scope`, `ldap_user_filter`, and `webhook_kind` values now take effect.
+  Invalid out-of-range saved integers fall back to defaults, and saved booleans
+  accept both `true` and `True`. See UPGRADING.md before deploying this change.
 - **One way to guard a route; every write guard checks CSRF.** Routes declared
   authorization four different ways, and one of them (`require_admin_form`)
   left CSRF to a separate call each handler had to remember. Every route now

@@ -280,3 +280,42 @@ def test_standalone_current_settings_resolves_once_until_invalidated(
 
     assert current_settings(db_path).smtp_host == "second.example.test"
     assert calls == 2
+
+
+def test_upgrade_config_semantics_golden(monkeypatch, tmp_path):
+    """Pin every operator-visible merge change called out in UPGRADING."""
+    from cert_watch.config import Settings
+    from cert_watch.database import init_schema
+    from cert_watch.database.kv_store import kv_set_multi
+
+    data_dir = tmp_path / "upgrade-semantics"
+    db_path = data_dir / "cert-watch.sqlite3"
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("SMTP_PORT", "2525")
+    monkeypatch.setenv("LDAP_CONNECT_TIMEOUT", "12")
+    monkeypatch.setenv("ALERT_DIGEST_ONLY", "0")
+    init_schema(db_path)
+    kv_set_multi(
+        db_path,
+        {
+            "smtp_port": "25",
+            "ldap_connect_timeout": "3",
+            "alert_digest_only": "1",
+            "oauth_scope": "openid saved-scope",
+            "ldap_user_filter": "(uid={username})",
+            "webhook_kind": "teams",
+            "renewal_window_days": "9999",
+            "check_revocation": "True",
+        },
+    )
+
+    settings = Settings.from_env_with_kv(db_path)
+
+    assert settings.smtp_port == 2525
+    assert settings.ldap_connect_timeout == 12
+    assert settings.alert_digest_only is False
+    assert settings.oauth_scope == "openid saved-scope"
+    assert settings.ldap_user_filter == "(uid={username})"
+    assert settings.webhook_kind == "teams"
+    assert settings.renewal_window_days == 30
+    assert settings.check_revocation is True
