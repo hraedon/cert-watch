@@ -57,10 +57,20 @@ restore the pre-migration backup.
   cert-watch has given up; expiry evaluation no longer revives that row on
   every cycle. An operator with write access can use **Retry failed** in
   Activity or `POST /api/alerts/{id}/retry` to reset the attempt count and queue
-  it again. Manual **Flush queue** ignores scheduled backoff, but still claims
+  it again. **Failed alerts do not fire again automatically, including an
+  `expired` alert after delivery gives up; an operator must correct the channel
+  and select Retry failed.** Activity, `/api/health`, and the
+  `cert_watch_alerts{status="failed"}` metric make those rows visible. Manual
+  **Flush queue** ignores scheduled backoff, but still claims
   rows and is serialized with scheduled delivery. The Activity and certificate
   detail pages may briefly show the new `sending` status; an expired sending
-  lease is reported as undelivered by health/readiness checks.
+  lease is reported by health/readiness checks without making the Kubernetes
+  readiness probe fail.
+
+  Migration 0036 requeues legacy failed `expiry_warning` and `expired` rows
+  that have no lifecycle failure reason, preserving the previous release's
+  automatic revival behaviour for those existing rows. Other legacy failed
+  alert types remain failed.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

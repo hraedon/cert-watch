@@ -112,7 +112,10 @@
           <div class="cw-chiprow cw-metarow" data-testid="alert-channels">
             {% set outcome = delivery_outcomes.get(a.id) %}
             {% set undelivered = a.id in undelivered_alert_ids|default([]) %}
-            {% if a.status == 'sending' %}
+            {% if a.status == 'failed' %}
+              {{ ui.status(label='Delivery failed — operator retry required', tone='t-crit') }}
+              <span class="cw-sub">cert-watch gave up after its bounded delivery attempts.</span>
+            {% elif a.status == 'sending' %}
               {{ ui.status(label='Sending', tone='t-muted') }}
               <span class="cw-sub">Claimed by a delivery worker.</span>
             {% elif outcome %}

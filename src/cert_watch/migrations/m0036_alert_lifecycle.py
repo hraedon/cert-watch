@@ -47,3 +47,15 @@ def upgrade(conn: sqlite3.Connection) -> None:
                    WHERE event.alert_id = alerts.id
                )"""
         )
+
+    # Before this lifecycle existed, threshold evaluation revived failed
+    # expiry notifications on every pass. Preserve that released behaviour
+    # exactly once on upgrade. New terminal failures carry failure_reason and
+    # remain terminal; non-expiry alert types were never auto-requeued.
+    conn.execute(
+        """UPDATE alerts
+           SET status = 'pending', attempt_count = 0, next_attempt_at = NULL
+           WHERE status = 'failed'
+             AND alert_type IN ('expiry_warning', 'expired')
+             AND failure_reason IS NULL"""
+    )

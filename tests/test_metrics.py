@@ -14,6 +14,35 @@ def test_metrics_empty(reload_app):
     assert 'urgency="healthy"' in text
     assert 'urgency="expired"' in text
     assert 'grade="unknown"' in text
+    assert 'cert_watch_alerts{status="pending"} 0.0' in text
+    assert 'cert_watch_alerts{status="sending"} 0.0' in text
+    assert 'cert_watch_alerts{status="failed"} 0.0' in text
+
+
+def test_metrics_exposes_alert_lifecycle_statuses(tmp_path, reload_app):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+    for number, status in enumerate(("pending", "sending", "failed", "failed")):
+        repo.create(
+            Alert(
+                cert_id=f"lifecycle-{number}",
+                alert_type="expiry_warning",
+                status=status,
+                message="m",
+            )
+        )
+
+    with TestClient(app_mod.app) as client:
+        response = client.get("/metrics")
+
+    assert response.status_code == 200
+    assert 'cert_watch_alerts{status="pending"} 1.0' in response.text
+    assert 'cert_watch_alerts{status="sending"} 1.0' in response.text
+    assert 'cert_watch_alerts{status="failed"} 2.0' in response.text
 
 
 def test_metrics_with_data(tmp_path, reload_app, leaf_pem_file):
@@ -141,6 +170,8 @@ def test_prometheus_rules_valid_yaml():
     assert "CertExpiringCritical" in alert_names
     assert "CertExpiringWarning" in alert_names
     assert "CertExpired" in alert_names
+    failed = next(rule for rule in rules if rule["alert"] == "CertWatchAlertDeliveryFailed")
+    assert failed["expr"] == 'cert_watch_alerts{status="failed"} > 0'
 
 
 # ── /metrics auth gate ──────────────────────────────────────────────────────

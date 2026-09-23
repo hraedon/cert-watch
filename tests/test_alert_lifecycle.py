@@ -169,16 +169,23 @@ def test_migration_0036_upgrades_rows_and_backfills_last_attempt(tmp_path: Path)
     db = tmp_path / "pre-0036.sqlite3"
     init_schema(db)
     repo = SqliteAlertRepository(db)
+    cases = (
+        ("pending-expiry", "pending", "expiry_warning"),
+        ("sent-expiry", "sent", "expiry_warning"),
+        ("failed-expiry", "failed", "expiry_warning"),
+        ("failed-expired", "failed", "expired"),
+        ("failed-drift", "failed", "drift"),
+    )
     ids = {
-        status: repo.create(
+        name: repo.create(
             Alert(
-                cert_id=f"cert-{status}",
-                alert_type="expiry_warning",
+                cert_id=f"cert-{name}",
+                alert_type=alert_type,
                 status=status,
-                message=status,
+                message=name,
             )
         )
-        for status in ("pending", "sent", "failed")
+        for name, status, alert_type in cases
     }
     with sqlite3.connect(db) as conn:
         conn.execute(
@@ -186,7 +193,7 @@ def test_migration_0036_upgrades_rows_and_backfills_last_attempt(tmp_path: Path)
             "(attempt_id, alert_id, occurred_at, event_kind, channel, details) "
             "VALUES ('attempt-1', ?, '2026-09-20T10:00:00+00:00', 'started', "
             "'smtp', '{}')",
-            (ids["sent"],),
+            (ids["sent-expiry"],),
         )
         conn.execute("DROP INDEX idx_alerts_dispatch")
         for column in (
@@ -205,16 +212,21 @@ def test_migration_0036_upgrades_rows_and_backfills_last_attempt(tmp_path: Path)
     with sqlite3.connect(db) as conn:
         conn.row_factory = sqlite3.Row
         rows = {
-            row["status"]: row
+            row["message"]: row
             for row in conn.execute(
-                "SELECT status, attempt_count, last_attempt_at FROM alerts"
+                "SELECT message, status, attempt_count, next_attempt_at, "
+                "last_attempt_at FROM alerts"
             )
         }
         indexes = {
             row[1] for row in conn.execute("PRAGMA index_list('alerts')")
         }
-    assert set(rows) == {"pending", "sent", "failed"}
+    assert set(rows) == {name for name, _, _ in cases}
     assert all(row["attempt_count"] == 0 for row in rows.values())
-    assert rows["sent"]["last_attempt_at"] == "2026-09-20T10:00:00+00:00"
-    assert rows["pending"]["last_attempt_at"] is None
+    assert rows["failed-expiry"]["status"] == "pending"
+    assert rows["failed-expired"]["status"] == "pending"
+    assert rows["failed-drift"]["status"] == "failed"
+    assert rows["failed-expiry"]["next_attempt_at"] is None
+    assert rows["sent-expiry"]["last_attempt_at"] == "2026-09-20T10:00:00+00:00"
+    assert rows["pending-expiry"]["last_attempt_at"] is None
     assert "idx_alerts_dispatch" in indexes

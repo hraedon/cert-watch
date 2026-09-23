@@ -33,18 +33,27 @@ def _is_sqlite_busy(exc: sqlite3.OperationalError) -> bool:
     return "database is locked" in message or "database table is locked" in message
 
 
-def _undelivered_count(db: str | Path, *, now: datetime) -> int:
-    """Count overdue pending rows and abandoned sending leases."""
+def _alert_delivery_counts(db: str | Path, *, now: datetime) -> tuple[int, int]:
+    """Return overdue pending rows and abandoned sending leases separately."""
     cutoff = (now - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
     with _connect(db) as conn:
         row = conn.execute(
-            """SELECT COUNT(*) FROM alerts
-               WHERE (status = 'pending' AND created_at <= ?)
-                  OR (status = 'sending' AND
-                      (lease_expires_at IS NULL OR lease_expires_at <= ?))""",
+            """SELECT
+                   SUM(CASE WHEN status = 'pending' AND created_at <= ?
+                            THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN status = 'sending' AND
+                                      (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                            THEN 1 ELSE 0 END)
+               FROM alerts""",
             (cutoff, now.isoformat()),
         ).fetchone()
-    return row[0] if row else 0
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+
+
+def _undelivered_count(db: str | Path, *, now: datetime) -> int:
+    """Count overdue pending rows and abandoned sending leases."""
+    overdue, stale_leases = _alert_delivery_counts(db, now=now)
+    return overdue + stale_leases
 
 
 @router.get("/healthz")
@@ -140,16 +149,19 @@ def readyz(request: Request) -> JSONResponse:
         checks["certificates"] = "error"
         checks["expired"] = "error"
         ok = False
-    if db_reachable and delivery_is_configured(_get_settings(request)):
+    if db_reachable:
         try:
-            undelivered = _undelivered_count(db, now=datetime.now(UTC))
-            checks["undelivered_alerts"] = str(undelivered)
-            if undelivered:
-                ok = False
+            overdue, stale_leases = _alert_delivery_counts(
+                db, now=datetime.now(UTC)
+            )
+            checks["undelivered_alerts"] = str(
+                overdue if delivery_is_configured(_get_settings(request)) else 0
+            )
+            checks["stale_sending_leases"] = str(stale_leases)
         except Exception:
             logger.warning("readyz alert lifecycle query failed", exc_info=True)
             checks["undelivered_alerts"] = "error"
-            ok = False
+            checks["stale_sending_leases"] = "error"
     # Shallow body for unauthenticated callers under an auth provider; open
     # mode (no provider) and authenticated callers get the full detail.
     # /readyz is a public path, so auth_middleware never runs on it and
@@ -249,7 +261,8 @@ def api_health(request: Request) -> JSONResponse:
         cutoff = (now - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
+                "SELECT COUNT(*) FROM alerts "
+                "WHERE status = 'failed' AND last_attempt_at > ?",
                 (cutoff,),
             ).fetchone()
             checks["failed_alerts_24h"] = row[0] if row else 0

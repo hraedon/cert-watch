@@ -49,7 +49,7 @@ def test_readyz_with_scan_history(tmp_path, reload_app):
     assert data["checks"]["last_scan_status"] == "success"
 
 
-def test_readyz_degrades_for_a_sending_alert_with_an_expired_lease(
+def test_readyz_reports_but_does_not_degrade_for_alert_delivery_backlog(
     tmp_path, reload_app
 ):
     app_mod = reload_app(SMTP_HOST="relay.example.invalid")
@@ -75,8 +75,10 @@ def test_readyz_degrades_for_a_sending_alert_with_an_expired_lease(
     with TestClient(app_mod.app) as client:
         response = client.get("/readyz")
 
-    assert response.status_code == 503
-    assert response.json()["checks"]["undelivered_alerts"] == "1"
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert response.json()["checks"]["undelivered_alerts"] == "0"
+    assert response.json()["checks"]["stale_sending_leases"] == "1"
     with sqlite3.connect(db) as conn:
         assert conn.execute(
             "SELECT status FROM alerts WHERE id = ?", (alert_id,)
@@ -238,6 +240,40 @@ def test_api_health_with_scan_and_alerts(tmp_path, reload_app):
     assert r.status_code == 200
     data = r.json()
     assert data["last_scan_status"] == "failure"
+    assert data["overall"] == "warning"
+
+
+def test_api_health_counts_give_up_by_last_attempt_not_creation_time(
+    tmp_path, reload_app
+):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    init_schema(db)
+    alert_id = SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="old-give-up",
+            alert_type="expired",
+            status="failed",
+            message="delivery gave up",
+        )
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET created_at = ?, last_attempt_at = ? WHERE id = ?",
+            (
+                (datetime.now(UTC) - timedelta(days=30)).isoformat(),
+                (datetime.now(UTC) - timedelta(hours=1)).isoformat(),
+                alert_id,
+            ),
+        )
+        conn.commit()
+
+    with TestClient(app_mod.app) as client:
+        data = client.get("/api/health").json()
+
+    assert data["failed_alerts_24h"] == 1
     assert data["overall"] == "warning"
 
 

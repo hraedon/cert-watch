@@ -171,6 +171,7 @@ def test_alerts_view_lists_existing(tmp_path, reload_app):
     assert r.status_code == 200
     assert "m" in r.text  # alert message is displayed
     assert "Sending" in r.text
+    assert "Delivery failed — operator retry required" in r.text
     assert "Retry failed" in r.text
 
 

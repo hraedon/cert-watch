@@ -89,6 +89,14 @@ All notable changes to cert-watch are documented in this file.
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Alert delivery outages no longer evict the serving pod.** `/readyz`
+  reports overdue pending alerts and stale `sending` leases without failing
+  Kubernetes readiness. `/api/health` dates terminal give-ups from their last
+  attempt, Activity labels them as requiring operator retry, and `/metrics`
+  exports `cert_watch_alerts{status=...}` with an example failed-delivery rule.
+- **Legacy failed expiry alerts remain deliverable after migration 0036.** The
+  migration requeues only pre-lifecycle `expiry_warning` and `expired` rows;
+  other legacy alert types and lifecycle-aware failures remain terminal.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the
