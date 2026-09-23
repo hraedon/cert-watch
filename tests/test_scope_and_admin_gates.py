@@ -268,3 +268,73 @@ def test_list_scan_batches_scope_filter_casefolds(db):
     assert [h["hostname"] for h in batches[0]["hosts"]] == ["pay.example.com"]
     all_batches, _ = list_scan_batches(db)
     assert len(all_batches[0]["hosts"]) == 2
+
+
+# ---------- #69 end to end: mixed-case scope, scanned + pending hosts ----------
+
+
+def _seed_mixed_fleet(db: Path) -> str:
+    """Three scanned hosts and one never-scanned host, all tagged ``payments``
+    and owned by alice, plus one out-of-scope ``hr`` host. The role scope in
+    ``_seed`` is ``Payments`` (different case), which is the issue's scenario.
+    Returns the pending host's id."""
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import replace_scanned
+
+    hosts = SqliteHostRepository(db)
+    now = datetime.now(UTC)
+    for name, tags in (
+        ("pay-a.example.com", "payments"),
+        ("pay-b.example.com", "payments"),
+        ("pay-c.example.com", "payments"),
+        ("hr.example.com", "hr"),
+    ):
+        host_id = hosts.add(name, 443, tags=tags)
+        hosts.update_owner(host_id, owner_name="alice")
+        cert = Certificate(
+            subject=f"CN={name}",
+            issuer="O=DigiCert,CN=SHA2",
+            not_before=now - timedelta(days=1),
+            not_after=now + timedelta(days=60),
+            san_dns_names=[name],
+            fingerprint_sha256=name,
+        )
+        replace_scanned(db, name, 443, cert, [], True)
+    pending = hosts.add("pay-pending.example.com", 443, tags="payments")
+    hosts.update_owner(pending, owner_name="alice")
+    return pending
+
+
+@pytest.mark.parametrize("pivot", ["issuer", "owner", "renewal_method"])
+def test_scoped_pivot_drilldown_count_matches_pivot_count(app_env, pivot):
+    """#69: for a scoped user the drill-down returns every host the pivot
+    table counts, including the pending one, with scope and tag in
+    different case."""
+    from cert_watch.database import list_fleet_pivot
+
+    _seed_mixed_fleet(app_env.db)
+    groups = list_fleet_pivot(app_env.db, pivot, scope_tags=("Payments",))
+    assert sum(g["count"] for g in groups) == 4
+    with TestClient(app_env.app) as client:
+        _login_as(client, "viewer", "payments-view")
+        for group in groups:
+            r = client.get(f"/api/pivot/{pivot}/{group['key']}")
+            assert r.status_code == 200
+            hosts = [e["host"] for e in r.json()["entries"]]
+            assert len(hosts) == group["count"], (group["key"], hosts)
+            assert "hr.example.com:443" not in hosts
+    if pivot == "owner":
+        assert "pay-pending.example.com:443" in hosts
+
+
+def test_scoped_user_opens_host_tagged_in_different_case(app_env):
+    """#69: a row the scoped list shows (tag ``payments``, scope ``Payments``)
+    opens instead of redirecting to "certificate not found"."""
+    pending = _seed_mixed_fleet(app_env.db)
+    with TestClient(app_env.app) as client:
+        _login_as(client, "viewer", "payments-view")
+        ok = client.get(f"/certificates/{pending}", follow_redirects=False)
+        issuers = client.get(f"/api/hosts/{pending}/issuers")
+    assert ok.status_code == 200
+    assert "pay-pending.example.com" in ok.text
+    assert issuers.status_code == 200
