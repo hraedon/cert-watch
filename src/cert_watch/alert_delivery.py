@@ -126,7 +126,7 @@ def _matching_groups(db_path: Path, cert_id: str) -> tuple[list[dict[str, str]],
             }
         return [{"id": group_id, "name": names.get(group_id, "(deleted group)")}
                 for group_id in matches.get(cert_id, [])], True
-    except Exception:
+    except Exception:  # noqa: BLE001 — evidence enrichment is an optional snapshot
         logger.warning("Matching-group snapshot unavailable for delivery evidence")
         return [], False
 
@@ -188,5 +188,5 @@ def attempt_delivery(
         _active.reset(token)
         try:
             complete_attempt(db_path, attempt_id, observation.details(delivered))
-        except Exception:
+        except Exception:  # noqa: BLE001 — completion evidence is best-effort after delivery
             logger.warning("Delivery outcome could not be persisted; outcome remains unknown")

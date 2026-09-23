@@ -37,7 +37,7 @@ _ID_TOKEN_ERRORS: tuple[type[Exception], ...] = (ValueError, KeyError, TypeError
 try:
     from joserfc.errors import JoseError as _JoseRfcError
 
-    _ID_TOKEN_ERRORS = (_JoseRfcError,) + _ID_TOKEN_ERRORS
+    _ID_TOKEN_ERRORS = (_JoseRfcError, *_ID_TOKEN_ERRORS)
 except ImportError:
     pass
 
@@ -264,7 +264,7 @@ class OAuthProvider(AuthProvider):
                 oidt.validate(leeway=120)
             except ImportError:
                 _validate_claims_manual(raw_claims, issuer, self.config.client_id, nonce)
-            except Exception as exc:  # noqa: BLE001 — normalize authlib oidc validation errors to ValueError
+            except Exception as exc:  # Normalize authlib OIDC validation errors to ValueError.
                 raise ValueError(str(exc)) from exc
             return dict(raw_claims)
 
@@ -329,7 +329,7 @@ class OAuthProvider(AuthProvider):
         verify_result = _verify_state(state, security=self._security)
         if verify_result is None:
             return AuthResult(success=False, error="invalid OAuth state")
-        expected_state, nonce, code_verifier = verify_result
+        _expected_state, nonce, code_verifier = verify_result
         endpoints = self._discover()
         token_endpoint = endpoints.get("token_endpoint", "")
         if not token_endpoint:

@@ -116,6 +116,6 @@ async def test_smtp_connection(
         if policy_error:
             return JSONResponse({"ok": False, "error": policy_error})
         return JSONResponse({"ok": True, "message": f"Test email sent to {recipients}"})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — SMTP library failures become JSON feedback
         logger.warning("SMTP test failed: %s", exc)
         return JSONResponse({"ok": False, "error": _sanitize_test_error(str(exc))})

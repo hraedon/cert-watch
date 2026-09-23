@@ -29,16 +29,16 @@ from cert_watch.routes.settings.roles import router as roles_router
 from cert_watch.routes.settings.smtp import router as smtp_router
 
 __all__ = [
-    "router",
     "_SENSITIVE_KEYS",
-    "_is_cert_verify_error",
+    "_SMTP_KEYS",
     "_capture_ldaps_chain",
     "_capture_starttls_chain",
-    "_probe_tls_chain",
     "_der_chain_to_ca_dicts",
-    "_SMTP_KEYS",
     "_effective_config",
     "_get_encryption_key",
+    "_is_cert_verify_error",
+    "_probe_tls_chain",
+    "router",
 ]
 
 router = APIRouter()

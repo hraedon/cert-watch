@@ -97,6 +97,32 @@ etc.).
 > sessions survive process restarts and app-pool recycles — the same reason the
 > Kubernetes deploy wires them from a Secret.
 
+### Optional Windows Event Log export
+
+The base Windows install does not include `pywin32`. If this deployment sends
+audit events to the Windows Application log, install the `cert-watch[windows]`
+extra explicitly from an elevated PowerShell in the repository root:
+
+```powershell
+$venvPython = "C:\ProgramData\cert-watch\venv\Scripts\python.exe"
+$package = (Resolve-Path ".").Path + "[windows]"
+& $venvPython -m pip install --upgrade $package
+```
+
+If `-InstallDir` was used, point `$venvPython` at that installation's venv.
+Then add these variables to the environment of the IIS-hosted process or
+Windows service and restart it:
+
+```text
+CERT_WATCH_EVENTLOG=1
+CERT_WATCH_EVENTLOG_SOURCE=cert-watch
+```
+
+`CERT_WATCH_EVENTLOG_SOURCE` is optional and defaults to `cert-watch`. A fresh
+run of `install-windows.ps1` installs only the base package (plus authentication
+extras when requested), so keep this Event Log step in the deployment runbook
+for each new installation.
+
 ---
 
 ## Step 2a — Host with HttpPlatformHandler (recommended)

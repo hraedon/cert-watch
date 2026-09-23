@@ -177,13 +177,13 @@ def test_purge_old_audit_never_raises(db: Path) -> None:
 def test_resolve_actor_no_auth() -> None:
     """AC-4: resolve_actor returns 'anonymous' when auth_user is not set."""
     class FakeRequest:
-        scope = {}
+        scope = {}  # noqa: RUF012 — fixed test-double state; instances do not mutate it
     assert resolve_actor(FakeRequest()) == "anonymous"
 
 
 def test_resolve_actor_with_user() -> None:
     class FakeRequest:
-        scope = {"auth_user": "alice"}
+        scope = {"auth_user": "alice"}  # noqa: RUF012 — fixed test-double state
     assert resolve_actor(FakeRequest()) == "alice"
 
 

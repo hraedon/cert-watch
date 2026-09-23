@@ -251,7 +251,7 @@ def test_grouped_page_pagination_and_filter(tmp_path, self_signed_leaf):
     db = tmp_path / "grp3.sqlite3"
     _seed(db, self_signed_leaf)
     # No shared fingerprints in _seed → grouped count == ungrouped count.
-    all_rows, total = list_dashboard_grouped_page(db, per_page=0)
+    _all_rows, total = list_dashboard_grouped_page(db, per_page=0)
     assert total == 5
     p1, t1 = list_dashboard_grouped_page(db, page=1, per_page=2)
     assert t1 == 5

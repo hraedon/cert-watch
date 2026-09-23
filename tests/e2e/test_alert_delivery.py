@@ -8,8 +8,8 @@ from urllib.parse import urlsplit
 import pytest
 
 pytest.importorskip("playwright")
-from playwright.sync_api import expect  # noqa: E402
-from starlette.testclient import TestClient  # noqa: E402
+from playwright.sync_api import expect
+from starlette.testclient import TestClient
 
 from cert_watch.database.delivery_evidence import begin_attempt
 from tests.test_alert_delivery_evidence import _config, _pending, _smtp

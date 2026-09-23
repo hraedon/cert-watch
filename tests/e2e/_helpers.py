@@ -90,7 +90,7 @@ def boot_server(
             with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
                 if r.status == 200:
                     return proc, base
-        except Exception:
+        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
             # Unit-test fixtures patch time.sleep globally to remove retry
             # backoff. Startup still needs a real wait in function fixtures.
             startup_wait.wait(0.1)

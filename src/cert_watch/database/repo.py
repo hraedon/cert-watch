@@ -385,7 +385,7 @@ class SqliteAlertRepository(AlertRepository):
             " ORDER BY a.created_at DESC LIMIT ? OFFSET ?"
         )
         with _connect(self.db_path) as conn:
-            rows = conn.execute(sql, params + [limit, offset]).fetchall()
+            rows = conn.execute(sql, [*params, limit, offset]).fetchall()
         return [self._row_to_alert(r) for r in rows]
 
     def list_pending_scoped(
@@ -1073,7 +1073,7 @@ class SqliteAlertGroupRepository:
         recipients: list[str] | None = None,
         match_tags: list[str] | None = None,
         webhook_url: str | None = None,
-        threshold_days: int | None | object = _UNSET,
+        threshold_days: int | object | None = _UNSET,
         digest_cadence_days: int | None = None,
     ) -> bool:
         from cert_watch.tags import format_tags

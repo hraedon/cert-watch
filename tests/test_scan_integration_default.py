@@ -55,7 +55,7 @@ def local_tls_server(chain_triplet, tmp_path):
 def test_open_tls_connection_pinned_loopback_returns_cert(local_tls_server, monkeypatch):
     """A pinned loopback TLS connection returns a non-empty peer certificate
     when the transport override is active."""
-    host, port = local_tls_server.server_address
+    _host, port = local_tls_server.server_address
 
     def _trust_ctx(*args, **kwargs):
         import ssl as _ssl
@@ -104,7 +104,7 @@ def test_open_tls_connection_pinned_loopback_always_blocked():
 )
 def test_get_chain_der_native_returns_full_chain(local_tls_server, monkeypatch):
     """On Python 3.13+, the peer's full presented chain is returned."""
-    host, port = local_tls_server.server_address
+    _host, port = local_tls_server.server_address
 
     def _trust_ctx(*args, **kwargs):
         import ssl as _ssl
@@ -138,7 +138,7 @@ def test_probe_hsts_true_when_header_present(local_tls_server, monkeypatch):
     """_probe_hsts detects the HSTS header served by the local TLS server."""
     import ssl as _ssl_module
 
-    host, port = local_tls_server.server_address
+    _host, port = local_tls_server.server_address
 
     def _trust_ctx(*args, **kwargs):
         ctx = _ssl_module.SSLContext(_ssl_module.PROTOCOL_TLS_CLIENT)

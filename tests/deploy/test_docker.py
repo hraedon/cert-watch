@@ -35,13 +35,13 @@ def docker_container(docker_image, waiter):
 
 
 def test_healthz_returns_ok(docker_container):
-    cid, w = docker_container
+    _cid, w = docker_container
     body = w.poll_healthy()
     assert body["status"] == "ok", f"unexpected healthz body: {body}"
 
 
 def test_readyz_returns_ok(docker_container):
-    cid, w = docker_container
+    _cid, w = docker_container
     body = w.poll_ready()
     assert body["status"] == "ok", f"unexpected readyz body: {body}"
     assert body.get("checks", {}).get("database") == "ok"

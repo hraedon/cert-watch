@@ -319,7 +319,7 @@ def _deliver_webhook(
             last_error = alert.error_message or "unknown"
         new_status = "delivered" if success else "failed"
         err = None if success else last_error
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — external webhook failures become delivery status
         logger.warning("event webhook delivery failed: %s", exc)
         new_status = "failed"
         err = str(exc)[:500]
@@ -423,7 +423,7 @@ def get_events(
     with _connect(db_path) as conn:
         rows = conn.execute(
             f"SELECT * FROM event_log{where} ORDER BY id DESC LIMIT ? OFFSET ?",
-            params + [limit, offset],
+            [*params, limit, offset],
         ).fetchall()
     return [dict(r) for r in rows]
 
@@ -468,7 +468,7 @@ def get_failed_deliveries(
     with _connect(db_path) as conn:
         rows = conn.execute(
             f"SELECT * FROM event_log{where} ORDER BY id DESC LIMIT ?",
-            params + [limit],
+            [*params, limit],
         ).fetchall()
     return [dict(r) for r in rows]
 

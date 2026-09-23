@@ -69,7 +69,7 @@ def fernet_decrypt(value: str, key: str) -> str | None:
     """
     if not value.startswith(_ENCRYPTED_PREFIX) and not value.startswith(_ENCRYPTED_PREFIX_V2):
         return value
-    from cryptography.fernet import Fernet, InvalidToken
+    from cryptography.fernet import Fernet
 
     is_v2 = value.startswith(_ENCRYPTED_PREFIX_V2)
     token = value[len(_ENCRYPTED_PREFIX_V2 if is_v2 else _ENCRYPTED_PREFIX):]
@@ -77,7 +77,7 @@ def fernet_decrypt(value: str, key: str) -> str | None:
     # Try the provided key first
     try:
         return Fernet(key.encode()).decrypt(token.encode()).decode()
-    except (InvalidToken, Exception):
+    except Exception:  # noqa: BLE001 — malformed/corrupt ciphertext must be reported as unreadable
         pass
 
     if not is_v2:
@@ -102,14 +102,14 @@ def check_encrypted_values(db_path: str | Path, encryption_key: str) -> list[str
     for row in rows:
         val = row["value"]
         if val and (val.startswith(_ENCRYPTED_PREFIX) or val.startswith(_ENCRYPTED_PREFIX_V2)):
-            from cryptography.fernet import Fernet, InvalidToken
+            from cryptography.fernet import Fernet
             if val.startswith(_ENCRYPTED_PREFIX_V2):
                 token = val[len(_ENCRYPTED_PREFIX_V2):]
             else:
                 token = val[len(_ENCRYPTED_PREFIX):]
             try:
                 Fernet(encryption_key.encode()).decrypt(token.encode())
-            except (InvalidToken, Exception):
+            except Exception:  # noqa: BLE001 — audit all malformed/corrupt encrypted values
                 undecryptable.append(row["key"])
     return undecryptable
 

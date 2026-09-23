@@ -341,7 +341,7 @@ def test_bump_session_version_concurrent_race(tmp_path):
         try:
             v = bump_session_version(db, "alice")
             versions.append(v)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — collect worker failures for the assertion
             errors.append(exc)
 
     threads = [threading.Thread(target=bump) for _ in range(10)]

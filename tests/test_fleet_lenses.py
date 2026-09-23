@@ -45,9 +45,9 @@ def test_fleet_pivot_by_issuer(tmp_path):
     keys = [g["key"] for g in groups]
     assert "Let's Encrypt" in keys
     assert "DigiCert" in keys
-    le = [g for g in groups if g["key"] == "Let's Encrypt"][0]
+    le = next(g for g in groups if g["key"] == "Let's Encrypt")
     assert le["count"] == 2
-    dc = [g for g in groups if g["key"] == "DigiCert"][0]
+    dc = next(g for g in groups if g["key"] == "DigiCert")
     assert dc["count"] == 1
 
 
@@ -62,9 +62,9 @@ def test_fleet_pivot_by_owner(tmp_path):
     keys = [g["key"] for g in groups]
     assert "alice" in keys
     assert "Unassigned" in keys
-    alice = [g for g in groups if g["key"] == "alice"][0]
+    alice = next(g for g in groups if g["key"] == "alice")
     assert alice["count"] == 2
-    unassigned = [g for g in groups if g["key"] == "Unassigned"][0]
+    unassigned = next(g for g in groups if g["key"] == "Unassigned")
     assert unassigned["count"] == 1
 
 

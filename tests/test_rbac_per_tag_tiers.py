@@ -74,7 +74,7 @@ class TestMayWriteTags:
 class TestResolveTagTiers:
     def test_scoped_role_tier_applies_per_tag(self):
         role_tiers = {"prod-ops": ("operator", "prod", {})}
-        tier, scope, tag_tiers = _resolve_tier_and_scope(["prod-ops"], role_tiers)
+        tier, _scope, tag_tiers = _resolve_tier_and_scope(["prod-ops"], role_tiers)
         assert tier == "viewer"  # WI-061 invariant
         assert tag_tiers == {"prod": "operator"}
 

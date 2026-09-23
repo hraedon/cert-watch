@@ -63,7 +63,7 @@ def _start_tls_server(
             with contextlib.suppress(Exception):
                 ssl_conn.recv(1024)
             ssl_conn.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 — fixture loop survives malformed/aborted TLS clients
             with contextlib.suppress(Exception):
                 conn.close()
     sock.close()

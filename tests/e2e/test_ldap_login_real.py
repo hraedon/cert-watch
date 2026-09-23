@@ -26,7 +26,7 @@ from collections.abc import Iterator
 import pytest
 
 pytest.importorskip("playwright")
-from playwright.sync_api import expect  # noqa: E402
+from playwright.sync_api import expect
 
 pytestmark = [
     pytest.mark.e2e,
@@ -52,7 +52,7 @@ def _wait_for(url: str, timeout: float = 10) -> bool:
             with urllib.request.urlopen(url, timeout=1) as r:
                 if r.status == 200:
                     return True
-        except Exception:
+        except OSError:
             pass
         time.sleep(0.1)
     return False

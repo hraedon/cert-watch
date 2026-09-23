@@ -87,6 +87,20 @@ def test_windows_smoke_installs_production_preload_prerequisite() -> None:
     assert "warmup.dll" in smoke
 
 
+def test_windows_smoke_exercises_optional_eventlog_sink() -> None:
+    smoke = _workflow("deploy-smoke.yml")
+    install = smoke.index("Install cert-watch via install-windows.ps1")
+    eventlog = smoke.index("Verify optional Windows Event Log sink", install)
+    start = smoke.index("Start app on loopback and wait for health", eventlog)
+
+    assert install < eventlog < start
+    assert ".Path + '[windows]'" in smoke[eventlog:start]
+    assert "import os, win32evtlog, win32evtlogutil" in smoke[eventlog:start]
+    assert "siem.export_audit_event" in smoke[eventlog:start]
+    assert "Get-EventLog -LogName Application" in smoke[eventlog:start]
+    assert "ReplacementStrings" in smoke[eventlog:start]
+
+
 def test_published_image_is_signed_and_attested() -> None:
     """Provenance for the artefact a trust-hygiene tool asks its own users to trust.
 
@@ -256,3 +270,13 @@ def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     invalid = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True)
     assert invalid.returncode != 0
     assert b"must be a semantic version" in invalid.stderr
+
+
+def test_eventlog_readback_window_tolerates_whole_second_timestamps() -> None:
+    """Get-EventLog -After is strict and TimeGenerated is truncated to the second,
+    so a window starting at the write instant misses the record it is looking for."""
+    smoke = _workflow("deploy-smoke.yml")
+    step = smoke[smoke.index("Verify optional Windows Event Log sink"):]
+    step = step[: step.index("Start app on loopback")]
+    assert "$started = (Get-Date).AddSeconds(-" in step
+    assert "$started = Get-Date\n" not in step

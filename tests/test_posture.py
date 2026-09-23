@@ -929,7 +929,7 @@ def test_check_endpoint_reachable_ocsp_success():
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        reachable, msg = _check_endpoint_reachable("http://ocsp.test", method="HEAD")
+        reachable, _msg = _check_endpoint_reachable("http://ocsp.test", method="HEAD")
         assert reachable is True
 
 
@@ -938,7 +938,7 @@ def test_check_endpoint_reachable_ocsp_failure():
 
     from cert_watch.posture import _check_endpoint_reachable
     with patch("cert_watch.posture.ssrf_safe_urlopen", side_effect=Exception("timeout")):
-        reachable, msg = _check_endpoint_reachable("http://ocsp.test", method="HEAD")
+        reachable, _msg = _check_endpoint_reachable("http://ocsp.test", method="HEAD")
         assert reachable is False
 
 
@@ -952,7 +952,7 @@ def test_check_endpoint_reachable_crl_success():
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        reachable, msg = _check_endpoint_reachable("http://crl.test/ca.crl", method="GET")
+        reachable, _msg = _check_endpoint_reachable("http://crl.test/ca.crl", method="GET")
         assert reachable is True
 
 
@@ -961,7 +961,7 @@ def test_check_endpoint_reachable_crl_failure():
 
     from cert_watch.posture import _check_endpoint_reachable
     with patch("cert_watch.posture.ssrf_safe_urlopen", side_effect=Exception("refused")):
-        reachable, msg = _check_endpoint_reachable("http://crl.test/ca.crl", method="GET")
+        reachable, _msg = _check_endpoint_reachable("http://crl.test/ca.crl", method="GET")
         assert reachable is False
 
 

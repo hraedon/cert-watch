@@ -152,7 +152,7 @@ def test_resolve_host_allows_public(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", lambda *a, **kw: [
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", 443)),
     ])
-    family, sockaddr = _resolve_host("example.com", 443)
+    _family, sockaddr = _resolve_host("example.com", 443)
     assert sockaddr[0] == "93.184.216.34"
 
 
@@ -162,7 +162,7 @@ def test_resolve_host_skips_blocked_uses_next(monkeypatch):
         (socket.AF_INET6, 1, 0, "", ("::1", 443, 0, 0)),
         (socket.AF_INET, 1, 0, "", ("93.184.216.34", 443)),
     ])
-    family, sockaddr = _resolve_host("mixed.example.com", 443)
+    _family, sockaddr = _resolve_host("mixed.example.com", 443)
     assert sockaddr[0] == "93.184.216.34"
 
 

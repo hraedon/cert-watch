@@ -65,7 +65,7 @@ def _start_server(
             with urllib.request.urlopen(f"{base}/healthz", timeout=0.5) as r:
                 if r.status == 200:
                     return proc, base
-        except Exception:
+        except Exception:  # noqa: BLE001 — startup polling tolerates transient HTTP failures
             time.sleep(0.1)
     proc.kill()
     proc.wait(timeout=5)

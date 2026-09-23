@@ -430,6 +430,47 @@ jobs:
           python --version
           .\scripts\install-windows.ps1 -InstallDir C:\cert-watch-ci
 
+      # Event Log export is optional and deliberately remains an operator-selected
+      # extra. Install it into the deployed venv exactly as the IIS runbook says,
+      # then exercise the real pywin32 imports and read the emitted marker back
+      # from the Application log.
+      - name: Verify optional Windows Event Log sink
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $venvPy = 'C:\cert-watch-ci\venv\Scripts\python.exe'
+          $package = (Resolve-Path '.').Path + '[windows]'
+          & $venvPy -m pip install --upgrade $package
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Installation of cert-watch[windows] failed'
+          }
+
+          $source = 'cert-watch-deploy-smoke'
+          $marker = 'eventlog-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
+          # TimeGenerated has whole-second resolution and -After is strict, so a
+          # record written in the same second as $started would be filtered out.
+          # The per-run marker keeps the match unique; backdate the window.
+          $started = (Get-Date).AddSeconds(-5)
+          $env:CERT_WATCH_EVENTLOG = '1'
+          $env:CERT_WATCH_EVENTLOG_SOURCE = $source
+          $env:CERT_WATCH_SMOKE_MARKER = $marker
+          & $venvPy -c "import os, win32evtlog, win32evtlogutil; from cert_watch import siem; siem.reset_exporter(); assert siem.siem_enabled(); siem.export_audit_event({'action': 'deploy-smoke.eventlog', 'marker': os.environ['CERT_WATCH_SMOKE_MARKER']})"
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows Event Log sink invocation failed'
+          }
+
+          $event = $null
+          for ($i = 0; $i -lt 10 -and -not $event; $i++) {
+            $event = Get-EventLog -LogName Application -Source $source -After $started -ErrorAction SilentlyContinue |
+              Where-Object { $_.EventID -eq 1000 -and ($_.ReplacementStrings -join "`n") -like ('*' + $marker + '*') } |
+              Select-Object -First 1
+            if (-not $event) { Start-Sleep -Seconds 1 }
+          }
+          if (-not $event) {
+            throw ('Event Log marker was not found in the Application log: ' + $marker)
+          }
+          Write-Host ('Windows Event Log sink verified: record ' + $event.Index)
+
       - name: Start app on loopback and wait for health
         shell: powershell
         run: |

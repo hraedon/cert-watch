@@ -372,6 +372,19 @@ def test_api_update_host_owner_invalid_json(reload_app, tmp_path):
     assert "error" in r.json()
 
 
+def test_api_update_host_owner_rejects_non_object_json(reload_app, tmp_path):
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    from cert_watch.database import SqliteHostRepository, init_schema
+
+    init_schema(db)
+    hid = SqliteHostRepository(db).add("h.example.com", 443)
+    with TestClient(app_mod.app) as client:
+        r = client.patch(f"/api/hosts/{hid}/owner", json=["owner_name", "Alice"])
+    assert r.status_code == 400
+    assert r.json() == {"error": "JSON body must be an object"}
+
+
 def test_api_update_host_owner_with_runbook(reload_app, tmp_path):
     app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"

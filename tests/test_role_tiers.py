@@ -170,9 +170,11 @@ class TestApiKeyContext:
             scope = "admin"
 
         class FakeRequest:
-            headers = {"authorization": "Bearer cwk_test"}
+            headers = {  # noqa: RUF012 — fixed test-double state; instances do not mutate it
+                "authorization": "Bearer cwk_test"
+            }
             state = type("S", (), {})()
-            scope = {}
+            scope = {}  # noqa: RUF012 — fixed test-double state; instances do not mutate it
 
         class FakeApp:
             state = type("S", (), {})()

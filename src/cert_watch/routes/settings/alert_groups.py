@@ -199,7 +199,7 @@ def _match_preview(
             rows = conn.execute(
                 f"SELECT DISTINCT c.hostname, c.subject {join} AND ({where}) "
                 f"ORDER BY c.hostname LIMIT ?",
-                params + [sample_limit],
+                [*params, sample_limit],
             ).fetchall()
             sample = [{"hostname": r["hostname"], "subject": r["subject"]} for r in rows]
     return count, sample

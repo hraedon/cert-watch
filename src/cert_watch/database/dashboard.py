@@ -130,7 +130,7 @@ from cert_watch.database.dashboard_unified import (
     list_unified_entries as list_unified_entries,
 )
 
-__all__ = [
+__all__ = [  # noqa: RUF022 — exports are grouped by query role
     # helpers
     "_URGENCY_ORDER",
     "_SORT_COLUMNS_BARE",

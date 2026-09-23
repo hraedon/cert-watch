@@ -438,7 +438,7 @@ class TestDeliverWebhookSSRFPolicy:
     def _capture(self, monkeypatch, db):
         captured: dict = {}
 
-        def _fake_send(alert, wc):  # noqa: ANN001
+        def _fake_send(alert, wc):
             captured["allow_private"] = wc.allow_private
             captured["allowed_subnets"] = wc.allowed_subnets
             return True

@@ -33,6 +33,19 @@ All notable changes to cert-watch are documented in this file.
   The receipt suite runs explicitly in CI, including TLS certificate and hostname
   refusal checks, rather than being silently excluded by integration markers.
 
+### Changed
+- **Audit action names for tag edits are unified.** The HTML and JSON paths now
+  share one service, and both record `host.update_tags` / `cert.update_tags`.
+  The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
+  SIEM filters on the old names need updating.
+
+### Fixed
+- **SIEM export no longer runs under the write lock.** Audit events recorded
+  inside a transaction are now sent to the SIEM after the transaction commits
+  and the global write lock is released, so a slow or unreachable syslog/HEC
+  sink cannot stall other writers on those paths, and the event is not sent
+  before its row commits.
+
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
   host-scoped concept. Migration 0031 concatenates every non-empty

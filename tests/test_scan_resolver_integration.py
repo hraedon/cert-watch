@@ -53,7 +53,7 @@ def test_resolve_host_private_allowed_with_allow_private(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
-    family, sockaddr = _resolve_host("private.example", LOCALHOST_PORT, allow_private=True)
+    _family, sockaddr = _resolve_host("private.example", LOCALHOST_PORT, allow_private=True)
     assert sockaddr[0] == "10.0.0.5"
 
 
@@ -114,7 +114,7 @@ def test_resolve_private_allowed_by_subnet_override(monkeypatch):
 
     monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
 
-    family, sockaddr = _resolve_host(
+    _family, sockaddr = _resolve_host(
         "private.example",
         LOCALHOST_PORT,
         allow_private=False,

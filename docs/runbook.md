@@ -461,7 +461,9 @@ CERT_WATCH_HEC_URL=https://splunk.internal:8088/services/collector
 CERT_WATCH_HEC_TOKEN_FILE=/run/secrets/hec_token
 CERT_WATCH_HEC_INDEX=cert_watch      # optional
 
-# Windows Event Log (Windows only; pip install cert-watch[windows])
+# Windows Event Log (Windows only)
+# First install cert-watch[windows] into the deployed venv; install-windows.ps1
+# deliberately leaves this operator-selected extra out. See deploy/iis/README.md.
 CERT_WATCH_EVENTLOG=1
 ```
 

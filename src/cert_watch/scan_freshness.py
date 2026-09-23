@@ -106,10 +106,10 @@ def load_scan_evidence(
         last = _timestamp(row["last_success"])
         attempt = _timestamp(row["last_attempt"])
         due = retry = None
-        invalid = (bool(row["last_success"]) and last is None
-                   or bool(row["last_attempt"]) and attempt is None
-                   or last is not None and last > now
-                   or attempt is not None and attempt > now)
+        invalid = ((bool(row["last_success"]) and last is None)
+                   or (bool(row["last_attempt"]) and attempt is None)
+                   or (last is not None and last > now)
+                   or (attempt is not None and attempt > now))
         try:
             due = (cadence_due_at(last, row["scan_interval_hours"], hour, minute)
                    if last else None)

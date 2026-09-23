@@ -116,7 +116,7 @@ def _published_tag(estate) -> str:
         ["git", "show", f"main:{KUSTOMIZATION_DIRS[0]}/kustomization.yaml"],
         cwd=estate["origin"], capture_output=True, text=True, check=True,
     ).stdout
-    return [ln for ln in show.splitlines() if "newTag:" in ln][0].split(":")[1].strip()
+    return next(ln for ln in show.splitlines() if "newTag:" in ln).split(":")[1].strip()
 
 
 def _published_kustomization(estate) -> str:
