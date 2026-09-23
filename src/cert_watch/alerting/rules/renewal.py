@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.messages import _format_renewal_message
 from cert_watch.alerting.routing import _load_host_owner_maps
 from cert_watch.database import Alert, AlertRepository
@@ -74,7 +75,16 @@ def evaluate_renewal_window(
     routing_map = resolve_routing(
         db_path, tuple(leaf["id"] for leaf in candidates)
     )
-    active_keys = {f"renewal:{leaf['fingerprint_sha256']}" for leaf in candidates}
+    active_keys = {
+        certificate_alert_key(
+            "renewal",
+            cert_id=leaf["id"],
+            fingerprint=leaf["fingerprint_sha256"],
+            hostname=leaf["hostname"],
+            port=leaf["port"],
+        )
+        for leaf in candidates
+    }
     store = AlertStore(db_path)
     with _connect(db_path) as conn:
         open_keys = {
@@ -103,7 +113,13 @@ def evaluate_renewal_window(
             extra_recipients=list(routing["recipients"]),
             hostname=leaf["hostname"] or "",
             subject=leaf["subject"] or "",
-            dedupe_key=f"renewal:{leaf['fingerprint_sha256']}",
+            dedupe_key=certificate_alert_key(
+                "renewal",
+                cert_id=cid,
+                fingerprint=leaf["fingerprint_sha256"],
+                hostname=leaf["hostname"],
+                port=leaf["port"],
+            ),
             routing=routing,
         )
         alert_id = alert_repo.enqueue(alert, lifetime=True)

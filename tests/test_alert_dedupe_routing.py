@@ -1,4 +1,4 @@
-"""Plan 058 PR 4: fingerprint dedupe, closure, routing, and event rules."""
+"""Plan 058 PR 4: endpoint dedupe, closure, routing, and event rules."""
 
 from __future__ import annotations
 
@@ -34,6 +34,7 @@ from cert_watch.database.users_roles import (
     User,
 )
 from cert_watch.policy import PolicyViolation
+from cert_watch.routing_report import build_routing_report
 from tests._helpers import seed_certificate
 
 HOST = "matrix.example.test"
@@ -257,6 +258,17 @@ def test_endpoint_bound_rules_do_not_dedupe_shared_certificate_routes(tmp_path):
         ]
         assert len({alert.dedupe_key for alert in alerts}) == 2
 
+    snapshot = tmp_path / "shared-routes-snapshot.sqlite3"
+    with sqlite3.connect(db) as source, sqlite3.connect(snapshot) as target:
+        source.backup(target)
+    reported = {
+        row["hostname"]: row["recipients"]
+        for row in build_routing_report(snapshot)["certificates"]
+    }
+    assert reported == {
+        alert.hostname: alert.extra_recipients for alert in expiry
+    }
+
 
 def test_cancelled_lifetime_row_does_not_suppress_recreated_condition(tmp_path):
     db = tmp_path / "cancelled-lifetime.sqlite3"
@@ -389,7 +401,8 @@ def test_live_leases_survive_replacement_and_certificate_delete(tmp_path):
             "SELECT status, lease_owner, closed_at FROM alerts WHERE id = ?",
             (first_alert.id,),
         ).fetchone()
-    assert tuple(row) == ("sending", "worker", None)
+    assert tuple(row[:2]) == ("sending", "worker")
+    assert row["closed_at"] is not None
 
     other_id, _, _ = replace_scanned(
         db, "delete.example.test", PORT, _cert("66" * 32), [], True,
@@ -412,7 +425,8 @@ def test_live_leases_survive_replacement_and_certificate_delete(tmp_path):
             "SELECT status, lease_owner, closed_at FROM alerts WHERE id = ?",
             (other_alert.id,),
         ).fetchone()
-    assert tuple(row) == ("sending", "worker", None)
+    assert tuple(row[:2]) == ("sending", "worker")
+    assert row["closed_at"] is not None
 
     assert store.complete_pending(
         other_alert.id,
@@ -574,7 +588,7 @@ def test_migration_0037_backfills_and_collapses_real_upgraded_database(tmp_path)
         conn.row_factory = sqlite3.Row
         expiry = conn.execute(
             "SELECT id, status, dedupe_key, closed_at, routing FROM alerts "
-            "WHERE alert_type='expiry_warning' ORDER BY created_at"
+            "WHERE alert_type='expiry_warning' ORDER BY id"
         ).fetchall()
         policies = conn.execute(
             "SELECT id, status, dedupe_key FROM alerts "
@@ -589,20 +603,28 @@ def test_migration_0037_backfills_and_collapses_real_upgraded_database(tmp_path)
         index_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE name='ux_alerts_open_dedupe'"
         ).fetchone()[0]
-    assert (expiry[0]["id"], expiry[0]["status"]) == ("oldest", "pending")
-    assert (expiry[1]["status"], expiry[1]["closed_at"] is not None) == (
+    expiry_by_id = {row["id"]: row for row in expiry}
+    assert expiry_by_id["oldest"]["status"] == "pending"
+    assert (
+        expiry_by_id["newer"]["status"],
+        expiry_by_id["newer"]["closed_at"] is not None,
+    ) == (
         "cancelled", True,
     )
-    assert (expiry[2]["id"], expiry[2]["status"], expiry[2]["closed_at"]) == (
-        "shared", "pending", None,
+    assert (
+        expiry_by_id["shared"]["status"], expiry_by_id["shared"]["closed_at"],
+    ) == (
+        "pending", None,
     )
-    assert expiry[0]["dedupe_key"] == (
+    assert expiry_by_id["oldest"]["dedupe_key"] == (
         f"expiry:{HOST}:{PORT}:{'77' * 32}:expiry_warning:14"
     )
-    assert expiry[2]["dedupe_key"] == (
+    assert expiry_by_id["shared"]["dedupe_key"] == (
         f"expiry:second.example.test:8443:{'77' * 32}:expiry_warning:14"
     )
-    assert json.loads(expiry[0]["routing"])["recipients"] == ["ops@example.invalid"]
+    assert json.loads(expiry_by_id["oldest"]["routing"])["recipients"] == [
+        "ops@example.invalid"
+    ]
     assert [(row["id"], row["status"]) for row in policies] == [
         ("policy", "pending"),
         ("policy-duplicate", "cancelled"),

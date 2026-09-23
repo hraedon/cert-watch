@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.messages import _format_message
 from cert_watch.alerting.model import (
     CHAIN_THRESHOLDS,
@@ -47,6 +48,7 @@ def evaluate_thresholds(
     extra_recipients: list[str] | None = None,
     routing: dict[str, Any] | None = None,
     hostname: str = "",
+    port: int | None = None,
     urgent_only: bool = False,
 ) -> list[Alert]:
     """Create a pending alert for the most urgent newly-tripped threshold.
@@ -145,9 +147,16 @@ def evaluate_thresholds(
         extra_recipients=recipients,
         hostname=hostname,
         subject=cert.subject,
-        dedupe_key=(
-            f"expiry:{cert.fingerprint_sha256}:"
-            f"{'expired' if days < 0 else 'expiry_warning'}:{most_urgent}"
+        dedupe_key=certificate_alert_key(
+            "expiry",
+            cert_id=cid,
+            fingerprint=cert.fingerprint_sha256,
+            hostname=hostname,
+            port=port,
+            suffix=(
+                "expired" if days < 0 else "expiry_warning",
+                str(most_urgent),
+            ),
         ),
         routing=routing or {
             "version": 1,
@@ -234,6 +243,7 @@ def evaluate_all_certs(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
             owner_info=owner_info, extra_recipients=merged_extra or None,
             hostname=leaf_row["hostname"] or "", urgent_only=urgent_only,
+            port=port,
             routing=routing,
         )
         all_alerts.extend(alerts)

@@ -51,12 +51,15 @@ restore the pre-migration backup.
 ### Behaviour changes in this line to be aware of
 
 - **Alert dedupe and routing are persisted (migration 0037).** Alert identity
-  now uses the certificate fingerprint rather than the replaceable inventory
-  row id. Expiry thresholds never fire twice for the same
-  fingerprint/type/threshold. A renewal-stalled notice fires once per
-  fingerprint; the weekly renewal digest is its reminder channel. A policy
+  now uses endpoint plus certificate fingerprint rather than the replaceable
+  inventory row id. Expiry thresholds never fire twice for the same endpoint,
+  fingerprint, type, and threshold. A renewal-stalled notice fires once per
+  endpoint/fingerprint; the weekly renewal digest is its reminder channel. A policy
   violation fires once while present, closes on a clean scan, and may fire
-  again if the same rule reappears. Policy and drift alerts now include matching
+  again if the same rule reappears. Shared wildcard/SAN certificates therefore
+  retain independent alert rows and routing snapshots for every endpoint.
+  Uploaded certificates use their certificate row identity. Policy and drift
+  alerts now include matching
   alert groups, the host owner, and role members, so those recipients may begin
   receiving notifications they were previously omitted from.
 
@@ -73,7 +76,10 @@ restore the pre-migration backup.
   existing overdue events, including the port-less 1.x compatibility identity.
   Stale pending alerts closed by certificate replacement or deletion are now
   retained as `cancelled` with `closed_at` instead of being deleted. A row in
-  `sending` under a live lease is left untouched. Cancelled rows use the normal
+  `sending` under a live lease is marked closed without stealing the lease; it
+  becomes sent or cancelled when the holder settles, and an expired stale lease
+  is cancelled rather than reclaimed. Cancelled rows do not suppress a recreated
+  expiry or renewal condition that never reached a recipient. They use the normal
   delivered-alert retention window, while pending/failed rows that never
   reached anyone retain the existing longer outage-evidence window. Sent
   PagerDuty/Alertmanager incidents resolve when their condition is closed;

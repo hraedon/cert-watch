@@ -32,18 +32,23 @@ def _routing_snapshot(raw_recipients: object) -> str:
 
 
 def _backfill_key(row: sqlite3.Row) -> str | None:
-    fingerprint = row["fingerprint_sha256"]
+    cert_id = row["certificate_id"]
+    fingerprint = row["fingerprint_sha256"] or cert_id
     alert_type = row["alert_type"]
-    if not fingerprint:
+    if not cert_id:
         return None
+    if row["hostname"] and row["port"] is not None:
+        identity = f"{row['hostname']}:{row['port']}:{fingerprint}"
+    else:
+        identity = f"cert:{cert_id}"
     if alert_type in {"expiry_warning", "expired"} and row["threshold_days"] is not None:
-        return f"expiry:{fingerprint}:{alert_type}:{row['threshold_days']}"
+        return f"expiry:{identity}:{alert_type}:{row['threshold_days']}"
     if alert_type == "renewal_stalled":
-        return f"renewal:{fingerprint}"
+        return f"renewal:{identity}"
     if alert_type == "policy_violation":
         match = _POLICY_RULE.search(row["message"] or "")
         if match:
-            return f"policy:{fingerprint}:{match.group(1)}"
+            return f"policy:{identity}:{match.group(1)}"
     return None
 
 
@@ -113,8 +118,10 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "a.threshold_days" if "threshold_days" in alert_columns else "NULL"
     )
     rows = conn.execute(
-        f"""SELECT a.id, a.alert_type, a.message, {threshold_expr} AS threshold_days,
-                  {recipients_expr} AS extra_recipients, c.fingerprint_sha256
+        f"""SELECT a.id, a.cert_id, a.alert_type, a.message,
+                  {threshold_expr} AS threshold_days,
+                  {recipients_expr} AS extra_recipients,
+                  c.id AS certificate_id, c.fingerprint_sha256, c.hostname, c.port
            FROM alerts AS a
            LEFT JOIN certificates AS c ON c.id = a.cert_id
            WHERE a.dedupe_key IS NULL OR a.routing IS NULL"""

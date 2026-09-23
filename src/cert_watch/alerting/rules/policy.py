@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.database import Alert
 
 if TYPE_CHECKING:
@@ -30,16 +31,20 @@ def evaluate_policy_alerts(
 
     if conn is not None:
         cert_row = conn.execute(
-            "SELECT fingerprint_sha256 FROM certificates WHERE id = ?", (cert_id,)
+            "SELECT fingerprint_sha256, hostname, port FROM certificates WHERE id = ?",
+            (cert_id,),
         ).fetchone()
     else:
         with _connect(db_path) as lookup:
             cert_row = lookup.execute(
-                "SELECT fingerprint_sha256 FROM certificates WHERE id = ?", (cert_id,)
+                "SELECT fingerprint_sha256, hostname, port FROM certificates WHERE id = ?",
+                (cert_id,),
             ).fetchone()
     cert_fingerprint = fingerprint or (
         cert_row["fingerprint_sha256"] if cert_row else None
     )
+    endpoint_hostname = cert_row["hostname"] if cert_row else None
+    endpoint_port = cert_row["port"] if cert_row else None
     routing = resolve_routing(db_path, (cert_id,), conn=conn)[cert_id]
     active_rule_ids = {
         violation.rule_id
@@ -47,22 +52,29 @@ def evaluate_policy_alerts(
         if violation.severity in ("critical", "warning")
     }
     store = AlertStore(db_path, initialize=conn is None)
-    if cert_fingerprint:
+    active_keys = {
+        certificate_alert_key(
+            "policy",
+            cert_id=cert_id,
+            fingerprint=cert_fingerprint,
+            hostname=endpoint_hostname,
+            port=endpoint_port,
+            suffix=(rule_id,),
+        )
+        for rule_id in active_rule_ids
+    }
+    # Runtime evaluations always have a certificate row (or an explicit
+    # fingerprint during the scan transaction). Calls without either are a
+    # compatibility path that cannot prove whether omitted rules cleared.
+    if cert_row is not None or fingerprint is not None:
         query = """SELECT dedupe_key FROM alerts
                    WHERE alert_type = 'policy_violation' AND closed_at IS NULL
-                     AND dedupe_key LIKE ?"""
+                     AND cert_id = ? AND dedupe_key IS NOT NULL"""
         if conn is not None:
-            open_rows = conn.execute(
-                query, (f"policy:{cert_fingerprint}:%",)
-            ).fetchall()
+            open_rows = conn.execute(query, (cert_id,)).fetchall()
         else:
             with _connect(db_path) as lookup:
-                open_rows = lookup.execute(
-                    query, (f"policy:{cert_fingerprint}:%",)
-                ).fetchall()
-        active_keys = {
-            f"policy:{cert_fingerprint}:{rule_id}" for rule_id in active_rule_ids
-        }
+                open_rows = lookup.execute(query, (cert_id,)).fetchall()
         stale_keys = {row["dedupe_key"] for row in open_rows} - active_keys
         closed = store.close_keys(stale_keys, conn=conn)
         if closed_sent is not None:
@@ -82,9 +94,13 @@ def evaluate_policy_alerts(
             ),
             hostname=hostname,
             subject=subject,
-            dedupe_key=(
-                f"policy:{cert_fingerprint}:{violation.rule_id}"
-                if cert_fingerprint else None
+            dedupe_key=certificate_alert_key(
+                "policy",
+                cert_id=cert_id,
+                fingerprint=cert_fingerprint,
+                hostname=endpoint_hostname,
+                port=endpoint_port,
+                suffix=(violation.rule_id,),
             ),
             routing=routing,
             extra_recipients=list(routing["recipients"]),

@@ -56,7 +56,8 @@ class AlertStore:
         duplicate_params: tuple[Any, ...] = ()
         if alert.dedupe_key:
             duplicate_predicate = (
-                "dedupe_key = ?" if lifetime else "dedupe_key = ? AND closed_at IS NULL"
+                "dedupe_key = ? AND status IN ('pending', 'sending', 'sent', 'failed')"
+                if lifetime else "dedupe_key = ? AND closed_at IS NULL"
             )
             duplicate_params = (alert.dedupe_key,)
         params = (
@@ -78,10 +79,15 @@ class AlertStore:
         def execute(active_conn: sqlite3.Connection) -> bool:
             try:
                 cursor = active_conn.execute(sql, params)
-            except sqlite3.IntegrityError:
+            except sqlite3.IntegrityError as exc:
                 # The partial unique index is the final arbiter when two rule
                 # evaluators race between their NOT EXISTS checks.
-                return False
+                if (
+                    exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+                    and str(exc) == "UNIQUE constraint failed: alerts.dedupe_key"
+                ):
+                    return False
+                raise
             return cursor.rowcount == 1
 
         if conn is not None:
@@ -105,8 +111,9 @@ class AlertStore:
     ) -> list[Alert]:
         """Close conditions and return sent rows needing incident resolves.
 
-        Pending rows become cancelled. A live claimed row is deliberately not
-        touched; a later evaluation closes it after its lease holder settles.
+        Pending rows become cancelled. A live claimed row is marked closed but
+        keeps its lease; settlement records a completed send or cancels it
+        instead of returning stale work to the queue.
         """
         if not dedupe_keys:
             return []
@@ -117,30 +124,44 @@ class AlertStore:
         def execute(active_conn: sqlite3.Connection) -> list[Alert]:
             rows = active_conn.execute(
                 f"""SELECT * FROM alerts
-                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL
-                      AND (status != 'sending' OR lease_expires_at IS NULL
-                           OR lease_expires_at < ?)""",
-                (*keys, _iso(current)),
+                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL""",
+                keys,
             ).fetchall()
             active_conn.execute(
                 f"""UPDATE alerts SET
                          closed_at = ?,
-                         status = CASE WHEN status IN ('pending', 'sending')
+                         status = CASE WHEN status = 'pending'
+                                            OR (status = 'sending'
+                                                AND (lease_expires_at IS NULL
+                                                     OR lease_expires_at < ?))
                                        THEN 'cancelled' ELSE status END,
                          error_message = CASE WHEN status IN ('pending', 'sending')
                                               THEN ? ELSE error_message END,
-                         next_attempt_at = CASE WHEN status IN ('pending', 'sending')
+                         next_attempt_at = CASE WHEN status = 'pending'
+                                                    OR (status = 'sending'
+                                                        AND (lease_expires_at IS NULL
+                                                             OR lease_expires_at < ?))
                                                 THEN NULL ELSE next_attempt_at END,
-                         lease_owner = CASE WHEN status IN ('pending', 'sending')
+                         lease_owner = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
                                             THEN NULL ELSE lease_owner END,
-                         lease_expires_at = CASE WHEN status IN ('pending', 'sending')
+                         lease_expires_at = CASE WHEN status = 'pending'
+                                                     OR (status = 'sending'
+                                                         AND (lease_expires_at IS NULL
+                                                              OR lease_expires_at < ?))
                                                  THEN NULL ELSE lease_expires_at END,
-                         deferred_since = CASE WHEN status IN ('pending', 'sending')
+                         deferred_since = CASE WHEN status = 'pending'
+                                                    OR (status = 'sending'
+                                                        AND (lease_expires_at IS NULL
+                                                             OR lease_expires_at < ?))
                                                THEN NULL ELSE deferred_since END
-                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL
-                      AND (status != 'sending' OR lease_expires_at IS NULL
-                           OR lease_expires_at < ?)""",
-                (_iso(current), reason, *keys, _iso(current)),
+                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL""",
+                (
+                    _iso(current), _iso(current), reason, _iso(current),
+                    _iso(current), _iso(current), _iso(current), *keys,
+                ),
             )
             from cert_watch.database.repo import SqliteAlertRepository
             return [
@@ -169,30 +190,44 @@ class AlertStore:
         current = now or datetime.now(UTC)
         rows = conn.execute(
             f"""SELECT * FROM alerts
-                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL
-                  AND (status != 'sending' OR lease_expires_at IS NULL
-                       OR lease_expires_at < ?)""",
-            (*cert_ids, _iso(current)),
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
+            cert_ids,
         ).fetchall()
         conn.execute(
             f"""UPDATE alerts SET
                      closed_at = ?,
-                     status = CASE WHEN status IN ('pending', 'sending')
+                     status = CASE WHEN status = 'pending'
+                                        OR (status = 'sending'
+                                            AND (lease_expires_at IS NULL
+                                                 OR lease_expires_at < ?))
                                    THEN 'cancelled' ELSE status END,
                      error_message = CASE WHEN status IN ('pending', 'sending')
                                           THEN ? ELSE error_message END,
-                     next_attempt_at = CASE WHEN status IN ('pending', 'sending')
+                     next_attempt_at = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
                                             THEN NULL ELSE next_attempt_at END,
-                     lease_owner = CASE WHEN status IN ('pending', 'sending')
+                     lease_owner = CASE WHEN status = 'pending'
+                                            OR (status = 'sending'
+                                                AND (lease_expires_at IS NULL
+                                                     OR lease_expires_at < ?))
                                         THEN NULL ELSE lease_owner END,
-                     lease_expires_at = CASE WHEN status IN ('pending', 'sending')
+                     lease_expires_at = CASE WHEN status = 'pending'
+                                                 OR (status = 'sending'
+                                                     AND (lease_expires_at IS NULL
+                                                          OR lease_expires_at < ?))
                                              THEN NULL ELSE lease_expires_at END,
-                     deferred_since = CASE WHEN status IN ('pending', 'sending')
+                     deferred_since = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
                                            THEN NULL ELSE deferred_since END
-                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL
-                  AND (status != 'sending' OR lease_expires_at IS NULL
-                       OR lease_expires_at < ?)""",
-            (_iso(current), reason, *cert_ids, _iso(current)),
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
+            (
+                _iso(current), _iso(current), reason, _iso(current),
+                _iso(current), _iso(current), _iso(current), *cert_ids,
+            ),
         )
         from cert_watch.database.repo import SqliteAlertRepository
         return [
@@ -235,6 +270,29 @@ class AlertStore:
             )
             conn.commit()
         return cursor.rowcount == 1
+
+    def rule_firing_due(
+        self,
+        dedupe_key: str,
+        *,
+        now: datetime,
+        interval_seconds: int,
+        suppression_keys: tuple[str, ...] = (),
+    ) -> bool:
+        """Return whether an event-only rule is outside its cooldown window."""
+        from datetime import timedelta
+
+        keys = (dedupe_key, *suppression_keys)
+        placeholders = ",".join("?" for _ in keys)
+        cutoff = _iso(now - timedelta(seconds=interval_seconds))
+        with _connect(self.db_path) as conn:
+            recent = conn.execute(
+                f"""SELECT 1 FROM rule_firings
+                    WHERE dedupe_key IN ({placeholders}) AND last_fired_at > ?
+                    LIMIT 1""",
+                (*keys, cutoff),
+            ).fetchone()
+        return recent is None
 
     def claim(
         self,
@@ -294,6 +352,18 @@ class AlertStore:
             RETURNING *
         """
         with _connect(self.db_path) as conn:
+            # A condition may close while a worker owns a live lease. Once
+            # that lease expires, retire the row instead of reclaiming stale
+            # work. Drift is intentionally born closed because it represents
+            # an edge rather than an ongoing condition.
+            conn.execute(
+                """UPDATE alerts SET status = 'cancelled',
+                          next_attempt_at = NULL, lease_owner = NULL,
+                          lease_expires_at = NULL, deferred_since = NULL
+                   WHERE status = 'sending' AND lease_expires_at < ?
+                     AND closed_at IS NOT NULL AND alert_type != 'drift'""",
+                (_iso(now),),
+            )
             rows = conn.execute(
                 sql,
                 (lease_owner, _iso(lease_expires_at), *params),
@@ -412,7 +482,15 @@ class AlertStore:
         with _connect(self.db_path) as conn:
             cursor = conn.execute(
                 f"""UPDATE alerts SET
-                        status = ?, sent_at = ?, error_message = ?,
+                        status = CASE
+                            WHEN closed_at IS NOT NULL AND alert_type != 'drift'
+                                 AND ? != 'sent' THEN 'cancelled'
+                            ELSE ? END,
+                        sent_at = ?,
+                        error_message = CASE
+                            WHEN closed_at IS NOT NULL AND alert_type != 'drift'
+                                 AND ? != 'sent' THEN error_message
+                            ELSE ? END,
                         attempt_count = attempt_count + ?,
                         last_attempt_at = CASE WHEN ? > 0 THEN ? ELSE last_attempt_at END,
                         next_attempt_at = ?, failure_reason = ?,
@@ -421,7 +499,9 @@ class AlertStore:
                     WHERE id = ? AND status = 'sending' AND lease_owner = ?""",
                 (
                     status,
+                    status,
                     _iso(sent_at) if sent_at else None,
+                    status,
                     error_message,
                     attempts,
                     attempts,
@@ -472,7 +552,8 @@ class AlertStore:
                        next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
                        failure_reason = NULL, error_message = NULL,
                        deferred_since = NULL, sent_at = NULL
-                   WHERE id = ? AND status = 'failed' AND closed_at IS NULL""",
+                   WHERE id = ? AND status = 'failed'
+                     AND (closed_at IS NULL OR alert_type = 'drift')""",
                 (alert_id,),
             )
             conn.commit()

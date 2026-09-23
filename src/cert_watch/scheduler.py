@@ -597,14 +597,14 @@ def _check_renewal_overdue(
                     key = f"overdue:{signal.hostname}:{port}:{signal.cert_fingerprint}"
                     legacy_key = f"overdue:{signal.hostname}:*:{signal.cert_fingerprint}"
                     now = datetime.now(UTC)
-                    if not store.claim_rule_firing(
+                    if not store.rule_firing_due(
                         key,
                         now=now,
                         interval_seconds=24 * 60 * 60,
                         suppression_keys=(legacy_key,),
                     ):
                         continue
-                    emit_event(
+                    event_id = emit_event(
                         Event(
                             event_type="renewal_overdue",
                             timestamp=now,
@@ -620,6 +620,14 @@ def _check_renewal_overdue(
                             source="scheduler",
                         ),
                         db_path,
+                    )
+                    if event_id is None:
+                        continue
+                    store.claim_rule_firing(
+                        key,
+                        now=now,
+                        interval_seconds=24 * 60 * 60,
+                        suppression_keys=(legacy_key,),
                     )
                     try:
                         _send_renewal_webhook_if_configured(
