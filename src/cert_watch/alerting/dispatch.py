@@ -351,14 +351,16 @@ class Dispatcher:
             error = item.last_error or alert.error_message or "unknown"
             reason = item.last_reason or "unknown"
             if new_attempt_count >= ALERT_MAX_ATTEMPTS:
-                message = f"{error} (gave up after {new_attempt_count} attempts)"
+                failure_message = (
+                    f"{error} (gave up after {new_attempt_count} attempts)"
+                )
                 if self.store.complete_failed(
                     alert.id,
                     lease_owner=self.lease_owner,
                     attempts=attempts_to_persist,
                     now=now,
                     failure_reason=reason,
-                    error_message=message,
+                    error_message=failure_message,
                 ):
                     failed += 1
                 continue
@@ -373,7 +375,7 @@ class Dispatcher:
                 next_attempt_at = now + timedelta(
                     seconds=ALERT_RETRY_ROUND_DELAYS[round_index]
                 )
-            message: str | None = (
+            pending_message: str | None = (
                 f"{error} (after {item.attempts_made} "
                 f"{'attempt' if item.attempts_made == 1 else 'attempts'})"
                 if item.attempts_made
@@ -385,7 +387,7 @@ class Dispatcher:
                 attempts=attempts_to_persist,
                 now=now,
                 next_attempt_at=next_attempt_at,
-                error_message=message,
+                error_message=pending_message,
             ):
                 # No configured channel is an intentional operating mode, not
                 # an outage to surface as a failed manual flush. The persisted
