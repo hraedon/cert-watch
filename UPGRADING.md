@@ -70,7 +70,9 @@ restore the pre-migration backup.
   Migration 0036 requeues legacy failed `expiry_warning` and `expired` rows
   that have no lifecycle failure reason, preserving the previous release's
   automatic revival behaviour for those existing rows. Other legacy failed
-  alert types remain failed.
+  alert types remain failed. SSRF-blocked and invalid-channel delivery rounds
+  count toward the same bounded give-up policy; having no delivery channel
+  configured does not consume attempts and remains pending with backoff.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

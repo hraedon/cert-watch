@@ -97,6 +97,10 @@ All notable changes to cert-watch are documented in this file.
 - **Legacy failed expiry alerts remain deliverable after migration 0036.** The
   migration requeues only pre-lifecycle `expiry_warning` and `expired` rows;
   other legacy alert types and lifecycle-aware failures remain terminal.
+- **Pre-transport policy failures now obey bounded give-up.** SSRF blocks and
+  invalid webhook channel results consume delivery rounds and eventually
+  become operator-visible failures. An estate with no SMTP or webhook instead
+  keeps alerts pending on normal backoff without consuming the attempt budget.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

@@ -7,6 +7,8 @@ import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from cert_watch.alerting import Dispatcher
 from cert_watch.alerting.model import ALERT_MAX_ATTEMPTS, SendResult
 from cert_watch.database import Alert, AlertStore, SqliteAlertRepository, init_schema
@@ -134,6 +136,91 @@ def test_backoff_schedule_and_give_up_use_injected_clock(tmp_path: Path) -> None
     assert stored.attempt_count == ALERT_MAX_ATTEMPTS
     assert stored.failure_reason == "transport"
     assert stored.next_attempt_at is None
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        SendResult(
+            "blocked",
+            "blocked",
+            reached_transport=False,
+            operator_message="destination blocked by policy",
+        ),
+        SendResult(
+            "failed",
+            "invalid_channel",
+            reached_transport=False,
+            operator_message="unknown webhook channel",
+        ),
+    ],
+    ids=("ssrf-blocked", "invalid-channel"),
+)
+def test_pre_transport_policy_failures_reach_give_up(
+    tmp_path: Path, result: SendResult
+) -> None:
+    db = tmp_path / "pre-transport.sqlite3"
+    init_schema(db)
+    _alert(db)
+    current = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+    transport = CountingTransport(result)
+
+    def clock() -> datetime:
+        return current
+
+    for delay in (timedelta(hours=1), timedelta(hours=4), timedelta(hours=12)):
+        assert Dispatcher(db, transports=[transport], clock=clock).process_pending() == {
+            "sent": 0,
+            "failed": 0,
+            "deferred": 1,
+        }
+        current += delay
+
+    assert Dispatcher(db, transports=[transport], clock=clock).process_pending() == {
+        "sent": 0,
+        "failed": 1,
+        "deferred": 0,
+    }
+    stored = SqliteAlertRepository(db).list_for_cert("cert-1")[0]
+    assert stored.status == "failed"
+    assert stored.attempt_count == ALERT_MAX_ATTEMPTS
+    assert transport.counts == {"cert-1": ALERT_MAX_ATTEMPTS}
+
+
+def test_unconfigured_delivery_backs_off_without_spending_attempts(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "unconfigured.sqlite3"
+    init_schema(db)
+    _alert(db)
+    current = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+
+    def clock() -> datetime:
+        return current
+
+    assert Dispatcher(db, transports=[], clock=clock).process_pending() == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 1,
+    }
+    stored = SqliteAlertRepository(db).list_for_cert("cert-1")[0]
+    assert stored.status == "pending"
+    assert stored.attempt_count == 0
+    assert stored.next_attempt_at == current + timedelta(hours=1)
+
+    configured = CountingTransport()
+    assert Dispatcher(db, transports=[configured], clock=clock).process_pending() == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 0,
+    }
+    current += timedelta(hours=1)
+    assert Dispatcher(db, transports=[configured], clock=clock).process_pending() == {
+        "sent": 1,
+        "failed": 0,
+        "deferred": 0,
+    }
+    assert configured.counts == {"cert-1": 1}
 
 
 def test_flush_and_scheduler_dispatchers_still_send_once(tmp_path: Path) -> None:

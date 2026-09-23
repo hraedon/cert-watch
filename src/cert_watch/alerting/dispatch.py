@@ -50,11 +50,17 @@ class _Delivery:
     reached_transport: bool = False
     evidence_recorded: bool = False
     evidence_unavailable: bool = False
+    configuration_missing: bool = False
     lease_lost: bool = False
 
     @property
     def done(self) -> bool:
-        return self.delivered or self.evidence_unavailable or self.lease_lost
+        return (
+            self.delivered
+            or self.evidence_unavailable
+            or self.configuration_missing
+            or self.lease_lost
+        )
 
     @property
     def attempts_remaining(self) -> int:
@@ -91,6 +97,7 @@ def _attempt_once(
     alert = item.alert
     item.reached_transport = False
     item.evidence_recorded = False
+    item.configuration_missing = False
     configured: Sequence[Transport]
     if transports is not None:
         configured = transports
@@ -102,6 +109,13 @@ def _attempt_once(
             built.append(WebhookTransport(webhook_config))
         configured = built
 
+    if not configured:
+        item.configuration_missing = True
+        item.last_error = "No SMTP or webhook delivery channel is configured"
+        item.last_reason = "unknown"
+        return
+
+    count_wave = False
     for transport in configured:
         if item.delivered:
             break
@@ -117,6 +131,10 @@ def _attempt_once(
             item.evidence_recorded = True
             item.delivered = result.delivered
             item.reached_transport = item.reached_transport or result.reached_transport
+            count_wave = count_wave or result.reached_transport or result.reason in {
+                "blocked",
+                "invalid_channel",
+            }
             if result.reason:
                 item.last_reason = result.reason
             if not item.delivered and result.operator_message:
@@ -125,7 +143,7 @@ def _attempt_once(
         except DeliveryEvidenceUnavailable:
             # A later channel can still record evidence and deliver.
             item.delivered = False
-    if item.reached_transport:
+    if count_wave:
         item.waves_reached += 1
     if item.delivered:
         return
@@ -211,15 +229,7 @@ class Dispatcher:
     def _lease_expiry(self) -> datetime:
         return _utc(self.clock()) + timedelta(seconds=self.lease_seconds)
 
-    def _configured(self) -> bool:
-        if self.transports is not None:
-            return bool(self.transports)
-        return self.config is not None or self.webhook_config is not None
-
     def process_pending(self) -> dict[str, int]:
-        if not self._configured():
-            return {"sent": 0, "failed": 0, "deferred": 0}
-
         claimed_at = _utc(self.clock())
         alerts = self.store.claim(
             lease_owner=self.lease_owner,
