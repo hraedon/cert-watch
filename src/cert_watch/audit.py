@@ -45,11 +45,11 @@ def record_audit(
     the write lock. Without *conn*, the row is committed here and the event is
     exported immediately; the return value is then ``None``.
     """
+    ts = datetime.now(UTC).isoformat()
     try:
         actor = actor[:256] if actor else actor
         target_id = target_id[:256] if target_id else target_id
         row_id = uuid.uuid4().hex
-        ts = datetime.now(UTC).isoformat()
         detail_json = json.dumps(detail, default=str) if detail else None
         if conn is not None:
             conn.execute(
@@ -95,10 +95,11 @@ def record_audit(
 def export_audit(event: dict[str, Any] | None) -> None:
     """Send one committed audit event to the SIEM sinks (Plan 028).
 
-    Fail-open and a no-op when no sink is configured. Call only after the
-    audit row is committed and outside the write lock: a sink can block.
+    Fail-open and a no-op when no sink is configured. Call outside the write
+    lock, after the audit row is committed (or its best-effort write has been
+    attempted): a sink can block.
     """
-    if event is None:
+    if not event:
         return
     try:
         from cert_watch.siem import export_audit_event, siem_enabled

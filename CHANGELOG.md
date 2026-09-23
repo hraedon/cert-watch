@@ -33,8 +33,8 @@ All notable changes to cert-watch are documented in this file.
 - **SIEM export no longer runs under the write lock.** Audit events recorded
   inside a transaction are now sent to the SIEM after the transaction commits
   and the global write lock is released, so a slow or unreachable syslog/HEC
-  sink cannot stall other writers, and the exported event always describes a
-  committed row.
+  sink cannot stall other writers on those paths, and the event is not sent
+  before its row commits.
 
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single

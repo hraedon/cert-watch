@@ -159,3 +159,15 @@ def test_siem_export_runs_after_commit_and_outside_the_write_lock(
     ]
     assert all(lock_free for _, lock_free, _ in observed)
     assert all(committed == 1 for _, _, committed in observed)
+
+
+def test_record_audit_without_conn_never_raises_on_bad_input(tmp_path: Path) -> None:
+    from cert_watch.audit import record_audit
+
+    record_audit(
+        tmp_path / "missing.sqlite3",
+        actor=object(),  # type: ignore[arg-type]
+        action="probe.bad_input",
+        target_type="host",
+        target_id="x",
+    )
