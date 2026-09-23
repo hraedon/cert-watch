@@ -52,7 +52,7 @@ def test_readyz_with_scan_history(tmp_path, reload_app):
 def test_readyz_reports_but_does_not_degrade_for_alert_delivery_backlog(
     tmp_path, reload_app
 ):
-    app_mod = reload_app(SMTP_HOST="relay.example.invalid")
+    app_mod = reload_app()
     db = tmp_path / "cert-watch.sqlite3"
     from cert_watch.database import Alert, AlertStore, SqliteAlertRepository, init_schema
 
@@ -71,13 +71,27 @@ def test_readyz_reports_but_does_not_degrade_for_alert_delivery_backlog(
         lease_expires_at=now - timedelta(minutes=1),
         now=now - timedelta(minutes=2),
     )
+    overdue_id = SqliteAlertRepository(db).create(
+        Alert(
+            cert_id="ready-overdue",
+            alert_type="expiry_warning",
+            status="pending",
+            message="m",
+        )
+    )
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET created_at = ? WHERE id = ?",
+            ((now - timedelta(hours=25)).isoformat(), overdue_id),
+        )
+        conn.commit()
 
     with TestClient(app_mod.app) as client:
         response = client.get("/readyz")
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
-    assert response.json()["checks"]["undelivered_alerts"] == "0"
+    assert response.json()["checks"]["undelivered_alerts"] == "1"
     assert response.json()["checks"]["stale_sending_leases"] == "1"
     with sqlite3.connect(db) as conn:
         assert conn.execute(

@@ -154,9 +154,7 @@ def readyz(request: Request) -> JSONResponse:
             overdue, stale_leases = _alert_delivery_counts(
                 db, now=datetime.now(UTC)
             )
-            checks["undelivered_alerts"] = str(
-                overdue if delivery_is_configured(_get_settings(request)) else 0
-            )
+            checks["undelivered_alerts"] = str(overdue)
             checks["stale_sending_leases"] = str(stale_leases)
         except Exception:
             logger.warning("readyz alert lifecycle query failed", exc_info=True)
