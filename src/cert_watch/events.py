@@ -260,7 +260,9 @@ def _deliver_webhook(
     db_path: str | Path,
     row_id: int,
 ) -> None:
-    from cert_watch.alerts import Alert, WebhookConfig, send_webhook
+    from cert_watch.alerting.model import WebhookConfig
+    from cert_watch.alerting.transports.webhook import send_webhook
+    from cert_watch.database import Alert
 
     payload = event.payload
     friendly_msg = (

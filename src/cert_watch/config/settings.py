@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from cert_watch.alerts import AlertConfig, WebhookConfig
+    from cert_watch.alerting import AlertConfig, WebhookConfig
     from cert_watch.auth import AuthProvider
     from cert_watch.renewal_webhook import RenewalWebhookConfig
     from cert_watch.security import SecurityContext
@@ -316,7 +316,7 @@ class Settings:
 
     def build_alert_config(self) -> AlertConfig | None:
         """Return an AlertConfig if SMTP envs are sufficiently populated, else None."""
-        from cert_watch.alerts import AlertConfig
+        from cert_watch.alerting import AlertConfig
 
         if not (self.smtp_host and self.alert_from and self.alert_recipients):
             return None
@@ -333,7 +333,7 @@ class Settings:
 
     def build_webhook_config(self) -> WebhookConfig | None:
         """Return a WebhookConfig if webhook URL is set, else None."""
-        from cert_watch.alerts import WebhookConfig
+        from cert_watch.alerting import WebhookConfig
         from cert_watch.http_client import validate_webhook_url
 
         if not self.webhook_url:

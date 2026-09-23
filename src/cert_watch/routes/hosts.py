@@ -13,7 +13,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-from cert_watch.alerts import WebhookConfig
+from cert_watch.alerting import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock

@@ -434,7 +434,7 @@ def _stage_resolve_pending_alerts(
     old_leaf_id: str | None = None
     if webhook_config is None:
         return None, None
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting.model import WebhookConfig
     if not isinstance(webhook_config, WebhookConfig):
         return None, None
     from cert_watch.database import SqliteAlertRepository
@@ -484,7 +484,8 @@ def _stage_webhook_resolve(
     """
     if not replaced_cert_id or webhook_config is None:
         return
-    from cert_watch.alerts import WebhookConfig, resolve_webhook_for_renewed_cert
+    from cert_watch.alerting.model import WebhookConfig
+    from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
     if not isinstance(webhook_config, WebhookConfig):
         raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
     resolved = resolve_webhook_for_renewed_cert(
@@ -719,7 +720,7 @@ def _stage_policy(
                 scanned_at=None,
                 conn=conn,
             )
-        from cert_watch.alerts import evaluate_policy_alerts
+        from cert_watch.alerting.rules.policy import evaluate_policy_alerts
         evaluate_policy_alerts(
             cert_id=leaf_id,
             hostname=entry.host,

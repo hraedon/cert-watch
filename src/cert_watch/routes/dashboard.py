@@ -347,7 +347,7 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
 
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
-    from cert_watch.alerts import process_pending
+    from cert_watch.alerting.dispatch import process_pending
 
     result = process_pending(alert_repo, alert_config, webhook_config)
     record_audit(

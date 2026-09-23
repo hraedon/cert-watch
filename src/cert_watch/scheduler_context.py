@@ -165,12 +165,10 @@ class SchedulerContext:
     def run_alerts(self) -> dict[str, Any]:
         import datetime as _dt
 
-        from cert_watch.alerts import (
-            evaluate_all_certs,
-            evaluate_renewal_window,
-            process_pending,
-            send_expiry_digest,
-        )
+        from cert_watch.alerting.digest.expiry import send_expiry_digest
+        from cert_watch.alerting.dispatch import process_pending
+        from cert_watch.alerting.rules.expiry import evaluate_all_certs
+        from cert_watch.alerting.rules.renewal import evaluate_renewal_window
 
         config = self._snapshot()
         s = config.settings
@@ -201,7 +199,7 @@ class SchedulerContext:
     def _weekly_digest(
         self, delivery_completion_callback: Callable[[bool], None] | None = None
     ) -> bool | None:
-        from cert_watch.digest import send_renewal_digest
+        from cert_watch.alerting.digest.renewal import send_renewal_digest
 
         config = self._snapshot()
         s = config.settings

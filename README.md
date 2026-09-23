@@ -643,7 +643,7 @@ src/cert_watch/
   routes/              HTTP route handlers (api, views, hosts, certificates, …)
   middleware.py        Security middleware + FastAPI deps (auth, CSRF, rate limit, CSP)
   auth/                Authentication package (session, LDAP, OAuth, local admin, factory)
-  alerts.py            Email + webhook alerting
+  alerting/            Email + webhook alerting (rules, routing, transports, digests)
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
   config/              Environment and persisted-GUI settings

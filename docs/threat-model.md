@@ -108,7 +108,7 @@ consumers use address validation, DNS pinning, and redirect revalidation.
 OIDC validates issuer, audience, nonce, and algorithm. SMTP uses verified TLS
 when configured (`src/cert_watch/http_client.py:33-257`,
 `src/cert_watch/auth/oauth_provider.py:224-332`,
-`src/cert_watch/alerts.py:586-653`).
+`src/cert_watch/alerting/transports/smtp.py:38-105`).
 
 ### Uploaded data to parsers and trust decisions
 
