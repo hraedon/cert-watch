@@ -128,13 +128,13 @@
                   <div class="cw-field">
                     <label class="cw-label" for="role_map_{{ r.id }}">Groups (semicolon-separated DNs)</label>
                     <input class="cw-input mono" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
-                           value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join('; ') }}"
+                           value="{{ ldap_role_map.get(r.id, {}).get('groups', []) | join('; ') }}"
                            placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
                   </div>
                   <div class="cw-field">
                     <label class="cw-label" for="role_users_{{ r.id }}">Users (comma-separated usernames / UPNs)</label>
                     <input class="cw-input mono" type="text" id="role_users_{{ r.id }}" name="role_users_{{ r.id }}"
-                           value="{{ ldap_role_map.get(r.name, {}).get('users', []) | join(', ') }}"
+                           value="{{ ldap_role_map.get(r.id, {}).get('users', []) | join(', ') }}"
                            placeholder="jsmith, alice@example.com">
                     <div class="cw-hint">Grant this role to specific IdP users directly — for users without a suitable group.</div>
                   </div>
@@ -142,7 +142,9 @@
                 </form>
               </div>
             </details>
-            <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role? Members lose its access and alert routing.">
+            {% set last_mapping = ldap_role_map | length == 1 and r.id in ldap_role_map %}
+            {% if last_mapping %}<div class="cw-hint">This role holds the last IdP mapping: once it is deleted, directory users are read-only until another role is mapped.</div>{% endif %}
+            <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role? Members lose its access and alert routing.{% if last_mapping %} This is the last IdP mapping: directory users become read-only until another role is mapped.{% endif %}">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="cw-btn danger sm">Delete</button>
             </form>

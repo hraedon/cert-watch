@@ -16,6 +16,7 @@ from cert_watch.caa_check import (
 from cert_watch.database import list_scan_batches
 from cert_watch.middleware import get_auth_context, get_csrf_context, rate_limit, require_auth
 from cert_watch.routes._deps import _db_path, get_templates
+from cert_watch.routes._scoped import scope_tags_from_auth
 
 logger = logging.getLogger("cert_watch.routes.scan_history")
 
@@ -28,7 +29,12 @@ templates = get_templates()
 def scan_history_view(request: Request, page: int = 1) -> HTMLResponse:
     db = _db_path(request)
     per_page = 20
-    rows, total = list_scan_batches(db, page=page, per_page=per_page)
+    # Scope-filtered like the dashboard and alerts: a tag-scoped user must not
+    # see other teams' hostnames or scan errors. Admins/unscoped get ().
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    rows, total = list_scan_batches(
+        db, page=page, per_page=per_page, scope_tags=scope_tags,
+    )
     total_pages = max((total + per_page - 1) // per_page, 1)
     page = max(1, min(page, total_pages))
     return templates.TemplateResponse(

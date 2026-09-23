@@ -26,6 +26,12 @@ def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
     return tuple(parse_tags(scope_tag))
 
 
+def _folded(tags: Any) -> set[str]:
+    """Casefold a tag collection: scope matching is case-insensitive (#69),
+    as in ``tags_match`` and the SQL-side effective-tag filter."""
+    return {t.casefold() for t in tags}
+
+
 def tags_with_scope(request: Request, tags: str) -> str:
     """Merge the authenticated user's scope tag into *tags* (WI-052)."""
     auth_ctx = getattr(request.state, "auth_context", None)
@@ -85,9 +91,9 @@ def scope_write_denied(
         return None
     from cert_watch.tags import parse_tags
 
-    scope_tags = parse_tags(scope_tag)
+    scope_tags = _folded(parse_tags(scope_tag))
     target_tags = _effective_tags(db_path, cert_id=cert_id, host_id=host_id)
-    if not any(t in target_tags for t in scope_tags):
+    if not scope_tags & _folded(target_tags):
         return "operation not permitted outside your team scope"
     # Plan 053 (WI-064): visibility is necessary but no longer sufficient —
     # the write tier must also cover the target's tags. may_write_tags is
@@ -119,9 +125,9 @@ def scope_read_denied(
         return None
     from cert_watch.tags import parse_tags
 
-    scope_tags = parse_tags(scope_tag)
+    scope_tags = _folded(parse_tags(scope_tag))
     target_tags = _effective_tags(db_path, cert_id=cert_id, host_id=host_id)
-    if any(t in target_tags for t in scope_tags):
+    if scope_tags & _folded(target_tags):
         return None
     return "resource not in your team scope"
 
@@ -144,11 +150,10 @@ def enforce_scope_tag(
         return None
     from cert_watch.tags import parse_tags
 
-    scope_tags = parse_tags(scope_tag)
+    scope_tags = _folded(parse_tags(scope_tag))
     if not user_tag:
         return "a tag parameter is required for scoped users"
-    user_tags = parse_tags(user_tag)
-    if not any(t in scope_tags for t in user_tags):
+    if not scope_tags & _folded(parse_tags(user_tag)):
         return "requested tag is outside your team scope"
     return None
 
@@ -171,8 +176,8 @@ def scope_new_tags_denied(
         return None
     from cert_watch.tags import parse_tags
 
-    scope_tags = set(parse_tags(scope_tag))
+    scope_tags = _folded(parse_tags(scope_tag))
     for tag in parse_tags(new_tags):
-        if tag not in scope_tags:
+        if tag.casefold() not in scope_tags:
             return f"tag '{tag}' is outside your team scope"
     return None

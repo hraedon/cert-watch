@@ -182,22 +182,37 @@ def _total_scan_history(db_path: str | Path) -> int:
 
 def list_scan_history(
     db_path: str | Path, *, page: int = 1, limit: int = 0,
+    scope_tags: tuple[str, ...] = (),
 ) -> list[dict[str, Any]]:
     """Return scan_history rows, newest first.
 
-    When ``limit > 0``, applies SQL-level pagination.
+    When ``limit > 0``, applies SQL-level pagination. When ``scope_tags`` is
+    non-empty, only rows for a host whose tags match one of them are returned
+    (tag-scoped access control; rows for since-deleted hosts are dropped).
     """
     init_schema(db_path)
+    where = ""
+    params: list[Any] = []
+    if scope_tags:
+        from cert_watch.database.dashboard import _add_effective_tag_filter
+
+        host_match, params = _add_effective_tag_filter(
+            "SELECT 1 FROM hosts h WHERE h.hostname = s.hostname AND h.port = s.port",
+            params, scope_tags, col_cert=None, col_host="h.tags",
+        )
+        where = f"WHERE EXISTS ({host_match})"
     with _connect(db_path) as conn:
         if limit > 0:
             offset = max(0, (page - 1) * limit)
             rows = conn.execute(
-                "SELECT * FROM scan_history ORDER BY scanned_at DESC LIMIT ? OFFSET ?",
-                (limit, offset),
+                f"SELECT s.* FROM scan_history s {where}"
+                " ORDER BY s.scanned_at DESC LIMIT ? OFFSET ?",
+                (*params, limit, offset),
             ).fetchall()
         else:
             rows = conn.execute(
-                "SELECT * FROM scan_history ORDER BY scanned_at DESC"
+                f"SELECT s.* FROM scan_history s {where} ORDER BY s.scanned_at DESC",
+                params,
             ).fetchall()
     return [dict(r) for r in rows]
 
@@ -277,9 +292,14 @@ def list_scan_batches(
     *,
     page: int = 1,
     per_page: int = 20,
+    scope_tags: tuple[str, ...] = (),
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return scan batches paginated, plus total batch count."""
-    rows = list_scan_history(db_path, limit=0)
+    """Return scan batches paginated, plus total batch count.
+
+    ``scope_tags`` restricts the batches to in-scope hosts (see
+    :func:`list_scan_history`); batch totals then count only those hosts.
+    """
+    rows = list_scan_history(db_path, limit=0, scope_tags=scope_tags)
     batches = _group_scan_batches(rows)
     total = len(batches)
     start = (page - 1) * per_page

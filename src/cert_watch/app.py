@@ -196,9 +196,20 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         init_schema(base.db_path)
         try:
             s = Settings.from_env_with_kv(base.db_path, encryption_key)
-        except Exception:  # noqa: BLE001 — corrupt/unavailable persisted settings fall back to env
-            logger.warning("Could not merge kv_store settings, using env-only")
-            s = base
+        except Exception:  # corrupt/unavailable persisted settings fall back to env
+            # The persisted role mapping could not be read either, so do not
+            # fall back to "no role map = full access": directory users are
+            # least-privileged until settings load cleanly (PR #78, B-1).
+            from dataclasses import replace
+
+            from cert_watch.auth.rbac import RBAC_ENFORCED_KEY
+
+            logger.error(
+                "Could not merge kv_store settings, using env-only; directory "
+                "users are read-only unless CERT_WATCH_ROLE_MAP maps them",
+                exc_info=True,
+            )
+            s = replace(base, role_map=base.role_map or {RBAC_ENFORCED_KEY: {}})
         # WI-083: SecurityContext is the single source of truth for signing
         # keys. The OAuth provider receives it at construction; the request path
         # reads it from app.state.security. Module-level globals remain as an

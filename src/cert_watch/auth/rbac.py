@@ -1,9 +1,16 @@
 """Role-Based Access Control for cert-watch (Plan 035).
 
-When no role map is configured, all authenticated users get full access
-(backward compat).  When CERT_WATCH_ROLE_MAP (JSON) is set, users
-are mapped to roles (admin / operator / viewer) based on IdP groups/roles,
-and permissions are derived from the ROLE_PERMISSIONS table.
+When no role map is configured, all authenticated *directory* (LDAP/OAuth)
+users get full access (backward compat).  When a role map is set (the
+CERT_WATCH_ROLE_MAP JSON merged with the Settings → Roles mapping), directory
+users are mapped to roles (admin / operator / viewer) based on IdP
+groups/roles, and permissions are derived from the ROLE_PERMISSIONS table.
+
+Local accounts never depend on the role map: a session minted by the users
+table resolves from that user's assigned role on every request (no role, or a
+deleted role, means viewer), and the break-glass admin is always admin. Which
+of the three a session is travels as a reserved claim that IdP claims can
+never carry (see :func:`claims_for_session`).
 
 The central concept is the ``AuthContext`` — a per-request object that
 carries the resolved roles and permissions for the current user.
@@ -11,13 +18,16 @@ carries the resolved roles and permissions for the current user.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
 
+logger = logging.getLogger("cert_watch.auth.rbac")
+
 if TYPE_CHECKING:
-    from cert_watch.database.users_roles import SqliteRoleRepository
+    from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
 
 
 # Valid RBAC tiers.  The team-role name is now decoupled from the permission
@@ -43,6 +53,13 @@ class Permission(StrEnum):
 ROLE_ADMIN = "admin"
 ROLE_OPERATOR = "operator"
 ROLE_VIEWER = "viewer"
+
+# Reserved session claims (stored in the session's roles list) naming how the
+# session was minted. The "cw:" prefix is stripped from IdP claims before they
+# reach the cookie, so only the login route can set them.
+RESERVED_CLAIM_PREFIX = "cw:"
+LOCAL_USER_CLAIM = "cw:local-user"
+BREAK_GLASS_CLAIM = "cw:break-glass"
 
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     ROLE_ADMIN: frozenset(Permission),
@@ -135,7 +152,11 @@ def claims_for_session(
         relevant_groups.update(mapping.get("groups", []))
         relevant_roles.update(mapping.get("roles", []))
     groups = [g for g in (user_groups or []) if g in relevant_groups]
-    roles = [r for r in (user_roles or []) if r in relevant_roles]
+    # Reserved claims mark local sessions; an IdP must never be able to mint one.
+    roles = [
+        r for r in (user_roles or [])
+        if r in relevant_roles and not r.startswith(RESERVED_CLAIM_PREFIX)
+    ]
     return groups, roles
 
 
@@ -163,6 +184,10 @@ class AuthContext:
     # role contributes its tier *for its tags* here instead of raising the
     # global tier — so "operator for prod, viewer for edge" is expressible.
     tag_tiers: dict[str, str] = field(default_factory=dict)
+    # True for a users-table account: its role decides writes and admin even
+    # with no role map, so the legacy write_users/admin_users lists (which
+    # only apply to the no-role-map directory path) must not widen it.
+    local_account: bool = False
 
     @classmethod
     def from_roles(cls, username: str, roles: list[str]) -> AuthContext:
@@ -179,6 +204,7 @@ class AuthContext:
         scope_tag: str = "",
         email: str = "",
         tag_tiers: dict[str, str] | None = None,
+        local_account: bool = False,
     ) -> AuthContext:
         """Build a context from the explicit permission tier (WI-050)."""
         tier = tier if tier in PERMISSION_TIERS else ROLE_VIEWER
@@ -190,6 +216,7 @@ class AuthContext:
             scope_tag=scope_tag,
             email=email,
             tag_tiers=dict(tag_tiers or {}),
+            local_account=local_account,
         )
 
     @classmethod
@@ -230,8 +257,10 @@ class AuthContext:
         if self.may_write():
             return True
         order = {ROLE_VIEWER: 0, ROLE_OPERATOR: 1, ROLE_ADMIN: 2}
+        # Tags match case-insensitively, as everywhere else in scope (#69).
+        folded = {t.casefold(): tier for t, tier in self.tag_tiers.items()}
         return any(
-            order.get(self.tag_tiers.get(t, ROLE_VIEWER), 0) >= 1
+            order.get(folded.get(t.casefold(), ROLE_VIEWER), 0) >= 1
             for t in resource_tags
         )
 
@@ -243,6 +272,143 @@ class AuthContext:
 # ---------------------------------------------------------------------------
 # Role map parsing and context builder
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# The Settings → Roles IdP mapping (kv ``ldap_role_map``)
+# ---------------------------------------------------------------------------
+
+UI_ROLE_MAP_KV_KEY = "ldap_role_map"
+# Sticky: set the first time a Settings → Roles mapping exists. From then on
+# an empty map means "directory users are least-privileged", never the
+# legacy "no role map = full access" (PR #78 re-verification, N-1).
+UI_ROLE_MAP_CONFIGURED_KV_KEY = "ldap_role_map_configured"
+# A role-map entry that matches nobody. Its presence makes the map non-empty,
+# so every "role map configured?" check takes the RBAC path and an unmatched
+# directory user resolves to viewer. Used when mapping is configured but no
+# mapping is left, and when the role map cannot be read at startup.
+RBAC_ENFORCED_KEY = "cw:rbac-enforced"
+
+
+def _read_raw_ui_role_map_state(db_path: Any) -> tuple[dict[str, Any], bool]:
+    """``(mapping, malformed)`` for the stored value. A value that exists but
+    is not a JSON object reads as ``({}, True)``; a database error propagates,
+    so a failed settings rebuild keeps the last good role map instead of
+    silently emptying it (B-1)."""
+    import json
+
+    from cert_watch.database import kv_get
+
+    raw = kv_get(db_path, UI_ROLE_MAP_KV_KEY)
+    if raw is None or raw == "":
+        return {}, False
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}, True
+    return (data, False) if isinstance(data, dict) else ({}, True)
+
+
+def _read_raw_ui_role_map(db_path: Any) -> dict[str, Any]:
+    return _read_raw_ui_role_map_state(db_path)[0]
+
+
+def load_ui_role_map(db_path: Any) -> dict[str, dict[str, list[str]]]:
+    """Return the Settings → Roles mapping keyed by **role id**.
+
+    Entries are stored by role id so a rename cannot orphan them and a delete
+    removes them (PR #78 review, B1). Only keys that are the id of an existing
+    role count: name keys are rewritten once by :func:`normalize_ui_role_map`
+    and ignored afterwards, so a later role that happens to reuse a name
+    never adopts a stale entry (N-2). Database errors propagate.
+    """
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    data = _read_raw_ui_role_map(db_path)
+    if not data:
+        return {}
+    role_ids = {r.id for r in SqliteRoleRepository(db_path).list_all()}
+    return {
+        key: _clean_mapping(mapping)
+        for key, mapping in data.items()
+        if key in role_ids and isinstance(mapping, dict)
+    }
+
+
+def _clean_mapping(mapping: dict[str, Any]) -> dict[str, list[str]]:
+    return {
+        "groups": [str(g) for g in mapping.get("groups", []) if g],
+        "users": [str(u) for u in mapping.get("users", []) if u],
+    }
+
+
+def normalize_ui_role_map(db_path: Any) -> None:
+    """One-time rewrite of the stored mapping to role-id keys.
+
+    A name key (as written by earlier releases) is rewritten to the id of the
+    role that has that name now; entries that resolve to no role are dropped.
+    A non-empty stored map also sets the sticky "configured" flag. Writes
+    only when something changes, so it is cheap to call on every load.
+    """
+    import json
+
+    from cert_watch.database import get_write_lock, kv_get, kv_set
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    with get_write_lock():
+        data, malformed = _read_raw_ui_role_map_state(db_path)
+        if malformed:
+            # Someone configured a mapping we cannot read: fail closed (the
+            # sticky flag makes the empty map least privilege), keep the value.
+            logger.error(
+                "stored %s is not a JSON object; directory users are treated "
+                "as unmapped (read-only) until it is re-saved", UI_ROLE_MAP_KV_KEY,
+            )
+            if kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) != "1":
+                kv_set(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
+            return
+        if not data:
+            return
+        if kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) != "1":
+            kv_set(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
+        roles = SqliteRoleRepository(db_path).list_all()
+        by_id = {r.id for r in roles}
+        by_name = {r.name: r.id for r in roles}
+        out: dict[str, dict[str, list[str]]] = {}
+        for key, mapping in data.items():
+            if not isinstance(mapping, dict):
+                continue
+            if key in by_id:
+                out[key] = _clean_mapping(mapping)
+            elif key in by_name and by_name[key] not in data:
+                out.setdefault(by_name[key], _clean_mapping(mapping))
+        if out != data:
+            kv_set(db_path, UI_ROLE_MAP_KV_KEY, json.dumps(out))
+
+
+def ui_role_map_configured(db_path: Any) -> bool:
+    from cert_watch.database import kv_get
+
+    return kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) == "1"
+
+
+def ui_role_map_by_name(db_path: Any) -> dict[str, dict[str, Any]]:
+    """The UI mapping in role-map shape (keyed by current role name).
+
+    Each entry carries its ``role_id`` so :func:`_role_tiers_from_map` reads
+    the tier from that role and grants nothing if it has since been deleted,
+    even while a cached ``Settings.role_map`` still lists it. Database errors
+    propagate (B-1).
+    """
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    ui = load_ui_role_map(db_path)
+    if not ui:
+        return {}
+    names = {r.id: r.name for r in SqliteRoleRepository(db_path).list_all()}
+    return {
+        names[rid]: {**mapping, "role_id": rid} for rid, mapping in ui.items() if rid in names
+    }
 
 
 def _role_tiers_from_map(
@@ -258,18 +424,26 @@ def _role_tiers_from_map(
     """
     result: dict[str, tuple[str, str, dict[str, str]]] = {}
     db_roles: dict[str, tuple[str, str, dict[str, str]]] = {}
+    db_roles_by_id: dict[str, tuple[str, str, dict[str, str]]] = {}
     if role_repo is not None:
         try:
             overrides = role_repo.all_tag_tiers()
             for role in role_repo.list_all():
-                db_roles[role.name] = (
+                db_roles[role.name] = db_roles_by_id[role.id] = (
                     role.permission_tier,
                     role.scope_tag,
                     overrides.get(role.id, {}),
                 )
         except (OSError, sqlite3.Error):
             pass
-    for role_name in role_map:
+    for role_name, mapping in role_map.items():
+        role_id = mapping.get("role_id") if isinstance(mapping, dict) else None
+        if role_id:
+            # UI-sourced entry: bound to one role row. A deleted role grants
+            # nothing -- no fall back to the built-in tier of the same name.
+            if role_id in db_roles_by_id:
+                result[role_name] = db_roles_by_id[role_id]
+            continue
         if role_name in db_roles:
             result[role_name] = db_roles[role_name]
         elif role_name in ROLE_PERMISSIONS:
@@ -326,21 +500,60 @@ def _resolve_tier_and_scope(
     return chosen_tier, format_tags(scope_tags), tag_tiers
 
 
+def _local_user_context(
+    username: str,
+    role_repo: SqliteRoleRepository | None,
+    user_repo: SqliteUserRepository | None,
+) -> AuthContext:
+    """AuthContext for a users-table account, from its assigned role.
+
+    The role is read on every request, so a role change or deletion applies
+    to live sessions. No user row, no role, a dangling ``role_id`` or an
+    unreadable database all resolve to viewer -- never to full access.
+    """
+    viewer = AuthContext.from_tier(username, tier=ROLE_VIEWER, local_account=True)
+    if user_repo is None or role_repo is None:
+        return viewer
+    try:
+        user = user_repo.get_by_username(username)
+        role = role_repo.get(user.role_id) if user is not None and user.role_id else None
+        if user is None or role is None:
+            return viewer
+        overrides = role_repo.list_tag_tiers(role.id)
+    except (OSError, sqlite3.Error):
+        return viewer
+    tier, scope, tag_tiers = _resolve_tier_and_scope(
+        [role.name], {role.name: (role.permission_tier, role.scope_tag, overrides)},
+    )
+    return AuthContext.from_tier(
+        username, tier=tier, roles=[role.name], scope_tag=scope,
+        email=user.email, tag_tiers=tag_tiers, local_account=True,
+    )
+
+
 def build_auth_context(
     username: str,
     user_groups: list[str],
     user_roles: list[str],
     role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None = None,
+    user_repo: SqliteUserRepository | None = None,
 ) -> AuthContext:
     """Build an AuthContext by resolving IdP groups/roles to cert-watch roles.
 
-    If *role_map* is empty, returns a full-access context (backward compat).
+    Local sessions come first and ignore *role_map*: the break-glass admin is
+    always admin, and a users-table account resolves from its assigned role
+    (see :func:`_local_user_context`).
 
-    When *role_repo* is supplied, the permission tier and scope tag are read
-    from the Role row (WI-050). Otherwise the legacy role-name → permission
-    mapping is used.
+    For directory users: if *role_map* is empty, returns a full-access context
+    (backward compat). When *role_repo* is supplied, the permission tier and
+    scope tag are read from the Role row (WI-050). Otherwise the legacy
+    role-name → permission mapping is used.
     """
+    if BREAK_GLASS_CLAIM in user_roles:
+        return AuthContext.full_access(username)
+    if LOCAL_USER_CLAIM in user_roles:
+        return _local_user_context(username, role_repo, user_repo)
     if not role_map:
         return AuthContext.full_access(username)
 

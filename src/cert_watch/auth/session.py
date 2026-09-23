@@ -119,8 +119,18 @@ def _sign_state(
     payload = f"{state}:{nonce}" if nonce else state
     if code_verifier:
         payload = f"{payload}|{code_verifier}"
-    sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
-    return f"{payload}:{sig}"
+    return f"{payload}:{_state_mac(payload, security)}"
+
+
+# OAuth state tokens get their own MAC domain, distinct from sessions, so
+# neither token type (nor a pre-1.0 bare-MAC session) verifies as the other
+# (PR #78 re-verification, N-3).
+_STATE_FORMAT = b"cert-watch-oauth-state-v1\x00"
+
+
+def _state_mac(payload: str, security: SecurityContext | None) -> str:
+    mac = hmac.new(_key(security).encode(), _STATE_FORMAT + payload.encode(), hashlib.sha256)
+    return mac.hexdigest()[:64]
 
 
 def _verify_state(
@@ -141,10 +151,7 @@ def _verify_state(
     sig = parts[-1]
     payload = ":".join(parts[:-1])
     # Verify HMAC over the FULL payload (including code_verifier if present).
-    expected = hmac.new(
-        _key(security).encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()[:64]
-    if not hmac.compare_digest(sig, expected):
+    if not hmac.compare_digest(sig, _state_mac(payload, security)):
         return None
     # Extract optional PKCE code_verifier (pipe-separated; L12).
     code_verifier: str | None = None
@@ -158,9 +165,20 @@ def _verify_state(
     return state, nonce, code_verifier
 
 
+# Session format version, bound into the MAC input (not the visible payload).
+# Tokens minted before 1.0 were MACed over the bare payload; they carry no
+# local-account marker, so they fail verification and the holder is signed
+# out once (PR #78 review, S1). Bump this to invalidate every session again.
+_SESSION_FORMAT = b"cert-watch-session-v2\x00"
+
+
+def _session_mac(data: str, security: SecurityContext | None) -> str:
+    mac = hmac.new(_key(security).encode(), _SESSION_FORMAT + data.encode(), hashlib.sha256)
+    return mac.hexdigest()[:64]
+
+
 def _sign_session(data: str, security: SecurityContext | None = None) -> str:
-    sig = hmac.new(_key(security).encode(), data.encode(), hashlib.sha256).hexdigest()[:64]
-    return f"{data}:{sig}"
+    return f"{data}:{_session_mac(data, security)}"
 
 
 def create_session(
@@ -195,27 +213,30 @@ def create_session(
     # loop. The login path already trims claims to the role map; warn loudly if
     # a token still lands near the limit so the cause is diagnosable from logs.
     if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-        # Try progressively trimming groups until it fits (or we run out).
-        # More aggressive: drop groups entirely, then roles, before erroring.
+        # Trim groups first, then drop the (display-only) email. Roles are
+        # NEVER dropped: they carry the reserved local-session marker, and a
+        # local session stripped of it would be authorized as a directory
+        # user -- full access when no role map is set (PR #78 review, N1).
+        # A token still too large is kept whole: the browser drops the
+        # cookie and the user is simply not signed in (fail closed).
         trimmed_groups = (groups or [])[:]
-        while trimmed_groups and len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-            trimmed_groups.pop()
-            test_payload = (
+        trimmed_email = email
+
+        def _mint() -> str:
+            p = (
                 f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
                 f":{_encode_list(trimmed_groups)}:{encoded_roles}"
             )
-            if email:
-                test_payload += f":{email}"
-            token = _sign_session(test_payload, security)
-        if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-            # Still too long without any groups — try stripping roles too
-            test_payload = (
-                f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
-                f"::"
-            )
-            if email:
-                test_payload += f":{email}"
-            token = _sign_session(test_payload, security)
+            if trimmed_email:
+                p += f":{trimmed_email}"
+            return _sign_session(p, security)
+
+        while trimmed_groups and len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
+            trimmed_groups.pop()
+            token = _mint()
+        if len(token.encode()) > _MAX_SAFE_SESSION_BYTES and trimmed_email:
+            trimmed_email = ""
+            token = _mint()
         logger.warning(
             "session token for %s is %d bytes, near the ~4KB browser cookie limit; "
             "the cookie may be dropped (login loop). A large IdP group list is the "
@@ -243,10 +264,8 @@ def decode_session(
     last_colon = token.rfind(":")
     payload = token[:last_colon]
     sig = token[last_colon + 1 :]
-    key = _key(security).encode()
-    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]
-    if not hmac.compare_digest(sig, expected):
-        return None
+    if not hmac.compare_digest(sig, _session_mac(payload, security)):
+        return None  # forged, or minted in a previous session format
     parts = payload.split(":")
     if len(parts) < 3:
         return None

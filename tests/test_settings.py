@@ -736,7 +736,11 @@ def _login_admin(client, monkeypatch):
     }
     req = StRequest(scope)
     security = _request_security(req)
-    token = create_session("admin", security, version=0)
+    # Mint the session exactly as a break-glass login does (reserved claim),
+    # so it stays admin once a role map (e.g. one saved from the UI) is live.
+    from cert_watch.auth.rbac import BREAK_GLASS_CLAIM
+
+    token = create_session("admin", security, version=0, roles=[BREAK_GLASS_CLAIM])
     client.cookies.set(SESSION_COOKIE, token)
     return client
 
@@ -1497,8 +1501,8 @@ def test_save_ldap_role_map(reload_app, tmp_path, monkeypatch):
     assert r.status_code == 303
     assert "saved=1" in r.headers["location"]
     stored = json.loads(kv_get(db, "ldap_role_map"))
-    assert "admins" in stored
-    assert stored["admins"]["groups"] == ["cert-watch-admins", "cert-watch-users"]
+    assert role_id in stored  # keyed by role id (PR #78, B1)
+    assert stored[role_id]["groups"] == ["cert-watch-admins", "cert-watch-users"]
 
 
 def test_save_ldap_role_map_skips_blank_groups(reload_app, tmp_path, monkeypatch):
@@ -1521,7 +1525,7 @@ def test_save_ldap_role_map_skips_blank_groups(reload_app, tmp_path, monkeypatch
         )
     assert r.status_code == 303
     stored = json.loads(kv_get(db, "ldap_role_map"))
-    assert "ops" not in stored
+    assert role_id not in stored
 
 
 # ---------- SMTP port 465 (SMTP_SSL) path ----------
@@ -2246,9 +2250,9 @@ def test_save_role_mapping_persists_users_and_merges(reload_app, tmp_path):
 
     stored = json.loads(kv_get(db, "ldap_role_map"))
     # The full DN survives (semicolon-separated, not shattered on its commas).
-    assert stored["ops"]["groups"] == ["CN=Ops,OU=Groups,DC=x"]
-    assert stored["ops"]["users"] == ["alice@x.com", "bob@x.com"]
-    assert stored["sec"]["users"] == ["carol@x.com"]
+    assert stored[ops_id]["groups"] == ["CN=Ops,OU=Groups,DC=x"]
+    assert stored[ops_id]["users"] == ["alice@x.com", "bob@x.com"]
+    assert stored[sec_id]["users"] == ["carol@x.com"]
 
 
 def test_save_role_mapping_clears_existing(reload_app, tmp_path, monkeypatch):
@@ -2267,12 +2271,12 @@ def test_save_role_mapping_clears_existing(reload_app, tmp_path, monkeypatch):
         _login_admin(client, monkeypatch)
         client.post("/settings/ldap-role-map",
                     data={f"role_users_{role_id}": "alice@x.com"}, follow_redirects=False)
-        assert "ops" in json.loads(kv_get(db, "ldap_role_map"))
+        assert role_id in json.loads(kv_get(db, "ldap_role_map"))
         # Now clear it.
         client.post("/settings/ldap-role-map",
                     data={f"role_map_{role_id}": "", f"role_users_{role_id}": ""},
                     follow_redirects=False)
-    assert "ops" not in json.loads(kv_get(db, "ldap_role_map"))
+    assert role_id not in json.loads(kv_get(db, "ldap_role_map"))
 
 
 def test_save_role_mapping_tolerates_bad_state(reload_app, tmp_path, monkeypatch):
@@ -2293,12 +2297,12 @@ def test_save_role_mapping_tolerates_bad_state(reload_app, tmp_path, monkeypatch
         kv_set(db, "ldap_role_map", "{not json")
         client.post("/settings/ldap-role-map",
                     data={f"role_users_{role_id}": "a@x.com"}, follow_redirects=False)
-        assert json.loads(kv_get(db, "ldap_role_map"))["ops"]["users"] == ["a@x.com"]
+        assert json.loads(kv_get(db, "ldap_role_map"))[role_id]["users"] == ["a@x.com"]
         # Non-dict JSON in store -> also reset.
         kv_set(db, "ldap_role_map", "[1, 2]")
         client.post("/settings/ldap-role-map",
                     data={f"role_users_{role_id}": "b@x.com"}, follow_redirects=False)
-        assert json.loads(kv_get(db, "ldap_role_map"))["ops"]["users"] == ["b@x.com"]
+        assert json.loads(kv_get(db, "ldap_role_map"))[role_id]["users"] == ["b@x.com"]
         # Unknown role id referenced in the form -> skipped, no crash.
         r = client.post("/settings/ldap-role-map",
                         data={"role_map_nonexistent-role": "CN=X"}, follow_redirects=False)
