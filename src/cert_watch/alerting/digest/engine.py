@@ -274,7 +274,9 @@ class DigestEngine:
                 for claim, recipient in zip(claims, live, strict=True):
                     if self._stopped(progress):
                         return True
-                    if renew_digest_delivery(self.db_path, claim):
+                    if renew_digest_delivery(
+                        self.db_path, claim, now=self.clock()
+                    ):
                         renewed_claims.append(claim)
                         renewed_recipients.append(recipient)
                     else:
@@ -297,7 +299,7 @@ class DigestEngine:
                 ):
                     succeeded = recipient.casefold() in accepted
                     recorded = complete_digest_delivery(
-                        self.db_path, claim, succeeded=succeeded
+                        self.db_path, claim, succeeded=succeeded, now=self.clock()
                     )
                     if succeeded:
                         if recorded:
@@ -323,7 +325,7 @@ class DigestEngine:
         retry: dict[str, str] = {}
         for target, original in recipients.items():
             claim = claim_digest_delivery(
-                self.db_path, period_key, "smtp", target
+                self.db_path, period_key, "smtp", target, now=self.clock()
             )
             if claim.state == "sent":
                 progress.skipped += 1
@@ -385,7 +387,7 @@ class DigestEngine:
                     continue
                 channel, claim_target = identity
                 claim = claim_digest_delivery(
-                    self.db_path, period_key, channel, claim_target
+                    self.db_path, period_key, channel, claim_target, now=self.clock()
                 )
                 if self._stopped(progress):
                     return len(pending)
@@ -395,7 +397,7 @@ class DigestEngine:
                 if claim.state == "busy":
                     progress.busy += 1
                     continue
-                if not renew_digest_delivery(self.db_path, claim):
+                if not renew_digest_delivery(self.db_path, claim, now=self.clock()):
                     progress.busy += 1
                     continue
                 if self._stopped(progress):
@@ -411,7 +413,7 @@ class DigestEngine:
                 result = transport.send(message)
                 progress.attempts += 1
                 recorded = complete_digest_delivery(
-                    self.db_path, claim, succeeded=result.delivered
+                    self.db_path, claim, succeeded=result.delivered, now=self.clock()
                 )
                 if result.delivered:
                     if recorded:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -307,3 +308,52 @@ def test_stop_between_targets_prevents_further_delivery(
 
     assert result.cancelled
     assert [message.recipients for message in smtp.messages] == [("one@test",)]
+
+
+# Lease decisions must follow the injected clock, never wall time. These pin
+# the clock decades away from "now" in both directions so a leak to
+# ``datetime.now()`` fails regardless of when the suite runs.
+PAST = datetime(2001, 1, 1, 12, tzinfo=UTC)
+FUTURE = datetime(2099, 1, 1, 12, tzinfo=UTC)
+
+
+def test_live_lease_under_injected_past_clock_stays_busy(
+    tmp_path, fake_transport
+) -> None:
+    db = tmp_path / "digest.sqlite3"
+    period = digest_period_key("expiry", 7, now=PAST)
+    claim_digest_delivery(db, period, "smtp", "accepted@test", now=PAST)
+    smtp = fake_transport(channel="smtp")
+    webhook = fake_transport(channel="webhook:generic")
+
+    result = DigestEngine(db, [smtp, webhook], clock=lambda: PAST).run(
+        _kind(recipients=("Accepted@Test",)), period
+    )
+
+    assert result.busy == 1
+    assert smtp.messages == []
+    assert webhook.messages == []
+
+
+def test_expired_lease_under_injected_future_clock_is_taken_over(
+    tmp_path, fake_transport
+) -> None:
+    db = tmp_path / "digest.sqlite3"
+    period = digest_period_key("expiry", 7, now=FUTURE)
+    stale = FUTURE - timedelta(hours=1)
+    claim_digest_delivery(db, period, "smtp", "accepted@test", now=stale)
+    smtp = fake_transport(channel="smtp")
+
+    result = DigestEngine(db, [smtp], clock=lambda: FUTURE).run(
+        _kind(recipients=("Accepted@Test",)), period
+    )
+
+    assert result.busy == 0
+    assert result.sent == 1
+    assert len(smtp.messages) == 1
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT status, sent_at, updated_at FROM digest_deliveries "
+            "WHERE channel = 'smtp' AND target = 'accepted@test'"
+        ).fetchone()
+    assert row == ("sent", FUTURE.isoformat(), FUTURE.isoformat())
