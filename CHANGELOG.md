@@ -40,6 +40,11 @@ All notable changes to cert-watch are documented in this file.
   SIEM filters on the old names need updating.
 
 ### Fixed
+- **Alerts page flash messages.** `/alerts` now shows `?warning=` and `?error=`
+  messages (flush busy, flush failures, rate limits); they were silently dropped.
+- **Signed compliance reports reject unsigned additions.** Verification now
+  requires the file to be exactly what its signed values render to, so an
+  added key (anywhere in the document) fails instead of passing.
 - **SIEM export no longer runs under the write lock.** Audit events recorded
   inside a transaction are now sent to the SIEM after the transaction commits
   and the global write lock is released, so a slow or unreachable syslog/HEC

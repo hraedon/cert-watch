@@ -184,6 +184,18 @@ def verify_report_signature(
         ):
             if supplied["count"] != len(bucket.entries):
                 return False, "presentation value mismatch"
+        # The signed digest covers the primitives the report is rebuilt from;
+        # everything else in the file is derived. Require the supplied document
+        # to be exactly what those primitives render to, so no derived value
+        # can be altered and no unsigned key can be added.
+        def _unsigned(d: dict[str, Any]) -> str:
+            rest = {k: v for k, v in d.items() if k not in ("content_sha256", "signature")}
+            return json.dumps(rest, sort_keys=True, default=str)
+
+        if _unsigned(json.loads(json.dumps(report_to_dict(rebuilt), default=str))) != _unsigned(
+            report_json
+        ):
+            return False, "report content does not match its signed values"
         canonical = _canonical_json(rebuilt)
         expected_hash = hashlib.sha256(canonical).hexdigest()
         derived_key = hmac.new(

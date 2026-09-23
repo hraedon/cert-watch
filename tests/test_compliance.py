@@ -712,3 +712,20 @@ class TestComplianceFailsClosed:
         with pytest.raises(HTTPException) as exc:
             compliance_signing_key(_Req())
         assert exc.value.status_code == 503
+
+
+def test_added_unsigned_key_fails_verification() -> None:
+    """A signed report must not carry claims its signature does not cover."""
+    report = ComplianceReport(
+        generated_at="2026-01-01T00:00:00+00:00",
+        compliance_metrics=[ComplianceMetric("test", 1, 2)],
+        remediation_buckets=[RemediationBucket("bucket", [])],
+    )
+    sign_report(report, "k")
+    doc = report_to_dict(report)
+    assert verify_report_signature(doc, "k")[0] is True
+    doc["auditor_note"] = "reviewed and approved"
+    assert verify_report_signature(doc, "k")[0] is False
+    nested = report_to_dict(report)
+    nested["compliance_metrics"][0]["note"] = "exempted"
+    assert verify_report_signature(nested, "k")[0] is False
