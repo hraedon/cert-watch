@@ -2,6 +2,14 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `cert-watch verify-report` prints a clean `FAIL` and exits 1 when the report
+  file is missing, unreadable, not UTF-8, or nested too deeply to parse,
+  instead of a Python traceback (#66).
+
 ## [1.0.0] - 2026-09-23
 
 cert-watch 1.0 is a maintenance release in the literal sense: it rebuilds the

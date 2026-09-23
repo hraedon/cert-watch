@@ -190,3 +190,33 @@ def test_trust_anchor_routes_map_service_refusal_to_403(monkeypatch) -> None:
         api.api_delete_trust_anchor("00000000-0000-4000-8000-000000000001", SimpleNamespace())
     )
     assert response.status_code == 403
+
+
+@pytest.mark.parametrize("kind", ["add", "delete"])
+def test_trust_anchor_services_refuse_non_admin(estate, kind: str) -> None:
+    """#65: a trust anchor is a fleet-wide trust decision, so the service
+    itself refuses a scoped writer (the route's admin guard is the first
+    layer; this pins the second) before parsing, persisting or auditing."""
+    from cert_watch.database import SqliteTrustAnchorRepository
+    from cert_watch.services.certificate_management import (
+        add_trust_anchor,
+        delete_trust_anchor,
+    )
+
+    db = estate["db"]
+    anchors = SqliteTrustAnchorRepository(db)
+    now = datetime.now(UTC)
+    anchor_id = anchors.add(
+        Certificate(
+            subject="CN=Existing Root", issuer="CN=Existing Root",
+            not_before=now - timedelta(days=1), not_after=now + timedelta(days=365),
+        )
+    )
+    kw = {"auth": SCOPED_OPERATOR, "actor": "otto", "source_ip": None}
+    with pytest.raises(PermissionError, match="admin required"):
+        if kind == "add":
+            add_trust_anchor(db, b"not a certificate", "ca.pem", **kw)
+        else:
+            delete_trust_anchor(db, anchor_id, **kw)
+    assert [a.id for a in anchors.list_all()] == [anchor_id]
+    assert list_audit(db) == []

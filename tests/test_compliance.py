@@ -670,6 +670,173 @@ class TestCLI:
             pass
 
 
+# ── #66: exported report whose presentation values were altered ─────────────
+
+
+def _export_signed_report(tmp_path: Path, reload_app) -> dict:
+    """Export the signed JSON report through the real API route."""
+    app_mod = reload_app()
+    _seed_fleet(str(tmp_path / "cert-watch.sqlite3"))
+    with TestClient(app_mod.app) as client:
+        r = client.get("/api/reports/compliance.json")
+    assert r.status_code == 200
+    return r.json()
+
+
+def _cli_verify(tmp_path: Path, data: object, capsys) -> tuple[int, str]:
+    report_file = tmp_path / "compliance-report.json"
+    report_file.write_text(json.dumps(data))
+    from cert_watch.__main__ import main
+
+    capsys.readouterr()  # drop app start-up logging from the export
+    try:
+        main(["verify-report", str(report_file)])
+        code = 0
+    except SystemExit as e:
+        code = int(e.code or 0)
+    return code, capsys.readouterr().out
+
+
+def _app_signing_key(tmp_path: Path) -> str:
+    from cert_watch.config import resolve_or_persist_secret
+
+    return resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", tmp_path, ".auth_secret")
+
+
+class TestExportedReportTamper:
+    def test_untampered_export_verifies(self, tmp_path, reload_app, capsys):
+        data = _export_signed_report(tmp_path, reload_app)
+        assert verify_report_signature(data, _app_signing_key(tmp_path)) == (True, "PASS")
+        code, out = _cli_verify(tmp_path, data, capsys)
+        assert code == 0
+        assert out.startswith("PASS")
+
+    def test_metric_rewritten_to_false_100_percent_fails(self, tmp_path, reload_app, capsys):
+        """The issue's scenario: pct/display claim full compliance while the
+        signed passing/total primitives are left untouched."""
+        data = _export_signed_report(tmp_path, reload_app)
+        metric = next(
+            m for m in data["compliance_metrics"]
+            if m["collected"] and m["total"] > 0 and m["passing"] < m["total"]
+        )
+        passing, total = metric["passing"], metric["total"]
+        metric["pct"] = 100.0
+        metric["display"] = f"{total} of {total} (100.0%)"
+        assert (metric["passing"], metric["total"]) == (passing, total)
+
+        ok, msg = verify_report_signature(data, _app_signing_key(tmp_path))
+        assert ok is False
+        assert msg == "presentation value mismatch"
+        code, out = _cli_verify(tmp_path, data, capsys)
+        assert code == 1
+        assert out.startswith("FAIL")
+        assert "PASS" not in out
+
+    @pytest.mark.parametrize("field", ["pct", "display"])
+    def test_single_presentation_field_altered_fails(
+        self, tmp_path, reload_app, capsys, field
+    ):
+        data = _export_signed_report(tmp_path, reload_app)
+        metric = next(m for m in data["compliance_metrics"] if m["total"])
+        metric[field] = 100.0 if field == "pct" else "all passing"
+        assert verify_report_signature(data, _app_signing_key(tmp_path))[0] is False
+        code, out = _cli_verify(tmp_path, data, capsys)
+        assert (code, out[:4]) == (1, "FAIL")
+
+    def test_bucket_count_altered_fails(self, tmp_path, reload_app, capsys):
+        data = _export_signed_report(tmp_path, reload_app)
+        bucket = next(b for b in data["remediation_buckets"] if b["entries"])
+        bucket["count"] = 0
+        assert verify_report_signature(data, _app_signing_key(tmp_path)) == (
+            False, "presentation value mismatch",
+        )
+        code, out = _cli_verify(tmp_path, data, capsys)
+        assert (code, out[:4]) == (1, "FAIL")
+
+
+def _drop_entry_host(d: dict) -> None:
+    del next(b for b in d["remediation_buckets"] if b["entries"])["entries"][0]["host"]
+
+
+def _drop_metric_passing(d: dict) -> None:
+    del d["compliance_metrics"][0]["passing"]
+
+
+def _drop_metric_pct(d: dict) -> None:
+    del d["compliance_metrics"][0]["pct"]
+
+
+def _drop_bucket_count(d: dict) -> None:
+    del d["remediation_buckets"][0]["count"]
+
+
+def _metric_not_object(d: dict) -> None:
+    d["compliance_metrics"][0] = "SHA-1"
+
+
+def _metrics_not_list(d: dict) -> None:
+    d["compliance_metrics"] = {"label": "x"}
+
+
+def _entries_not_list(d: dict) -> None:
+    d["remediation_buckets"][0]["entries"] = "none"
+
+
+def _passing_is_string(d: dict) -> None:
+    d["compliance_metrics"][0]["passing"] = "1"
+
+
+def _signature_not_string(d: dict) -> None:
+    d["signature"] = ["x"]
+
+
+class TestMalformedExportedReport:
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            _drop_entry_host, _drop_metric_passing, _drop_metric_pct,
+            _drop_bucket_count, _metric_not_object, _metrics_not_list,
+            _entries_not_list, _passing_is_string, _signature_not_string,
+        ],
+    )
+    def test_malformed_report_is_clean_fail(self, tmp_path, reload_app, capsys, mutate):
+        data = _export_signed_report(tmp_path, reload_app)
+        mutate(data)
+        ok, msg = verify_report_signature(data, _app_signing_key(tmp_path))
+        assert ok is False
+        assert msg
+        code, out = _cli_verify(tmp_path, data, capsys)
+        assert code == 1
+        assert out.startswith("FAIL")
+
+
+class TestUnreadableReportFile:
+    """#66 follow-on: a file verify-report can't read or parse is a clean
+    FAIL with exit 1, never a traceback."""
+
+    @pytest.mark.parametrize(
+        ("name", "content"),
+        [
+            ("missing.json", None),
+            ("binary.json", b"\xff\xfe\x00not utf-8"),
+            ("deep.json", b"[" * 100_000 + b"]" * 100_000),
+        ],
+        ids=["missing", "not-utf8", "too-deep"],
+    )
+    def test_unreadable_file_is_clean_fail(self, tmp_path, monkeypatch, capsys, name, content):
+        monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+        monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-key")
+        path = tmp_path / name
+        if content is not None:
+            path.write_bytes(content)
+        from cert_watch.__main__ import main
+
+        with pytest.raises(SystemExit) as exc:
+            main(["verify-report", str(path)])
+        assert exc.value.code == 1
+        assert capsys.readouterr().out.startswith("FAIL")
+
+
 # ── Compliance report fails closed ──────────────────────────────────────────
 
 

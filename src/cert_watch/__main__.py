@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
             "CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret"
         )
         try:
-            with open(args.report_path) as f:
+            with open(args.report_path, encoding="utf-8") as f:
                 report_data = _json.load(f)
         except _json.JSONDecodeError:
             print(
@@ -161,6 +161,11 @@ def main(argv: list[str] | None = None) -> None:
                 "against the JSON report (compliance-report.json), not the CSV "
                 "export. Re-download the JSON report and verify that."
             )
+            raise SystemExit(1) from None
+        except (OSError, ValueError, RecursionError) as exc:
+            # Missing/unreadable file, non-UTF-8 bytes, or nesting too deep to
+            # parse: a clean FAIL, not a traceback (#66).
+            print(f"FAIL — could not read report: {type(exc).__name__}")
             raise SystemExit(1) from None
         if not isinstance(report_data, dict):
             print("FAIL — report is not a JSON object")
