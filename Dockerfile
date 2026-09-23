@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Pinned digest at 2026-06-11 (python:3.13-slim)
-FROM python:3.13-slim@sha256:c8c127005665ea0ab700577dca2b412d3c32d844cc3916886042b432f5848121 AS builder
+FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 AS builder
 
 ARG GIT_TAG=0.5.0
 ARG GIT_COMMIT=unknown
@@ -25,7 +25,7 @@ RUN uv pip install --no-deps . --python /build/.venv/bin/python
 RUN sed -i 's|/build/.venv/bin/python|/opt/venv/bin/python|g' /build/.venv/bin/*
 
 # Pinned digest at 2026-06-11 (python:3.13-slim)
-FROM python:3.13-slim@sha256:c8c127005665ea0ab700577dca2b412d3c32d844cc3916886042b432f5848121 AS runtime
+FROM python:3.14-slim@sha256:caaf356f40667c496d405780745b9ac25771c189a51dfcc42430d531ea09f8a2 AS runtime
 
 ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
