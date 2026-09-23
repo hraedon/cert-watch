@@ -325,7 +325,9 @@ class TestSetupWizard:
 
         setup_app_client.get("/setup", follow_redirects=False)
         app = setup_app_client._transport.app  # type: ignore[attr-defined]
-        app.state.scheduler_context = _RecordingContext()
+        app.state.scheduler = type(
+            "RecordingScheduler", (), {"context": _RecordingContext()}
+        )()
 
         sid = next(c.value for c in setup_app_client.cookies.jar if c.name == "cw_sid")
         r = setup_app_client.post("/setup", data={

@@ -163,15 +163,8 @@ def metrics(request: Request) -> PlainTextResponse:
         ).fetchone()
         failed_recent = failed_recent_row[0] if failed_recent_row else 0
 
-        last_scan_row = conn.execute(
-            "SELECT MAX(scanned_at) FROM scan_history"
-        ).fetchone()
-        last_scan_ts: float = 0.0
-        if last_scan_row and last_scan_row[0]:
-            try:
-                last_scan_ts = _parse_iso(last_scan_row[0]).timestamp()
-            except (ValueError, TypeError):
-                last_scan_ts = 0.0
+        scheduler = getattr(request.app.state, "scheduler", None)
+        last_scan_ts = scheduler.last_scan_timestamp if scheduler is not None else None
 
     for urgency, count in urgency_counts.items():
         urgency_gauge.labels(urgency=urgency).set(count)
@@ -186,7 +179,7 @@ def metrics(request: Request) -> PlainTextResponse:
     certs_gauge.set(total_certs)
     expired_gauge.set(expired)
     failed_recent_gauge.set(failed_recent)
-    if last_scan_ts > 0:
+    if last_scan_ts is not None and last_scan_ts > 0:
         # Registered only when a scan exists so the series is genuinely
         # ABSENT on never-scanned installs — prometheus_client would
         # otherwise emit 0.0, which reads as "stalled since 1970" to a

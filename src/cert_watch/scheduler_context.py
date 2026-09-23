@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
-from time import monotonic
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.config import Settings, publish_settings
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, get_write_lock
 from cert_watch.scan import DeferredPostCommit, _evaluate_posture, scan_host, store_scanned
-from cert_watch.scheduler import get_hosts_due_for_scan, run_scan_now, wake_scheduler
+from cert_watch.scheduler import SystemClock, get_hosts_due_for_scan
+
+if TYPE_CHECKING:
+    from cert_watch.scheduler import Clock
 
 logger = logging.getLogger("cert_watch.scheduler_context")
 
@@ -36,6 +40,13 @@ class SchedulerContext:
     _config_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _job_config: _JobConfig = field(init=False, repr=False)
     _digest_deadline: float | None = field(default=None, init=False, repr=False)
+    _clock: Clock = field(default_factory=SystemClock, init=False, repr=False)
+    _wake: Callable[[], None] = field(
+        default_factory=lambda: (lambda: None), init=False, repr=False,
+    )
+    _scan_runner: Callable[..., dict[str, int]] | None = field(
+        default=None, init=False, repr=False,
+    )
 
     def __post_init__(self) -> None:
         self._job_config = _JobConfig(self.settings, self.alert_cfg, self.webhook_cfg)
@@ -44,6 +55,20 @@ class SchedulerContext:
     def _snapshot(self) -> _JobConfig:
         with self._config_lock:
             return self._job_config
+
+    def bind_runtime(
+        self,
+        *,
+        stop_event: threading.Event,
+        wake: Callable[[], None],
+        scan_runner: Callable[..., dict[str, int]],
+        clock: Clock,
+    ) -> None:
+        """Attach the app-owned scheduler's lifecycle and time source."""
+        self.stop_event = stop_event
+        self._wake = wake
+        self._scan_runner = scan_runner
+        self._clock = clock
 
     def update_settings(self, settings: Settings, *, publish: bool = True) -> None:
         """Publish a complete configuration; running jobs keep their snapshot."""
@@ -59,7 +84,7 @@ class SchedulerContext:
             self.webhook_cfg = config.webhook_cfg
         if publish:
             publish_settings(settings)
-        wake_scheduler()
+        self._wake()
 
     def schedule_time(self) -> tuple[int, int]:
         settings = self._snapshot().settings
@@ -70,15 +95,22 @@ class SchedulerContext:
         s = config.settings
         host_repo = SqliteHostRepository(s.db_path)
         all_hosts = host_repo.list_all()
-        hosts = get_hosts_due_for_scan(s.db_path, hour=s.sched_hour, minute=s.sched_min)
+        hosts = get_hosts_due_for_scan(
+            s.db_path,
+            hour=s.sched_hour,
+            minute=s.sched_min,
+            now=self._clock.now(),
+        )
         starttls_by_host = {
             (h.hostname, h.port): h.starttls_mode for h in all_hosts
         }
         deferred_operations: list[DeferredPostCommit] = []
 
         from cert_watch.scan import _execute_deferred_post_commit
+        if self._scan_runner is None:
+            raise RuntimeError("SchedulerContext is not bound to a Scheduler")
         try:
-            result = run_scan_now(
+            result = self._scan_runner(
                 scan_fn=lambda host, port: scan_host(
                     host, port, verify=s.tls_verify, timeout=s.scan_timeout,
                     retries=s.scan_retries, allow_private=s.allow_private,
@@ -148,7 +180,7 @@ class SchedulerContext:
                 s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
             )
             self._resolve_closed_alerts(config, closed_sent)
-            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+            deadline = self._clock.monotonic() + ALERT_CYCLE_BUDGET_SECONDS
             self._digest_deadline = deadline
             result = process_pending(
                 repo,
@@ -172,7 +204,7 @@ class SchedulerContext:
             s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
         )
         self._resolve_closed_alerts(config, closed_sent)
-        self._digest_deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+        self._digest_deadline = self._clock.monotonic() + ALERT_CYCLE_BUDGET_SECONDS
         return process_pending(
             repo,
             config.alert_cfg,
@@ -180,8 +212,8 @@ class SchedulerContext:
             budget_seconds=ALERT_CYCLE_BUDGET_SECONDS,
         )
 
-    @staticmethod
     def _run_digest(
+        self,
         config: _JobConfig,
         kind: Any,
         cadence_days: int,
@@ -189,8 +221,6 @@ class SchedulerContext:
         deadline: float,
         stop_event: threading.Event | None,
     ) -> Any:
-        from datetime import UTC, datetime
-
         from cert_watch.alerting.digest.engine import DigestEngine
         from cert_watch.alerting.transports.base import Transport
         from cert_watch.alerting.transports.smtp import SmtpTransport
@@ -202,11 +232,11 @@ class SchedulerContext:
             transports.append(SmtpTransport(config.alert_cfg))
         if config.webhook_cfg is not None:
             transports.append(WebhookTransport(config.webhook_cfg))
-        now = datetime.now(UTC)
+        now: datetime = self._clock.now()
         engine = DigestEngine(
             config.settings.db_path,
             transports,
-            budget_seconds=max(0.0, deadline - monotonic()),
+            budget_seconds=max(0.0, deadline - self._clock.monotonic()),
             clock=lambda: now,
             stop_event=stop_event,
         )
@@ -243,7 +273,7 @@ class SchedulerContext:
 
         deadline = self._digest_deadline
         if deadline is None:
-            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+            deadline = self._clock.monotonic() + ALERT_CYCLE_BUDGET_SECONDS
         try:
             renewal = self._run_digest(
                 config,

@@ -35,8 +35,7 @@ def test_delivery_details_expand_and_wrap(page, monkeypatch, tmp_path, reload_ap
         "recipients": [], "global_recipients": [], "queued_recipients": [],
         "groups": [], "groups_available": True,
     })
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         def respond(route):
             parsed = urlsplit(route.request.url)

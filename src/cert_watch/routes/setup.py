@@ -141,9 +141,9 @@ async def setup_submit(
         # only because build_auth_provider performed its own hidden kv reads.
         s = Settings.from_env_with_kv(db, encryption_key=enc_key)
         request.app.state.settings = s
-        context = getattr(request.app.state, "scheduler_context", None)
-        if context is not None:
-            context.update_settings(s)
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            scheduler.context.update_settings(s)
         if subnet_list:
             logger.info("setup wizard: scan allowlist set to %s", subnet_list)
 
