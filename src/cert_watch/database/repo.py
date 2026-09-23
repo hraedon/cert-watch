@@ -6,6 +6,7 @@ import json
 import sqlite3
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -581,13 +582,36 @@ class ScopedAlertRepository(AlertRepository):
         self._repo.mark_sent(alert_id)
 
     def mark_failed(self, alert_id: str, error_message: str) -> None:
-        self._repo.mark_failed(alert_id, error_message)
+        with self._forward_dispatch_context():
+            self._repo.mark_failed(alert_id, error_message)
 
     def reset_to_pending(self, alert_id: str) -> None:
         self._repo.reset_to_pending(alert_id)
 
     def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
-        self._repo.note_deferral(alert_id, when, restart=restart)
+        with self._forward_dispatch_context():
+            self._repo.note_deferral(alert_id, when, restart=restart)
+
+    @contextlib.contextmanager
+    def _forward_dispatch_context(self) -> Iterator[None]:
+        """Expose lease-guarded settlement metadata to the inner repository."""
+        names = (
+            "_dispatch_lease_owner",
+            "_dispatch_attempts",
+            "_dispatch_now",
+            "_dispatch_failure_reason",
+        )
+        forwarded: list[str] = []
+        for name in names:
+            if hasattr(self, name):
+                setattr(self._repo, name, getattr(self, name))
+                forwarded.append(name)
+        try:
+            yield
+        finally:
+            for name in forwarded:
+                with contextlib.suppress(AttributeError):
+                    delattr(self._repo, name)
 
 
 # ---------- Trust Anchors ----------

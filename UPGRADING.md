@@ -79,7 +79,8 @@ restore the pre-migration backup.
   recorded in delivery evidence but do not consume the bounded give-up budget.
   Successful deliveries settle immediately rather than waiting for the whole
   queue, and database refusal during evidence-deferral recovery is isolated to
-  that row so later alerts continue processing.
+  that row so later alerts continue processing. Tag-scoped flushes use the same
+  lease-guarded deferral and give-up transitions as unscoped workers.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

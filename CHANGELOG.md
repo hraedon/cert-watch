@@ -112,6 +112,10 @@ All notable changes to cert-watch are documented in this file.
   database update in either evidence-deferral recovery branch no longer aborts
   the delivery cycle. Accepted alerts are marked `sent` immediately, closing
   the lease window in which a long cycle and concurrent flush could resend one.
+- **Scoped alert settlement retains lease guards.** The tag-scoped repository
+  now forwards dispatch settlement metadata to its inner SQLite repository, so
+  evidence deferrals and give-ups transition `sending` rows instead of silently
+  leaving them leased.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

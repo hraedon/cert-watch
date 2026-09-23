@@ -21,6 +21,7 @@ from cert_watch.alerts import (
 )
 from cert_watch.database import (
     Alert,
+    ScopedAlertRepository,
     SqliteAlertRepository,
     _connect,
     init_schema,
@@ -722,6 +723,24 @@ def test_refused_evidence_fallback_update_never_escapes(
         "failed": 0,
         "deferred": 0,
     }
+
+
+def test_scoped_repository_forwards_dispatch_settlement_context(
+    monkeypatch, tmp_path
+):
+    db, _, alert = _pending(tmp_path)
+    scoped = ScopedAlertRepository(db, ())
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    assert process_pending(scoped, _config()) == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 1,
+    }
+    stored = SqliteAlertRepository(db).list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending"
+    assert stored.deferred_since is not None
 
 
 def test_an_attempt_recorded_this_cycle_restarts_the_deferral_clock(monkeypatch, tmp_path):
