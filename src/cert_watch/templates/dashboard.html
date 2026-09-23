@@ -398,6 +398,20 @@
             <option value="mysql">STARTTLS — MySQL (3306)</option>
           </select>
         </div>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label">Tags <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input" type="text" name="tags" placeholder="production, edge">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label">Scan cadence (hours) <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input mono" type="number" name="scan_interval_hours" min="1" max="8760" placeholder="Daily schedule">
+          </div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label">Notes <span class="cw-muted">(optional)</span></label>
+          <textarea class="cw-input" name="notes" rows="3" placeholder="Runbook context or operational notes"></textarea>
+        </div>
         <label class="cw-check">
           <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
         </label>
@@ -432,11 +446,11 @@
         <label class="cw-drop" for="csv-input">
           <div class="cw-drop-icon">{{ icons.svg_icon('file', 18) }}</div>
           <div><b>Drop a CSV, or <span class="cw-link">browse</span></b></div>
-          <div class="cw-sub">Needs a <span class="mono">hostname</span> column · optional <span class="mono">port</span>, <span class="mono">threshold_days</span></div>
+          <div class="cw-sub">Needs <span class="mono">hostname</span> · optional <span class="mono">port</span>, <span class="mono">threshold_days</span>, <span class="mono">tags</span>, <span class="mono">notes</span>, <span class="mono">scan_interval_hours</span>, <span class="mono">starttls_mode</span></div>
           <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
         </label>
         <div class="cw-note">
-          <code class="mono">hostname,port,threshold_days<br>api.example.com,443,30<br>vpn.example.com,4443,14</code>
+          <code class="mono">hostname,port,threshold_days,tags<br>api.example.com,443,30,production<br>vpn.example.com,4443,14,edge</code>
         </div>
         <div class="cw-form-foot">
           <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>

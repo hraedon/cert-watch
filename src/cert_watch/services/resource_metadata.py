@@ -1,8 +1,8 @@
 """Application services for host notes and resource tags.
 
-Each service takes the acting :class:`~cert_watch.auth.rbac.AuthContext`
-(``auth``; ``None`` for auth-disabled / system callers) and enforces tag scope
-itself, inside the write lock, before it validates or persists anything:
+Each service requires the acting :class:`~cert_watch.auth.rbac.AuthContext`
+(``auth``; trusted internal/auth-disabled callers use ``AuthContext.system()``)
+and enforces tag scope itself, inside the write lock, before it validates or persists anything:
 target scope first, then input validation, then (for tags) that every new tag
 is within scope. Route adapters only translate the exceptions.
 
@@ -20,7 +20,11 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
-from cert_watch.auth.scope import ensure_new_tags_in_scope, ensure_write_scope
+from cert_watch.auth.scope import (
+    ensure_new_tags_in_scope,
+    ensure_write_scope,
+    require_auth_context,
+)
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
@@ -102,6 +106,7 @@ def update_host_notes(
     actor: str,
     source_ip: str | None,
 ) -> str:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         value = _value(notes)
@@ -141,6 +146,7 @@ def update_host_tags(
     actor: str,
     source_ip: str | None,
 ) -> TagUpdateResult:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, host_id=host_id)
         normalized = normalize_tags(_value(tags))
@@ -168,6 +174,7 @@ def update_certificate_tags(
     actor: str,
     source_ip: str | None,
 ) -> TagUpdateResult:
+    require_auth_context(auth)
     with get_write_lock():
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))

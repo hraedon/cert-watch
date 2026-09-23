@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from cert_watch.audit import list_audit
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -22,6 +23,8 @@ from cert_watch.services.resource_metadata import (
     update_host_tags,
 )
 
+SYSTEM = AuthContext.system()
+
 
 def test_host_notes_and_tags_share_validation_persistence_and_audit(tmp_path: Path) -> None:
     db = tmp_path / "cert-watch.sqlite3"
@@ -30,10 +33,10 @@ def test_host_notes_and_tags_share_validation_persistence_and_audit(tmp_path: Pa
     host_id = repo.add("metadata.example.test")
 
     notes = update_host_notes(
-        db, host_id, "renew through ACME", auth=None, actor="operator", source_ip="192.0.2.10"
+        db, host_id, "renew through ACME", auth=SYSTEM, actor="operator", source_ip="192.0.2.10"
     )
     tags = update_host_tags(
-        db, host_id, " prod, web,prod ", auth=None, actor="operator", source_ip="192.0.2.10"
+        db, host_id, " prod, web,prod ", auth=SYSTEM, actor="operator", source_ip="192.0.2.10"
     )
 
     stored = repo.get(host_id)
@@ -65,7 +68,7 @@ def test_certificate_tags_return_effective_host_tags(tmp_path: Path) -> None:
     )
 
     result = update_certificate_tags(
-        db, cert_id, "prod, platform", auth=None, actor="operator", source_ip=None
+        db, cert_id, "prod, platform", auth=SYSTEM, actor="operator", source_ip=None
     )
 
     assert result.tags == ("prod", "platform")
@@ -78,9 +81,11 @@ def test_metadata_validation_and_missing_target_precede_audit(tmp_path: Path) ->
     init_schema(db)
 
     with pytest.raises(ResourceMetadataValidationError, match="notes too long"):
-        update_host_notes(db, "missing", "x" * 10_001, auth=None, actor="operator", source_ip=None)
+        update_host_notes(
+            db, "missing", "x" * 10_001, auth=SYSTEM, actor="operator", source_ip=None
+        )
     with pytest.raises(ResourceMetadataNotFoundError):
-        update_host_tags(db, "missing", "prod", auth=None, actor="operator", source_ip=None)
+        update_host_tags(db, "missing", "prod", auth=SYSTEM, actor="operator", source_ip=None)
 
     assert list_audit(db) == []
 
@@ -98,7 +103,7 @@ def test_audit_failure_rolls_back_metadata_update(
 
     monkeypatch.setattr(resource_metadata, "record_audit", fail_audit)
     with pytest.raises(RuntimeError, match="audit unavailable"):
-        update_host_notes(db, host_id, "after", auth=None, actor="operator", source_ip=None)
+        update_host_notes(db, host_id, "after", auth=SYSTEM, actor="operator", source_ip=None)
 
     stored = repo.get(host_id)
     assert stored is not None
@@ -148,10 +153,15 @@ def test_siem_export_runs_after_commit_and_outside_the_write_lock(
     monkeypatch.setattr(siem, "siem_enabled", lambda: True)
     monkeypatch.setattr(siem, "export_audit_event", export)
 
-    update_host_notes(db, host_id, "n", auth=None, actor="op", source_ip=None)
-    update_host_tags(db, host_id, "prod", auth=None, actor="op", source_ip=None)
+    update_host_notes(db, host_id, "n", auth=SYSTEM, actor="op", source_ip=None)
+    update_host_tags(db, host_id, "prod", auth=SYSTEM, actor="op", source_ip=None)
     update_host_ownership(
-        db, host_id, HostOwnershipUpdate(owner_name="Ops"), auth=None, actor="op", source_ip=None
+        db,
+        host_id,
+        HostOwnershipUpdate(owner_name="Ops"),
+        auth=SYSTEM,
+        actor="op",
+        source_ip=None,
     )
 
     assert [action for action, _, _ in observed] == [

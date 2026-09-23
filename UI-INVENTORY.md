@@ -6,8 +6,8 @@ Any PR that adds, removes, or relocates a field, control, or editing surface
 must diff this file in the same PR; a UI change without a matching inventory
 diff fails review.
 
-Paths are relative to `src/cert_watch/`. Endpoints marked **(no UI caller)**
-exist but are invoked by no template or bundled JS. State inventoried:
+Paths are relative to `src/cert_watch/`. The HTML UI and JSON API are both
+first-class consumers of the application services named below. State inventoried:
 branch `review/product-coherence-20260912`, 2026-09-12 (V1 + V2 implemented;
 notes are host-scoped only; inactive group-webhook controls removed).
 
@@ -28,19 +28,19 @@ visible population, with the scope stated on the selected view.
 | Concept | Column | Editing control today | Write endpoint | Single owner (proposed) |
 |---|---|---|---|---|
 | ~~Notes & procedures~~ | **REMOVED** — `certificates.notes` merged by migration 0031 (deprecated column retained for unmatched notes) | — | `POST /certificates/{id}/notes` and `PATCH /api/certificates/{id}/notes` **removed** | Host-scoped notes won (V1, implemented 2026-08-30) |
-| Own tags | `certificates.tags` | Text input (datalist), cert detail — `certificate_detail.html:370-374` | `POST /certificates/{id}/tags` and `PUT /api/certificates/{id}/tags` (no UI caller) are adapters over `services.resource_metadata.update_certificate_tags` | Cert-detail tags editor (host tags inherited, shown `(host)` — OK) |
-| Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` (routes/certificates.py:674); `POST /certificates/{id}/delete` (:459) | As-is |
+| Own tags | `certificates.tags` | Text input (datalist), cert detail — `certificate_detail.html:370-374` | `POST /certificates/{id}/tags` and `PUT /api/certificates/{id}/tags` are adapters over `services.resource_metadata.update_certificate_tags` | Cert-detail tags editor (host tags inherited, shown `(host)` — OK) |
+| Lifecycle (create/delete) | row | Add drawer: upload tab `dashboard.html:377`; delete `certificate_detail.html:72` | `POST /upload` + `POST /api/certificates/upload`; `POST /certificates/{id}/delete` + `DELETE /api/certificates/{id}` use `services.certificate_management` | HTML and JSON are equal adapters |
 
 ## Host (`hosts` table)
 
 | Concept | Column(s) | Editing control(s) today | Write endpoint(s) | Single owner (proposed) |
 |---|---|---|---|---|
-| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One form ("Operational summary → Edit"), cert detail — `certificate_detail.html:138-166` | `POST /certificates/{cert_id\|host_id}/owner` and `PATCH /api/hosts/{id}/owner` (no UI caller) are adapters over the single `services.host_ownership.update_host_ownership` transaction | Shared ownership service; rename the legacy form endpoint under `/hosts/` when convenient |
-| Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` (routes/hosts.py:139, no drawer field) and CSV `notes` column (:296) | `POST /hosts/{id}/notes` and `PATCH /api/hosts/{id}/notes` (no UI caller) are adapters over `services.resource_metadata.update_host_notes`; `POST /hosts`; CSV `POST /hosts/import` | Detail-page Notes panel — **resolved (V1/V2)** |
-| Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also add-host route param (routes/hosts.py:136, **no drawer field**) and CSV `tags` column (:295) | `POST /hosts/{id}/tags` and `PUT /api/hosts/{id}/tags` (no UI caller) are adapters over `services.resource_metadata.update_host_tags`; `POST /hosts`; `POST /hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds, label them as such |
-| Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` (routes/hosts.py:130) | Create-only by design — OK |
-| Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts`; `POST /hosts/import` | Endpoint settings now owns post-creation edits via `POST /hosts/{id}/settings`; see below |
-| Lifecycle (delete, scan) | row | `certificate_detail.html:78` (delete), :64 (scan) | `POST /hosts/{id}/delete` (routes/hosts.py:476); `POST /hosts/{id}/scan` (:561) | As-is |
+| Ownership & renewal contact | `owner_name`, `owner_email`, `owner_slack`, `renewal_method`, `runbook_url` (schema.py:72-77) | One form ("Operational summary → Edit"), cert detail — `certificate_detail.html:138-166` | `POST /hosts/{id}/owner` and `PATCH /api/hosts/{id}/owner` are adapters over the single `services.host_ownership.update_host_ownership` transaction; legacy `POST /certificates/{id}/owner` remains callable for compatibility | Shared ownership service; host-namespaced UI path (V4 resolved) |
+| Host notes | `hosts.notes` (schema.py:78) | **ONE editing control:** textarea ("Notes" panel), endpoint detail page — `certificate_detail.html` (V2 resolved 2026-08-30: the 3 dashboard inline editors in `static/js/dashboard.js` were removed; the dashboard now shows a read-only note indicator chip). Creation-time seeds: `notes` param on `POST /hosts` and CSV `notes` column | `POST /hosts/{id}/notes` and `PATCH /api/hosts/{id}/notes` are adapters over `services.resource_metadata.update_host_notes`; host creation is `POST /hosts` + `POST /api/hosts`; CSV import is `POST /hosts/import` + `POST /api/hosts/import` | Detail-page Notes panel — **resolved (V1/V2)** |
+| Host tags | `hosts.tags` (schema.py:70) | Text input (datalist), cert/host detail (host branch of shared form) — `certificate_detail.html:370-374`; also creation-time seeds | `POST /hosts/{id}/tags` and `PUT /api/hosts/{id}/tags` are adapters over `services.resource_metadata.update_host_tags`; creation uses `POST /hosts` + `POST /api/hosts`; import uses `POST /hosts/import` + `POST /api/hosts/import` | Detail-page tags editor; drawer/CSV are creation-time seeds |
+| Scan target (hostname, port, TLS mode, common-ports) | `hostname`, `port` + scan params | Add drawer, scan tab — `dashboard.html:339-372` | `POST /hosts` + `POST /api/hosts`, through `services.host_management.create_hosts` | Create-only by design — OK |
+| Alert threshold | `threshold_days` (schema.py:69) | Create-only: drawer `dashboard.html:352`; CSV column | `POST /hosts` + `POST /api/hosts`; `POST /hosts/import` + `POST /api/hosts/import` | Endpoint settings owns post-creation edits via its HTML/API pair; see below |
+| Lifecycle (delete, scan) | row | `certificate_detail.html:78` (delete), :64 (scan) | `POST /hosts/{id}/delete` + `DELETE /api/hosts/{id}`; `POST /hosts/{id}/scan` + `POST /api/hosts/{id}/scan`, through `services.host_management` | HTML and JSON are equal adapters |
 
 ## Tags (cross-cutting registry)
 
@@ -66,9 +66,9 @@ visible population, with the scope stated on the selected view.
 | Local users | users | Settings → Users — `settings/users.html:24,73,103` | `POST /settings/users[/{id}[/delete]]` (routes/settings/roles.py:199,238,287) | As-is |
 | API keys | `api_keys` (schema.py:129) | Settings → API keys — `settings/api_keys.html:48,89` | `POST /settings/api-keys[/{id}/revoke]` (routes/settings/api_keys.py:33,68) | As-is |
 | Policy rules | kv | Settings → Policy — `settings/policy.html:19,108` | `POST /settings/policy` (routes/settings/policy.py:20) | As-is |
-| Trust anchors | `trust_anchors` (schema.py:84) | Settings → Trust anchors — `settings/trust_anchors.html:21,45` | `POST /trust-anchors[/{id}/delete]` (routes/certificates.py:724,789) | As-is |
+| Trust anchors | `trust_anchors` (schema.py:84) | Settings → Trust anchors — `settings/trust_anchors.html:21,45` | `POST /trust-anchors` + `POST /api/trust-anchors`; `POST /trust-anchors/{id}/delete` + `DELETE /api/trust-anchors/{id}`, through `services.certificate_management` | HTML and JSON are equal adapters |
 
-## Violations & open decisions
+## Resolved inventory decisions
 
 - **V1 — RESOLVED 2026-08-30 (branch `redesign/attention-home`).** Two
   near-identical notes textareas on the detail page (`hosts.notes` at
@@ -88,7 +88,8 @@ visible population, with the scope stated on the selected view.
   and `dashboard.html`; the dashboard now renders a **read-only** note
   indicator chip (hover tooltip) that deep-links nothing — editing happens on
   the detail-page Notes panel (`POST /hosts/{id}/notes`, form POST).
-  `PATCH /api/hosts/{id}/notes` remains as the JSON API path (no UI caller).
+  `PATCH /api/hosts/{id}/notes` is the first-class JSON API adapter for the
+  same service used by the detail-page form.
   One concept, one control, one verb.
 - **V3 — inactive group webhook removed, 2026-09-12.** The group webhook
   field had no delivery consumer. Create/edit forms no longer offer it;
@@ -97,18 +98,14 @@ visible population, with the scope stated on the selected view.
   alert webhook; Events owns the independent event-forwarding sink. Channel
   copy states SMTP-first delivery, webhook fallback, and the union of global
   SMTP recipients with matching group recipients.
-- **V4 — Owner edits ride a certificate-namespaced endpoint.**
-  `POST /certificates/{id}/owner` (routes/certificates.py:559) mutates the
-  *hosts* table and accepts a bare `host_id` on cert-less pages
-  (`certificate_detail.html:138`). Works, but the URL misstates the record
-  owner; `PATCH /api/hosts/{id}/owner` already exists unused.
-- **V5 — Add-host route accepts fields the drawer never offers.**
-  `POST /hosts` accepts `tags` (routes/hosts.py:136), `notes` (:139), and
-  `scan_interval_hours` (:137); the drawer form (`dashboard.html:339-372`)
-  exposes none of them. CSV import likewise accepts `tags`, `notes`,
-  `scan_interval_hours` (routes/hosts.py:295-297) while the drawer's inline
-  docs (`dashboard.html:401,405`) document only `hostname,port,threshold_days`.
-  Decide: surface the fields, or drop them from the route/docs mismatch.
+- **V4 — RESOLVED 2026-09-22.** The ownership form now posts to the coherent
+  host-namespaced `POST /hosts/{id}/owner`, paired with
+  `PATCH /api/hosts/{id}/owner`; both call the ownership service. The former
+  `POST /certificates/{id}/owner` adapter remains callable for compatibility
+  and delegates to the same service.
+- **V5 — RESOLVED 2026-09-22.** The add-host drawer now surfaces optional
+  `tags`, `notes`, and `scan_interval_hours`, and its bulk-import help documents
+  every accepted optional CSV field, including `starttls_mode`.
 
 ## Endpoint settings and scan evidence (2026-09-12)
 
@@ -144,3 +141,32 @@ group chips were removed because they did not establish historical delivery.
 | `hosts.renewal_status` | `POST /hosts/{id}/settings`; existing `PATCH /api/hosts/{id}/owner` | Endpoint settings; explicitly operator-reported with suppression/reset help. |
 | `hosts.scan_interval_hours` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Endpoint settings editor; no creation drawer field. |
 | `hosts.threshold_days` | `POST /hosts`, CSV, and `POST /hosts/{id}/settings` | Creation drawer and endpoint settings editor. |
+
+## Executable write contracts
+
+This table is machine-read by `tests/test_ui_inventory_contract.py`. Keep one
+row per HTML/API adapter pair; the service symbol is the single mutation owner.
+Bulk import and scan-all are included even though they are collection actions,
+because the HTML and JSON adapters must share their mutation owner too.
+
+| Concept | HTML endpoint | JSON endpoint | Service symbol |
+|---|---|---|---|
+| certificate tags | `POST /certificates/{cert_id}/tags` | `PUT /api/certificates/{cert_id}/tags` | `resource_metadata.update_certificate_tags` |
+| certificate upload | `POST /upload` | `POST /api/certificates/upload` | `certificate_management.upload_certificate_bytes` |
+| certificate delete | `POST /certificates/{cert_id}/delete` | `DELETE /api/certificates/{cert_id}` | `certificate_management.delete_certificate` |
+| host ownership | `POST /hosts/{host_id}/owner` | `PATCH /api/hosts/{host_id}/owner` | `host_ownership.update_host_ownership` |
+| host notes | `POST /hosts/{host_id}/notes` | `PATCH /api/hosts/{host_id}/notes` | `resource_metadata.update_host_notes` |
+| host tags | `POST /hosts/{host_id}/tags` | `PUT /api/hosts/{host_id}/tags` | `resource_metadata.update_host_tags` |
+| host create | `POST /hosts` | `POST /api/hosts` | `host_management.create_hosts` |
+| host import | `POST /hosts/import` | `POST /api/hosts/import` | `host_management.import_hosts_csv` |
+| host scan all | `POST /hosts/all/scan` | `POST /api/hosts/scan` | `host_management.scan_all_hosts` |
+| host settings | `POST /hosts/{host_id}/settings` | `PATCH /api/hosts/{host_id}/settings` | `host_management.update_host_settings` |
+| expected issuers | `POST /hosts/{host_id}/expected-issuers` | `PUT /api/hosts/{host_id}/issuers` | `host_management.update_expected_issuers` |
+| host delete | `POST /hosts/{host_id}/delete` | `DELETE /api/hosts/{host_id}` | `host_management.delete_host` |
+| host scan | `POST /hosts/{host_id}/scan` | `POST /api/hosts/{host_id}/scan` | `host_management.scan_host_now` |
+| trust anchor add | `POST /trust-anchors` | `POST /api/trust-anchors` | `certificate_management.add_trust_anchor` |
+| trust anchor delete | `POST /trust-anchors/{anchor_id}/delete` | `DELETE /api/trust-anchors/{anchor_id}` | `certificate_management.delete_trust_anchor` |
+| alert group create | `POST /settings/alert-groups` | `POST /api/alert-groups` | `alert_groups.create_alert_group` |
+| alert group update | `POST /settings/alert-groups/{group_id}` | `PATCH /api/alert-groups/{group_id}` | `alert_groups.update_alert_group` |
+| alert group delete | `POST /settings/alert-groups/{group_id}/delete` | `DELETE /api/alert-groups/{group_id}` | `alert_groups.delete_alert_group` |
+| mark all alerts read | `POST /alerts/mark-all-read` | `POST /api/alerts/mark-all-read` | `alert_state.mark_all_alerts_read` |

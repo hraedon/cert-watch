@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth.guards import require_auth
 from cert_watch.compliance import build_compliance_report, report_to_csv_rows, report_to_dict
-from cert_watch.database import list_dashboard_page
+from cert_watch.database import SqliteHostRepository, list_dashboard_page
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _csv_safe, _db_path
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
@@ -21,6 +21,41 @@ from cert_watch.routes.api._shared import compliance_signing_key
 logger = logging.getLogger("cert_watch.routes.api.reports")
 
 router = APIRouter()
+
+
+@router.get("/api/export/hosts.csv")
+def api_export_hosts_csv(
+    request: Request, _auth: str = Depends(require_auth)
+) -> PlainTextResponse:
+    """Export tracked hosts as CSV."""
+    scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
+    repo = SqliteHostRepository(_db_path(request))
+    hosts = repo.list_scoped(scope_tags) if scope_tags else repo.list_all()
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "hostname", "port", "threshold_days", "tags", "scan_interval_hours",
+            "owner_name", "owner_email", "owner_slack", "renewal_status", "notes",
+            "starttls_mode", "added_at",
+        ]
+    )
+    for host in hosts:
+        writer.writerow(
+            [
+                _csv_safe(host.hostname), _csv_safe(host.port),
+                _csv_safe(host.threshold_days or ""), _csv_safe(host.tags),
+                _csv_safe(host.scan_interval_hours or ""), _csv_safe(host.owner_name),
+                _csv_safe(host.owner_email), _csv_safe(host.owner_slack),
+                _csv_safe(host.renewal_status), _csv_safe(host.notes),
+                _csv_safe(host.starttls_mode), _csv_safe(host.added_at.isoformat()),
+            ]
+        )
+    return PlainTextResponse(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=hosts.csv"},
+    )
 
 
 @router.get("/api/export/certificates.csv")

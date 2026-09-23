@@ -167,12 +167,21 @@ def _seed(db: Path, principal: Principal) -> Seeded:
 # Session-ending routes run last: a password change, then logout (which
 # revokes the session every later request would need).
 _DESTRUCTIVE_LAST = ("/settings/change-password", "/auth/logout")
+_NEW_DESTRUCTIVE_API = {
+    "/api/certificates/{cert_id}",
+    "/api/hosts/{host_id}",
+    "/api/trust-anchors/{anchor_id}",
+}
 
 
 def _order_key(item: tuple[str, str, Any]) -> tuple[int, str, str]:
     method, path, _ = item
     if path in _DESTRUCTIVE_LAST:
-        rank = 2 + _DESTRUCTIVE_LAST.index(path)
+        rank = 3 + _DESTRUCTIVE_LAST.index(path)
+    elif method == "DELETE" and path in _NEW_DESTRUCTIVE_API:
+        # The new API equivalents run after their existing HTML adapters so
+        # adding coverage cannot mutate the established golden observations.
+        rank = 2
     elif method == "DELETE" or path.endswith(("/delete", "/revoke")):
         rank = 1
     else:
@@ -200,9 +209,58 @@ def _expansions(path: str) -> list[dict[str, str]]:
     return combos
 
 
+def _fresh_api_delete_target(
+    db: Path, path: str, label: str, seeded: Seeded
+) -> None:
+    """Give each new DELETE adapter its own target after the HTML delete ran.
+
+    The matrix deliberately executes both presentations in one app. Reusing
+    the HTML target made every authorized JSON delete observe only a 404,
+    turning a real authorization success into an unrecorded outcome.
+    """
+    if path == "/api/hosts/{host_id}":
+        from cert_watch.database import SqliteHostRepository
+
+        suffix = "a" if label == "host_a" else "b"
+        seeded.ids[label] = SqliteHostRepository(db).add(
+            f"fresh-{suffix}-{seeded.ids[label]}.example.com",
+            443,
+            tags=suffix.upper(),
+        )
+    elif path == "/api/certificates/{cert_id}":
+        from tests._helpers import seed_scanned
+
+        suffix = "a" if label == "cert_a" else "b"
+        seeded.ids[label] = seed_scanned(
+            db,
+            f"fresh-{suffix}-{seeded.ids[label]}.example.com",
+            443,
+            _cert(f"fresh-{suffix}.example.com", suffix),
+        )
+        from cert_watch.database import SqliteCertificateRepository
+
+        SqliteCertificateRepository(db).set_tags(seeded.ids[label], suffix.upper())
+    elif path == "/api/trust-anchors/{anchor_id}":
+        from cert_watch.database import SqliteTrustAnchorRepository
+
+        seeded.ids[label] = SqliteTrustAnchorRepository(db).add(
+            _cert(f"fresh-anchor-{seeded.ids[label]}", "d")
+        )
+
+
 def _body_for(route: Any, path: str) -> dict[str, Any]:
     """Minimal well-formed request body: required form fields filled so body
     validation passes and the outcome reflects the guards, not a 422."""
+    if path == "/api/hosts":
+        return {"json": {"hostname": "93.184.216.34", "port": 443}}
+    if path == "/api/hosts/{host_id}/settings":
+        return {
+            "json": {
+                "scan_interval_hours": None,
+                "threshold_days": None,
+                "renewal_status": "pending",
+            }
+        }
     data: dict[str, str] = {"_probe": "1"}
     files: dict[str, Any] = {}
     dependant = getattr(route, "dependant", None)
@@ -336,11 +394,17 @@ def run_matrix_for(
 ) -> dict[str, str]:
     import cert_watch.routes.hosts as hosts_routes
     import cert_watch.security.ratelimit as ratelimit_mod
+    import cert_watch.services.host_management as host_management
 
     async def _no_scan(*_a: Any, **_k: Any) -> tuple[str, str]:
         return "scan_error", "scanning disabled in the authz matrix"
 
     monkeypatch.setattr(hosts_routes, "_scan_and_store", _no_scan)
+
+    async def _no_service_scan(*_a: Any, **_k: Any):
+        return host_management.ScanResult("scan_error", "scanning disabled in the authz matrix")
+
+    monkeypatch.setattr(host_management, "_scan_and_store", _no_service_scan)
     ratelimit_mod._clear_rate_caches()
     db = tmp_path / "cert-watch.sqlite3"
     seeded = _seed(db, principal)
@@ -352,6 +416,9 @@ def run_matrix_for(
             headers = {**headers, **_csrf_header(client)}
         for method, path, route in sorted(mutating_routes(app), key=_order_key):
             for combo in _expansions(path):
+                if method == "DELETE" and path in _NEW_DESTRUCTIVE_API:
+                    for label in combo.values():
+                        _fresh_api_delete_target(db, path, label, seeded)
                 url = path
                 for name, label in combo.items():
                     url = url.replace("{" + name + "}", seeded.ids[label])

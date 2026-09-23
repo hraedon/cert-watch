@@ -50,6 +50,28 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Scoped writers can no longer create or import hosts with out-of-scope
+  tags.** This closes a scope-widening path: a writer scoped to `A` who submits
+  `B` is refused instead of storing `B,A`. Remove out-of-scope tags from the
+  add-host form or CSV before retrying; the writer's own scope tag is added
+  automatically.
+- **API seam additions; no existing endpoint paths changed.** The operational
+  UI mutations now have first-class JSON equivalents. Added paths are
+  `POST /api/hosts`, `POST /api/hosts/import`, `POST /api/hosts/scan`,
+  `POST /api/hosts/{id}/scan`, `PATCH /api/hosts/{id}/settings`,
+  `DELETE /api/hosts/{id}`, `POST /api/certificates/upload`,
+  `DELETE /api/certificates/{id}`, `POST /api/trust-anchors`,
+  `DELETE /api/trust-anchors/{id}`, and `POST /api/alerts/mark-all-read`.
+  Existing `/api/health`, `/api/audit`,
+  `/api/certificates/{id}/posture`, `/api/export/hosts.csv`, and
+  `/api/alerts/{id}/read` paths did not move; only their Python module ownership
+  changed. Existing clients require no action.
+- **The host-ownership HTML form path changed.** The detail UI now submits to
+  `POST /hosts/{id}/owner` (new) rather than
+  `POST /certificates/{id}/owner`. The old path remains callable for
+  compatibility in this release and delegates to the same service, so existing
+  integrations do not need an immediate change. The JSON path remains
+  `PATCH /api/hosts/{id}/owner`.
 - **Review saved configuration before upgrading.** Configuration resolution is
   now uniform across startup, the Settings UI, and background work. This changes
   several previously inconsistent cases:

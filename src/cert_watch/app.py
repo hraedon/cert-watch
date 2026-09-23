@@ -34,6 +34,7 @@ from cert_watch.filters import register_filters
 from cert_watch.firstrun import FirstRunPosture, first_run_action, is_network_exposed
 from cert_watch.middleware import install_middleware
 from cert_watch.routes import api as route_modules
+from cert_watch.routes.upload_validation import install_upload_validation_handler
 from cert_watch.scheduler import start_scheduler, stop_scheduler
 from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.security import SecurityContext
@@ -400,6 +401,7 @@ def create_app(
 
     install_middleware(application)
     install_guard_handler(application)
+    install_upload_validation_handler(application)
 
     # Mount route modules
     for router in route_modules:
