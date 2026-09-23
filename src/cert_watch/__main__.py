@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> None:
             "CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret"
         )
         try:
-            with open(args.report_path) as f:
+            with open(args.report_path, encoding="utf-8") as f:
                 report_data = _json.load(f)
         except _json.JSONDecodeError:
             print(
