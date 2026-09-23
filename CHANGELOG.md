@@ -172,6 +172,21 @@ All notable changes to cert-watch are documented in this file.
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Scheduler crashes recover without restart storms or false readiness.**
+  Exceptions in loop setup now retry with exponential backoff (one second up
+  to five minutes), make `/readyz` not-ready during recovery, and expose the
+  consecutive failure count plus last exception class in `/api/health`.
+  Planned bounded-stop handoff remains immediate and separate from crash
+  recovery. Immediate scans without an explicit host provider again scan all
+  registered hosts. Scheduler wake/delivery routes tolerate missing app state.
+  The last-scan metric is absent when no scheduler is attached; if refreshing
+  its timestamp hits a database error, `/metrics` serves the last known value.
+- **Scheduler restarts and shutdown are now deterministic.** Each application
+  owns its scheduler thread, synchronization state, clock, and renewal-webhook
+  executor. Restarting after a bounded stop hands off to exactly one new loop
+  after the old cycle reaches a safe point, instead of returning early on the
+  still-alive old thread and later leaving no scheduler running. Shutdown also
+  cancels queued webhook work and cannot wait indefinitely on a hung delivery.
 - **Alert delivery outages no longer evict the serving pod.** `/readyz`
   reports overdue pending alerts and stale `sending` leases without failing
   Kubernetes readiness. `/api/health` dates terminal give-ups from their last

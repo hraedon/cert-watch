@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import threading
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -17,7 +16,7 @@ from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository, init_schema, kv_set
 from cert_watch.routes.hosts import _scan_and_store
 from cert_watch.routes.settings.core import _rebuild_settings
-from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.scheduler import ScanHistory, Scheduler, record_scan_history
 from cert_watch.scheduler_context import SchedulerContext
 
 
@@ -31,7 +30,7 @@ def test_saved_settings_reach_existing_scheduler_job(monkeypatch, tmp_path):
     settings = _settings(tmp_path)
     context = SchedulerContext(settings, None, None)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(
-        settings=settings, scheduler_context=context,
+        settings=settings, scheduler=SimpleNamespace(context=context),
     )))
     for key, value in {
         "smtp_host": "new-relay.example.invalid", "alert_from": "watch@example.invalid",
@@ -71,7 +70,9 @@ def test_scheduled_scan_selects_due_hosts_only(monkeypatch, tmp_path):
     monkeypatch.setattr("cert_watch.scan._execute_deferred_post_commit", Mock())
     monkeypatch.setattr("cert_watch.scheduler._check_renewal_overdue", Mock())
 
-    result = SchedulerContext(settings, None, None).scan_all()
+    context = SchedulerContext(settings, None, None)
+    Scheduler(context)
+    result = context.scan_all()
 
     assert [call.args[:2] for call in scan.call_args_list] == [("due.example.invalid", 443)]
     assert result["scanned"] == 1
@@ -82,6 +83,7 @@ def test_scheduled_scan_executes_deferred_operations_when_scan_batch_raises(
 ):
     settings = _settings(tmp_path)
     context = SchedulerContext(settings, None, None)
+    Scheduler(context)
     monkeypatch.setattr("cert_watch.scheduler_context._evaluate_posture", Mock())
     monkeypatch.setattr(
         "cert_watch.scheduler_context.store_scanned", Mock(return_value="leaf")
@@ -95,7 +97,7 @@ def test_scheduled_scan_executes_deferred_operations_when_scan_batch_raises(
         kwargs["store_fn"](object())
         raise RuntimeError("later host failed")
 
-    monkeypatch.setattr("cert_watch.scheduler_context.run_scan_now", fail_after_store)
+    context._scan_runner = fail_after_store
 
     with pytest.raises(RuntimeError, match="later host failed"):
         context.scan_all()
@@ -147,11 +149,24 @@ def test_lifespan_jobs_use_saved_configuration_without_restart(
 ):
     if environment_hour:
         monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", environment_hour)
-    jobs = {}
-    monkeypatch.setattr("cert_watch.app.start_scheduler", lambda **kwargs: jobs.update(kwargs))
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
-    wake = Mock()
-    monkeypatch.setattr("cert_watch.scheduler_context.wake_scheduler", wake)
+    created = []
+
+    class RecordingScheduler(Scheduler):
+        def __init__(self, context):
+            super().__init__(context)
+            self.wake_count = 0
+            created.append(self)
+
+        def start(self):
+            return None
+
+        def stop(self, timeout=None):
+            return True
+
+        def wake(self):
+            self.wake_count += 1
+
+    monkeypatch.setattr("cert_watch.app.Scheduler", RecordingScheduler)
     delivered = Mock(return_value={"sent": 0, "failed": 0})
     monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", delivered)
     app = reload_app().app
@@ -166,12 +181,13 @@ def test_lifespan_jobs_use_saved_configuration_without_restart(
         assert smtp.status_code == alerts.status_code == 303
         assert "saved=1" in smtp.headers["location"]
         assert "saved=1" in alerts.headers["location"]
-        assert jobs["scan_fn"].__self__ is app.state.scheduler_context
-        assert jobs["schedule_provider"]() == (int(environment_hour or "20"), 15)
-        assert app.state.scheduler_context.settings.renewal_window_days == 0
-        jobs["alert_fn"]()
+        runtime = app.state.scheduler
+        assert runtime is created[0]
+        assert runtime.context.schedule_time() == (int(environment_hour or "20"), 15)
+        assert runtime.context.settings.renewal_window_days == 0
+        runtime.context.run_alerts()
     assert delivered.call_args.args[1].smtp_host == "saved.example.invalid"
-    assert wake.call_count == 2
+    assert created[0].wake_count == 2
 
 
 class _Clock(datetime):
@@ -182,9 +198,8 @@ class _Clock(datetime):
         return cls.current if tz is None else cls.current.astimezone(tz)
 
 
-def _freeze(monkeypatch):
+def _freeze():
     _Clock.current = datetime(2026, 9, 12, 12, tzinfo=UTC)
-    monkeypatch.setattr(scheduler, "datetime", _Clock)
 
 
 def _history(settings, hostname, status="success", *, age=timedelta()):
@@ -197,49 +212,61 @@ def _history(settings, hostname, status="success", *, age=timedelta()):
 def test_default_daily_host_waits_for_boundary_even_during_interval_cycles(
     monkeypatch, tmp_path, interval,
 ):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
     SqliteHostRepository(settings.db_path).add("daily.example.invalid", 443,
                                             scan_interval_hours=interval)
     _history(settings, "daily.example.invalid", age=timedelta(hours=1))
 
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == []
-    assert scheduler._seconds_until_next_scan(settings.db_path, 6, 0) == 18 * 3600
+    assert scheduler.get_hosts_due_for_scan(settings.db_path, now=_Clock.current) == []
+    assert scheduler._seconds_until_next_scan(
+        settings.db_path, 6, 0, now=_Clock.current
+    ) == 18 * 3600
     _Clock.current += timedelta(hours=18)
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == [("daily.example.invalid", 443)]
+    assert scheduler.get_hosts_due_for_scan(
+        settings.db_path, now=_Clock.current
+    ) == [("daily.example.invalid", 443)]
 
 
 def test_failed_interval_scan_retries_after_one_hour_without_spinning(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
     SqliteHostRepository(settings.db_path).add("retry.example.invalid", 443,
                                             scan_interval_hours=1)
     _history(settings, "retry.example.invalid", age=timedelta(hours=2))
     _history(settings, "retry.example.invalid", "failure", age=timedelta(minutes=10))
 
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == []
-    assert scheduler._seconds_until_next_scan(settings.db_path, 6, 0) == 50 * 60
+    assert scheduler.get_hosts_due_for_scan(settings.db_path, now=_Clock.current) == []
+    assert scheduler._seconds_until_next_scan(
+        settings.db_path, 6, 0, now=_Clock.current
+    ) == 50 * 60
     _Clock.current += timedelta(minutes=50)
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == [("retry.example.invalid", 443)]
+    assert scheduler.get_hosts_due_for_scan(
+        settings.db_path, now=_Clock.current
+    ) == [("retry.example.invalid", 443)]
 
 
 def test_never_attempted_host_keeps_hourly_wakeup_and_is_eligible_in_any_cycle(
     monkeypatch, tmp_path,
 ):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
     SqliteHostRepository(settings.db_path).add("new.example.invalid", 443)
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == [("new.example.invalid", 443)]
-    assert scheduler._seconds_until_next_scan(settings.db_path, 6, 0) == 3600
+    assert scheduler.get_hosts_due_for_scan(
+        settings.db_path, now=_Clock.current
+    ) == [("new.example.invalid", 443)]
+    assert scheduler._seconds_until_next_scan(
+        settings.db_path, 6, 0, now=_Clock.current
+    ) == 3600
 
 
 def test_explicit_scan_bypasses_cadence(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
     SqliteHostRepository(settings.db_path).add("manual.example.invalid", 443,
                                             scan_interval_hours=72)
     _history(settings, "manual.example.invalid")
-    assert scheduler.get_hosts_due_for_scan(settings.db_path) == []
+    assert scheduler.get_hosts_due_for_scan(settings.db_path, now=_Clock.current) == []
     scan = AsyncMock(return_value=object())
     monkeypatch.setattr("cert_watch.routes.hosts.scan_host_async", scan)
     monkeypatch.setattr(
@@ -252,61 +279,66 @@ def test_explicit_scan_bypasses_cadence(monkeypatch, tmp_path):
     scan.assert_awaited_once()
 
 
-def _drive_timer(monkeypatch, settings, on_wait, *, scan_fn=None, schedule_provider=None):
-    """Run the real scheduler loop with a deterministic clock/event, no sleeping."""
-    stop = threading.Event()
+def _drive_timer(settings, on_wait, *, scan_fn=None, context=None, stop_after_scan=False):
+    """Run the real scheduler loop with an injected clock and real thread."""
     waits = []
+    holder = {}
 
-    class Wake:
-        signalled = False
+    class Clock:
+        def now(self):
+            return _Clock.current
 
-        def clear(self):
-            self.signalled = False
+        def monotonic(self):
+            return _Clock.current.timestamp()
 
-        def set(self):
-            self.signalled = True
-
-        def wait(self, timeout):
+        def wait(self, event, timeout):
             waits.append(timeout)
-            on_wait(len(waits), timeout, stop)
-            return self.signalled
+            runtime = holder["runtime"]
+            on_wait(len(waits), timeout, runtime)
+            return event.is_set()
 
-    wake = Wake()
-    monkeypatch.setattr(scheduler, "_scheduler_stop", stop)
-    monkeypatch.setattr(scheduler, "_scheduler_wake", wake)
-    monkeypatch.setattr(scheduler, "_scheduler_thread", None)
-    monkeypatch.setattr(scheduler, "_start_renewal_webhook_pool", Mock())
-    monkeypatch.setattr(scheduler, "_detach_renewal_webhook_pool", Mock(return_value=None))
-    monkeypatch.setattr(scheduler.threading, "Thread", lambda **kwargs: SimpleNamespace(
-        start=kwargs["target"], is_alive=lambda: False, join=Mock(),
-    ))
-    scheduler.start_scheduler(
-        scan_fn=scan_fn or Mock(return_value={}), alert_fn=Mock(return_value={}),
-        db_path=settings.db_path, hour=settings.sched_hour, minute=settings.sched_min,
-        schedule_provider=schedule_provider,
-    )
+    context = context or SchedulerContext(settings, None, None)
+    if scan_fn is not None:
+        def scan():
+            result = scan_fn()
+            if stop_after_scan:
+                holder["runtime"].stop(timeout=0)
+            return result
+        context.scan_all = scan
+    context.run_alerts = Mock(return_value={})
+    context.maybe_run_weekly_digest = Mock(return_value={})
+    context.maintenance = Mock()
+    runtime = Scheduler(context, clock=Clock())
+    holder["runtime"] = runtime
+    runtime.start()
+    thread = runtime._thread
+    if thread is not None:
+        thread.join(1)
+    assert not runtime.is_running, "deterministic scheduler loop did not stop"
+    runtime.stop(timeout=1)
     return waits
 
 
 def test_scheduler_wakes_when_hourly_host_becomes_due(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
     SqliteHostRepository(settings.db_path).add("hourly.example.invalid", 443,
                                             scan_interval_hours=1)
     _history(settings, "hourly.example.invalid", age=timedelta(minutes=30))
     scanned = []
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         assert number == 1
         assert timeout == 1800
         _Clock.current += timedelta(seconds=timeout)
 
     def scan():
-        scanned.extend(scheduler.get_hosts_due_for_scan(settings.db_path))
-        scheduler._scheduler_stop.set()
+        scanned.extend(
+            scheduler.get_hosts_due_for_scan(settings.db_path, now=_Clock.current)
+        )
         return {}
 
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan)
+    _drive_timer(settings, on_wait, scan_fn=scan, stop_after_scan=True)
     assert scanned == [("hourly.example.invalid", 443)]
 
 
@@ -314,12 +346,12 @@ def test_scheduler_wakes_when_hourly_host_becomes_due(monkeypatch, tmp_path):
 def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(
     monkeypatch, tmp_path, settings_wakeup,
 ):
-    _freeze(monkeypatch)
+    _freeze()
     _Clock.current = datetime(2026, 9, 12, 11, 59, 59, 999999, tzinfo=UTC)
     settings = _settings(tmp_path, sched_hour=13)
     context = SchedulerContext(settings, None, None)
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         if number == 1:
             assert timeout == 3600
             # OS scheduling need only overshoot by a millisecond to cross the
@@ -331,11 +363,10 @@ def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(
             assert timeout == 0
         else:
             assert number == (3 if settings_wakeup else 2)
-            stop.set()
+            runtime.stop(timeout=0)
 
     scan = Mock(return_value={})
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan,
-                 schedule_provider=context.schedule_time)
+    _drive_timer(settings, on_wait, scan_fn=scan, context=context)
     scan.assert_called_once()
 
 
@@ -345,11 +376,11 @@ def test_hourly_recheck_crossing_daily_deadline_runs_cycle_once(
 def test_settings_save_interrupts_timer_and_reads_new_schedule(
     monkeypatch, tmp_path, old_time, new_time, old_wait, new_wait,
 ):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path, sched_hour=old_time[0], sched_min=old_time[1])
     context = SchedulerContext(settings, None, None)
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         if number == 1:
             assert timeout == old_wait
             context.update_settings(replace(
@@ -358,80 +389,81 @@ def test_settings_save_interrupts_timer_and_reads_new_schedule(
         else:
             assert number == 2
             assert timeout == new_wait
-            stop.set()
+            runtime.stop(timeout=0)
 
     scan = Mock(return_value={})
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan,
-                 schedule_provider=context.schedule_time)
+    _drive_timer(settings, on_wait, scan_fn=scan, context=context)
     scan.assert_not_called()
 
 
 def test_early_interval_cycle_preserves_future_daily_cycle(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path, sched_hour=13)
     SqliteHostRepository(settings.db_path).add("hourly.example.invalid", 443,
                                             scan_interval_hours=1)
     _history(settings, "hourly.example.invalid", age=timedelta(minutes=30))
     cycles = []
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         if number < 3:
             assert timeout == 1800
             _Clock.current += timedelta(seconds=timeout)
         else:
             assert number == 3
-            stop.set()
+            runtime.stop(timeout=0)
 
     def scan():
-        due = scheduler.get_hosts_due_for_scan(settings.db_path, hour=13)
+        due = scheduler.get_hosts_due_for_scan(
+            settings.db_path, hour=13, now=_Clock.current
+        )
         cycles.append(due)
         for hostname, _ in due:
             _history(settings, hostname)
         return {}
 
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan)
+    _drive_timer(settings, on_wait, scan_fn=scan)
     assert cycles == [[("hourly.example.invalid", 443)], []]
 
 
 def test_actual_schedule_change_replaces_elapsed_daily_target(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path, sched_hour=13)
     context = SchedulerContext(settings, None, None)
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         if number == 1:
             _Clock.current += timedelta(seconds=timeout, milliseconds=1)
             context.update_settings(replace(settings, sched_hour=14))
         else:
             assert number == 2
             assert 3500 < timeout < 3600
-            stop.set()
+            runtime.stop(timeout=0)
 
     scan = Mock(return_value={})
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan,
-                 schedule_provider=context.schedule_time)
+    _drive_timer(settings, on_wait, scan_fn=scan, context=context)
     scan.assert_not_called()
 
 
 def test_timer_stop_interrupts_wait_without_running_jobs(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     settings = _settings(tmp_path)
 
-    def on_wait(number, timeout, stop):
+    def on_wait(number, timeout, runtime):
         assert number == 1
-        scheduler.stop_scheduler()
+        runtime.stop(timeout=0)
 
     scan = Mock(return_value={})
-    _drive_timer(monkeypatch, settings, on_wait, scan_fn=scan)
+    _drive_timer(settings, on_wait, scan_fn=scan)
     scan.assert_not_called()
 
 
 def test_scan_keeps_one_snapshot_through_mid_job_settings_update(monkeypatch, tmp_path):
-    _freeze(monkeypatch)
+    _freeze()
     monkeypatch.setattr("cert_watch.http_client.validate_webhook_url", lambda *a, **kw: None)
     settings = _settings(tmp_path, tls_verify=True, drift_alerts=False,
                          webhook_url="https://old.example.invalid")
     context = SchedulerContext(settings, None, settings.build_webhook_config())
+    Scheduler(context)
     for hostname in ["a.example.invalid", "b.example.invalid"]:
         SqliteHostRepository(settings.db_path).add(hostname, 443)
     updated = replace(settings, tls_verify=False, drift_alerts=True,

@@ -5,11 +5,20 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from cert_watch.config import Settings
+from cert_watch.database import init_schema
 from cert_watch.renewal_analytics import (
     RenewalOverdueSignal,
     detect_renewal_overdue,
 )
-from cert_watch.scheduler import run_scan_now
+from cert_watch.scheduler import Scheduler
+from cert_watch.scheduler_context import SchedulerContext
+
+
+def _runtime(db: Path) -> Scheduler:
+    init_schema(db)
+    settings = Settings(db_path=db, data_dir=db.parent)
+    return Scheduler(SchedulerContext(settings, None, None))
 
 
 def _iso(dt: datetime) -> str:
@@ -291,7 +300,7 @@ class TestSchedulerRenewalOverdue:
         def alert_fn():
             return {"sent": 0, "failed": 0}
 
-        run_scan_now(
+        _runtime(db).run_scan_now(
             scan_fn,
             alert_fn,
             db_path=db,
@@ -346,7 +355,7 @@ class TestSchedulerRenewalOverdue:
         def alert_fn():
             return {"sent": 0, "failed": 0}
 
-        run_scan_now(
+        _runtime(db).run_scan_now(
             scan_fn,
             alert_fn,
             db_path=db,
@@ -358,7 +367,7 @@ class TestSchedulerRenewalOverdue:
         evts = get_events(db, event_type="renewal_overdue")
         assert len(evts) == 0
 
-    def test_run_scan_no_db_skips_overdue(self):
+    def test_run_scan_no_db_skips_overdue(self, tmp_path):
         def scan_fn(hostname, port):
             from dataclasses import dataclass
 
@@ -372,7 +381,7 @@ class TestSchedulerRenewalOverdue:
         def alert_fn():
             return {"sent": 0, "failed": 0}
 
-        result = run_scan_now(
+        result = _runtime(tmp_path / "runtime.sqlite3").run_scan_now(
             scan_fn,
             alert_fn,
             host_provider=lambda: [("any.example.com", 443)],

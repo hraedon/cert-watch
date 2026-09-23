@@ -11,7 +11,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from cert_watch import scheduler
 from cert_watch.alerting import WebhookConfig
 from cert_watch.audit import record_audit
 from cert_watch.auth.scope import (
@@ -491,7 +490,6 @@ def update_host_settings(
         },
         source_ip=source_ip,
     )
-    scheduler.wake_scheduler()
     assert updated is not None
     return updated
 

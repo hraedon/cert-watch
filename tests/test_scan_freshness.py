@@ -116,8 +116,7 @@ def test_home_browse_and_detail_expose_overdue_scans(
     # suppress the overdue reason (it is gated on `not failing`). That race made
     # this test fail roughly one full-suite run in three. Assert the rendering,
     # not the scheduler.
-    monkeypatch.setattr(app_module, "start_scheduler", lambda **kwargs: None)
-    monkeypatch.setattr(app_module, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(app_module.Scheduler, "start", lambda self: None)
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
     SqliteHostRepository(db).add("old.example.test", 443, scan_interval_hours=4)
