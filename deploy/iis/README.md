@@ -218,6 +218,19 @@ additionally keep the app warm with a scheduled task that requests the
 public `/healthz` endpoint every few minutes (liveness only; do not depend
 on `/readyz`, which requires auth when a provider is configured).
 
+Saving `web.config` also stops the current `python.exe` backend, but IIS does
+not start a replacement until a request arrives. This caused a six-minute gap
+and a missed scheduled scan in validation. After **every** `web.config` edit,
+explicitly recycle the application pool; Application Initialization plus
+preload then respawns the backend without waiting for traffic:
+
+```powershell
+& "$env:windir\system32\inetsrv\appcmd.exe" recycle apppool /apppool.name:cert-watch
+```
+
+`cert-watch` is the installer's default pool name. Substitute the value passed
+to `-AppPool` for a non-default installation.
+
 **preloadEnabled is silently inert without the Application Initialization
 role service.** IIS gives no warning when the feature is missing — the
 setting is accepted, visible in config, and completely ignored. That is not
@@ -352,6 +365,24 @@ so a failure can be triaged from the report alone, without RDP-ing in to dig.
 Add `-Markdown` for a readable report, or `-Json` to stream it to stdout (handy
 for feeding the result to an automated triage step). Each remediation string
 points back to the relevant step in this document.
+
+## Upgrading
+
+Follow [UPGRADING.md](../../UPGRADING.md), including its 0.9-to-1.0 checklist.
+For IIS, take the WAL-safe database backup with the CLI inside the installation
+venv, preserve both files under `<data dir>\secrets`, and recover the live
+site's physical path, application pool, application overrides, data directory,
+Python path, and TLS binding before running the new source tree's installer.
+Installers from 1.0.1 on record their supplied, non-secret arguments in
+`<InstallDir>\install-args.json` for the next run; older installations require
+the IIS inspection described in the upgrade guide.
+
+The installer stops only the pool named by `-AppPool`. With `-ConfigureIIS`, it
+also assigns the existing site to that pool and sets its physical path to
+`-SitePath`, so accepting defaults from a customized installation can repoint
+the live site. A shell command also does not inherit settings from
+`web.config`. The upgrade guide includes exact PowerShell recovery and schema
+verification commands, plus the HTTPS-binding warning.
 
 ## Uninstall / teardown
 

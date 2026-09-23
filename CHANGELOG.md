@@ -9,6 +9,19 @@ All notable changes to cert-watch are documented in this file.
 - `cert-watch verify-report` prints a clean `FAIL` and exits 1 when the report
   file is missing, unreadable, not UTF-8, or nested too deeply to parse,
   instead of a Python traceback (#66).
+- Configure application logging before startup schema migration so the
+  pre-migration backup path and each applied migration reach the configured
+  handler.
+
+### Documentation
+
+- Correct the 0.9-to-1.0 migration behavior and ranges, including preservation
+  of unmatched certificate notes. Expand the upgrade procedure with
+  Docker/Compose, Kubernetes, Linux, and IIS backup and verification commands;
+  live IIS path, pool, binding, and installer-argument recovery; the 1.0.1
+  installer argument record; warnings about defaults repointing an IIS site;
+  pip's actual dependency/index behavior; and the required recycle after a
+  `web.config` edit.
 
 ## [1.0.0] - 2026-09-23
 
