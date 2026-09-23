@@ -105,6 +105,9 @@ All notable changes to cert-watch are documented in this file.
   attempted before a delivery cycle runs out of time retain their last useful
   error and receive persisted backoff; only rows never reached in that cycle
   remain immediately eligible.
+- **Manual Flush queue no longer exhausts alert retries.** Operator-initiated
+  flushes still record append-only delivery evidence and schedule normal
+  backoff after failure, but do not advance the persisted give-up counter.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

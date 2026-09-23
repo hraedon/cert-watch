@@ -75,7 +75,8 @@ restore the pre-migration backup.
   configured does not consume attempts and remains pending with backoff. If a
   delivery cycle exhausts its wall-clock budget, rows already attempted keep
   their last diagnostic and back off; rows not reached remain immediately
-  eligible for the next worker.
+  eligible for the next worker. Operator-initiated **Flush queue** attempts are
+  recorded in delivery evidence but do not consume the bounded give-up budget.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

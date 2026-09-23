@@ -13,6 +13,7 @@ from cert_watch.alerting import Dispatcher
 from cert_watch.alerting.model import ALERT_MAX_ATTEMPTS, SendResult
 from cert_watch.database import Alert, AlertStore, SqliteAlertRepository, init_schema
 from cert_watch.database.connection import close_connections
+from cert_watch.database.delivery_evidence import list_attempts
 
 
 class CountingTransport:
@@ -264,6 +265,33 @@ def test_cycle_budget_backs_off_attempted_rows_and_preserves_diagnostics(
     assert stored["second"].attempt_count == 0
     assert stored["second"].next_attempt_at is None
     assert stored["second"].error_message == "waiting for first attempt"
+
+
+def test_operator_flush_records_evidence_without_spending_give_up_budget(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "operator-flush.sqlite3"
+    init_schema(db)
+    alert_id = _alert(db)
+    transport = CountingTransport(
+        SendResult(
+            "failed", "transport", operator_message="relay unavailable"
+        )
+    )
+
+    for _ in range(4):
+        assert Dispatcher(
+            db, transports=[transport], ignore_backoff=True
+        ).process_pending() == {"sent": 0, "failed": 0, "deferred": 1}
+
+    stored = SqliteAlertRepository(db).list_for_cert("cert-1")[0]
+    assert stored.status == "pending"
+    assert stored.attempt_count == 0
+    assert len(list_attempts(db, [alert_id])[alert_id]) == 12
+
+    assert Dispatcher(
+        db, transports=[transport], ignore_backoff=False
+    ).process_pending() == {"sent": 0, "failed": 0, "deferred": 0}
 
 
 def test_flush_and_scheduler_dispatchers_still_send_once(tmp_path: Path) -> None:

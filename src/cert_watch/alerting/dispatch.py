@@ -229,6 +229,13 @@ class Dispatcher:
     def _lease_expiry(self) -> datetime:
         return _utc(self.clock()) + timedelta(seconds=self.lease_seconds)
 
+    def _attempts_to_persist(self, item: _Delivery) -> int:
+        """Manual flush observes outcomes without consuming give-up budget."""
+        return 0 if self.ignore_backoff else item.waves_reached
+
+    def _has_attempts_remaining(self, item: _Delivery) -> bool:
+        return self.ignore_backoff or item.attempts_remaining > 0
+
     def process_pending(self) -> dict[str, int]:
         claimed_at = _utc(self.clock())
         alerts = self.store.claim(
@@ -243,7 +250,7 @@ class Dispatcher:
         started = self.monotonic_clock()
         exhausted = False
 
-        active = [item for item in queue if item.attempts_remaining > 0]
+        active = [item for item in queue if self._has_attempts_remaining(item)]
         for wave in backoff_range(
             ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
         ):
@@ -270,7 +277,7 @@ class Dispatcher:
             active = [
                 item
                 for item in active
-                if not item.done and item.attempts_remaining > 0
+                if not item.done and self._has_attempts_remaining(item)
             ]
             if not active or exhausted:
                 break
@@ -306,7 +313,7 @@ class Dispatcher:
                 if self.store.complete_sent(
                     alert.id,
                     lease_owner=self.lease_owner,
-                    attempts=item.waves_reached,
+                    attempts=self._attempts_to_persist(item),
                     now=now,
                 ):
                     sent += 1
@@ -318,7 +325,8 @@ class Dispatcher:
                 deferred += outcome == "deferred"
                 continue
 
-            new_attempt_count = alert.attempt_count + item.waves_reached
+            attempts_to_persist = self._attempts_to_persist(item)
+            new_attempt_count = alert.attempt_count + attempts_to_persist
             error = item.last_error or alert.error_message or "unknown"
             reason = item.last_reason or "unknown"
             if new_attempt_count >= ALERT_MAX_ATTEMPTS:
@@ -326,7 +334,7 @@ class Dispatcher:
                 if self.store.complete_failed(
                     alert.id,
                     lease_owner=self.lease_owner,
-                    attempts=item.waves_reached,
+                    attempts=attempts_to_persist,
                     now=now,
                     failure_reason=reason,
                     error_message=message,
@@ -353,7 +361,7 @@ class Dispatcher:
             if self.store.complete_pending(
                 alert.id,
                 lease_owner=self.lease_owner,
-                attempts=item.waves_reached,
+                attempts=attempts_to_persist,
                 now=now,
                 next_attempt_at=next_attempt_at,
                 error_message=message,
@@ -379,7 +387,7 @@ class Dispatcher:
             try:
                 if self.settlement_repo is not None:
                     self._prepare_repo_settlement(
-                        attempts=item.waves_reached,
+                        attempts=self._attempts_to_persist(item),
                         now=now,
                         failure_reason="evidence_unavailable",
                     )
@@ -389,7 +397,7 @@ class Dispatcher:
                     completed = self.store.complete_failed(
                         alert.id,
                         lease_owner=self.lease_owner,
-                        attempts=item.waves_reached,
+                        attempts=self._attempts_to_persist(item),
                         now=now,
                         failure_reason="evidence_unavailable",
                         error_message=message,
@@ -404,7 +412,7 @@ class Dispatcher:
                 completed = self.store.complete_pending(
                     alert.id,
                     lease_owner=self.lease_owner,
-                    attempts=item.waves_reached,
+                    attempts=self._attempts_to_persist(item),
                     now=now,
                     next_attempt_at=None,
                 )
@@ -415,14 +423,16 @@ class Dispatcher:
 
         try:
             if self.settlement_repo is not None:
-                self._prepare_repo_settlement(attempts=item.waves_reached, now=now)
+                self._prepare_repo_settlement(
+                    attempts=self._attempts_to_persist(item), now=now
+                )
                 self.settlement_repo.note_deferral(alert.id, now, restart=restart)
                 completed = True
             else:
                 completed = self.store.complete_pending(
                     alert.id,
                     lease_owner=self.lease_owner,
-                    attempts=item.waves_reached,
+                    attempts=self._attempts_to_persist(item),
                     now=now,
                     next_attempt_at=None,
                     deferred_since=now,
@@ -438,7 +448,7 @@ class Dispatcher:
             completed = self.store.complete_pending(
                 alert.id,
                 lease_owner=self.lease_owner,
-                attempts=item.waves_reached,
+                attempts=self._attempts_to_persist(item),
                 now=now,
                 next_attempt_at=None,
             )
