@@ -73,8 +73,16 @@ All notable changes to cert-watch are documented in this file.
   module paths `cert_watch.alerts`, `cert_watch.alert_delivery`,
   `cert_watch.alert_adapters` and `cert_watch.digest` are deprecated re-export
   shims and will be removed in a later release; logger names are unchanged.
+- **Activity uses one alert-channel vocabulary.** New delivery attempts are
+  recorded as `smtp` or `webhook:<kind>` (for example `webhook:teams` and
+  `webhook:alertmanager`); legacy ledger names are normalized on read and the
+  append-only historical rows are not rewritten.
 
 ### Fixed
+- **The container image supports LDAP and OAuth sign-in.** The published image
+  was built without the optional `ldap3` / `authlib` libraries, so
+  `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the
+  `auth` extra, and the deploy smoke job checks the imports.
 - **Alerts page flash messages.** `/alerts` now shows `?warning=` and `?error=`
   messages (flush busy, flush failures, rate limits); they were silently dropped.
 - **Signed compliance reports reject unsigned additions.** Verification now

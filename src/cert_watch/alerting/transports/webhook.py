@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import socket
 from datetime import datetime
+from typing import Any
+from urllib.error import HTTPError, URLError
 
-from cert_watch.alerting.evidence import observe_exception, observe_failure, observe_http
-from cert_watch.alerting.model import WebhookConfig
+from cert_watch.alerting.model import OutboundMessage, SendResult, WebhookConfig
 from cert_watch.alerting.transports.adapters import get_adapter
 from cert_watch.alerting.transports.base import _redact_secret
-from cert_watch.database import Alert
 from cert_watch.http_client import SSRFBlockedError, ssrf_safe_urlopen
 
 logger = logging.getLogger("cert_watch.alerts")
@@ -30,22 +32,68 @@ def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
     if config and config.headers:
         for val in config.headers.values():
             if len(val) >= 4:
-                msg = msg.replace(val, "***")
+                for form in _escaped_forms(val):
+                    msg = msg.replace(form, "***")
     return msg
 
 
-def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
-    """Send alert via the configured channel adapter. Returns True on success.
+def _escaped_forms(value: str) -> tuple[str, ...]:
+    """*value* as it can appear in an exception message.
+
+    urllib quotes an invalid header value as ``repr(value.encode())``, so a
+    value containing CR/LF or non-ASCII shows up escaped rather than raw and a
+    plain substring match would miss it.
+    """
+    forms = {value, repr(value)[1:-1]}
+    try:
+        forms.add(repr(value.encode("latin-1"))[2:-1])
+    except UnicodeEncodeError:
+        forms.add(repr(value.encode("utf-8"))[2:-1])
+    return tuple(sorted(forms, key=len, reverse=True))
+
+
+_WEBHOOK_KINDS = {"generic", "slack", "discord", "teams", "pagerduty", "alertmanager"}
+
+
+class WebhookTransport:
+    def __init__(self, config: WebhookConfig) -> None:
+        self.config = config
+        kind = config.kind if config.kind in _WEBHOOK_KINDS else "unknown"
+        self.channel = f"webhook:{kind}"
+        endpoint = config.routing_key if config.kind == "pagerduty" else config.url
+        self.destination_id = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
+
+    def send(self, msg: OutboundMessage) -> SendResult:
+        return send_webhook(msg, self.config)
+
+
+def send_webhook(msg: OutboundMessage | Any, config: WebhookConfig | None) -> SendResult:
+    """Send a message via the configured channel and return a sanitized result.
 
     Dispatches to the adapter matching ``config.kind`` and sends the resulting
     request through ``ssrf_safe_urlopen``. PagerDuty returns HTTP 202 on success;
     all other providers return 2xx.
     """
+    if not isinstance(msg, OutboundMessage):
+        # Compatibility for deprecated direct callers while plan 058's shims
+        # remain. WebhookTransport itself accepts OutboundMessage only.
+        msg = OutboundMessage.from_alert(msg)
     if config is None:
-        return False
+        return SendResult(
+            "failed", "invalid_channel", reached_transport=False,
+            operator_message="Webhook is not configured",
+        )
     try:
         adapter = get_adapter(config.kind)
-        req = adapter.build(alert, config)
+    except ValueError as exc:
+        return SendResult(
+            "failed",
+            "invalid_channel",
+            reached_transport=False,
+            operator_message=_sanitize_webhook_error(str(exc), config),
+        )
+    try:
+        req = adapter.build(msg, config)
         resp = ssrf_safe_urlopen(
             req.url,
             data=req.body,
@@ -59,16 +107,42 @@ def send_webhook(alert: Alert, config: WebhookConfig | None) -> bool:
             delivered = (
                 resp.status == 202 if config.kind == "pagerduty" else 200 <= resp.status < 300
             )
-            observe_http(resp.status, delivered=delivered)
-            return delivered
+            return SendResult(
+                "accepted" if delivered else "failed",
+                "" if delivered else "http_rejected",
+                http_status=resp.status,
+            )
     except SSRFBlockedError as exc:
-        alert.error_message = f"webhook URL blocked by SSRF policy: {exc}"
-        observe_failure("blocked")
-        return False
+        return SendResult(
+            "blocked",
+            "blocked",
+            reached_transport=False,
+            operator_message=_sanitize_webhook_error(
+                f"webhook URL blocked by SSRF policy: {exc}", config
+            ),
+        )
     except Exception as exc:  # noqa: BLE001 — webhook is an external service with unpredictable failure modes
-        alert.error_message = _sanitize_webhook_error(str(exc), config)
-        observe_exception(exc)
-        return False
+        if isinstance(exc, HTTPError):
+            reason = "http_rejected"
+            http_status = exc.code
+            reached_transport = True
+        elif isinstance(exc, TimeoutError):
+            reason = "timeout"
+            http_status = None
+            reached_transport = True
+        else:
+            reason = "transport"
+            http_status = None
+            reached_transport = not (
+                isinstance(exc, URLError) and isinstance(exc.reason, socket.gaierror)
+            )
+        return SendResult(
+            "failed",
+            reason,
+            reached_transport=reached_transport,
+            http_status=http_status,
+            operator_message=_sanitize_webhook_error(str(exc), config),
+        )
 
 
 def _adapter_has_build_resolve(kind: str) -> bool:
