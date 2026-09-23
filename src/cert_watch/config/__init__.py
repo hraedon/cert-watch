@@ -28,6 +28,7 @@ from cert_watch.config.kv_loader import (
     SETUP_COMPLETE,
 )
 from cert_watch.config.loader import setting_env_is_set, setting_env_source, ui_field_map
+from cert_watch.config.runtime import current_settings, invalidate_settings, publish_settings
 from cert_watch.config.settings import Settings
 
 __all__ = [
@@ -45,6 +46,9 @@ __all__ = [
     "_parse_int",
     "_parse_role_map",
     "_validate_range",
+    "current_settings",
+    "invalidate_settings",
+    "publish_settings",
     "read_secret",
     "resolve_or_persist_secret",
     "setting_env_is_set",

@@ -98,9 +98,9 @@ def _resolve_encryption_key(db_path: str | Path) -> str | None:
     matching the alert path's behavior when the signing key is lost). ``db_path``
     lives under ``data_dir``, so its parent holds ``.auth_secret``.
     """
-    from cert_watch.config import Settings
+    from cert_watch.config import read_secret
 
-    signing_key: str | None = Settings.from_env().auth_secret or None
+    signing_key = read_secret("CERT_WATCH_AUTH_SECRET") or None
     if not signing_key:
         secret_file = Path(db_path).parent / ".auth_secret"
         try:
@@ -117,11 +117,11 @@ def _resolve_encryption_key(db_path: str | Path) -> str | None:
 def load_event_config(
     db_path: str | Path, *, encryption_key: str | None = None
 ) -> EventStreamConfig:
-    from cert_watch.config import Settings
+    from cert_watch.config import current_settings
 
     if encryption_key is None:
         encryption_key = _resolve_encryption_key(db_path)
-    settings = Settings.from_env_with_kv(Path(db_path), encryption_key)
+    settings = current_settings(Path(db_path), encryption_key=encryption_key)
     raw = settings.event_stream_config
     cfg = (
         EventStreamConfig.from_json(json.dumps(raw))
@@ -139,6 +139,7 @@ def load_event_config(
 def save_event_config(
     db_path: str | Path, config: EventStreamConfig, *, encryption_key: str | None = None
 ) -> None:
+    from cert_watch.config import invalidate_settings
     from cert_watch.database.kv_store import kv_set_multi
 
     if encryption_key is None:
@@ -157,6 +158,7 @@ def save_event_config(
             # .auth_secret, so this branch is not reached there.
             pairs[_KV_ROUTING_KEY] = config.pagerduty_routing_key
     kv_set_multi(db_path, pairs)
+    invalidate_settings(db_path)
 
 
 _rate_lock = threading.Lock()
@@ -245,9 +247,9 @@ def _resolve_ssrf_policy(db_path: str | Path) -> tuple[bool, tuple[str, ...]]:
     setup wizard. Resolved live at delivery time (not snapshotted into the
     event-stream config) so a policy change takes effect without re-saving it.
     """
-    from cert_watch.config import Settings
+    from cert_watch.config import current_settings
 
-    settings = Settings.from_env_with_kv(Path(db_path))
+    settings = current_settings(Path(db_path))
     return settings.allow_private, settings.allowed_subnets
 
 

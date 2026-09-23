@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from cert_watch.config import Settings
+from cert_watch.config import Settings, publish_settings
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, get_write_lock
 from cert_watch.scan import DeferredPostCommit, _evaluate_posture, scan_host, store_scanned
 from cert_watch.scheduler import get_hosts_due_for_scan, run_scan_now, wake_scheduler
@@ -64,6 +64,7 @@ class SchedulerContext:
         from cert_watch.database.kv_store import kv_get
 
         self._job_config = _JobConfig(self.settings, self.alert_cfg, self.webhook_cfg)
+        publish_settings(self.settings)
         self._expiry_digest_week = _decode_iso_week(
             kv_get(self.settings.db_path, _EXPIRY_DIGEST_WEEK_KEY)
         )
@@ -87,6 +88,7 @@ class SchedulerContext:
             self.settings = settings
             self.alert_cfg = config.alert_cfg
             self.webhook_cfg = config.webhook_cfg
+        publish_settings(settings)
         wake_scheduler()
 
     def schedule_time(self) -> tuple[int, int]:

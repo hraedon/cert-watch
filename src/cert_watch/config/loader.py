@@ -29,9 +29,8 @@ def setting_env_source(field_name: str, env: Mapping[str, str] | None = None) ->
     environ = os.environ if env is None else env
     spec = FIELD_SPECS[field_name]
     for name in spec.env_names:
-        if name in environ:
-            if spec.kv_key is None or environ[name].strip():
-                return name
+        if name in environ and (spec.kv_key is None or environ[name].strip()):
+            return name
         file_name = f"{name}_FILE"
         if spec.sensitive and environ.get(file_name, "").strip():
             return file_name

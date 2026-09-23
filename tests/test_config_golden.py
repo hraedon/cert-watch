@@ -249,3 +249,34 @@ def test_empty_secret_file_variable_is_unset_and_kv_falls_back(monkeypatch, tmp_
     monkeypatch.setenv("LDAP_BIND_PASSWORD_FILE", "")
 
     assert Settings.from_env_with_kv(db_path).ldap_bind_password == "saved-password"
+
+
+def test_standalone_current_settings_resolves_once_until_invalidated(
+    monkeypatch, tmp_path
+):
+    from cert_watch.config import Settings, current_settings, invalidate_settings
+    from cert_watch.database import init_schema
+    from cert_watch.database.kv_store import kv_set
+
+    db_path = tmp_path / "cert-watch.sqlite3"
+    init_schema(db_path)
+    kv_set(db_path, "smtp_host", "first.example.test")
+    original = Settings.from_env_with_kv.__func__
+    calls = 0
+
+    def counted(cls, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(cls, *args, **kwargs)
+
+    monkeypatch.setattr(Settings, "from_env_with_kv", classmethod(counted))
+
+    assert current_settings(db_path).smtp_host == "first.example.test"
+    assert current_settings(db_path).smtp_host == "first.example.test"
+    assert calls == 1
+
+    kv_set(db_path, "smtp_host", "second.example.test")
+    invalidate_settings(db_path)
+
+    assert current_settings(db_path).smtp_host == "second.example.test"
+    assert calls == 2

@@ -447,9 +447,9 @@ def _deserialize_policy_set(raw: str) -> PolicySet:
 
 
 def load_policy_set(db_path: str) -> PolicySet:
-    from cert_watch.config import Settings
+    from cert_watch.config import current_settings
 
-    stored = Settings.from_env_with_kv(Path(db_path)).policy_config
+    stored = current_settings(Path(db_path)).policy_config
     if stored is None:
         return default_policy_set()
     try:
@@ -460,8 +460,11 @@ def load_policy_set(db_path: str) -> PolicySet:
 
 
 def save_policy_set(db_path: str, ruleset: PolicySet) -> None:
+    from cert_watch.config import invalidate_settings
+
     with _policy_lock:
         kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+        invalidate_settings(db_path)
 
 
 def save_policy_set_locked(db_path: str, ruleset: PolicySet) -> None:
@@ -472,6 +475,9 @@ def save_policy_set_locked(db_path: str, ruleset: PolicySet) -> None:
     The lock is already held by the caller via :func:`acquire_policy_lock`.
     """
     kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+    from cert_watch.config import invalidate_settings
+
+    invalidate_settings(db_path)
 
 
 class acquire_policy_lock:

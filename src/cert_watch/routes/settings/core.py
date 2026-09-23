@@ -10,7 +10,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.auth.guards import MutationGuard, admin_settings_form
-from cert_watch.config import Settings
+from cert_watch.config import Settings, publish_settings
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes.settings.config import _SENSITIVE_KEYS, _get_encryption_key
 
@@ -42,6 +42,7 @@ def _rebuild_settings(request: Request, db_path: Path) -> None:
     if context is not None:
         context.update_settings(s)
     request.app.state.settings = s
+    publish_settings(s)
 
 
 async def _save_config_section(

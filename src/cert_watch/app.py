@@ -22,6 +22,7 @@ from cert_watch.config import (
     LOCAL_ADMIN_USER,
     SETUP_COMPLETE,
     Settings,
+    publish_settings,
 )
 from cert_watch.database import (
     check_encrypted_values,
@@ -284,6 +285,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     app.state.auth_provider = auth
     app.state.settings = s
     app.state.security = security
+    publish_settings(s)
 
     encryption_key = derive_encryption_key(security.signing_key)
     undecryptable = check_encrypted_values(s.db_path, encryption_key)

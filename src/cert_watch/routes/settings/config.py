@@ -9,7 +9,6 @@ from fastapi import Request
 from cert_watch.config import (
     FIELD_SPECS,
     SENSITIVE_SETTING_KEYS,
-    Settings,
     setting_env_is_set,
     ui_field_map,
 )
@@ -100,9 +99,10 @@ def _effective_config(
     """
     import json
 
+    from cert_watch.config import current_settings
     from cert_watch.database import kv_all
 
-    settings = Settings.from_env_with_kv(db_path, encryption_key)
+    settings = current_settings(db_path, encryption_key=encryption_key)
     kv = kv_all(db_path)
     by_kv = {spec.kv_key: name for name, spec in FIELD_SPECS.items() if spec.kv_key}
     result: dict[str, str] = {}
