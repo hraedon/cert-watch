@@ -209,9 +209,58 @@ def _expansions(path: str) -> list[dict[str, str]]:
     return combos
 
 
+def _fresh_api_delete_target(
+    db: Path, path: str, label: str, seeded: Seeded
+) -> None:
+    """Give each new DELETE adapter its own target after the HTML delete ran.
+
+    The matrix deliberately executes both presentations in one app. Reusing
+    the HTML target made every authorized JSON delete observe only a 404,
+    turning a real authorization success into an unrecorded outcome.
+    """
+    if path == "/api/hosts/{host_id}":
+        from cert_watch.database import SqliteHostRepository
+
+        suffix = "a" if label == "host_a" else "b"
+        seeded.ids[label] = SqliteHostRepository(db).add(
+            f"fresh-{suffix}-{seeded.ids[label]}.example.com",
+            443,
+            tags=suffix.upper(),
+        )
+    elif path == "/api/certificates/{cert_id}":
+        from tests._helpers import seed_scanned
+
+        suffix = "a" if label == "cert_a" else "b"
+        seeded.ids[label] = seed_scanned(
+            db,
+            f"fresh-{suffix}-{seeded.ids[label]}.example.com",
+            443,
+            _cert(f"fresh-{suffix}.example.com", suffix),
+        )
+        from cert_watch.database import SqliteCertificateRepository
+
+        SqliteCertificateRepository(db).set_tags(seeded.ids[label], suffix.upper())
+    elif path == "/api/trust-anchors/{anchor_id}":
+        from cert_watch.database import SqliteTrustAnchorRepository
+
+        seeded.ids[label] = SqliteTrustAnchorRepository(db).add(
+            _cert(f"fresh-anchor-{seeded.ids[label]}", "d")
+        )
+
+
 def _body_for(route: Any, path: str) -> dict[str, Any]:
     """Minimal well-formed request body: required form fields filled so body
     validation passes and the outcome reflects the guards, not a 422."""
+    if path == "/api/hosts":
+        return {"json": {"hostname": "93.184.216.34", "port": 443}}
+    if path == "/api/hosts/{host_id}/settings":
+        return {
+            "json": {
+                "scan_interval_hours": None,
+                "threshold_days": None,
+                "renewal_status": "pending",
+            }
+        }
     data: dict[str, str] = {"_probe": "1"}
     files: dict[str, Any] = {}
     dependant = getattr(route, "dependant", None)
@@ -367,6 +416,9 @@ def run_matrix_for(
             headers = {**headers, **_csrf_header(client)}
         for method, path, route in sorted(mutating_routes(app), key=_order_key):
             for combo in _expansions(path):
+                if method == "DELETE" and path in _NEW_DESTRUCTIVE_API:
+                    for label in combo.values():
+                        _fresh_api_delete_target(db, path, label, seeded)
                 url = path
                 for name, label in combo.items():
                     url = url.replace("{" + name + "}", seeded.ids[label])
