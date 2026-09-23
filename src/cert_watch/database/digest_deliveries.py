@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -36,6 +37,42 @@ def digest_period_key(kind: str, cadence_days: int, *, now: datetime | None = No
     return f"{kind}:{iso.year:04d}-W{iso.week:02d}:cadence={cadence_days}"
 
 
+def _week_identity(digest_key: str) -> str:
+    """Return the kind/week portion while preserving stored key compatibility."""
+    return digest_key.rsplit(":cadence=", 1)[0]
+
+
+def _sent_claim_for_week(
+    conn: sqlite3.Connection,
+    digest_key: str,
+    channel: str,
+    target: str,
+) -> sqlite3.Row | None:
+    rows = conn.execute(
+        "SELECT digest_key, idempotency_key FROM digest_deliveries "
+        "WHERE channel = ? AND target = ? AND status = 'sent'",
+        (channel, target),
+    ).fetchall()
+    week = _week_identity(digest_key)
+    return next(
+        (row for row in rows if _week_identity(row["digest_key"]) == week),
+        None,
+    )
+
+
+def digest_delivery_is_sent(
+    db_path: str | Path,
+    digest_key: str,
+    channel: str,
+    target: str,
+) -> bool:
+    """Return whether this transport target completed in the current ISO week."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        row = _sent_claim_for_week(conn, digest_key, channel, target)
+    return row is not None
+
+
 def _idempotency_key(digest_key: str, channel: str, target: str) -> str:
     raw = f"{digest_key}\0{channel}\0{target}".encode()
     return hashlib.sha256(raw).hexdigest()
@@ -64,17 +101,22 @@ def claim_digest_delivery(
     with _connect(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
+            sent = _sent_claim_for_week(conn, digest_key, channel, target)
+            if sent is not None:
+                conn.rollback()
+                return DigestDeliveryClaim(
+                    "sent",
+                    sent["digest_key"],
+                    channel,
+                    target,
+                    sent["idempotency_key"],
+                )
             row = conn.execute(
                 "SELECT status, lease_expires_at, idempotency_key "
                 "FROM digest_deliveries "
                 "WHERE digest_key = ? AND channel = ? AND target = ?",
                 (digest_key, channel, target),
             ).fetchone()
-            if row is not None and row["status"] == "sent":
-                conn.rollback()
-                return DigestDeliveryClaim(
-                    "sent", digest_key, channel, target, row["idempotency_key"]
-                )
             if row is not None and row["status"] == "claimed":
                 lease_raw = row["lease_expires_at"]
                 if lease_raw and _parse_iso(lease_raw) > current:

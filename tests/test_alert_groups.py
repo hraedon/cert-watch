@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     evaluate_all_certs,
     evaluate_thresholds,
     resolve_all_group_recipients,
@@ -629,8 +629,8 @@ class TestGroupThresholdOverride:
 class TestDigestCadence:
     def test_build_renewal_digest_cadence_days(self, db: Path):
         """cadence_days controls the lookback window for renewal events."""
+        from cert_watch.alerting.digest.renewal import build_renewal_digest
         from cert_watch.database.connection import _connect, _iso
-        from cert_watch.digest import build_renewal_digest
 
         # Seed a cert_renewed event 10 days ago
         event_ts = _iso(datetime.now(UTC) - timedelta(days=10))
@@ -652,8 +652,8 @@ class TestDigestCadence:
 
     def test_build_renewal_digest_default_days(self, db: Path):
         """Default days=7 includes events within the last 7 days."""
+        from cert_watch.alerting.digest.renewal import build_renewal_digest
         from cert_watch.database.connection import _connect, _iso
-        from cert_watch.digest import build_renewal_digest
 
         # Seed a cert_renewed event 3 days ago
         event_ts = _iso(datetime.now(UTC) - timedelta(days=3))

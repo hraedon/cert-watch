@@ -1,29 +1,146 @@
-"""Alerting: rules, routing, transports, delivery and digests (plan 058).
-
-The package is being assembled in stages. This first stage only moves the code
-that used to live in ``cert_watch.alerts``, ``alert_delivery``,
-``alert_adapters`` and ``digest`` into the modules plan 058 assigns it to; the
-facade grows as the later stages introduce ``Dispatcher`` and
-``DigestEngine``. Callers may import from this facade or from its public
-submodules.
-"""
+"""Public alerting facade: rules, routing, transports, delivery and digests."""
 
 from __future__ import annotations
 
+from cert_watch.alerting.digest import (
+    DigestEngine,
+    DigestKind,
+    DigestRunResult,
+    DigestTarget,
+    ExpiryDigestKind,
+    OrphanDigestKind,
+    RenewalDigestKind,
+)
+from cert_watch.alerting.dispatch import (
+    Dispatcher,
+    _attempt_once,
+    _Delivery,
+    _settle_evidence_deferral,
+    process_pending,
+)
+from cert_watch.alerting.messages import _format_message, _format_renewal_message
 from cert_watch.alerting.model import (
+    ALERT_CYCLE_BUDGET_SECONDS,
+    ALERT_MAX_ATTEMPTS,
+    ALERT_MAX_RETRIES,
+    ALERT_RETRY_DELAY,
+    CHAIN_THRESHOLDS,
+    EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
+    LEAF_THRESHOLDS,
+    SHORT_CERT_LIFETIME_DAYS,
+    SHORT_LIFETIME_CHAIN_PCT,
+    SHORT_LIFETIME_LEAF_PCT,
+    UNDELIVERED_AFTER_HOURS,
+    URGENT_THRESHOLD_DAYS,
     AlertConfig,
     OutboundMessage,
     SendResult,
     WebhookConfig,
+    delivery_is_configured,
     normalize_channel,
 )
-from cert_watch.alerting.transports.base import Transport
+from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+from cert_watch.alerting.routing import (
+    _load_host_owner_maps,
+    _load_role_user_emails,
+    _resolve_group_config,
+    find_orphan_certs,
+    resolve_all_group_recipients,
+    resolve_cert_recipients,
+    resolve_group_recipients,
+    resolve_group_thresholds,
+)
+from cert_watch.alerting.rules.expiry import (
+    effective_thresholds,
+    evaluate_all_certs,
+    evaluate_thresholds,
+)
+from cert_watch.alerting.rules.policy import evaluate_policy_alerts
+from cert_watch.alerting.rules.renewal import (
+    evaluate_renewal_window,
+    renewal_window_candidates,
+)
+from cert_watch.alerting.transports.base import Transport, _redact_secret
+from cert_watch.alerting.transports.smtp import (
+    _check_smtp_ssrf,
+    _open_smtp_connection,
+    _sanitize_smtp_error,
+    _smtp_recipients,
+    _validate_email,
+    connect_smtp_transport,
+    negotiate_starttls,
+    send_alert,
+)
+from cert_watch.alerting.transports.webhook import (
+    _adapter_has_build_resolve,
+    _sanitize_webhook_error,
+    send_webhook,
+    send_webhook_resolve,
+)
+from cert_watch.database import Alert, AlertRepository
 
 __all__ = [
+    "ALERT_CYCLE_BUDGET_SECONDS",
+    "ALERT_MAX_ATTEMPTS",
+    "ALERT_MAX_RETRIES",
+    "ALERT_RETRY_DELAY",
+    "CHAIN_THRESHOLDS",
+    "EVIDENCE_DEFERRAL_GIVE_UP_HOURS",
+    "LEAF_THRESHOLDS",
+    "SHORT_CERT_LIFETIME_DAYS",
+    "SHORT_LIFETIME_CHAIN_PCT",
+    "SHORT_LIFETIME_LEAF_PCT",
+    "UNDELIVERED_AFTER_HOURS",
+    "URGENT_THRESHOLD_DAYS",
+    "Alert",
     "AlertConfig",
+    "AlertRepository",
+    "DigestEngine",
+    "DigestKind",
+    "DigestRunResult",
+    "DigestTarget",
+    "Dispatcher",
+    "ExpiryDigestKind",
+    "OrphanDigestKind",
     "OutboundMessage",
+    "RenewalDigestKind",
     "SendResult",
     "Transport",
     "WebhookConfig",
+    "_Delivery",
+    "_adapter_has_build_resolve",
+    "_attempt_once",
+    "_check_smtp_ssrf",
+    "_format_message",
+    "_format_renewal_message",
+    "_load_host_owner_maps",
+    "_load_role_user_emails",
+    "_open_smtp_connection",
+    "_redact_secret",
+    "_resolve_group_config",
+    "_sanitize_smtp_error",
+    "_sanitize_webhook_error",
+    "_settle_evidence_deferral",
+    "_smtp_recipients",
+    "_validate_email",
+    "connect_smtp_transport",
+    "delivery_is_configured",
+    "effective_thresholds",
+    "evaluate_all_certs",
+    "evaluate_policy_alerts",
+    "evaluate_renewal_window",
+    "evaluate_thresholds",
+    "find_orphan_certs",
+    "negotiate_starttls",
     "normalize_channel",
+    "process_pending",
+    "renewal_window_candidates",
+    "resolve_all_group_recipients",
+    "resolve_cert_recipients",
+    "resolve_group_recipients",
+    "resolve_group_thresholds",
+    "resolve_webhook_for_renewed_cert",
+    "send_alert",
+    "send_webhook",
+    "send_webhook_resolve",
 ]

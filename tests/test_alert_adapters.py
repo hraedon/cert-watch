@@ -13,7 +13,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cert_watch.alert_adapters import (
+from cert_watch.alerting import WebhookConfig, send_webhook
+from cert_watch.alerting.model import OutboundMessage
+from cert_watch.alerting.transports.adapters import (
     _PAGERDUTY_EVENTS_URL,
     AlertmanagerAdapter,
     DiscordAdapter,
@@ -28,8 +30,6 @@ from cert_watch.alert_adapters import (
     _status_urgency,
     get_adapter,
 )
-from cert_watch.alerting.model import OutboundMessage
-from cert_watch.alerts import WebhookConfig, send_webhook
 from cert_watch.database import Alert
 
 
@@ -458,7 +458,7 @@ class TestPagerDutyResolve:
         assert trigger_body["dedup_key"] == resolve_body["dedup_key"]
 
     def test_send_webhook_resolve_pagerduty(self):
-        from cert_watch.alerts import send_webhook_resolve
+        from cert_watch.alerting import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
@@ -473,7 +473,7 @@ class TestPagerDutyResolve:
         assert body["event_action"] == "resolve"
 
     def test_send_webhook_resolve_non_202_is_failure(self):
-        from cert_watch.alerts import send_webhook_resolve
+        from cert_watch.alerting import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
@@ -486,18 +486,18 @@ class TestPagerDutyResolve:
         assert ok is False
 
     def test_resolve_webhook_for_renewed_cert_pagerduty(self, tmp_path):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
         from cert_watch.database import SqliteAlertRepository, init_schema
 
         db = tmp_path / "cw_resolve.sqlite3"
         init_schema(db)
         alert_repo = SqliteAlertRepository(db)
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=7,
         ))
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
@@ -511,14 +511,14 @@ class TestPagerDutyResolve:
         assert resolved == 2
 
     def test_resolve_webhook_noops_for_non_pagerduty(self):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
 
         config = _config(kind="discord")
         resolved = resolve_webhook_for_renewed_cert(None, "cert-1", config)
         assert resolved == 0
 
     def test_resolve_webhook_noops_for_none_config(self):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
 
         resolved = resolve_webhook_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
@@ -726,7 +726,7 @@ class TestAlertmanagerAdapter:
         assert resolve_labels == trigger_labels
 
     def test_send_webhook_resolve_alertmanager(self):
-        from cert_watch.alerts import send_webhook_resolve
+        from cert_watch.alerting import send_webhook_resolve
 
         config = _config(kind="alertmanager")
         with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
@@ -745,7 +745,7 @@ class TestAlertmanagerAdapter:
         assert body["alerts"][0]["labels"]["host"] == "web.example.com"
 
     def test_send_webhook_resolve_alertmanager_non_2xx_is_failure(self):
-        from cert_watch.alerts import send_webhook_resolve
+        from cert_watch.alerting import send_webhook_resolve
 
         config = _config(kind="alertmanager")
         with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
@@ -758,25 +758,25 @@ class TestAlertmanagerAdapter:
         assert ok is False
 
     def test_send_webhook_resolve_no_build_resolve_returns_false(self):
-        from cert_watch.alerts import send_webhook_resolve
+        from cert_watch.alerting import send_webhook_resolve
 
         config = _config(kind="discord")
         ok = send_webhook_resolve("cert-1", "expiry_warning", 7, config)
         assert ok is False
 
     def test_resolve_webhook_for_renewed_cert_alertmanager(self, tmp_path):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
         from cert_watch.database import SqliteAlertRepository, init_schema
 
         db = tmp_path / "cw_resolve_am.sqlite3"
         init_schema(db)
         alert_repo = SqliteAlertRepository(db)
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=7,
         ))
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="alertmanager")
@@ -790,21 +790,21 @@ class TestAlertmanagerAdapter:
         assert resolved == 2
 
     def test_resolve_webhook_noops_for_unsupported_kind(self):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
 
         config = _config(kind="discord")
         resolved = resolve_webhook_for_renewed_cert(None, "cert-1", config)
         assert resolved == 0
 
     def test_resolve_webhook_noops_for_none_config(self):
-        from cert_watch.alerts import resolve_webhook_for_renewed_cert
+        from cert_watch.alerting import resolve_webhook_for_renewed_cert
 
         resolved = resolve_webhook_for_renewed_cert(None, "cert-1", None)
         assert resolved == 0
 
 
 def test_adapter_has_build_resolve_unknown_kind():
-    from cert_watch.alerts import _adapter_has_build_resolve
+    from cert_watch.alerting import _adapter_has_build_resolve
 
     assert _adapter_has_build_resolve("nonexistent") is False
 

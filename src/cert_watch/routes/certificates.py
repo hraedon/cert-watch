@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import tempfile
-from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
@@ -12,26 +10,23 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.audit import resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import (
     admin_form_guard,
     get_auth_context,
-    require_auth,
     write_form_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
-from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
+    SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
     _connect,
     _row_to_cert,
-    delete_certificate_cascade,
     distinct_tags,
     get_renewal_history,
-    get_write_lock,
 )
 from cert_watch.filters import issuer_cn
 from cert_watch.presenters.certificate_detail import present_certificate_technical_details
@@ -39,13 +34,25 @@ from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_aut
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
-    scope_write_denied,
     tags_with_scope,
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.certificate_management import (
+    CertificateValidationError,
+    upload_certificate_bytes,
+)
+from cert_watch.services.certificate_management import (
+    add_trust_anchor as add_trust_anchor_service,
+)
+from cert_watch.services.certificate_management import (
+    delete_certificate as delete_certificate_service,
+)
+from cert_watch.services.certificate_management import (
+    delete_trust_anchor as delete_trust_anchor_service,
+)
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
     HostOwnershipTargetError,
@@ -62,7 +69,6 @@ from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
 )
 from cert_watch.tags import parse_tags
-from cert_watch.upload import ParseError, store_uploaded, upload_certificate
 
 logger = logging.getLogger("cert_watch.routes.certificates")
 
@@ -346,6 +352,11 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     slack_configured = (
         getattr(settings, "webhook_kind", "") == "slack" if settings else False
     )
+    certificate_alerts = sorted(
+        SqliteAlertRepository(db).list_for_cert(cert_id),
+        key=lambda alert: alert.created_at,
+        reverse=True,
+    )[:5]
 
     return templates.TemplateResponse(
         request=request,
@@ -379,36 +390,11 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "now": datetime.now(UTC),
             "posture": posture_data,
             "drift_events": drift_events,
+            "certificate_alerts": certificate_alerts,
             "slack_configured": slack_configured,
             **csrf_ctx,
         },
     )
-
-
-@router.get("/api/certificates/{cert_id}/posture", response_model=None)
-def certificate_posture_api(
-    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth),
-) -> dict[str, Any]:
-    """Return the latest posture evaluation for a certificate as JSON."""
-    db = _db_path(request)
-    denied = scope_read_denied(request, db, cert_id=cert_id)
-    if denied:
-        return {"error": "not found", "cert_id": cert_id}
-    from cert_watch.database import get_posture_for_cert
-
-    posture = get_posture_for_cert(db, cert_id)
-    if posture is None:
-        return {"error": "no posture data", "cert_id": cert_id}
-    return {
-        "cert_id": cert_id,
-        "grade": posture["grade"],
-        "findings": posture["findings"],
-        "protocol_version": posture.get("protocol_version", ""),
-        "ocsp_stapling": posture.get("ocsp_stapling"),
-        "hsts": posture.get("hsts"),
-        "must_staple": posture.get("must_staple", False),
-        "scanned_at": posture.get("scanned_at", ""),
-    }
 
 
 @router.post("/certificates/{cert_id}/delete")
@@ -416,19 +402,16 @@ async def delete_certificate(
     request: Request, cert_id: IdParam, _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    with get_write_lock():
-        delete_certificate_cascade(db, cert_id)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="cert.delete",
-        target_type="certificate",
-        target_id=cert_id,
-        source_ip=resolve_source_ip(request),
-    )
+    try:
+        delete_certificate_service(
+            db,
+            cert_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -534,40 +517,20 @@ async def upload(
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
         )
-    db = _db_path(request)
-    allowed_suffixes = {".pem", ".crt", ".cer", ".der", ".pfx", ".p12", ".p7b", ".p7c"}
-    raw_suffix = Path(file.filename or "uploaded").suffix.lower()
-    suffix = raw_suffix if raw_suffix in allowed_suffixes else ".pem"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(content) > MAX_UPLOAD_BYTES:
-            tmp.close()
-            Path(tmp.name).unlink(missing_ok=True)
-            return RedirectResponse(
-                url=f"/?error={quote('file too large (max 10 MB)')}", status_code=303
-            )
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
-        pw_bytes = password.encode("utf-8") if password else None
-        entry = upload_certificate(tmp_path, password=pw_bytes)
-        if isinstance(entry, ParseError):
-            return RedirectResponse(url=f"/?error={quote(entry.error_message)}", status_code=303)
-        entry.file_name = file.filename or entry.file_name
-        with get_write_lock():
-            store_uploaded(entry, db, tags=tags_with_scope(request, ""))
-        record_audit(
-            db,
+        upload_certificate_bytes(
+            _db_path(request),
+            content,
+            file.filename or "uploaded",
+            password,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
-            action="cert.upload",
-            target_type="certificate",
-            target_id="upload",
-            detail={"filename": file.filename or "unknown"},
             source_ip=resolve_source_ip(request),
+            tags=tags_with_scope(request, ""),
         )
-        logger.info("uploaded certificate: %s", file.filename or "unknown")
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    except (CertificateValidationError, ScopeDeniedError) as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -579,60 +542,20 @@ async def add_trust_anchor(
 ) -> RedirectResponse:
     # #65: a trust anchor changes chain validation for the whole fleet, so it
     # is admin-only (like the /settings/trust-anchors page), not write-gated.
-    db = _db_path(request)
-    allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
-    raw_suffix = Path(file.filename or "uploaded").suffix.lower()
-    suffix = raw_suffix if raw_suffix in allowed_suffixes else ".pem"
-    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-        content = await file.read(MAX_UPLOAD_BYTES + 1)
-        if len(content) > MAX_UPLOAD_BYTES:
-            tmp.close()
-            Path(tmp.name).unlink(missing_ok=True)
-            return RedirectResponse(
-                url=f"/settings/trust-anchors?error={quote('file too large (max 10 MB)')}",
-                status_code=303,
-            )
-        tmp.write(content)
-        tmp_path = Path(tmp.name)
+    content = await file.read(MAX_UPLOAD_BYTES + 1)
     try:
-        entry = upload_certificate(tmp_path)
-        if isinstance(entry, ParseError):
-            return RedirectResponse(
-                url=f"/settings/trust-anchors?error={quote(entry.error_message)}",
-                status_code=303,
-            )
-        # Pick the CA cert to anchor on. A chain PEM (leaf+intermediate+root)
-        # has a non-CA leaf, so entry.leaf would be rejected; prefer the self-
-        # signed root (typically last), else the first CA cert in the bundle.
-        # Falls through to entry.leaf so validate emits the canonical "not a CA"
-        # error when the bundle contains no CA. (Plan 054 P3.)
-        bundle = [entry.leaf, *entry.chain]
-        anchor_cert = next(
-            (c for c in reversed(bundle) if validate_is_ca_certificate(c.raw_der) is None),
-            entry.leaf,
-        )
-        ca_err = validate_is_ca_certificate(anchor_cert.raw_der)
-        if ca_err:
-            return RedirectResponse(
-                url=f"/settings/trust-anchors?error={quote('Invalid trust anchor: ' + ca_err)}",
-                status_code=303,
-            )
-        # Store as a trust anchor (not a certificate for monitoring)
-        repo = SqliteTrustAnchorRepository(db)
-        with get_write_lock():
-            anchor_id = repo.add(anchor_cert)
-        record_audit(
-            db,
+        add_trust_anchor_service(
+            _db_path(request),
+            content,
+            file.filename or "uploaded",
+            auth=acting_auth(request),
             actor=resolve_actor(request),
-            action="trust_anchor.add",
-            target_type="trust_anchor",
-            target_id=anchor_id,
-            detail={"subject": anchor_cert.subject},
             source_ip=resolve_source_ip(request),
         )
-        logger.info("uploaded trust anchor: %s", anchor_cert.subject)
-    finally:
-        tmp_path.unlink(missing_ok=True)
+    except CertificateValidationError as exc:
+        return RedirectResponse(
+            url=f"/settings/trust-anchors?error={quote(str(exc))}", status_code=303,
+        )
     return RedirectResponse(url="/settings/trust-anchors?saved=1", status_code=303)
 
 
@@ -641,16 +564,11 @@ async def delete_trust_anchor(
     request: Request, anchor_id: IdParam,
     _auth: str = Depends(admin_form_guard),  # #65: admin-only
 ) -> RedirectResponse:
-    db = _db_path(request)
-    repo = SqliteTrustAnchorRepository(db)
-    with get_write_lock():
-        repo.delete(anchor_id)
-    record_audit(
-        db,
+    delete_trust_anchor_service(
+        _db_path(request),
+        anchor_id,
+        auth=acting_auth(request),
         actor=resolve_actor(request),
-        action="trust_anchor.delete",
-        target_type="trust_anchor",
-        target_id=anchor_id,
         source_ip=resolve_source_ip(request),
     )
     logger.info("deleted trust anchor %s", anchor_id)

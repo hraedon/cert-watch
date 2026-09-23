@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cert_watch.alerts import evaluate_all_certs
+from cert_watch.alerting import evaluate_all_certs
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteAlertRepository, SqliteHostRepository, init_schema
 from cert_watch.database.cert_ops import replace_scanned
@@ -159,9 +159,8 @@ def test_delivery_evidence_survives_a_rescan_of_the_same_certificate(tmp_path, s
     assert {e["attempt_id"] for e in events} == {attempt}
 
 
-def test_a_failed_alert_is_retried_rather_than_duplicated(tmp_path):
-    """The failed-to-pending retry keyed off the same id the rescan was
-    discarding, so a failed alert was stranded and a duplicate created."""
+def test_a_failed_alert_stays_terminal_and_is_not_duplicated(tmp_path):
+    """Expiry evaluation leaves gave-up rows for explicit operator retry."""
     db, repo = _estate(tmp_path)
     _cycle(db, repo, _cert())
     alert = repo.list_pending()[0]
@@ -173,6 +172,6 @@ def test_a_failed_alert_is_retried_rather_than_duplicated(tmp_path):
 
     rows = _alert_rows(db)
     assert len(rows) == 1, "no duplicate row for a failed alert"
+    assert rows[0]["status"] == "failed"
+    assert produced == []
     assert rows[0]["id"] == alert.id
-    assert rows[0]["status"] == "pending", "it is reset for retry"
-    assert [a.id for a in produced] == [alert.id]

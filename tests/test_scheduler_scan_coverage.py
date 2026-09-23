@@ -199,18 +199,14 @@ def test_stop_scheduler_when_not_started():
     stop_scheduler()  # should not raise
 
 
-def test_stop_scheduler_cancels_queued_pool_tasks(monkeypatch):
+def test_stop_scheduler_drains_remaining_renewal_webhook_pool(monkeypatch):
     from unittest.mock import Mock, call
 
     import cert_watch.scheduler as scheduler
 
     renewal_pool = Mock()
-    digest_pool = Mock()
     monkeypatch.setattr(
         scheduler, "_detach_renewal_webhook_pool", lambda: renewal_pool
-    )
-    monkeypatch.setattr(
-        "cert_watch.alerting.digest.pool._detach_digest_pool", lambda: digest_pool
     )
     monkeypatch.setattr(scheduler, "_scheduler_thread", None)
 
@@ -218,7 +214,6 @@ def test_stop_scheduler_cancels_queued_pool_tasks(monkeypatch):
 
     expected = call(wait=True, cancel_futures=True)
     assert renewal_pool.shutdown.call_args == expected
-    assert digest_pool.shutdown.call_args == expected
 
 
 # ---------- run_scan_now ----------

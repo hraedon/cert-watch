@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
+
 from cert_watch.auth.rbac import AuthContext
 from cert_watch.database import (
     Role,
@@ -437,33 +439,62 @@ def _scoped_client(app, groups):
 class TestScanAllHostsRoute:
     """WI-078: POST /hosts/all/scan only scans the caller's in-scope hosts."""
 
-    def _run(self, db, tmp_path, monkeypatch, scope_tag):
+    def _run(self, db, tmp_path, monkeypatch, scope_tag, path):
         _seed_two_teams(db)
 
         scanned: list[str] = []
 
-        async def _fake_scan(hostname, port, **kwargs):
-            from cert_watch.scan import ScanError
+        async def _fake_route_scan(hostname, port, *_args, **_kwargs):
+            scanned.append(hostname)
+            return "scan_error", "stub"
+
+        async def _fake_service_scan(hostname, port, *_args, **_kwargs):
+            from cert_watch.services.host_management import ScanResult
 
             scanned.append(hostname)
-            return ScanError(hostname=hostname, port=port, error_message="stub")
+            return ScanResult("scan_error", "stub")
 
+        monkeypatch.setattr("cert_watch.routes.hosts._scan_and_store", _fake_route_scan)
         monkeypatch.setattr(
-            "cert_watch.routes.hosts.scan_host_async", _fake_scan
+            "cert_watch.services.host_management._scan_and_store", _fake_service_scan
         )
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
-            r = client.post("/hosts/all/scan", follow_redirects=False)
-        assert r.status_code == 303
+            r = client.post(path, follow_redirects=False)
+        assert r.status_code == (200 if path.startswith("/api/") else 303)
         return scanned
 
-    def test_scoped_operator_scans_only_team_hosts(self, db, tmp_path, monkeypatch):
-        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="team-a")
+    @pytest.mark.parametrize("path", ["/hosts/all/scan", "/api/hosts/scan"])
+    def test_scoped_operator_scans_only_team_hosts(
+        self, db, tmp_path, monkeypatch, path
+    ):
+        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="team-a", path=path)
         assert scanned == ["host-a.example.com"]
 
-    def test_unscoped_operator_scans_all_hosts(self, db, tmp_path, monkeypatch):
-        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="")
+    @pytest.mark.parametrize("path", ["/hosts/all/scan", "/api/hosts/scan"])
+    def test_unscoped_operator_scans_all_hosts(self, db, tmp_path, monkeypatch, path):
+        scanned = self._run(db, tmp_path, monkeypatch, scope_tag="", path=path)
         assert set(scanned) == {"host-a.example.com", "host-b.example.com"}
+
+
+class TestScopedCertificateUpload:
+    """Both adapters persist the scoped caller's tag on offline uploads."""
+
+    @pytest.mark.parametrize("path", ["/upload", "/api/certificates/upload"])
+    def test_scoped_upload_is_tagged_in_scope(self, db, tmp_path, leaf_pem_file, path):
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client, open(leaf_pem_file, "rb") as handle:
+            response = client.post(
+                path,
+                files={"file": ("leaf.pem", handle, "application/x-pem-file")},
+                follow_redirects=False,
+            )
+        assert response.status_code == (201 if path.startswith("/api/") else 303)
+        with _connect(db) as conn:
+            rows = conn.execute(
+                "SELECT tags FROM certificates WHERE source = 'uploaded' AND is_leaf = 1"
+            ).fetchall()
+        assert [row["tags"] for row in rows] == ["team-a"]
 
 
 class TestMarkAllAlertsReadRoute:
@@ -487,6 +518,48 @@ class TestMarkAllAlertsReadRoute:
         assert reads == {"alert-a": 1, "alert-b": 1}
 
 
+class TestRetryAlertScopePrivacy:
+    """Missing and out-of-scope alerts are indistinguishable to team users."""
+
+    def test_html_and_api_hide_existence_and_audit_scope_denials(
+        self, db, tmp_path
+    ):
+        _seed_two_teams(db)
+        hidden_id = "00000000-0000-4000-8000-000000000002"
+        missing_id = "00000000-0000-4000-8000-000000000003"
+        with _connect(db) as conn:
+            conn.execute("UPDATE alerts SET status = 'failed'")
+            _insert_alert(
+                conn, hidden_id, "cert-b", status="failed", message="hidden"
+            )
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+
+        with _scoped_client(app, groups) as client:
+            html_missing = client.post(
+                f"/alerts/{missing_id}/retry", follow_redirects=False
+            )
+            html_hidden = client.post(
+                f"/alerts/{hidden_id}/retry", follow_redirects=False
+            )
+            api_missing = client.post(f"/api/alerts/{missing_id}/retry")
+            api_hidden = client.post(f"/api/alerts/{hidden_id}/retry")
+
+        assert html_hidden.status_code == html_missing.status_code == 303
+        assert html_hidden.headers["location"] == html_missing.headers["location"]
+        assert api_hidden.status_code == api_missing.status_code == 404
+        assert api_hidden.json() == api_missing.json() == {"error": "alert not found"}
+        with _connect(db) as conn:
+            denied = conn.execute(
+                "SELECT action, target_id FROM audit_log "
+                "WHERE action = 'alert.retry_denied' ORDER BY id"
+            ).fetchall()
+        assert [tuple(row) for row in denied] == [
+            ("alert.retry_denied", hidden_id),
+            ("alert.retry_denied", hidden_id),
+        ]
+
+
 class TestFlushAlertQueueRoute:
     """WI-078: POST /alerts/flush only sends the caller's in-scope alerts."""
 
@@ -495,11 +568,16 @@ class TestFlushAlertQueueRoute:
 
         seen: list[str] = []
 
-        def _fake_process(alert_repo, alert_config, webhook_config):
-            seen.extend(a.id for a in alert_repo.list_pending())
+        def _fake_process(dispatcher):
+            from cert_watch.database import SqliteAlertRepository
+
+            repo = SqliteAlertRepository(dispatcher.db_path)
+            seen.extend(a.id for a in repo.list_pending_scoped(dispatcher.scope_tags))
             return {"sent": len(seen), "failed": 0}
 
-        monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", _fake_process)
+        monkeypatch.setattr(
+            "cert_watch.alerting.dispatch.Dispatcher.process_pending", _fake_process
+        )
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
             r = client.post("/alerts/flush", follow_redirects=False)
@@ -516,17 +594,12 @@ class TestFlushAlertQueueRoute:
 
 
 class TestScopedFlushFullContract:
-    """WI-078: drive the REAL process_pending through ScopedAlertRepository with
-    only the SMTP transport stubbed, proving the whole wrapper contract
-    (scoped list_pending + mark_sent on in-scope IDs) — not just list_pending.
-    The route test stubs process_pending entirely, so it can't cover this."""
+    """WI-078: drive the real Dispatcher with its SQL claim scope."""
 
     def test_real_process_pending_sends_and_marks_only_in_scope(
         self, db: Path, monkeypatch
     ):
         from cert_watch.alerting import dispatch as alerts_mod
-        from cert_watch.database import ScopedAlertRepository
-
         _seed_two_teams(db)
 
         sent_cert_ids: list[str] = []
@@ -540,16 +613,17 @@ class TestScopedFlushFullContract:
         # Stub delivery at the transport boundary; process_pending itself is real.
         monkeypatch.setattr(alerts_mod.SmtpTransport, "send", _fake_send)
 
-        repo = ScopedAlertRepository(db, ("team-a",))
         config = alerts_mod.AlertConfig(
             smtp_host="relay.example.invalid", smtp_user="", smtp_password="",
             from_addr="watch@example.invalid", recipients=["team@example.invalid"],
         )
-        result = alerts_mod.process_pending(repo, config=config, webhook_config=None)
+        result = alerts_mod.Dispatcher(
+            db, config=config, webhook_config=None, scope_tags=("team-a",)
+        ).process_pending()
 
         assert sent_cert_ids == ["cert-a"]
         assert result == {"sent": 1, "failed": 0, "deferred": 0}
-        # mark_sent went through the wrapper → only the in-scope alert flipped.
+        # The atomic claim selected and completed only the in-scope row.
         with _connect(db) as conn:
             statuses = dict(conn.execute("SELECT id, status FROM alerts").fetchall())
         assert statuses["alert-a"] == "sent"

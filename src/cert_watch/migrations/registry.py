@@ -102,6 +102,22 @@ from cert_watch.migrations.m0034_alert_trigger_cert_id import (
 from cert_watch.migrations.m0035_schema_reconciliation import (
     upgrade as schema_reconciliation_upgrade,
 )
+from cert_watch.migrations.m0036_alert_lifecycle import (
+    DESCRIPTION as alert_lifecycle_description,
+)
+from cert_watch.migrations.m0036_alert_lifecycle import (
+    MIGRATION_ID as alert_lifecycle_id,
+)
+from cert_watch.migrations.m0036_alert_lifecycle import upgrade as alert_lifecycle_upgrade
+from cert_watch.migrations.m0037_alert_dedupe_routing import (
+    DESCRIPTION as alert_dedupe_routing_description,
+)
+from cert_watch.migrations.m0037_alert_dedupe_routing import (
+    MIGRATION_ID as alert_dedupe_routing_id,
+)
+from cert_watch.migrations.m0037_alert_dedupe_routing import (
+    upgrade as alert_dedupe_routing_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -217,4 +233,10 @@ runner.register(
     "0035",
     "reconcile schema objects formerly supplied by ensure_base",
     schema_reconciliation_upgrade,
+)
+runner.register(alert_lifecycle_id, alert_lifecycle_description, alert_lifecycle_upgrade)
+runner.register(
+    alert_dedupe_routing_id,
+    alert_dedupe_routing_description,
+    alert_dedupe_routing_upgrade,
 )

@@ -187,6 +187,11 @@ _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
 
 
+def scheduler_stop_event() -> threading.Event:
+    """Return the scheduler lifecycle signal for stop-aware cycle work."""
+    return _scheduler_stop
+
+
 def try_run_alert_delivery(
     delivery_fn: Callable[[], dict[str, int]],
 ) -> dict[str, int] | None:
@@ -332,10 +337,7 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
-        from cert_watch.alerting.digest.pool import start_digest_pool
-
         _start_renewal_webhook_pool()
-        start_digest_pool()
 
         def _loop() -> None:
             next_cycle_allowed = 0.0
@@ -400,15 +402,11 @@ def stop_scheduler() -> None:
     _scheduler_stop.set()
     _scheduler_wake.set()
     # Close submission gates before waiting for a potentially long scan. The
-    # cycle checks the stop event between stages, and neither pool is recreated
-    # until the next explicit start_scheduler() call.
+    # cycle checks the stop event between stages, and the remaining renewal
+    # webhook pool is not recreated until the next explicit start_scheduler().
     renewal_pool = _detach_renewal_webhook_pool()
-    from cert_watch.alerting.digest.pool import _detach_digest_pool
-    digest_pool = _detach_digest_pool()
     if renewal_pool is not None:
         renewal_pool.shutdown(wait=True, cancel_futures=True)
-    if digest_pool is not None:
-        digest_pool.shutdown(wait=True, cancel_futures=True)
     if _scheduler_thread is not None:
         _scheduler_thread.join(timeout=30)
 
@@ -581,41 +579,11 @@ def _check_renewal_overdue(
     if db_path is None:
         return
     try:
-        import json as _json
-
-        from cert_watch.database.connection import _connect as _conn
+        from cert_watch.database import AlertStore
         from cert_watch.events import Event, emit_event
         from cert_watch.renewal_analytics import detect_renewal_overdue
 
-        cutoff = (datetime.now(UTC) - timedelta(hours=24)).isoformat()
-        already_emitted: set[tuple[str, int | None, str]] = set()
-        legacy_emitted: set[tuple[str, str]] = set()
-        with _conn(db_path) as conn:
-            rows = conn.execute(
-                """SELECT payload FROM event_log
-                   WHERE event_type = 'renewal_overdue'
-                   AND created_at > ?""",
-                (cutoff,),
-            ).fetchall()
-        for r in rows:
-            try:
-                p = _json.loads(r["payload"])
-                if not isinstance(p, dict):
-                    continue
-                hostname = p.get("hostname")
-                fingerprint = p.get("cert_fingerprint")
-                event_port = p.get("port")
-                if not isinstance(hostname, str) or not isinstance(fingerprint, str):
-                    continue
-                if event_port is None:
-                    # Old payloads represented a hostname-wide identity. Keep
-                    # that 24-hour suppression contract after adding ports.
-                    legacy_emitted.add((hostname, fingerprint))
-                elif type(event_port) is int and 1 <= event_port <= 65535:
-                    already_emitted.add((hostname, event_port, fingerprint))
-            except (_json.JSONDecodeError, TypeError):
-                pass
-
+        store = AlertStore(db_path)
         seen: set[tuple[str, int]] = set()
         for hostname, port in hosts:
             if (hostname, port) in seen:
@@ -624,15 +592,20 @@ def _check_renewal_overdue(
             try:
                 signal = detect_renewal_overdue(db_path, hostname, port=port)
                 if signal is not None:
-                    if (
-                        (signal.hostname, port, signal.cert_fingerprint) in already_emitted
-                        or (signal.hostname, signal.cert_fingerprint) in legacy_emitted
+                    key = f"overdue:{signal.hostname}:{port}:{signal.cert_fingerprint}"
+                    legacy_key = f"overdue:{signal.hostname}:*:{signal.cert_fingerprint}"
+                    now = datetime.now(UTC)
+                    if not store.rule_firing_due(
+                        key,
+                        now=now,
+                        interval_seconds=24 * 60 * 60,
+                        suppression_keys=(legacy_key,),
                     ):
                         continue
-                    emit_event(
+                    event_id = emit_event(
                         Event(
                             event_type="renewal_overdue",
-                            timestamp=datetime.now(UTC),
+                            timestamp=now,
                             payload={
                                 "hostname": signal.hostname,
                                 "port": port,
@@ -646,7 +619,14 @@ def _check_renewal_overdue(
                         ),
                         db_path,
                     )
-                    already_emitted.add((signal.hostname, port, signal.cert_fingerprint))
+                    if event_id is None:
+                        continue
+                    store.claim_rule_firing(
+                        key,
+                        now=now,
+                        interval_seconds=24 * 60 * 60,
+                        suppression_keys=(legacy_key,),
+                    )
                     try:
                         _send_renewal_webhook_if_configured(
                             signal, hostname, port, db_path, settings=settings,

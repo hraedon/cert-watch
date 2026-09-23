@@ -4,10 +4,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from cert_watch.alerting.digest.renewal import build_renewal_digest
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteHostRepository, init_schema, record_cert_history
 from cert_watch.database.connection import _connect
-from cert_watch.digest import build_renewal_digest
 from cert_watch.renewal_analytics import RenewalOverdueSignal
 from cert_watch.renewal_webhook import build_renewal_payload
 from tests._helpers import seed_certificate

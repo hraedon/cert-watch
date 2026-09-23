@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     CHAIN_THRESHOLDS,
     LEAF_THRESHOLDS,
     SHORT_CERT_LIFETIME_DAYS,

@@ -197,7 +197,7 @@ def test_scoped_omitted_port_analytics_excludes_hidden_endpoint(tmp_path):
     assert result.observed_lifetimes == [90]
 
 
-def test_overdue_dedupe_tolerates_malformed_and_honors_legacy_event(
+def test_overdue_dedupe_uses_rule_firing_and_honors_migrated_legacy_event(
     tmp_path, monkeypatch,
 ):
     import json
@@ -219,6 +219,10 @@ def test_overdue_dedupe_tolerates_malformed_and_honors_legacy_event(
             "INSERT INTO event_log (event_type,timestamp,source,payload,created_at) "
             "VALUES ('renewal_overdue',?,'test',?,?)",
             [(now, payload, now) for payload in payloads],
+        )
+        conn.execute(
+            "INSERT INTO rule_firings VALUES (?, ?, ?, 1)",
+            ("overdue:dual.example.test:*:shared", now, now),
         )
         conn.commit()
     monkeypatch.setattr(

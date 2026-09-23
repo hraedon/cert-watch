@@ -6,12 +6,11 @@ mutable state is encapsulated rather than threaded via nonlocal.
 
 from __future__ import annotations
 
-import datetime as _dt
 import logging
 import threading
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from cert_watch.config import Settings, publish_settings
@@ -20,22 +19,6 @@ from cert_watch.scan import DeferredPostCommit, _evaluate_posture, scan_host, st
 from cert_watch.scheduler import get_hosts_due_for_scan, run_scan_now, wake_scheduler
 
 logger = logging.getLogger("cert_watch.scheduler_context")
-
-_EXPIRY_DIGEST_WEEK_KEY = "_scheduler.expiry_digest_iso_week"
-_RENEWAL_DIGEST_WEEK_KEY = "_scheduler.renewal_digest_iso_week"
-
-
-def _decode_iso_week(value: str | None) -> tuple[int, int]:
-    if not value:
-        return (0, 0)
-    try:
-        year, week = (int(part) for part in value.split("-W", 1))
-    except (TypeError, ValueError):
-        return (0, 0)
-    if year < 1 or not 1 <= week <= 53:
-        return (0, 0)
-    return (year, week)
-
 
 @dataclass(frozen=True)
 class _JobConfig:
@@ -49,28 +32,14 @@ class SchedulerContext:
     settings: Settings
     alert_cfg: Any
     webhook_cfg: Any
-    _expiry_digest_week: tuple[int, int] = field(default_factory=lambda: (0, 0))
-    _renewal_digest_week: tuple[int, int] = field(default_factory=lambda: (0, 0))
-    _renewal_digest_inflight_week: tuple[int, int] | None = field(
-        default=None, init=False, repr=False
-    )
-    _digest_state_lock: threading.Lock = field(
-        default_factory=threading.Lock, init=False, repr=False
-    )
+    stop_event: threading.Event | None = None
     _config_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _job_config: _JobConfig = field(init=False, repr=False)
+    _digest_deadline: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        from cert_watch.database.kv_store import kv_get
-
         self._job_config = _JobConfig(self.settings, self.alert_cfg, self.webhook_cfg)
         publish_settings(self.settings)
-        self._expiry_digest_week = _decode_iso_week(
-            kv_get(self.settings.db_path, _EXPIRY_DIGEST_WEEK_KEY)
-        )
-        self._renewal_digest_week = _decode_iso_week(
-            kv_get(self.settings.db_path, _RENEWAL_DIGEST_WEEK_KEY)
-        )
 
     def _snapshot(self) -> _JobConfig:
         with self._config_lock:
@@ -95,13 +64,6 @@ class SchedulerContext:
     def schedule_time(self) -> tuple[int, int]:
         settings = self._snapshot().settings
         return settings.sched_hour, settings.sched_min
-
-    def _record_digest_week(
-        self, key: str, week: tuple[int, int]
-    ) -> tuple[bool, tuple[int, int]]:
-        from cert_watch.database.kv_store import kv_set_max_iso_week
-
-        return kv_set_max_iso_week(self._snapshot().settings.db_path, key, week)
 
     def scan_all(self) -> dict[str, Any]:
         config = self._snapshot()
@@ -170,130 +132,143 @@ class SchedulerContext:
         return leaf_id
 
     def run_alerts(self) -> dict[str, Any]:
-        import datetime as _dt
-
-        from cert_watch.alerting.digest.expiry import send_expiry_digest
+        from cert_watch.alerting.digest.expiry import ExpiryDigestKind
         from cert_watch.alerting.dispatch import process_pending
+        from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
         from cert_watch.alerting.rules.expiry import evaluate_all_certs
         from cert_watch.alerting.rules.renewal import evaluate_renewal_window
 
         config = self._snapshot()
         s = config.settings
         repo = SqliteAlertRepository(s.db_path)
+        closed_sent: list[Any] = []
         if s.alert_digest_only:
             evaluate_all_certs(s.db_path, repo, urgent_only=True)
-            evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
-            result = process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
-            iso = _dt.datetime.now(_dt.UTC).isocalendar()
-            this_week = (iso[0], iso[1])
-            if this_week != self._expiry_digest_week:
-                delivered = send_expiry_digest(
-                    s.db_path, config.alert_cfg, webhook_config=config.webhook_cfg,
-                    cadence_days=self._max_group_cadence(s.db_path),
-                )
-                if delivered:
-                    _, stored_week = self._record_digest_week(
-                        _EXPIRY_DIGEST_WEEK_KEY, this_week
-                    )
-                    self._expiry_digest_week = max(self._expiry_digest_week, stored_week)
-                result["sent"] = result.get("sent", 0) + (1 if delivered else 0)
-                result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
+            evaluate_renewal_window(
+                s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+            )
+            self._resolve_closed_alerts(config, closed_sent)
+            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+            self._digest_deadline = deadline
+            result = process_pending(
+                repo,
+                config.alert_cfg,
+                webhook_config=config.webhook_cfg,
+                budget_seconds=ALERT_CYCLE_BUDGET_SECONDS,
+            )
+            digest = self._run_digest(
+                config,
+                ExpiryDigestKind(config.alert_cfg),
+                self._max_group_cadence(s.db_path),
+                deadline=deadline,
+                stop_event=self.stop_event,
+            )
+            result["sent"] = result.get("sent", 0) + digest.sent
+            result["failed"] = result.get("failed", 0) + digest.failed
+            result["deferred"] = result.get("deferred", 0) + digest.busy
             return result
         evaluate_all_certs(s.db_path, repo)
-        evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
-        return process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
-
-    def _weekly_digest(
-        self, delivery_completion_callback: Callable[[bool], None] | None = None
-    ) -> bool | None:
-        from cert_watch.alerting.digest.renewal import send_renewal_digest
-
-        config = self._snapshot()
-        s = config.settings
-        return send_renewal_digest(
-            s.db_path, config.alert_cfg, config.webhook_cfg,
-            cadence_days=self._max_group_cadence(s.db_path, default=7),
-            delivery_completion_callback=delivery_completion_callback,
+        evaluate_renewal_window(
+            s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+        )
+        self._resolve_closed_alerts(config, closed_sent)
+        self._digest_deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+        return process_pending(
+            repo,
+            config.alert_cfg,
+            webhook_config=config.webhook_cfg,
+            budget_seconds=ALERT_CYCLE_BUDGET_SECONDS,
         )
 
-    def maybe_run_weekly_digest(self) -> dict[str, Any]:
-        iso = _dt.datetime.now(_dt.UTC).isocalendar()
-        this_week = (iso[0], iso[1])
-        with self._digest_state_lock:
-            if (
-                this_week == self._renewal_digest_week
-                or this_week == self._renewal_digest_inflight_week
-            ):
-                return {"sent": 0, "failed": 0}
-            self._renewal_digest_inflight_week = this_week
+    @staticmethod
+    def _run_digest(
+        config: _JobConfig,
+        kind: Any,
+        cadence_days: int,
+        *,
+        deadline: float,
+        stop_event: threading.Event | None,
+    ) -> Any:
+        from datetime import UTC, datetime
 
-        callback_lock = threading.Lock()
-        callback_completed = False
-        callback_succeeded = False
+        from cert_watch.alerting.digest.engine import DigestEngine
+        from cert_watch.alerting.transports.base import Transport
+        from cert_watch.alerting.transports.smtp import SmtpTransport
+        from cert_watch.alerting.transports.webhook import WebhookTransport
+        from cert_watch.database.digest_deliveries import digest_period_key
 
-        def _complete_delivery(succeeded: bool) -> bool:
-            nonlocal callback_completed, callback_succeeded
-            with callback_lock:
-                if callback_completed:
-                    return callback_succeeded
-                now = _dt.datetime.now(_dt.UTC).isocalendar()
-                callback_week = (now[0], now[1])
-                with self._digest_state_lock:
-                    is_current = (
-                        callback_week == this_week
-                        and self._renewal_digest_inflight_week == this_week
-                    )
-                if not is_current:
-                    callback_completed = True
-                    with self._digest_state_lock:
-                        if self._renewal_digest_inflight_week == this_week:
-                            self._renewal_digest_inflight_week = None
-                    return False
-                if not succeeded:
-                    callback_completed = True
-                    with self._digest_state_lock:
-                        if self._renewal_digest_inflight_week == this_week:
-                            self._renewal_digest_inflight_week = None
-                    return False
-                try:
-                    _, stored_week = self._record_digest_week(
-                        _RENEWAL_DIGEST_WEEK_KEY, this_week
-                    )
-                except Exception:
-                    logger.exception("could not persist successful renewal digest week")
-                    callback_completed = True
-                    with self._digest_state_lock:
-                        if self._renewal_digest_inflight_week == this_week:
-                            self._renewal_digest_inflight_week = None
-                    return False
-                callback_completed = True
-                callback_succeeded = True
-            with self._digest_state_lock:
-                self._renewal_digest_week = max(self._renewal_digest_week, stored_week)
-                if self._renewal_digest_inflight_week == this_week:
-                    self._renewal_digest_inflight_week = None
-            return True
+        transports: list[Transport] = []
+        if config.alert_cfg is not None:
+            transports.append(SmtpTransport(config.alert_cfg))
+        if config.webhook_cfg is not None:
+            transports.append(WebhookTransport(config.webhook_cfg))
+        now = datetime.now(UTC)
+        engine = DigestEngine(
+            config.settings.db_path,
+            transports,
+            budget_seconds=max(0.0, deadline - monotonic()),
+            clock=lambda: now,
+            stop_event=stop_event,
+        )
+        return engine.run(
+            kind,
+            digest_period_key(kind.name, cadence_days, now=now),
+        )
 
-        def _completion_callback(succeeded: bool) -> None:
-            _complete_delivery(succeeded)
-
+    @staticmethod
+    def _resolve_closed_alerts(config: _JobConfig, alerts: list[Any]) -> None:
+        if not alerts or config.webhook_cfg is None:
+            return
         try:
-            delivered = self._weekly_digest(_completion_callback)
+            from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+
+            resolve_webhook_for_renewed_cert(
+                config.settings.db_path,
+                "",
+                config.webhook_cfg,
+                pending_alerts=alerts,
+            )
         except Exception:
-            _complete_delivery(False)
-            logger.exception("weekly renewal digest failed")
-            return {"sent": 0, "failed": 1}
-        if delivered is True:
-            # SMTP completes synchronously.  The callback may also have run
-            # already for inline webhook fallback; its idempotence prevents a
-            # second ledger write in that path.
-            if _complete_delivery(True):
-                return {"sent": 1, "failed": 0}
-            return {"sent": 0, "failed": 1}
-        if delivered is None:
-            return {"sent": 0, "failed": 0}
-        _complete_delivery(False)
-        return {"sent": 0, "failed": 1}
+            logger.warning("closed alert incidents could not be resolved", exc_info=True)
+
+    def maybe_run_weekly_digest(self) -> dict[str, Any]:
+        from cert_watch.alerting.digest.orphan import OrphanDigestKind
+        from cert_watch.alerting.digest.renewal import RenewalDigestKind
+
+        config = self._snapshot()
+        cadence_days = self._max_group_cadence(
+            config.settings.db_path, default=7
+        )
+        from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
+
+        deadline = self._digest_deadline
+        if deadline is None:
+            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+        try:
+            renewal = self._run_digest(
+                config,
+                RenewalDigestKind(config.alert_cfg),
+                cadence_days,
+                deadline=deadline,
+                stop_event=self.stop_event,
+            )
+            orphan = self._run_digest(
+                config,
+                OrphanDigestKind(config.alert_cfg),
+                7,
+                deadline=deadline,
+                stop_event=self.stop_event,
+            )
+        except Exception:
+            logger.exception("weekly digest failed")
+            return {"sent": 0, "failed": 1, "deferred": 0}
+        finally:
+            self._digest_deadline = None
+        return {
+            "sent": renewal.sent + orphan.sent,
+            "failed": renewal.failed + orphan.failed,
+            "deferred": renewal.busy + orphan.busy,
+        }
 
     def maintenance(self) -> None:
         from cert_watch.audit import purge_old_audit

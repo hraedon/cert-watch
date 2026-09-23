@@ -55,6 +55,8 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
+                       a.attempt_count, a.next_attempt_at, a.last_attempt_at,
+                       a.lease_expires_at, a.failure_reason,
                        a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
                                         NULLIF(a.hostname, ''),
                                         '(unknown certificate)') AS subject,
@@ -73,6 +75,8 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
+                       a.attempt_count, a.next_attempt_at, a.last_attempt_at,
+                       a.lease_expires_at, a.failure_reason,
                        a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
                                         NULLIF(a.hostname, ''),
                                         '(unknown certificate)') AS subject,
@@ -316,7 +320,8 @@ def list_scan_batches(
 # the same horizon as delivered ones erased that evidence silently (#39). They
 # are kept this many times longer instead. The horizon is still finite so an
 # install that never delivers (no SMTP, no webhook: every alert stays pending)
-# keeps a bound on the table; a rescan already drops obsolete pending alerts.
+# keeps a bound on the table. Cancelled alerts are intentionally delivered-class:
+# their condition closed and their durable row no longer represents an outage.
 UNDELIVERED_RETENTION_MULTIPLIER = 4
 
 
@@ -325,10 +330,10 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
     older than ``retention_days * UNDELIVERED_RETENTION_MULTIPLIER``. Returns
     the count deleted.
 
-    "Delivered" is a ``sent`` status or a recorded ``sent_at``. Everything else
-    reached nobody and is retained for the longer horizon, so the record of a
-    delivery outage outlives the outage instead of expiring with it. The
-    delivery-evidence ledger cascades with the alert row either way.
+    "Delivered-class" is ``sent``, ``cancelled``, or a recorded ``sent_at``.
+    Pending and failed rows that reached nobody are retained for the longer
+    horizon, so the record of a delivery outage outlives the outage instead of
+    expiring with it. The delivery-evidence ledger cascades either way.
 
     A non-positive ``retention_days`` disables purging (returns 0).
     """
@@ -343,8 +348,10 @@ def purge_old_alerts(db_path: str | Path, retention_days: int) -> int:
         with _connect(db_path) as conn:
             cur = conn.execute(
                 """DELETE FROM alerts
-                   WHERE ((status = 'sent' OR sent_at IS NOT NULL) AND created_at < ?)
-                      OR (status != 'sent' AND sent_at IS NULL AND created_at < ?)""",
+                   WHERE ((status IN ('sent', 'cancelled') OR sent_at IS NOT NULL)
+                          AND created_at < ?)
+                      OR (status NOT IN ('sent', 'cancelled') AND sent_at IS NULL
+                          AND created_at < ?)""",
                 (delivered_cutoff, undelivered_cutoff),
             )
             deleted = cur.rowcount

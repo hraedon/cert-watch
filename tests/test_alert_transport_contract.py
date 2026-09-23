@@ -268,7 +268,7 @@ def test_unknown_webhook_kind_is_the_only_invalid_channel_failure():
 
 
 def test_deprecated_observation_names_are_not_silently_exported():
-    import cert_watch.alert_delivery as shim
+    import cert_watch.alerting.evidence as evidence
 
     for name in (
         "_Observation",
@@ -278,7 +278,7 @@ def test_deprecated_observation_names_are_not_silently_exported():
         "observe_http",
         "observe_smtp",
     ):
-        assert not hasattr(shim, name)
+        assert not hasattr(evidence, name)
 
 
 def test_send_result_is_frozen_and_rejects_unknown_labels():
@@ -330,6 +330,7 @@ def test_attempt_delivery_ledger_details_match_pre_refactor_golden(
         "queued_recipients": ["queued@example.invalid"],
         "groups": [],
         "groups_available": True,
+        "claim_owner": "",
     }
     assert attempt["result"] == {
         "outcome": "partial",

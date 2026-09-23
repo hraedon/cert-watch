@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
@@ -88,6 +88,17 @@ def metrics(request: Request) -> PlainTextResponse:
         ["host", "reason"],
         registry=registry,
     )
+    alerts_gauge = Gauge(
+        "cert_watch_alerts",
+        "Alerts grouped by durable delivery lifecycle status",
+        ["status"],
+        registry=registry,
+    )
+    failed_recent_gauge = Gauge(
+        "cert_watch_alerts_failed_recent",
+        "Alerts that reached terminal failure in the last 24 hours",
+        registry=registry,
+    )
 
     now = datetime.now(UTC)
     with _connect(db) as conn:
@@ -138,6 +149,20 @@ def metrics(request: Request) -> PlainTextResponse:
                 error_counts.get((host_label, reason), 0) + r["cnt"]
             )
 
+        alert_status_counts = {"pending": 0, "sending": 0, "failed": 0}
+        for row in conn.execute(
+            "SELECT status, COUNT(*) AS cnt FROM alerts "
+            "WHERE status IN ('pending', 'sending', 'failed') GROUP BY status"
+        ).fetchall():
+            alert_status_counts[row["status"]] = row["cnt"]
+
+        failed_recent_row = conn.execute(
+            "SELECT COUNT(*) FROM alerts WHERE status = 'failed' "
+            "AND last_attempt_at > ?",
+            ((now - timedelta(hours=24)).isoformat(),),
+        ).fetchone()
+        failed_recent = failed_recent_row[0] if failed_recent_row else 0
+
         last_scan_row = conn.execute(
             "SELECT MAX(scanned_at) FROM scan_history"
         ).fetchone()
@@ -154,10 +179,13 @@ def metrics(request: Request) -> PlainTextResponse:
         posture_gauge.labels(grade=grade).set(count)
     for (host_label, reason), count in error_counts.items():
         scan_errors_gauge.labels(host=host_label, reason=reason).set(count)
+    for status, count in alert_status_counts.items():
+        alerts_gauge.labels(status=status).set(count)
 
     hosts_gauge.set(total_hosts)
     certs_gauge.set(total_certs)
     expired_gauge.set(expired)
+    failed_recent_gauge.set(failed_recent)
     if last_scan_ts > 0:
         # Registered only when a scan exists so the series is genuinely
         # ABSENT on never-scanned installs — prometheus_client would

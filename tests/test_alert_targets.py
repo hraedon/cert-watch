@@ -6,8 +6,14 @@ import json
 
 import pytest
 
+from cert_watch.alerting import (
+    AlertConfig,
+    WebhookConfig,
+    process_pending,
+    send_alert,
+    send_webhook,
+)
 from cert_watch.alerting.model import OutboundMessage
-from cert_watch.alerts import AlertConfig, WebhookConfig, process_pending, send_alert, send_webhook
 from cert_watch.database import Alert, SqliteAlertRepository, init_schema
 from cert_watch.database.delivery_evidence import list_attempts
 from tests._integration_servers import allow_loopback_transport

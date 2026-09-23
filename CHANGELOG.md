@@ -5,6 +5,37 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Endpoint-keyed alert lifecycle and persisted routing.** Migration 0037
+  adds alert dedupe keys, condition closure timestamps, versioned routing
+  snapshots, an open-queue uniqueness guard, and a `rule_firings` ledger for
+  recurring event-only rules. Policy and drift alerts now receive the same
+  alert-group, owner, and role-member routes as expiry alerts.
+- **Durable alert dispatch claims and operator retry.** Migration 0036 adds
+  atomic claims, expiring leases, attempt counters and scheduled retry times.
+  Activity shows the new `sending` state and offers an audited **Retry failed**
+  action (HTML and JSON API) that resets a terminal alert's attempt budget.
+- **The JSON API is now the operational presentation seam.** Every inventory
+  mutation has a JSON counterpart over the same application service as its
+  server-rendered form. New endpoints are:
+
+  | Action | JSON endpoint |
+  |---|---|
+  | Create or import hosts | `POST /api/hosts`, `POST /api/hosts/import` |
+  | Scan all or one host | `POST /api/hosts/scan`, `POST /api/hosts/{id}/scan` |
+  | Edit host settings | `PATCH /api/hosts/{id}/settings` |
+  | Delete a host | `DELETE /api/hosts/{id}` |
+  | Upload or delete a certificate | `POST /api/certificates/upload`, `DELETE /api/certificates/{id}` |
+  | Add or delete a trust anchor | `POST /api/trust-anchors`, `DELETE /api/trust-anchors/{id}` |
+  | Mark all visible alerts read | `POST /api/alerts/mark-all-read` |
+
+  Existing `/api/health`, `/api/audit`, certificate-posture, host-export, and
+  alert-read URLs are unchanged but their route definitions now live under
+  `routes/api/`. No endpoint path moved or redirects were added.
+- **Host ownership has a coherent UI write path.** The detail form now posts to
+  `POST /hosts/{id}/owner` instead of the certificate-namespaced path. The old
+  `POST /certificates/{id}/owner` path remains callable for compatibility and
+  uses the same service; API clients continue to use
+  `PATCH /api/hosts/{id}/owner`.
 - **Published container images are signed and attested, and verified before
   deploy.** The release workflow signs the pushed digest with keyless cosign,
   attaches an SPDX SBOM and max-detail SLSA provenance, then re-verifies the
@@ -34,6 +65,17 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Security
+- **JSON write routes now enforce the same per-action budgets and scope as the
+  HTML forms.** HTML and JSON calls share one client budget for host creation,
+  import, scans, endpoint settings, certificate upload, and mark-all-read.
+  Host JSON bodies are strictly typed and bounded before service execution.
+  Application services now reject a missing acting principal; trusted
+  request-less work uses an explicit system principal instead of `None`.
+- **Scoped host creation and CSV import reject tags outside the caller's
+  scope.** Earlier versions could accept a scoped user's extra tag and persist
+  the union (for example `B,A` for an `A`-scoped user). The caller's scope tag
+  is still attached automatically, but every additionally submitted tag must
+  be within that scope.
 - **Sensitive settings uniformly support secret files.** Every environment-backed
   sensitive setting accepts a `<NAME>_FILE` source (including CSRF and metrics
   tokens), with the direct environment variable taking precedence. An explicitly
@@ -49,6 +91,31 @@ All notable changes to cert-watch are documented in this file.
   unchanged. See UPGRADING.md.
 
 ### Changed
+- **Alert rules no longer manufacture repeat notifications for a persistent
+  condition.** Renewal-stalled alerts fire once per endpoint and certificate
+  fingerprint;
+  policy violations remain quiet until the rule clears and later reappears;
+  expiry thresholds are endpoint/fingerprint-keyed and remain once-only.
+  Shared wildcard/SAN certificates retain one alert and immutable route per
+  endpoint; uploaded certificates use their row identity. Cancelled alerts that
+  never reached a recipient no longer suppress a recreated lifetime condition.
+  Renewal-overdue cadence now uses `rule_firings` after the event is persisted,
+  instead of reparsing event JSON every cycle.
+  Routes are fixed when an alert is queued (destination credentials and URLs
+  still resolve when it is sent). Certificate replacement/deletion cancels and
+  retains stale pending alerts instead of deleting them. A live leased row is
+  marked closed and settles as sent or cancelled; an expired stale lease is
+  cancelled rather than reclaimed. Failed drift edges can be retried. Cancelled
+  rows use the normal delivered retention horizon.
+- **Alert delivery failures back off before giving up.** A failed delivery
+  round returns to `pending` for 1 hour, then 4 hours, then 12 hours; after 12
+  transport-reaching attempts the row becomes terminal `failed`. Expiry rules
+  no longer revive failed alerts indefinitely. Manual flush ignores the delay
+  but uses the same atomic claim path, so concurrent scheduler/flush workers do
+  not both send the same queued row.
+- **Host creation exposes the fields it accepts.** The add-host drawer now
+  includes optional tags, notes, and scan cadence, and the CSV help lists every
+  supported optional column. This closes the prior route/UI contract mismatch.
 - **Configuration now has one source of truth.** A declarative field table drives
   defaults, env/kv precedence, parsing, bounds, and sensitivity; runtime
   consumers use the resolved `Settings` snapshot instead of re-reading env or
@@ -82,18 +149,70 @@ All notable changes to cert-watch are documented in this file.
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
   SIEM filters on the old names need updating.
-- **Alerting code moved into the `cert_watch.alerting` package** (plan 058,
-  step 1; internal, no behaviour change). Rules, routing, transports, delivery
-  evidence, the delivery cycle and digests each have their own module. The old
-  module paths `cert_watch.alerts`, `cert_watch.alert_delivery`,
-  `cert_watch.alert_adapters` and `cert_watch.digest` are deprecated re-export
-  shims and will be removed in a later release; logger names are unchanged.
+- **Alerting code now lives exclusively in the `cert_watch.alerting` package.**
+  Rules, routing, transports, delivery evidence, the delivery cycle and the
+  unified digest engine each have their own module. The deprecated module paths
+  `cert_watch.alerts`, `cert_watch.alert_delivery`, `cert_watch.alert_adapters`
+  and `cert_watch.digest` have been removed for 1.0; external Python imports
+  must use `cert_watch.alerting` or its public submodules.
+- **One synchronous, claimed digest engine handles expiry, renewal and orphan
+  summaries.** SMTP refusal maps retry only refused recipients, webhook
+  fallback runs only after SMTP failure when no claim is busy, and expiry and
+  renewal webhooks share the same three-wave retry policy. Renewal webhooks now
+  run synchronously within the alert-cycle budget. Orphan notices are claimed
+  once per ISO-week period. The old scheduler `kv_store` week keys remain in
+  existing databases but are no longer read or written; `digest_deliveries`
+  claims are the sole cadence guard. Expiry digest headers now state the actual
+  configured cadence window instead of always saying 30 days. The renewal
+  webhook subject was fixed at `Renewal Digest (7d)`; it now includes the
+  active cadence, for example `Renewal Digest (14d)`.
 - **Activity uses one alert-channel vocabulary.** New delivery attempts are
   recorded as `smtp` or `webhook:<kind>` (for example `webhook:teams` and
   `webhook:alertmanager`); legacy ledger names are normalized on read and the
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Alert delivery outages no longer evict the serving pod.** `/readyz`
+  reports overdue pending alerts and stale `sending` leases without failing
+  Kubernetes readiness. `/api/health` dates terminal give-ups from their last
+  attempt, Activity labels them as requiring operator retry, and `/metrics`
+  exports `cert_watch_alerts{status=...}` plus the self-clearing
+  `cert_watch_alerts_failed_recent` 24-hour gauge used by the example
+  failed-delivery rule.
+- **Legacy failed expiry alerts remain deliverable after migration 0036.** The
+  migration marks pre-lifecycle `expiry_warning` and `expired` rows but leaves
+  them failed. On the next threshold evaluation, only a row for a certificate
+  that still exists as the current, unsuperseded leaf, is not marked renewed,
+  and represents the most urgent currently crossed threshold is revived once.
+  Deleted, renewed, superseded and obsolete-threshold rows stay failed and
+  remain available for an operator-initiated **Retry failed**.
+- **Delivery recovery no longer waits on stale no-channel backoff.** Saving a
+  valid SMTP or webhook channel clears the scheduled delay on pending rows
+  deferred solely because no channel existed. Repeated failures keep one
+  attempt-count suffix, and a scoped worker no longer reports a deferral after
+  another worker steals the row's lease.
+- **Pre-transport policy failures now obey bounded give-up.** SSRF blocks and
+  invalid webhook channel results consume delivery rounds and eventually
+  become operator-visible failures. An estate with no SMTP or webhook instead
+  keeps alerts pending on normal backoff without consuming the attempt budget.
+- **Cycle-budget deferrals preserve retry pacing and diagnostics.** Alerts
+  attempted before a delivery cycle runs out of time retain their last useful
+  error and receive persisted backoff; only rows never reached in that cycle
+  remain immediately eligible.
+- **Manual Flush queue no longer exhausts alert retries.** Operator-initiated
+  flushes still record append-only delivery evidence and schedule normal
+  backoff after failure, but do not advance the persisted give-up counter.
+- **Alert settlement is failure-isolated and prompt.** A second refused
+  database update in either evidence-deferral recovery branch no longer aborts
+  the delivery cycle. Accepted alerts are marked `sent` immediately, closing
+  the lease window in which a long cycle and concurrent flush could resend one.
+- **Scoped alert settlement retains lease guards.** The tag-scoped repository
+  now forwards dispatch settlement metadata to its inner SQLite repository, so
+  evidence deferrals and give-ups transition `sending` rows instead of silently
+  leaving them leased.
+- **Retry failed no longer reveals cross-team alert IDs.** HTML and API retry
+  routes return the same not-found response for missing and out-of-scope
+  alerts, while denied attempts are recorded in the audit log.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the
@@ -294,14 +413,9 @@ All notable changes to cert-watch are documented in this file.
   can produce one duplicate after lease expiry. Scheduler executor shutdown is
   now terminal until explicit startup; stopping during a long scan prevents
   later cycle stages from submitting new work or recreating an executor.
-- **Renewal digest cadence.** The scheduler's nominally weekly renewal digest
-  was guarded by weekday changes and therefore ran daily. It is now guarded by
-  a durable ISO year/week ledger in the existing `kv_store`; both renewal and
-  expiry digest ledgers advance only after successful delivery, survive
-  restarts, and retry failures. Asynchronous completion reports both success
-  and failure, clears failed in-flight weeks for same-week retry, ignores stale
-  or duplicate callbacks, and drains completion during shutdown. Production-
-  code tests cover success, failure/retry, restart, rollover, and shutdown.
+- **Renewal digest cadence.** Durable per-recipient/channel claims now provide
+  the weekly guard directly; the older scheduler-wide ISO-week key and
+  in-memory in-flight state are no longer part of delivery correctness.
 - **Status-colour separation under colour-vision deficiency (WI-145).**
   The dark-theme `--expired` (pink `#fb6f92`) collapsed onto `--ok` under
   deuteranopia (dE76 2.7) and onto `--crit` under tritanopia (dE76 2.7) —

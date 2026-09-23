@@ -4,8 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cert_watch.alerting.model import OutboundMessage
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     AlertConfig,
     WebhookConfig,
     _validate_email,
@@ -14,6 +13,7 @@ from cert_watch.alerts import (
     send_alert,
     send_webhook,
 )
+from cert_watch.alerting.model import OutboundMessage
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import Alert, SqliteAlertRepository
 
@@ -116,7 +116,6 @@ def test_send_alert_none_config_returns_false():
 
 def test_send_alert_port25_no_starttls_no_creds_sends():
     """Plain port-25 relay (no auth, no STARTTLS) must still deliver."""
-    import smtplib
 
     config = AlertConfig(
         smtp_host="relay.internal",
@@ -140,7 +139,6 @@ def test_send_alert_port25_no_starttls_no_creds_sends():
 
 def test_send_alert_no_starttls_with_creds_refuses():
     """Credentials present but STARTTLS unavailable: refuse, don't leak the password."""
-    import smtplib
 
     config = AlertConfig(
         smtp_host="relay.internal",
@@ -292,13 +290,12 @@ def test_process_pending_ssrf_blocked_does_not_crash(alert_repo, expiring_cert):
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         counts = process_pending(alert_repo, config)
     mock_smtp.assert_not_called()
-    assert counts["sent"] == 0
-    assert counts["failed"] > 0
+    assert counts == {"sent": 0, "failed": 0, "deferred": 1}
 
 
 def test_open_smtp_connection_ssrf_blocked_returns_none():
     """The digest SMTP open path also blocks SSRF without raising."""
-    from cert_watch.alerts import _open_smtp_connection
+    from cert_watch.alerting import _open_smtp_connection
 
     config = AlertConfig(
         smtp_host="169.254.169.254",
@@ -315,7 +312,7 @@ def test_open_smtp_connection_ssrf_blocked_returns_none():
 
 def test_open_smtp_connection_port465_uses_ssl():
     """Port 465 pins the validated IP while retaining hostname-based TLS SNI."""
-    from cert_watch.alerts import _open_smtp_connection
+    from cert_watch.alerting import _open_smtp_connection
 
     config = AlertConfig(
         smtp_host="smtp.example",
@@ -349,7 +346,7 @@ def test_open_smtp_connection_port465_uses_ssl():
 
 
 def test_negotiate_starttls_uses_verifying_default_context():
-    from cert_watch.alerts import negotiate_starttls
+    from cert_watch.alerting import negotiate_starttls
 
     smtp = MagicMock()
 
@@ -361,7 +358,7 @@ def test_negotiate_starttls_uses_verifying_default_context():
 
 
 def test_open_smtp_connection_rejects_invalid_relay_certificate():
-    from cert_watch.alerts import _open_smtp_connection
+    from cert_watch.alerting import _open_smtp_connection
 
     config = AlertConfig(
         smtp_host="smtp.example",
@@ -390,7 +387,7 @@ def test_open_smtp_connection_rejects_invalid_relay_certificate():
 
 def test_open_smtp_connection_uses_single_validated_resolution():
     """Delivery consumes the resolver's pin and never resolves independently."""
-    from cert_watch.alerts import _open_smtp_connection
+    from cert_watch.alerting import _open_smtp_connection
 
     config = AlertConfig(
         smtp_host="smtp.example",
@@ -419,7 +416,7 @@ def test_open_smtp_connection_uses_single_validated_resolution():
 
 
 def test_open_smtp_connection_resolution_failure_does_not_retry_by_hostname():
-    from cert_watch.alerts import _open_smtp_connection
+    from cert_watch.alerting import _open_smtp_connection
 
     config = AlertConfig(
         smtp_host="unresolved.example",
@@ -441,7 +438,7 @@ def test_open_smtp_connection_resolution_failure_does_not_retry_by_hostname():
 
 
 def test_check_smtp_ssrf_blocks_metadata_address():
-    from cert_watch.alerts import _check_smtp_ssrf
+    from cert_watch.alerting import _check_smtp_ssrf
 
     config = AlertConfig(
         smtp_host="169.254.169.254",
@@ -456,7 +453,7 @@ def test_check_smtp_ssrf_blocks_metadata_address():
 
 
 def test_sanitize_smtp_error_strips_credentials():
-    from cert_watch.alerts import _sanitize_smtp_error
+    from cert_watch.alerting import _sanitize_smtp_error
 
     config = AlertConfig(
         smtp_host="smtp.example",
@@ -476,7 +473,7 @@ def test_sanitize_smtp_error_redacts_short_password():
     """B4: a 1-3 char SMTP password must still be redacted (the previous
     ``>= 4`` gate leaked it into alert.error_message and WARNING logs).
     """
-    from cert_watch.alerts import _sanitize_smtp_error
+    from cert_watch.alerting import _sanitize_smtp_error
 
     config = AlertConfig(
         smtp_host="smtp.example",
@@ -492,7 +489,7 @@ def test_sanitize_smtp_error_redacts_short_password():
 
 
 def test_sanitize_webhook_error_strips_url_headers_and_routing_key():
-    from cert_watch.alerts import _sanitize_webhook_error
+    from cert_watch.alerting import _sanitize_webhook_error
 
     config = WebhookConfig(
         url="https://hooks.example.com/webhook?token=abc",
@@ -513,7 +510,7 @@ def test_sanitize_webhook_error_strips_url_headers_and_routing_key():
 
 def test_sanitize_webhook_error_redacts_short_routing_key():
     """B4: a 1-3 char routing key must still be redacted."""
-    from cert_watch.alerts import _sanitize_webhook_error
+    from cert_watch.alerting import _sanitize_webhook_error
 
     config = WebhookConfig(
         url="https://hooks.example.com/hook",
@@ -527,7 +524,7 @@ def test_sanitize_webhook_error_redacts_short_routing_key():
 
 
 def test_adapter_has_build_resolve():
-    from cert_watch.alerts import _adapter_has_build_resolve
+    from cert_watch.alerting import _adapter_has_build_resolve
 
     assert _adapter_has_build_resolve("pagerduty") is True
     assert _adapter_has_build_resolve("generic") is False
@@ -773,8 +770,8 @@ def test_send_webhook_ssrf_blocked():
     assert "SSRF" in result.operator_message or "blocked" in result.operator_message
 
 
-def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
-    """Deleting a cert must also delete its alerts."""
+def test_delete_certificate_cancels_pending_alerts(tmp_path, expiring_soon_leaf):
+    """Deleting a cert retains its pending alert as closed audit history."""
     from cert_watch.certificate_model import parse_certificate
     from cert_watch.database import (
         SqliteCertificateRepository,
@@ -794,7 +791,9 @@ def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
     assert len(alert_repo.list_for_cert(cert_id)) > 0
 
     delete_certificate_cascade(db, cert_id)
-    assert alert_repo.list_for_cert(cert_id) == []
+    [closed] = alert_repo.list_for_cert(cert_id)
+    assert closed.status == "cancelled"
+    assert closed.closed_at is not None
 
 
 def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):
@@ -959,9 +958,8 @@ def test_expired_fires_after_expiry_warning_at_same_threshold(alert_repo):
     assert expired_alerts[0].alert_type == "expired"
 
 
-def test_failed_alert_does_not_block_refire(alert_repo, expiring_cert):
-    """Regression: a failed delivery (status='failed') must not permanently
-    suppress the threshold — it should re-fire on the next evaluation."""
+def test_failed_alert_stays_terminal_until_operator_retry(alert_repo, expiring_cert):
+    """A gave-up alert is not silently revived by threshold evaluation."""
     # First evaluation creates a pending alert
     alerts = evaluate_thresholds(expiring_cert, alert_repo)
     assert len(alerts) == 1
@@ -969,571 +967,9 @@ def test_failed_alert_does_not_block_refire(alert_repo, expiring_cert):
     # Simulate delivery failure
     alert_repo.mark_failed(alerts[0].id, "SMTP connection refused")
 
-    # Re-evaluate — should create a new alert because the old one is 'failed'
+    # Re-evaluate — failed now means gave up, so the row stays terminal.
     second = evaluate_thresholds(expiring_cert, alert_repo)
-    assert len(second) == 1
-
-
-# ---------- send_expiry_digest (Plan 002 WI-2) ----------
-
-
-def _insert_cert(db_path, *, subject="CN=test", hostname="h.example.com", port=443,
-                 not_after="2026-06-01T00:00:00+00:00"):
-    """Insert a minimal certificate row for digest testing."""
-    import uuid
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.certificate_model import Certificate
-    from tests._helpers import seed_certificate
-
-    if isinstance(not_after, str):
-        not_after = datetime.fromisoformat(not_after)
-    cert_id = str(uuid.uuid4())
-    cert = Certificate(
-        subject=subject,
-        issuer="CN=CA",
-        not_before=datetime.now(UTC) - timedelta(days=1),
-        not_after=not_after,
-        fingerprint_sha256="fp" + cert_id[:8],
-        raw_der=b"",
-    )
-    return seed_certificate(
-        db_path, cert,
-        hostname=hostname,
-        port=port,
-        source="scan",
-    )
-
-
-def test_send_expiry_digest_returns_true_with_expiring_certs(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    # Cert expiring in 5 days
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, not_after=soon)
-    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
-                         from_addr="from@test", recipients=["to@test"])
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_server = MagicMock()
-        mock_smtp.SMTP.return_value.__enter__ = lambda s: mock_server
-        mock_smtp.SMTP.return_value.__exit__ = MagicMock(return_value=False)
-        result = send_expiry_digest(db, config)
-    assert result is True
-
-
-def test_send_expiry_digest_returns_true_when_no_expiring(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    # Cert expiring in 100 days — not within 30-day window
-    far = (datetime.now(UTC) + timedelta(days=100)).isoformat()
-    _insert_cert(db, not_after=far)
-    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
-                         from_addr="from@test", recipients=["to@test"])
-    result = send_expiry_digest(db, config)
-    assert result is True  # nothing to report is success
-
-
-def test_send_expiry_digest_returns_false_when_no_config(tmp_path):
-    from cert_watch.alerts import send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    _insert_cert(db)
-    assert send_expiry_digest(db, None, None) is False
-
-
-def test_send_expiry_digest_sends_webhook_when_no_smtp(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, not_after=soon)
-    webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-
-
-def test_successful_expiry_webhook_is_not_resent_in_same_period(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    _insert_cert(db, not_after=(datetime.now(UTC) + timedelta(days=5)).isoformat())
-    webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerting.digest.expiry.send_webhook", return_value=True) as send:
-        assert send_expiry_digest(db, None, webhook) is True
-        assert send_expiry_digest(db, None, webhook) is True
-    send.assert_called_once()
-
-
-def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=3)).isoformat()
-    _insert_cert(db, subject="CN=important", hostname="web.example.com",
-                 port=443, not_after=soon)
-    webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-
-
-def test_send_expiry_digest_rejects_injected_owner_email(tmp_path):
-    """A stored owner_email containing a comma must not reach the To: header.
-
-    smtplib.send_message derives the envelope recipients from that header, so
-    an unvalidated stored value would inject a second recipient into the
-    weekly digest. Every other send path applies _validate_email; this one
-    did not (#63). The invalid owner is skipped with a warning and gets no
-    owner digest; the cert still appears in the global digest.
-    """
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-    from cert_watch.database import SqliteHostRepository, init_schema
-
-    db = tmp_path / "cw.sqlite3"
-    init_schema(db)
-    SqliteHostRepository(db).add(
-        "h.example.com",
-        owner_email="alice@example.com, mallory@evil.example",
-    )
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, hostname="h.example.com", not_after=soon)
-
-    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
-                         from_addr="from@test", recipients=["ops@test"])
-    sent: list = []
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_smtp.SMTP.return_value.send_message.side_effect = sent.append
-        result = send_expiry_digest(db, config)
-
-    assert result is True
-    assert sent, "the global digest should still be delivered"
-    for msg in sent:
-        assert "evil.example" not in msg["To"]
-
-
-def test_send_expiry_digest_discord_adapter_format(tmp_path):
-    """WI-011: digest webhook to kind='discord' uses Discord embed format."""
-    import json
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, subject="CN=discord-test", hostname="d.example.com",
-                 port=443, not_after=soon)
-    webhook = WebhookConfig(url="https://hooks.discord.test/webhook", kind="discord")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-    call_kwargs = mock_urlopen.call_args
-    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
-    if isinstance(body, bytes):
-        body = body.decode("utf-8")
-    payload = json.loads(body)
-    assert "embeds" in payload
-    assert payload["embeds"][0]["title"] == "cert-watch: Expiry Digest"
-
-
-def test_send_expiry_digest_alertmanager_adapter_format(tmp_path):
-    """WI-011: digest webhook to kind='alertmanager' uses Alertmanager alert format."""
-    import json
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, subject="CN=am-test", hostname="am.example.com",
-                 port=443, not_after=soon)
-    webhook = WebhookConfig(url="https://am.example.com/api/v1/alerts", kind="alertmanager")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-    call_kwargs = mock_urlopen.call_args
-    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
-    if isinstance(body, bytes):
-        body = body.decode("utf-8")
-    payload = json.loads(body)
-    assert "alerts" in payload
-    assert payload["alerts"][0]["labels"]["alertname"] == "CertAlert"
-
-
-def test_send_expiry_digest_generic_adapter_format(tmp_path):
-    """WI-011: digest webhook to kind='generic' still uses plain JSON payload."""
-    import json
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, subject="CN=generic-test", hostname="g.example.com",
-                 port=443, not_after=soon)
-    webhook = WebhookConfig(url="https://hooks.test/hook", kind="generic")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-    call_kwargs = mock_urlopen.call_args
-    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
-    if isinstance(body, bytes):
-        body = body.decode("utf-8")
-    payload = json.loads(body)
-    assert payload["alert_type"] == "expiry_digest"
-    assert "message" in payload
-
-
-def test_send_expiry_digest_smtp_failure_returns_false(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, not_after=soon)
-    config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
-                         from_addr="from@test", recipients=["to@test"])
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_smtp.SMTP.side_effect = Exception("connection refused")
-        result = send_expiry_digest(db, config)
-    assert result is False
-
-
-def test_send_expiry_digest_respects_30_day_window(tmp_path):
-    """Only certs within 30 days are included."""
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-    db = tmp_path / "cw.sqlite3"
-    # One inside window, one outside
-    inside = (datetime.now(UTC) + timedelta(days=20)).isoformat()
-    outside = (datetime.now(UTC) + timedelta(days=60)).isoformat()
-    _insert_cert(db, subject="CN=inside", hostname="in.example.com", not_after=inside)
-    _insert_cert(db, subject="CN=outside", hostname="out.example.com", not_after=outside)
-    webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-    assert result is True
-
-
-# ---------- send_expiry_digest owner-scoped (WI-A.2) ----------
-
-
-def _seed_owner_host(db_path, hostname, owner_email, port=443):
-    from cert_watch.database import SqliteHostRepository
-    from cert_watch.database.schema import init_schema
-
-    init_schema(db_path)
-    SqliteHostRepository(db_path).add(hostname, port, owner_email=owner_email)
-
-
-def test_expiry_digest_owner_scoped(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
-    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
-    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
-    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test", recipients=["admin@example.com"],
-    )
-
-    sent: list = []
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
-        result = send_expiry_digest(db, config)
-
-    assert result is True
-    assert len(sent) == 3
-
-    global_msg = sent[0]
-    assert "admin@example.com" in global_msg["To"]
-    body = global_msg.get_content()
-    assert "cert-a" in body
-    assert "cert-b" in body
-
-    owner_msgs = sorted(sent[1:], key=lambda m: str(m["To"]))
-    alice_msg = owner_msgs[0]
-    assert "alice@example.com" in alice_msg["To"]
-    alice_body = alice_msg.get_content()
-    assert "cert-a" in alice_body
-    assert "cert-b" not in alice_body
-
-    bob_msg = owner_msgs[1]
-    assert "bob@example.com" in bob_msg["To"]
-    bob_body = bob_msg.get_content()
-    assert "cert-b" in bob_body
-    assert "cert-a" not in bob_body
-
-
-def test_expiry_digest_owner_in_global_recipients(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
-    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
-    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
-    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test",
-        recipients=["admin@example.com", "alice@example.com"],
-    )
-
-    sent: list = []
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
-        result = send_expiry_digest(db, config)
-
-    assert result is True
-    assert len(sent) == 2
-
-    global_msg = sent[0]
-    assert "alice@example.com" in global_msg["To"]
-    assert "admin@example.com" in global_msg["To"]
-    body = global_msg.get_content()
-    assert "cert-a" in body
-    assert "cert-b" in body
-
-    bob_msg = sent[1]
-    assert "bob@example.com" in bob_msg["To"]
-    bob_body = bob_msg.get_content()
-    assert "cert-b" in bob_body
-    assert "cert-a" not in bob_body
-
-
-def test_expiry_digest_no_owners_backward_compat(tmp_path):
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-    _insert_cert(db, subject="CN=cert-a", hostname="h1.example.com", not_after=soon)
-    _insert_cert(db, subject="CN=cert-b", hostname="h2.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test", recipients=["admin@example.com"],
-    )
-
-    sent: list = []
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
-        result = send_expiry_digest(db, config)
-
-    assert result is True
-    assert len(sent) == 1
-    body = sent[0].get_content()
-    assert "cert-a" in body
-    assert "cert-b" in body
-    assert "admin@example.com" in sent[0]["To"]
-
-
-def test_expiry_digest_mixed_case_email_preserves_original(tmp_path):
-    """WI-A.2: mixed-case owner_email must be used verbatim in the To header."""
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "mixed.example.com", "Alice@Example.COM")
-    _insert_cert(db, subject="CN=cert-mixed", hostname="mixed.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test", recipients=["admin@example.com"],
-    )
-
-    sent: list = []
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = lambda msg: sent.append(msg)
-        result = send_expiry_digest(db, config)
-
-    assert result is True
-    owner_msg = sent[1]
-    assert "Alice@Example.COM" in owner_msg["To"]
-
-
-def test_expiry_digest_partial_smtp_failure_returns_false(tmp_path):
-    """WI-A.2: global send succeeds but owner send raises → function returns False."""
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "host-p.example.com", "owner@example.com")
-    _insert_cert(db, subject="CN=cert-p", hostname="host-p.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test", recipients=["admin@example.com"],
-    )
-
-    call_count = 0
-
-    def _send(msg):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return None
-        raise smtplib.SMTPException("owner send failed")
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = _send
-        result = send_expiry_digest(db, config)
-
-    assert result is False
-
-
-def test_expiry_digest_conn_break_retries_remaining_owners(tmp_path):
-    """Regression: if a send fails on the shared SMTP connection (connection
-    breaks), remaining owner digests must be retried via _send_digest_smtp
-    (which creates a new connection per send), not silently lost."""
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import AlertConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "host-a.example.com", "alice@example.com")
-    _seed_owner_host(db, "host-b.example.com", "bob@example.com")
-    _insert_cert(db, subject="CN=cert-a", hostname="host-a.example.com", not_after=soon)
-    _insert_cert(db, subject="CN=cert-b", hostname="host-b.example.com", not_after=soon)
-
-    config = AlertConfig(
-        smtp_host="smtp.test", smtp_user="", smtp_password="",
-        from_addr="from@test", recipients=["admin@example.com"],
-    )
-
-    shared_calls = 0
-
-    def _shared_send(msg):
-        nonlocal shared_calls
-        shared_calls += 1
-        if shared_calls >= 2:
-            raise ConnectionError("connection dropped")
-        return None
-
-    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
-        mock_conn = mock_smtp.SMTP.return_value
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.send_message.side_effect = _shared_send
-        result = send_expiry_digest(db, config)
-
-    # Global succeeded, owner send broke the connection, remaining owner was
-    # retried via _send_digest_smtp (same mock → same failure).  The result
-    # is False because not all sends succeeded, and no webhook is configured.
-    assert result is False
-    # Global + failed owner on shared conn + at least 1 retry = > 2 calls.
-    assert mock_conn.send_message.call_count > 2
-
-
-def test_expiry_digest_webhook_strips_owner_email_pii(tmp_path):
-    """WI-A.2: webhook payload must not contain owner_email PII."""
-    from datetime import UTC, datetime, timedelta
-
-    from cert_watch.alerts import WebhookConfig, send_expiry_digest
-
-    db = tmp_path / "cw.sqlite3"
-    soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
-
-    _seed_owner_host(db, "pii.example.com", "secret@example.com")
-    _insert_cert(
-        db, subject="CN=cert-pii", hostname="pii.example.com",
-        port=443, not_after=soon,
-    )
-
-    webhook = WebhookConfig(url="https://hooks.test/hook")
-
-    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
-        mock_resp = MagicMock()
-        mock_resp.status = 200
-        mock_resp.__enter__ = MagicMock(return_value=mock_resp)
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        mock_urlopen.return_value = mock_resp
-        result = send_expiry_digest(db, None, webhook)
-
-    assert result is True
-    call_kwargs = mock_urlopen.call_args
-    body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
-    if isinstance(body, bytes):
-        body = body.decode("utf-8")
-    assert "secret@example.com" not in body
-    assert "pii.example.com" in body
+    assert second == []
 
 
 def _leaf_expiring_in(days: int, fp: str) -> Certificate:

@@ -50,6 +50,126 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Digest delivery is synchronous and claim-ledger driven.** Expiry, renewal
+  and orphan summaries now use one engine and one three-wave retry policy.
+  Expiry webhooks therefore retry transient failures; renewal webhooks no
+  longer run in a background digest pool and instead complete synchronously
+  within the alert-cycle budget. Webhook fallback occurs only after SMTP has
+  failed and no recipient claim is busy. Orphan notices are durably claimed
+  once per weekly period, so a quiet renewal week cannot repeat the same notice
+  every scheduler cycle. Existing `digest_deliveries` rows retain their key
+  format and suppress an upgrade-week resend. The legacy
+  `_scheduler.expiry_digest_iso_week` and
+  `_scheduler.renewal_digest_iso_week` `kv_store` rows are harmless but are no
+  longer read or written. Expiry digest headers now name the actual configured
+  cadence window rather than always saying “within 30 days.” The renewal
+  webhook subject was fixed at `Renewal Digest (7d)`; it now includes the
+  configured cadence (for example `Renewal Digest (14d)`), so subject-based
+  webhook filters must be updated.
+- **Deprecated alerting import shims are removed in 1.0.** External Python code
+  importing `cert_watch.alerts`, `cert_watch.alert_delivery`,
+  `cert_watch.alert_adapters` or `cert_watch.digest` must import from
+  `cert_watch.alerting` or the corresponding public submodule instead. This is
+  an intentional compatibility break at the 1.0 boundary; HTTP APIs and URLs
+  are unchanged.
+
+- **Alert dedupe and routing are persisted (migration 0037).** Alert identity
+  now uses endpoint plus certificate fingerprint rather than the replaceable
+  inventory row id. Expiry thresholds never fire twice for the same endpoint,
+  fingerprint, type, and threshold. A renewal-stalled notice fires once per
+  endpoint/fingerprint; the weekly renewal digest is its reminder channel. A policy
+  violation fires once while present, closes on a clean scan, and may fire
+  again if the same rule reappears. Shared wildcard/SAN certificates therefore
+  retain independent alert rows and routing snapshots for every endpoint.
+  Uploaded certificates use their certificate row identity. Policy and drift
+  alerts now include matching
+  alert groups, the host owner, and role members, so those recipients may begin
+  receiving notifications they were previously omitted from.
+
+  The resolved route is saved as versioned JSON when the alert is queued and
+  `extra_recipients` is retained as a compatibility copy for this release.
+  Editing group membership or ownership does not redirect an already queued
+  alert; global SMTP recipients, webhook URLs, and transport credentials still
+  resolve at send time so an outage configuration fix applies immediately.
+  Existing queued rows are backfilled from `extra_recipients`; group names are
+  unavailable for those historical snapshots.
+
+  Renewal-overdue's 24-hour suppression now lives in `rule_firings` rather than
+  reparsing `event_log` JSON on every scheduler cycle. Migration 0037 imports
+  existing overdue events, including the port-less 1.x compatibility identity.
+  Stale pending alerts closed by certificate replacement or deletion are now
+  retained as `cancelled` with `closed_at` instead of being deleted. A row in
+  `sending` under a live lease is marked closed without stealing the lease; it
+  becomes sent or cancelled when the holder settles, and an expired stale lease
+  is cancelled rather than reclaimed. Cancelled rows do not suppress a recreated
+  expiry or renewal condition that never reached a recipient. They use the normal
+  delivered-alert retention window, while pending/failed rows that never
+  reached anyone retain the existing longer outage-evidence window. Sent
+  PagerDuty/Alertmanager incidents resolve when their condition is closed;
+  unchanged rescans still do not resolve them (#62).
+- **Alert delivery has a persisted retry lifecycle (migration 0036).** Alerts
+  are atomically claimed as `sending` under a lease. A failed round is returned
+  to `pending` with a 1-hour, 4-hour, then 12-hour backoff instead of becoming
+  immediately terminal. After 12 transport-reaching attempts, `failed` means
+  cert-watch has given up; expiry evaluation no longer revives that row on
+  every cycle. An operator with write access can use **Retry failed** in
+  Activity or `POST /api/alerts/{id}/retry` to reset the attempt count and queue
+  it again. **Failed alerts do not fire again automatically, including an
+  `expired` alert after delivery gives up; an operator must correct the channel
+  and select Retry failed.** Activity, `/api/health`, and the
+  `cert_watch_alerts{status="failed"}` metric make those rows visible. Manual
+  **Flush queue** ignores scheduled backoff, but still claims
+  rows and is serialized with scheduled delivery. The Activity and certificate
+  detail pages may briefly show the new `sending` status; an expired sending
+  lease is reported by health/readiness checks without making the Kubernetes
+  readiness probe fail.
+
+  Migration 0036 labels legacy failed `expiry_warning` and `expired` rows that
+  have no lifecycle failure reason as `legacy_failed`, but leaves them failed.
+  On the next threshold evaluation, cert-watch revives such a row at most once
+  only when its certificate still exists as the current, unsuperseded leaf,
+  its host is not marked renewed, and the row is the most urgent threshold
+  currently crossed for that certificate and alert type. Revival resets its
+  attempt count and clears its failure reason. Deleted-certificate rows,
+  renewed or superseded certificates, obsolete threshold stages, and other
+  legacy alert types stay failed and visible; use **Retry failed** if an
+  operator deliberately wants to send one. SSRF-blocked and invalid-channel
+  delivery rounds count toward the same bounded give-up policy; having no
+  delivery channel configured does not consume attempts and remains pending
+  with backoff. Saving a valid SMTP or webhook channel makes those no-channel
+  deferrals immediately eligible for the next cycle. If a
+  delivery cycle exhausts its wall-clock budget, rows already attempted keep
+  their last diagnostic and back off; rows not reached remain immediately
+  eligible for the next worker. Operator-initiated **Flush queue** attempts are
+  recorded in delivery evidence but do not consume the bounded give-up budget.
+  Successful deliveries settle immediately rather than waiting for the whole
+  queue, and database refusal during evidence-deferral recovery is isolated to
+  that row so later alerts continue processing. Tag-scoped flushes use the same
+  lease-guarded deferral and give-up transitions as unscoped workers. Failed
+  alert retries outside a caller's team scope now look identical to a missing
+  alert and create an `alert.retry_denied` audit event.
+- **Scoped writers can no longer create or import hosts with out-of-scope
+  tags.** This closes a scope-widening path: a writer scoped to `A` who submits
+  `B` is refused instead of storing `B,A`. Remove out-of-scope tags from the
+  add-host form or CSV before retrying; the writer's own scope tag is added
+  automatically.
+- **API seam additions; no existing endpoint paths changed.** The operational
+  UI mutations now have first-class JSON equivalents. Added paths are
+  `POST /api/hosts`, `POST /api/hosts/import`, `POST /api/hosts/scan`,
+  `POST /api/hosts/{id}/scan`, `PATCH /api/hosts/{id}/settings`,
+  `DELETE /api/hosts/{id}`, `POST /api/certificates/upload`,
+  `DELETE /api/certificates/{id}`, `POST /api/trust-anchors`,
+  `DELETE /api/trust-anchors/{id}`, and `POST /api/alerts/mark-all-read`.
+  Existing `/api/health`, `/api/audit`,
+  `/api/certificates/{id}/posture`, `/api/export/hosts.csv`, and
+  `/api/alerts/{id}/read` paths did not move; only their Python module ownership
+  changed. Existing clients require no action.
+- **The host-ownership HTML form path changed.** The detail UI now submits to
+  `POST /hosts/{id}/owner` (new) rather than
+  `POST /certificates/{id}/owner`. The old path remains callable for
+  compatibility in this release and delegates to the same service, so existing
+  integrations do not need an immediate change. The JSON path remains
+  `PATCH /api/hosts/{id}/owner`.
 - **Review saved configuration before upgrading.** Configuration resolution is
   now uniform across startup, the Settings UI, and background work. This changes
   several previously inconsistent cases:
@@ -173,8 +293,8 @@ restore the pre-migration backup.
   under `CERT_WATCH_ALERT_RETENTION_DAYS`. Two side effects worth knowing: a
   pending alert now keeps its original `created_at` across rescans, so the
   "undelivered for more than 24h" signal can actually reach its threshold on a
-  daily-scan estate; and a `failed` alert is now retried on the next cycle
-  instead of being stranded and duplicated.
+  daily-scan estate. A `failed` alert now remains terminal until an operator
+  explicitly retries it; expiry evaluation will not revive it indefinitely.
 
 - **Per-certificate notes are merged into host notes (migration 0031).** Every
   non-empty `certificates.notes` value is concatenated into the matching

@@ -8,17 +8,16 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import get_auth_context, write_form_guard, write_guard
+from cert_watch.auth.guards import get_auth_context, write_form_guard
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
-    AlertRepository,
-    ScopedAlertRepository,
-    SqliteAlertRepository,
+    AlertStore,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -30,11 +29,18 @@ from cert_watch.database import (
     pivot_urgency_stats,
 )
 from cert_watch.database.connection import _connect
-from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
-from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._deps import (
+    IdParam,
+    _db_path,
+    _get_settings,
+    acting_auth,
+    get_templates,
+)
+from cert_watch.routes._scoped import scope_tags_from_auth
 from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -288,33 +294,6 @@ def dashboard(
     )
 
 
-@router.post("/api/alerts/{alert_id}/read", response_model=None)
-async def mark_alert_read(
-    request: Request,
-    alert_id: IdParam,
-    _auth: str = Depends(write_guard),
-) -> dict[str, Any] | JSONResponse:
-    """Mark an alert as read."""
-    db = _db_path(request)
-    with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT cert_id FROM alerts WHERE id = ?",
-            (alert_id,),
-        ).fetchone()
-        if not row:
-            return {"ok": False, "error": "alert not found"}
-        denied = scope_write_denied(request, db, cert_id=row["cert_id"])
-        if denied:
-            return JSONResponse({"ok": False, "error": denied}, status_code=403)
-    with get_write_lock(), _connect(db) as conn:
-        cur = conn.execute(
-            "UPDATE alerts SET read = 1 WHERE id = ?",
-            (alert_id,),
-        )
-        conn.commit()
-    return {"ok": True, "id": alert_id, "updated": cur.rowcount > 0}
-
-
 @router.post("/alerts/flush")
 async def flush_alert_queue(
     request: Request, _auth: str = Depends(write_form_guard),
@@ -332,21 +311,20 @@ async def flush_alert_queue(
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
 
-    # Scoped users flush only their in-scope alerts; everyone else flushes all.
-    alert_repo: AlertRepository = (
-        ScopedAlertRepository(db, scope_tags)
-        if scope_tags
-        else SqliteAlertRepository(db)
-    )
-
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
-    from cert_watch.alerting.dispatch import process_pending
+    from cert_watch.alerting.dispatch import Dispatcher
     from cert_watch.scheduler import try_run_alert_delivery
 
     result = await run_in_threadpool(
         try_run_alert_delivery,
-        lambda: process_pending(alert_repo, alert_config, webhook_config),
+        lambda: Dispatcher(
+            db,
+            alert_config,
+            webhook_config,
+            scope_tags=scope_tags,
+            ignore_backoff=True,
+        ).process_pending(),
     )
     if result is None:
         return RedirectResponse(
@@ -371,7 +349,7 @@ async def flush_alert_queue(
         # describe an outage as a successful flush.
         detail = f"Flushed {sent} alert(s), {failed} failed"
         if deferred:
-            detail += f", {deferred} deferred (delivery evidence unavailable)"
+            detail += f", {deferred} deferred"
         return RedirectResponse(
             url=f"/alerts?warning={quote(detail)}",
             status_code=303,
@@ -380,6 +358,52 @@ async def flush_alert_queue(
         url=f"/alerts?saved={quote(f'{sent} alert(s) sent')}",
         status_code=303,
     )
+
+
+@router.post("/alerts/{alert_id}/retry")
+async def retry_failed_alert(
+    request: Request,
+    alert_id: IdParam,
+    _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
+    """Return one terminal failed alert to the eligible queue."""
+    db = _db_path(request)
+    try:
+        with get_write_lock():
+            retried = AlertStore(db).operator_retry(alert_id, auth=acting_auth(request))
+    except ScopeDeniedError:
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert.retry_denied",
+            target_type="alert",
+            target_id=alert_id,
+            detail={"reason": "scope_denied"},
+            source_ip=resolve_source_ip(request),
+        )
+        return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
+    if not retried:
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT status FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+        if row is None:
+            return RedirectResponse(
+                url="/alerts?error=alert+not+found", status_code=303
+            )
+        return RedirectResponse(
+            url="/alerts?warning=only+failed+alerts+can+be+retried", status_code=303
+        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.retry_failed",
+        target_type="alert",
+        target_id=alert_id,
+        detail={"previous_status": "failed"},
+        source_ip=resolve_source_ip(request),
+    )
+    return RedirectResponse(url="/alerts?saved=alert+queued+for+retry", status_code=303)
 
 
 @router.post("/alerts/mark-all-read")
@@ -394,21 +418,12 @@ async def mark_all_alerts_read(
         )
     db = _db_path(request)
 
-    # Tag-scoped access control (WI-078): a scoped user only clears alerts inside
-    # their team scope; admins / unscoped users clear everything.
-    auth_ctx = getattr(request.state, "auth_context", None)
-    scope_tags = scope_tags_from_auth(auth_ctx)
+    from cert_watch.routes._deps import acting_auth
 
-    with get_write_lock():
-        count = SqliteAlertRepository(db).mark_all_read(scope_tags)
-
-    record_audit(
+    count = mark_all_alerts_read_service(
         db,
+        auth=acting_auth(request),
         actor=resolve_actor(request),
-        action="alert.mark_all_read",
-        target_type="alert",
-        target_id="all",
-        detail={"count": count},
         source_ip=resolve_source_ip(request),
     )
     plural = "alert" if count == 1 else "alerts"

@@ -140,6 +140,44 @@ def test_save_alert_config(reload_app):
     assert "saved=1" in r.headers["location"]
 
 
+@pytest.mark.parametrize(
+    ("path", "data"),
+    [
+        ("/settings/smtp", {"smtp_host": "smtp.example.com"}),
+        ("/settings/alerts", {"webhook_url": "https://hooks.test/hook"}),
+    ],
+)
+def test_configuring_delivery_wakes_no_channel_deferrals(
+    reload_app, tmp_path, path, data,
+):
+    from datetime import UTC, datetime
+
+    from cert_watch.alerting import Dispatcher
+    from cert_watch.database import Alert, SqliteAlertRepository, init_schema
+
+    app_mod = reload_app()
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+    repo.create(Alert(
+        cert_id="waiting", alert_type="expiry_warning", status="pending", message="m",
+    ))
+    Dispatcher(
+        db, transports=[], clock=lambda: datetime(2026, 9, 22, tzinfo=UTC)
+    ).process_pending()
+    before = repo.list_for_cert("waiting")[0]
+    assert before.next_attempt_at is not None
+
+    with TestClient(app_mod.app) as client:
+        response = client.post(path, data=data, follow_redirects=False)
+
+    assert response.status_code == 303
+    after = repo.list_for_cert("waiting")[0]
+    assert after.status == "pending"
+    assert after.attempt_count == 0
+    assert after.next_attempt_at is None
+
+
 # ---------- Test SMTP endpoint ----------
 
 

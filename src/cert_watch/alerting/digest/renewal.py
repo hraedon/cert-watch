@@ -1,32 +1,21 @@
-"""Renewal digest — volume-shaped reporting (WI-3.1 / Plan 048)."""
+"""Renewal digest target selection and rendering (Plan 048)."""
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from cert_watch.alerting.digest.engine import _send_claimed_digest_smtp, _webhook_channel
-from cert_watch.alerting.digest.orphan import send_orphan_notice
-from cert_watch.alerting.digest.pool import _submit_digest_task
-from cert_watch.alerting.model import (
-    ALERT_MAX_RETRIES,
-    ALERT_RETRY_DELAY,
-    AlertConfig,
-    OutboundMessage,
-    WebhookConfig,
-)
+from cert_watch.alerting.digest.engine import DigestTarget
+from cert_watch.alerting.model import AlertConfig, OutboundMessage
 from cert_watch.alerting.transports.smtp import _validate_email
-from cert_watch.alerting.transports.webhook import send_webhook
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.database.schema import init_schema
 
-logger = logging.getLogger("cert_watch.digest")
+logger = logging.getLogger("cert_watch.alerting.digest")
 
 
 @dataclass
@@ -73,17 +62,17 @@ def _endpoint_label(endpoint: _Endpoint) -> str:
 
 
 def build_renewal_digest(
-    db_path: str | Path, days: int = 7, *, cadence_days: int | None = None,
+    db_path: str | Path,
+    days: int = 7,
+    *,
+    cadence_days: int | None = None,
+    now: datetime | None = None,
 ) -> list[RenewalDigest]:
-    """Query event_log for cert_renewed and renewal_overdue events from the
-    last *days* days, group exact endpoints by their current owner, and produce
-    per-owner RenewalDigest objects. Unknown legacy ports stay unowned and
-    receive no inferred certificate or historical context. Zero-activity
-    periods produce an empty list (no empty noise).
-    """
+    """Build per-owner renewal activity for the requested cadence window."""
     effective_days = cadence_days if cadence_days is not None else days
     init_schema(db_path)
-    cutoff = (datetime.now(UTC) - timedelta(days=effective_days)).isoformat()
+    current = now or datetime.now(UTC)
+    cutoff = (current - timedelta(days=effective_days)).isoformat()
 
     with _connect(db_path) as conn:
         renewed_rows = conn.execute(
@@ -118,7 +107,9 @@ def build_renewal_digest(
     host_owners: dict[_Endpoint, str] = {}
     current_expiry: dict[_Endpoint, str | None] = {}
     with _connect(db_path) as conn:
-        for row in conn.execute("SELECT hostname, port, owner_email FROM hosts").fetchall():
+        for row in conn.execute(
+            "SELECT hostname, port, owner_email FROM hosts"
+        ).fetchall():
             host_owners[(row["hostname"], row["port"])] = row["owner_email"] or ""
         for endpoint in endpoints:
             hostname, port = endpoint
@@ -128,18 +119,23 @@ def build_renewal_digest(
             row = conn.execute(
                 """SELECT not_after FROM certificates
                    WHERE hostname = ? AND port = ? AND is_leaf = 1 AND source = 'scanned'
-                   ORDER BY created_at DESC, rowid DESC LIMIT 1""", (hostname, port),
+                   ORDER BY created_at DESC, rowid DESC LIMIT 1""",
+                (hostname, port),
             ).fetchone()
             current_expiry[endpoint] = row["not_after"] if row is not None else None
 
     from cert_watch.renewal_analytics import compute_host_analytics
 
     shortened_endpoints = {
-        endpoint for endpoint in endpoints
+        endpoint
+        for endpoint in endpoints
         if endpoint[1] is not None
         and compute_host_analytics(
-            db_path, endpoint[0], port=endpoint[1],
-        ).lifetime_trend == "decreasing"
+            db_path,
+            endpoint[0],
+            port=endpoint[1],
+        ).lifetime_trend
+        == "decreasing"
     }
 
     by_owner: dict[str, RenewalDigest] = {}
@@ -160,31 +156,35 @@ def build_renewal_digest(
 
     for endpoint, count in renewed_by_endpoint.items():
         owner = host_owners.get(endpoint, "") if endpoint[1] is not None else ""
-        d = _ensure_owner(owner)
-        d.renewed_count += count
-        d.renewed_hosts.append(_endpoint_label(endpoint))
+        digest = _ensure_owner(owner)
+        digest.renewed_count += count
+        digest.renewed_hosts.append(_endpoint_label(endpoint))
 
     for endpoint, count in overdue_by_endpoint.items():
         owner = host_owners.get(endpoint, "") if endpoint[1] is not None else ""
-        d = _ensure_owner(owner)
-        d.overdue_count += count
-        d.overdue_hosts.append(_endpoint_label(endpoint))
+        digest = _ensure_owner(owner)
+        digest.overdue_count += count
+        digest.overdue_hosts.append(_endpoint_label(endpoint))
 
-    for endpoint in sorted(shortened_endpoints, key=lambda value: (value[0], value[1] or 0)):
-        owner = host_owners.get(endpoint, "")
-        d = _ensure_owner(owner)
-        d.shortened_count += 1
-        d.shortened_hosts.append(_endpoint_label(endpoint))
+    for endpoint in sorted(
+        shortened_endpoints, key=lambda value: (value[0], value[1] or 0)
+    ):
+        digest = _ensure_owner(host_owners.get(endpoint, ""))
+        digest.shortened_count += 1
+        digest.shortened_hosts.append(_endpoint_label(endpoint))
 
     expiry_by_label = {
         _endpoint_label(endpoint): value for endpoint, value in current_expiry.items()
     }
-    for d in by_owner.values():
-        d.host_expiry = {
-            h: expiry_by_label.get(h)
-            for h in (*d.renewed_hosts, *d.overdue_hosts, *d.shortened_hosts)
+    for digest in by_owner.values():
+        digest.host_expiry = {
+            host: expiry_by_label.get(host)
+            for host in (
+                *digest.renewed_hosts,
+                *digest.overdue_hosts,
+                *digest.shortened_hosts,
+            )
         }
-
     return list(by_owner.values())
 
 
@@ -201,12 +201,7 @@ def _fmt_expiry(not_after: str | None) -> str:
 def _merge_owner_address_variants(
     digests: list[RenewalDigest],
 ) -> list[RenewalDigest]:
-    """Combine digests whose owner addresses differ only by case.
-
-    Email mailbox comparison and delivery claims are case-insensitive in the
-    send path. Keeping case variants as separate digests would let the first
-    claim suppress the second and omit some of that owner's hosts.
-    """
+    """Combine digests whose owner addresses differ only by case."""
     merged: dict[str, RenewalDigest] = {}
     for digest in digests:
         key = digest.owner_email.casefold()
@@ -234,260 +229,111 @@ def _build_digest_message(digest: RenewalDigest) -> str:
         "",
         f"Renewed on schedule: {digest.renewed_count}",
     ]
-    if digest.renewed_hosts:
-        for h in digest.renewed_hosts:
-            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
-    lines.append("")
-    lines.append(f"Overdue: {digest.overdue_count}")
-    if digest.overdue_hosts:
-        for h in digest.overdue_hosts:
-            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
+    for host in digest.renewed_hosts:
+        lines.append(f"  - {host}{_fmt_expiry(expiry.get(host))}")
+    lines.extend(("", f"Overdue: {digest.overdue_count}"))
+    for host in digest.overdue_hosts:
+        lines.append(f"  - {host}{_fmt_expiry(expiry.get(host))}")
     if digest.shortened_hosts:
-        lines.append("")
-        lines.append(f"Lifetimes shortened: {digest.shortened_count}")
-        for h in digest.shortened_hosts:
-            lines.append(f"  - {h}{_fmt_expiry(expiry.get(h))}")
+        lines.extend(("", f"Lifetimes shortened: {digest.shortened_count}"))
+        for host in digest.shortened_hosts:
+            lines.append(f"  - {host}{_fmt_expiry(expiry.get(host))}")
     return "\n".join(lines)
 
 
-def send_renewal_digest(
-    db_path: str | Path,
-    alert_config: AlertConfig | None,
-    webhook_config: WebhookConfig | None = None,
-    *,
-    days: int = 7,
-    cadence_days: int | None = None,
-    delivery_completion_callback: Callable[[bool], None] | None = None,
-) -> bool | None:
-    """Build and send the renewal digest through the existing alert pipeline.
+def _aggregate(digests: list[RenewalDigest], cadence_days: int) -> RenewalDigest:
+    return RenewalDigest(
+        days=cadence_days,
+        renewed_count=sum(digest.renewed_count for digest in digests),
+        renewed_hosts=sorted({host for d in digests for host in d.renewed_hosts}),
+        overdue_count=sum(digest.overdue_count for digest in digests),
+        overdue_hosts=sorted({host for d in digests for host in d.overdue_hosts}),
+        shortened_count=sum(digest.shortened_count for digest in digests),
+        shortened_hosts=sorted({host for d in digests for host in d.shortened_hosts}),
+        host_expiry={host: expiry for d in digests for host, expiry in d.host_expiry.items()},
+    )
 
-    When SMTP and webhook configs are both absent, returns False.
-    Sends one digest per owner plus one global digest for unowned hosts.
-    For SMTP delivery, returns True only when all deliveries succeeded.
-    For webhook delivery, the default API remains submission-based and returns
-    True after queueing. When *delivery_completion_callback* is supplied,
-    returns None for an asynchronous submission and invokes the callback with
-    the final success/failure result after all webhook deliveries complete.
-    """
-    if alert_config is None and webhook_config is None:
-        return False
 
-    # Surface orphaned certs (no alert routing) to admins as part of the digest
-    # run — independent of renewal activity, so a quiet week still flags them.
-    # Logs its own failures; does not gate the renewal-digest return value.
-    # Offloaded to the thread pool so SMTP latency does not block the scheduler
-    # thread (same bug class as WI-134 webhook path).
-    try:
-        orphan_submitted = _submit_digest_task(
-            send_orphan_notice,
-            db_path,
-            alert_config,
-            task_name="orphan notice delivery",
-        )
-    except Exception:
-        logger.warning(
-            "orphan notice pool submit failed; delivering inline",
-            exc_info=True,
-        )
-        send_orphan_notice(db_path, alert_config)
-    else:
-        if not orphan_submitted:
-            logger.info("orphan notice not submitted because digest pool is stopped")
+@dataclass(frozen=True)
+class RenewalDigestKind:
+    """Per-owner renewal activity with a global SMTP summary."""
 
-    digests = build_renewal_digest(db_path, days=days, cadence_days=cadence_days)
-    if not digests:
-        return True
-    digests = _merge_owner_address_variants(digests)
+    alert_config: AlertConfig | None
+    name: str = "renewal"
+    webhook_fanout: Literal["per_target"] = "per_target"
 
-    global_recipients_cf: set[str] = set()
-    global_recipients_original: list[str] = []
-    if isinstance(alert_config, AlertConfig):
-        seen: set[str] = set()
-        for r in alert_config.recipients:
-            if not _validate_email(r):
-                logger.warning("skipping invalid digest recipient: %r", r)
-                continue
-            cf = r.casefold()
-            if cf not in seen:
-                seen.add(cf)
-                global_recipients_original.append(r)
-        global_recipients_cf = seen
-
-    original_emails: dict[str, str] = {}
-    owner_digests: dict[str, RenewalDigest] = {}
-    for d in digests:
-        if not _validate_email(d.owner_email):
-            logger.warning("skipping invalid owner_email digest: %r", d.owner_email)
-            continue
-        cf = d.owner_email.casefold()
-        original_emails.setdefault(cf, d.owner_email)
-        if cf and cf not in global_recipients_cf:
-            owner_digests.setdefault(cf, d)
-
-    any_smtp_success = False
-    any_smtp_failure = False
-    smtp_busy = False
-
-    if isinstance(alert_config, AlertConfig):
-        from cert_watch.database.digest_deliveries import digest_period_key
-
-        effective_days = cadence_days if cadence_days is not None else days
-        digest_key = digest_period_key("renewal", effective_days)
-
-        global_digest = RenewalDigest(
-            days=effective_days,
-            renewed_count=sum(d.renewed_count for d in digests),
-            renewed_hosts=sorted({h for d in digests for h in d.renewed_hosts}),
-            overdue_count=sum(d.overdue_count for d in digests),
-            overdue_hosts=sorted({h for d in digests for h in d.overdue_hosts}),
-            shortened_count=sum(d.shortened_count for d in digests),
-            shortened_hosts=sorted({h for d in digests for h in d.shortened_hosts}),
-            host_expiry={h: e for d in digests for h, e in d.host_expiry.items()},
-        )
-        global_body = _build_digest_message(global_digest)
-        global_subject = (
-            f"[cert-watch] Renewal Digest: "
-            f"{global_digest.renewed_count} renewed, "
-            f"{global_digest.overdue_count} overdue"
-        )
-
-        def _build_global_msg(recipients: list[str]) -> EmailMessage:
-            m = EmailMessage()
-            m["Subject"] = global_subject
-            m["From"] = alert_config.from_addr
-            m["To"] = ", ".join(recipients)
-            m.set_content(global_body)
-            return m
-
-        def _build_owner_msg(cf_email: str, od: RenewalDigest) -> EmailMessage:
-            body = _build_digest_message(od)
-            subject = (
-                f"[cert-watch] Renewal Digest: "
-                f"{od.renewed_count} renewed, {od.overdue_count} overdue"
-            )
-            original = original_emails.get(cf_email, cf_email)
-            m = EmailMessage()
-            m["Subject"] = subject
-            m["From"] = alert_config.from_addr
-            m["To"] = original
-            m.set_content(body)
-            return m
-
-        if global_recipients_original:
-            outcomes, busy = _send_claimed_digest_smtp(
+    def targets(
+        self,
+        db_path: str | Path,
+        now: datetime,
+        cadence_days: int,
+    ) -> list[DigestTarget]:
+        digests = _merge_owner_address_variants(
+            build_renewal_digest(
                 db_path,
-                digest_key,
-                global_recipients_original,
-                alert_config,
-                _build_global_msg,
-                failure_label="global renewal digest",
+                cadence_days=cadence_days,
+                now=now,
             )
-            smtp_busy |= busy
-            any_smtp_success |= any(outcomes.values())
-            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
-
-        for cf_email, od in owner_digests.items():
-            original = original_emails.get(cf_email, cf_email)
-
-            def _build_current_owner_msg(
-                _recipients: list[str],
-                owner_email: str = cf_email,
-                owner_digest: RenewalDigest = od,
-            ) -> EmailMessage:
-                return _build_owner_msg(owner_email, owner_digest)
-
-            outcomes, busy = _send_claimed_digest_smtp(
-                db_path,
-                digest_key,
-                [original],
-                alert_config,
-                _build_current_owner_msg,
-                failure_label=f"owner digest for {original}",
-            )
-            smtp_busy |= busy
-            any_smtp_success |= any(outcomes.values())
-            any_smtp_failure |= any(not delivered for delivered in outcomes.values())
-
-        any_smtp_failure |= smtp_busy
-
-    if any_smtp_success and not any_smtp_failure:
-        return True
-
-    if any_smtp_failure and webhook_config is None:
-        return False
-
-    if smtp_busy:
-        return False
-
-    if isinstance(webhook_config, WebhookConfig):
-        from cert_watch.database.digest_deliveries import (
-            claim_digest_delivery,
-            complete_digest_delivery,
-            digest_period_key,
-            renew_digest_delivery,
         )
-        from cert_watch.retry import backoff_range
+        if not digests:
+            return []
 
-        effective_days = cadence_days if cadence_days is not None else days
-        digest_key = digest_period_key("renewal", effective_days)
-        channel = _webhook_channel(webhook_config)
-
-        def _deliver_digest_webhook(od: RenewalDigest) -> bool:
-            target = od.owner_email.casefold() or "_unowned"
-            claim = claim_digest_delivery(db_path, digest_key, channel, target)
-            if claim.state == "sent":
-                return True
-            if not claim.acquired:
-                return False
-            body = _build_digest_message(od)
-            msg = OutboundMessage.from_digest(
-                subject=f"Renewal Digest ({days}d)",
-                body=body,
-                severity="renewal_digest",
-                idempotency_key=claim.idempotency_key,
+        global_recipients = _valid_recipients(
+            self.alert_config.recipients if self.alert_config is not None else []
+        )
+        global_keys = {recipient.casefold() for recipient in global_recipients}
+        targets = [
+            DigestTarget(
+                key="global",
+                payload=_aggregate(digests, cadence_days),
+                smtp_recipients=tuple(global_recipients),
+                is_global=True,
+                webhook_eligible=False,
             )
-            for _ in backoff_range(
-                ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
-            ):
-                if not renew_digest_delivery(db_path, claim):
-                    return False
-                if send_webhook(msg, webhook_config):
-                    complete_digest_delivery(db_path, claim, succeeded=True)
-                    return True
-            logger.warning(
-                "renewal digest webhook failed after %d attempts",
-                ALERT_MAX_RETRIES,
+        ]
+        for digest in digests:
+            owner = digest.owner_email
+            key = owner.casefold() or "_unowned"
+            recipients: tuple[str, ...] = ()
+            if owner:
+                if not _validate_email(owner):
+                    logger.warning("skipping invalid owner_email digest: %r", owner)
+                elif key not in global_keys:
+                    recipients = (owner,)
+            targets.append(
+                DigestTarget(
+                    key=key,
+                    payload=digest,
+                    smtp_recipients=recipients,
+                    webhook_subject=f"Renewal Digest ({cadence_days}d)",
+                )
             )
-            complete_digest_delivery(db_path, claim, succeeded=False)
-            return False
+        return targets
 
-        def _deliver_all_digest_webhooks() -> bool:
-            delivered = all([_deliver_digest_webhook(od) for od in digests])
-            if delivery_completion_callback is not None:
-                try:
-                    delivery_completion_callback(delivered)
-                except Exception:
-                    logger.exception("digest delivery completion callback failed")
-            return delivered
+    def render(self, target: DigestTarget) -> OutboundMessage:
+        digest = target.payload
+        if not isinstance(digest, RenewalDigest):
+            raise TypeError("renewal target has the wrong payload")
+        return OutboundMessage.from_digest(
+            subject=(
+                f"[cert-watch] Renewal Digest: {digest.renewed_count} renewed, "
+                f"{digest.overdue_count} overdue"
+            ),
+            body=_build_digest_message(digest),
+            severity="renewal_digest",
+            idempotency_key="",
+            recipients=target.smtp_recipients,
+        )
 
-        try:
-            submitted = _submit_digest_task(
-                _deliver_all_digest_webhooks,
-                task_name="renewal digest webhook delivery",
-                failure_callback=delivery_completion_callback,
-            )
-        except Exception:
-            logger.warning(
-                "digest webhook pool submit failed; delivering inline",
-                exc_info=True,
-            )
-            return _deliver_all_digest_webhooks()
-        if not submitted:
-            logger.info("digest webhook not submitted because digest pool is stopped")
-            if delivery_completion_callback is not None:
-                delivery_completion_callback(False)
-                return None
-            return False
-        return None if delivery_completion_callback is not None else True
 
-    return False
+def _valid_recipients(recipients: list[str]) -> list[str]:
+    seen: set[str] = set()
+    valid: list[str] = []
+    for recipient in recipients:
+        key = recipient.casefold()
+        if not _validate_email(recipient):
+            logger.warning("skipping invalid digest recipient: %r", recipient)
+        elif key not in seen:
+            seen.add(key)
+            valid.append(recipient)
+    return valid

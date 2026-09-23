@@ -144,6 +144,25 @@ def test_check_renewal_overdue_fires_webhook_once_and_dedupes(seeded_db, monkeyp
     send.assert_called_once()
 
 
+def test_check_renewal_overdue_records_cooldown_only_after_event_is_persisted(
+    seeded_db, monkeypatch,
+):
+    db, parsed = seeded_db
+    signal = _signal(fingerprint=parsed.fingerprint_sha256)
+    hosts = [("host.example.com", 443)]
+    monkeypatch.setattr(
+        "cert_watch.renewal_analytics.detect_renewal_overdue", lambda *a, **k: signal,
+    )
+    monkeypatch.setattr("cert_watch.events.emit_event", lambda *a, **k: None)
+
+    _check_renewal_overdue(db, hosts)
+
+    from cert_watch.database.connection import _connect
+
+    with _connect(db) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 0
+
+
 def test_check_renewal_overdue_no_signal_no_send(seeded_db):
     db, _ = seeded_db
     with patch(

@@ -6,8 +6,8 @@ import json
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler
 
+from cert_watch.alerting import WebhookConfig, send_webhook
 from cert_watch.alerting.model import OutboundMessage
-from cert_watch.alerts import WebhookConfig, send_webhook
 from cert_watch.database import Alert
 from cert_watch.http_client import validate_webhook_url
 from tests._integration_servers import allow_loopback_transport, http_server, server_url

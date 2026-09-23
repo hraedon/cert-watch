@@ -140,7 +140,7 @@ class TestQueueAssembly:
 
     @pytest.mark.parametrize("days,severity", [(5, "critical"), (20, "warning")])
     def test_uploaded_expiry_has_replacement_guidance(self, db: Path, days: int, severity: str):
-        from cert_watch.alerts import evaluate_renewal_window
+        from cert_watch.alerting import evaluate_renewal_window
         from cert_watch.attention import build_attention_queue
 
         cert_id = SqliteCertificateRepository(db, source="uploaded").add(_mk_cert("upload", days))

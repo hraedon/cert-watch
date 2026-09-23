@@ -999,7 +999,7 @@ def test_scan_host_via_openssl_fallback_leaf_parse_fail(monkeypatch):
 
 
 def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf):
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     db = tmp_path / "cw.sqlite3"
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
@@ -1043,7 +1043,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
 
 
 def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_signed_leaf):
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     db = tmp_path / "cw.sqlite3"
     leaf = parse_certificate(self_signed_leaf.der)
     entry = ScannedEntry(host="x", port=443, leaf=leaf, chain=[])
@@ -1095,7 +1095,7 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
     """
     import json
 
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     from cert_watch.database.cert_ops import replace_scanned
 
@@ -1110,12 +1110,12 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
         db, hostname="x", port=443, leaf=leaf, chain=[], chain_valid=True,
     )
 
-    # Seed a pending alert for the old cert
+    # Seed a sent incident for the old cert; only delivered keys resolve.
     alert_repo = SqliteAlertRepository(db)
     alert_repo.create(Alert(
         cert_id=first_leaf_id,
         alert_type="expiry_warning",
-        status="pending",
+        status="sent",
         message="expiring",
         threshold_days=7,
         hostname="x",
@@ -1167,15 +1167,17 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
         assert payload["alerts"][0]["labels"]["alertname"] == "CertExpiry"
         assert payload["alerts"][0]["labels"]["host"] == "x"
 
-        # Verify the old cert's alerts were deleted by replace_scanned
-        assert len(alert_repo.list_for_cert(first_leaf_id)) == 0
+        # The closed incident is retained for alert retention.
+        [closed] = alert_repo.list_for_cert(first_leaf_id)
+        assert closed.status == "sent"
+        assert closed.closed_at is not None
 
 
 def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
     monkeypatch, tmp_path, self_signed_leaf, expiring_soon_leaf,
 ):
     """An Alertmanager resolve failure must not block the scan pipeline."""
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     from cert_watch.database.cert_ops import replace_scanned
 
@@ -1194,7 +1196,7 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
     alert_repo.create(Alert(
         cert_id=first_leaf_id,
         alert_type="expiry_warning",
-        status="pending",
+        status="sent",
         message="expiring",
         threshold_days=7,
         hostname="x",
@@ -1245,7 +1247,7 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
     closing an incident the operator still needs. The carried alert must
     stay pending and the resolve must not fire.
     """
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     from cert_watch.database.cert_ops import replace_scanned
     from cert_watch.database.connection import _connect
@@ -1262,7 +1264,7 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
     alert_repo.create(Alert(
         cert_id=first_leaf_id,
         alert_type="expiry_warning",
-        status="pending",
+        status="sent",
         message="expiring",
         threshold_days=7,
         hostname="x",
@@ -1296,9 +1298,9 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
         assert leaf_id != first_leaf_id
         mock_urlopen.assert_not_called()
 
-    # The pending alert was carried onto the rewritten row, not resolved
-    # away: it stays deliverable against the live certificate id.
-    assert [a.status for a in alert_repo.list_for_cert(leaf_id)] == ["pending"]
+    # The sent alert was carried onto the rewritten row, not resolved
+    # away: it remains the same sent incident against the live certificate id.
+    assert [a.status for a in alert_repo.list_for_cert(leaf_id)] == ["sent"]
 
     # No cert_renewed event either — the renewal digest counts those rows.
     with _connect(db) as conn:
@@ -1323,7 +1325,7 @@ def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
     import hashlib
     import json
 
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     from cert_watch.database.cert_ops import replace_scanned
 
@@ -1339,7 +1341,7 @@ def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
     alert_repo.create(Alert(
         cert_id=first_leaf_id,
         alert_type="expiry_warning",
-        status="pending",
+        status="sent",
         message="expiring",
         threshold_days=7,
         hostname="x",
@@ -1410,7 +1412,7 @@ def test_store_scanned_unchanged_rescan_defers_no_resolve(
 ):
     """#62 deferred path: the scheduler stashes no resolve for an unchanged
     rescan, so executing the deferred work performs no HTTP."""
-    from cert_watch.alerts import WebhookConfig
+    from cert_watch.alerting import WebhookConfig
     from cert_watch.database import Alert, SqliteAlertRepository, init_schema
     from cert_watch.database.cert_ops import replace_scanned
     from cert_watch.scan import DeferredPostCommit, _execute_deferred_post_commit
@@ -1531,7 +1533,7 @@ def test_store_scanned_drift_alert_creation(monkeypatch, tmp_path, self_signed_l
         "cert_watch.database._extract_sig_algo", lambda x: "SHA256"
     )
     monkeypatch.setattr(
-        "cert_watch.database.create_drift_alert",
+        "cert_watch.alerting.rules.drift.create_drift_alert",
         lambda *a, **kw: "alert-id",
     )
     monkeypatch.setattr(
@@ -1563,7 +1565,7 @@ def test_store_scanned_drift_alert_creation_exception(monkeypatch, tmp_path, sel
     monkeypatch.setattr("cert_watch.database._extract_key_algo", lambda x: "RSA")
     monkeypatch.setattr("cert_watch.database._extract_sig_algo", lambda x: "SHA256")
     monkeypatch.setattr(
-        "cert_watch.database.create_drift_alert",
+        "cert_watch.alerting.rules.drift.create_drift_alert",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("db locked")),
     )
     monkeypatch.setattr(
@@ -2200,7 +2202,7 @@ def test_store_scanned_rolls_back_prior_writes_when_history_fails(
 def test_store_scanned_webhook_resolve_failure_does_not_roll_back(
     tmp_path, self_signed_leaf, monkeypatch,
 ):
-    from cert_watch.alerts import Alert, WebhookConfig
+    from cert_watch.alerting import Alert, WebhookConfig
     from cert_watch.database import SqliteAlertRepository
     from cert_watch.database.schema import init_schema
 

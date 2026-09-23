@@ -482,14 +482,14 @@ def _stage_webhook_resolve(
     row id the triggering alert fired against, so they match the incident
     PagerDuty has open regardless of intervening row rewrites.
     """
-    if not replaced_cert_id or webhook_config is None:
+    if (not replaced_cert_id and not pending_for_resolve) or webhook_config is None:
         return
     from cert_watch.alerting.model import WebhookConfig
     from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
     if not isinstance(webhook_config, WebhookConfig):
         raise TypeError(f"expected WebhookConfig, got {type(webhook_config).__name__}")
     resolved = resolve_webhook_for_renewed_cert(
-        repo_path, replaced_cert_id, webhook_config,
+        repo_path, replaced_cert_id or "", webhook_config,
         pending_alerts=pending_for_resolve,
     )
     if resolved:
@@ -668,6 +668,7 @@ def _stage_policy(
     *,
     conn: sqlite3.Connection,
     ruleset: PolicySet,
+    closed_sent: list[Any] | None = None,
 ) -> str:
     """Evaluate policy overrides and fire policy violation alerts.
 
@@ -720,15 +721,17 @@ def _stage_policy(
                 scanned_at=None,
                 conn=conn,
             )
-        from cert_watch.alerting.rules.policy import evaluate_policy_alerts
-        evaluate_policy_alerts(
-            cert_id=leaf_id,
-            hostname=entry.host,
-            violations=violations,
-            db_path=str(repo_path),
-            subject=entry.leaf.subject,
-            conn=conn,
-        )
+    from cert_watch.alerting.rules.policy import evaluate_policy_alerts
+    evaluate_policy_alerts(
+        cert_id=leaf_id,
+        hostname=entry.host,
+        violations=violations,
+        db_path=str(repo_path),
+        subject=entry.leaf.subject,
+        conn=conn,
+        fingerprint=entry.leaf.fingerprint_sha256,
+        closed_sent=closed_sent,
+    )
     return posture_grade
 
 
@@ -742,10 +745,10 @@ def _stage_drift(
     conn: sqlite3.Connection,
 ) -> None:
     """Detect drift from previous cert and optionally create alerts."""
+    from cert_watch.alerting.rules.drift import create_drift_alert
     from cert_watch.database import (
         _extract_key_algo,
         _extract_sig_algo,
-        create_drift_alert,
         detect_drift,
     )
     key_algo = _extract_key_algo(entry.leaf.raw_der) if entry.leaf.raw_der else ""
@@ -914,6 +917,7 @@ def store_scanned(
             raise
 
     pending_for_resolve: list[Any] | None = None
+    policy_closed_sent: list[Any] = []
     old_leaf_id: str | None = None
     previous_grade: str | None = None
 
@@ -995,7 +999,7 @@ def store_scanned(
                 "policy", _stage_policy,
                 repo_path, leaf_id, entry,
                 posture_grade, original_findings, stored_chain_status,
-                conn=conn, ruleset=ruleset,
+                conn=conn, ruleset=ruleset, closed_sent=policy_closed_sent,
             )
         else:
             posture_grade = ""
@@ -1040,6 +1044,15 @@ def store_scanned(
         with contextlib.suppress(sqlite3.Error):
             conn.rollback()
         raise
+
+    if cert_unchanged:
+        # The pre-scan snapshot describes carried incidents, not closed ones.
+        # Keep only policy conditions that this unchanged scan actually closed.
+        pending_for_resolve = policy_closed_sent or None
+    elif policy_closed_sent:
+        if pending_for_resolve is None:
+            pending_for_resolve = []
+        pending_for_resolve.extend(policy_closed_sent)
 
     # Post-transaction HTTP: failures must not invalidate the scan.
     # When _deferred is provided, stash the work for the caller to execute

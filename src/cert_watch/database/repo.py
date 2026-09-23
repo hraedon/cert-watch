@@ -6,6 +6,7 @@ import json
 import sqlite3
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,7 +22,7 @@ from cert_watch.host_validation import hostname_is_valid
 class Alert:
     cert_id: str
     alert_type: str  # "expiry_warning" | "expired" | "scan_failure"
-    status: str  # "pending" | "sent" | "failed"
+    status: str  # "pending" | "sending" | "sent" | "failed" | "cancelled"
     message: str
     id: str = ""
     threshold_days: int | None = None
@@ -43,6 +44,15 @@ class Alert:
     # refused the write that precedes a send; cleared by any recorded attempt
     # and by every status change (migration 0033, #38).
     deferred_since: datetime | None = None
+    attempt_count: int = 0
+    next_attempt_at: datetime | None = None
+    last_attempt_at: datetime | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
+    failure_reason: str | None = None
+    dedupe_key: str | None = None
+    closed_at: datetime | None = None
+    routing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -244,6 +254,10 @@ class AlertRepository(ABC):
     @abstractmethod
     def create(self, alert: Alert) -> str: ...
 
+    def enqueue(self, alert: Alert, *, lifetime: bool = False) -> str | None:
+        """Queue through the persisted lifecycle when the adapter supports it."""
+        return self.create(alert)
+
     @abstractmethod
     def list_pending(self) -> list[Alert]: ...
 
@@ -259,7 +273,9 @@ class AlertRepository(ABC):
     @abstractmethod
     def reset_to_pending(self, alert_id: str) -> None: ...
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
         """Record that delivery was deferred at *when* (see migration 0033).
 
         The first deferral stamps ``deferred_since``; later ones leave it alone,
@@ -268,7 +284,11 @@ class AlertRepository(ABC):
         unwritable again: the outage is younger than the old stamp. Repositories
         that do not persist alerts may keep this default no-op.
         """
-        return None
+        return False
+
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        """Atomically revive an upgrade-marked expiry row when supported."""
+        return False
 
 
 class SqliteAlertRepository(AlertRepository):
@@ -296,6 +316,9 @@ class SqliteAlertRepository(AlertRepository):
             alert.hostname,
             alert.subject,
             alert.trigger_cert_id or alert.cert_id,
+            alert.dedupe_key,
+            _iso(alert.closed_at) if alert.closed_at else None,
+            json.dumps(alert.routing, separators=(",", ":"), sort_keys=True),
         )
         if conn is None:
             with _connect(self.db_path) as conn:
@@ -304,8 +327,8 @@ class SqliteAlertRepository(AlertRepository):
                     INSERT INTO alerts
                     (id, cert_id, alert_type, status, message, threshold_days,
                      extra_recipients, created_at, sent_at, error_message,
-                     hostname, subject, trigger_cert_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     params,
                 )
@@ -316,12 +339,23 @@ class SqliteAlertRepository(AlertRepository):
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
                  extra_recipients, created_at, sent_at, error_message,
-                 hostname, subject, trigger_cert_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params,
             )
         return alert_id
+
+    def enqueue(
+        self,
+        alert: Alert,
+        *,
+        lifetime: bool = False,
+        conn: sqlite3.Connection | None = None,
+    ) -> str | None:
+        from cert_watch.database.alert_store import AlertStore
+
+        return AlertStore(self.db_path).enqueue(alert, conn=conn, lifetime=lifetime)
 
     def list_pending(self) -> list[Alert]:
         with _connect(self.db_path) as conn:
@@ -450,41 +484,56 @@ class SqliteAlertRepository(AlertRepository):
             return cur.rowcount
 
     def mark_sent(self, alert_id: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'sent', sent_at = ?, deferred_since = NULL "
-                "WHERE id = ?",
-                (_iso(datetime.now(UTC)), alert_id),
-            )
-            conn.commit()
+        from cert_watch.database.alert_store import AlertStore
+
+        AlertStore(self.db_path).set_sent(alert_id)
 
     def mark_failed(self, alert_id: str, error_message: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'failed', error_message = ?, deferred_since = NULL "
-                "WHERE id = ?",
-                (error_message, alert_id),
+        from cert_watch.database.alert_store import AlertStore
+
+        store = AlertStore(self.db_path)
+        owner = getattr(self, "_dispatch_lease_owner", None)
+        if owner:
+            store.complete_failed(
+                alert_id,
+                lease_owner=owner,
+                attempts=getattr(self, "_dispatch_attempts", 0),
+                now=getattr(self, "_dispatch_now", datetime.now(UTC)),
+                failure_reason=getattr(self, "_dispatch_failure_reason", "unknown"),
+                error_message=error_message,
             )
-            conn.commit()
+        else:
+            store.set_failed(alert_id, error_message)
 
     def reset_to_pending(self, alert_id: str) -> None:
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                "UPDATE alerts SET status = 'pending', error_message = NULL, "
-                "deferred_since = NULL WHERE id = ?",
-                (alert_id,),
-            )
-            conn.commit()
+        from cert_watch.database.alert_store import AlertStore
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
-        assignment = "?" if restart else "COALESCE(deferred_since, ?)"
-        with _connect(self.db_path) as conn:
-            conn.execute(
-                f"UPDATE alerts SET deferred_since = {assignment} "
-                "WHERE id = ? AND status = 'pending'",
-                (_iso(when), alert_id),
+        AlertStore(self.db_path).reset_pending_compat(alert_id)
+
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        from cert_watch.database.alert_store import AlertStore
+
+        return AlertStore(self.db_path).revive_legacy_expiry(alert_id)
+
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
+        from cert_watch.database.alert_store import AlertStore
+
+        store = AlertStore(self.db_path)
+        owner = getattr(self, "_dispatch_lease_owner", None)
+        if owner:
+            return store.complete_pending(
+                alert_id,
+                lease_owner=owner,
+                attempts=getattr(self, "_dispatch_attempts", 0),
+                now=when,
+                next_attempt_at=None,
+                deferred_since=when,
+                preserve_deferral=not restart,
             )
-            conn.commit()
+        else:
+            return store.note_pending_deferral(alert_id, when, restart=restart)
 
     @staticmethod
     def _row_to_alert(row: sqlite3.Row) -> Alert:
@@ -494,6 +543,13 @@ class SqliteAlertRepository(AlertRepository):
             extra_recipients = json.loads(extra) if extra else []
         except (json.JSONDecodeError, TypeError):
             extra_recipients = []
+        raw_routing = row_dict.get("routing")
+        try:
+            routing = json.loads(raw_routing) if raw_routing else {}
+        except (json.JSONDecodeError, TypeError):
+            routing = {}
+        if not isinstance(routing, dict):
+            routing = {}
         deferred_since: datetime | None = None
         deferred_raw = row_dict.get("deferred_since")
         if deferred_raw:
@@ -501,6 +557,13 @@ class SqliteAlertRepository(AlertRepository):
             # its deferral clock, and the age-based health check still applies.
             with contextlib.suppress(ValueError, TypeError):
                 deferred_since = _parse_iso(deferred_raw)
+        def optional_datetime(name: str) -> datetime | None:
+            raw = row_dict.get(name)
+            if not raw:
+                return None
+            with contextlib.suppress(ValueError, TypeError):
+                return _parse_iso(raw)
+            return None
         return Alert(
             id=row["id"],
             cert_id=row["cert_id"],
@@ -516,17 +579,23 @@ class SqliteAlertRepository(AlertRepository):
             subject=row["subject"] if "subject" in row_dict else "",
             deferred_since=deferred_since,
             trigger_cert_id=row_dict.get("trigger_cert_id"),
+            attempt_count=int(row_dict.get("attempt_count") or 0),
+            next_attempt_at=optional_datetime("next_attempt_at"),
+            last_attempt_at=optional_datetime("last_attempt_at"),
+            lease_owner=row_dict.get("lease_owner"),
+            lease_expires_at=optional_datetime("lease_expires_at"),
+            failure_reason=row_dict.get("failure_reason"),
+            dedupe_key=row_dict.get("dedupe_key"),
+            closed_at=optional_datetime("closed_at"),
+            routing=routing,
         )
 
 
 class ScopedAlertRepository(AlertRepository):
     """Tag-scope decorator over SqliteAlertRepository (WI-078).
 
-    Used by ``flush_alert_queue`` so ``process_pending`` only sends alerts a
-    scoped user is allowed to see. ``list_pending`` is narrowed to the scope;
-    every other operation delegates unchanged to the wrapped repository. Because
-    ``mark_sent`` / ``mark_failed`` only ever receive alert IDs returned by the
-    scoped ``list_pending``, the mutating surface stays in-scope by construction.
+    Retained for compatible repository callers. Flush now passes its scope to
+    ``Dispatcher``, whose atomic claim applies the same effective-tag filter.
     """
 
     def __init__(self, db_path: str | Path, scope_tags: tuple[str, ...]) -> None:
@@ -557,13 +626,41 @@ class ScopedAlertRepository(AlertRepository):
         self._repo.mark_sent(alert_id)
 
     def mark_failed(self, alert_id: str, error_message: str) -> None:
-        self._repo.mark_failed(alert_id, error_message)
+        with self._forward_dispatch_context():
+            self._repo.mark_failed(alert_id, error_message)
 
     def reset_to_pending(self, alert_id: str) -> None:
         self._repo.reset_to_pending(alert_id)
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
-        self._repo.note_deferral(alert_id, when, restart=restart)
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        return self._repo.revive_legacy_expiry(alert_id)
+
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
+        with self._forward_dispatch_context():
+            return self._repo.note_deferral(alert_id, when, restart=restart)
+
+    @contextlib.contextmanager
+    def _forward_dispatch_context(self) -> Iterator[None]:
+        """Expose lease-guarded settlement metadata to the inner repository."""
+        names = (
+            "_dispatch_lease_owner",
+            "_dispatch_attempts",
+            "_dispatch_now",
+            "_dispatch_failure_reason",
+        )
+        forwarded: list[str] = []
+        for name in names:
+            if hasattr(self, name):
+                setattr(self._repo, name, getattr(self, name))
+                forwarded.append(name)
+        try:
+            yield
+        finally:
+            for name in forwarded:
+                with contextlib.suppress(AttributeError):
+                    delattr(self._repo, name)
 
 
 # ---------- Trust Anchors ----------

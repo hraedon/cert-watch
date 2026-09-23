@@ -18,7 +18,7 @@ from tests.test_alert_delivery_evidence import _config, _pending, _smtp
 @pytest.mark.parametrize("theme,width", [("dark", 375), ("light", 375),
                                          ("dark", 1280), ("light", 1280)])
 def test_delivery_details_expand_and_wrap(page, monkeypatch, tmp_path, reload_app, theme, width):
-    from cert_watch.alerts import process_pending
+    from cert_watch.alerting import process_pending
 
     db, repo, alert = _pending(tmp_path)
     address = "operator" * 8 + "@" + "long-domain." * 7 + "invalid"
