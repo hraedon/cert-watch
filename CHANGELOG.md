@@ -29,6 +29,13 @@ All notable changes to cert-watch are documented in this file.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
   SIEM filters on the old names need updating.
 
+### Fixed
+- **SIEM export no longer runs under the write lock.** Audit events recorded
+  inside a transaction are now sent to the SIEM after the transaction commits
+  and the global write lock is released, so a slow or unreachable syslog/HEC
+  sink cannot stall other writers, and the exported event always describes a
+  committed row.
+
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
   host-scoped concept. Migration 0031 concatenates every non-empty
