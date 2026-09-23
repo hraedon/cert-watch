@@ -47,6 +47,8 @@ MODULE_FLOORS: dict[str, int] = {
     "src/cert_watch/routes/settings/password.py": 89,
     "src/cert_watch/routes/settings/roles.py": 88,
     "src/cert_watch/scan.py": 92,
+    "src/cert_watch/scheduler.py": 91,
+    "src/cert_watch/scheduler_context.py": 91,
 }
 
 

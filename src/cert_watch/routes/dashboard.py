@@ -176,6 +176,7 @@ async def flush_alert_queue(
 
     result = await run_in_threadpool(
         try_run_alert_delivery,
+        getattr(request.app.state, "scheduler", None),
         lambda: Dispatcher(
             db,
             alert_config,

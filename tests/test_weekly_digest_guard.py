@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import threading
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from cert_watch.alerting.digest.engine import DigestRunResult
+from cert_watch.scheduler import Scheduler
 from cert_watch.scheduler_context import SchedulerContext
+
+
+class _FakeClock:
+    def __init__(self, monotonic: float):
+        self.monotonic_value = monotonic
+
+    def now(self):
+        return datetime(2026, 9, 23, tzinfo=UTC)
+
+    def monotonic(self):
+        return self.monotonic_value
+
+    def wait(self, event, timeout):
+        return event.is_set()
 
 
 def _context(db_path, *, digest_only: bool = False) -> SchedulerContext:
@@ -114,7 +130,9 @@ def test_all_digest_kinds_share_the_alert_cycle_deadline(monkeypatch, tmp_path):
         webhook_cfg=None,
         stop_event=stopped,
     )
-    monkeypatch.setattr("cert_watch.scheduler_context.monotonic", lambda: now[0])
+    clock = _FakeClock(now[0])
+    runtime = Scheduler(context, clock=clock)
+    stopped = runtime.stop_event
     monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", MagicMock())
     monkeypatch.setattr(
         "cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock()
@@ -123,6 +141,7 @@ def test_all_digest_kinds_share_the_alert_cycle_deadline(monkeypatch, tmp_path):
     def process(*args, **kwargs):
         assert kwargs["budget_seconds"] == 300.0
         now[0] = 145.0
+        clock.monotonic_value = now[0]
         return {"sent": 0, "failed": 0, "deferred": 0}
 
     monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
@@ -164,7 +183,7 @@ def test_digest_engine_receives_only_the_shared_budget_remaining(
             captured.update(kind=kind, period_key=period_key)
             return DigestRunResult()
 
-    monkeypatch.setattr("cert_watch.scheduler_context.monotonic", lambda: 175.0)
+    Scheduler(context, clock=_FakeClock(175.0))
     monkeypatch.setattr("cert_watch.alerting.digest.engine.DigestEngine", Engine)
     kind = MagicMock(name="kind")
     kind.name = "renewal"

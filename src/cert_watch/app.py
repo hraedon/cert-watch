@@ -35,7 +35,7 @@ from cert_watch.firstrun import FirstRunPosture, first_run_action, is_network_ex
 from cert_watch.middleware import install_middleware
 from cert_watch.routes import api as route_modules
 from cert_watch.routes.upload_validation import install_upload_validation_handler
-from cert_watch.scheduler import scheduler_stop_event, start_scheduler, stop_scheduler
+from cert_watch.scheduler import Scheduler
 from cert_watch.scheduler_context import SchedulerContext
 from cert_watch.security import SecurityContext
 from cert_watch.security.ratelimit import _init_rate_db
@@ -351,9 +351,9 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         settings=s,
         alert_cfg=s.build_alert_config(),
         webhook_cfg=s.build_webhook_config(),
-        stop_event=scheduler_stop_event(),
     )
-    app.state.scheduler_context = ctx
+    scheduler = Scheduler(ctx)
+    app.state.scheduler = scheduler
 
     # Purge once at startup too — restarts (e.g. k8s rollouts) are frequent and
     # shouldn't have to wait for the next daily cycle to reclaim the audit log.
@@ -362,20 +362,11 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     except Exception:
         logger.warning("startup maintenance purge failed — continuing", exc_info=True)
 
-    start_scheduler(
-        scan_fn=ctx.scan_all,
-        alert_fn=ctx.run_alerts,
-        maintenance_fn=ctx.maintenance,
-        digest_fn=ctx.maybe_run_weekly_digest,
-        hour=s.sched_hour,
-        minute=s.sched_min,
-        db_path=s.db_path,
-        schedule_provider=ctx.schedule_time,
-    )
+    scheduler.start()
     try:
         yield
     finally:
-        stop_scheduler()
+        scheduler.stop()
     logger.info("cert-watch shutting down")
 
 

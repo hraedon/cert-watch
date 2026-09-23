@@ -42,9 +42,9 @@ def _rebuild_settings(request: Request, db_path: Path) -> None:
     invalidate_settings(db_path)
 
     def apply(s: Settings) -> None:
-        context = getattr(request.app.state, "scheduler_context", None)
-        if context is not None:
-            context.update_settings(s, publish=False)
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler is not None:
+            scheduler.context.update_settings(s, publish=False)
         request.app.state.settings = s
 
     resolve_and_publish_settings(db_path, encryption_key=enc_key, apply=apply)

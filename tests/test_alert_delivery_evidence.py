@@ -75,8 +75,7 @@ def test_old_alert_does_not_claim_current_channels_are_delivery_evidence(
     monkeypatch.setenv("SMTP_HOST", "configured.example.invalid")
     monkeypatch.setenv("ALERT_FROM", "watch@example.invalid")
     monkeypatch.setenv("ALERT_RECIPIENTS", "current@example.invalid")
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
     assert response.status_code == 200
@@ -270,8 +269,7 @@ def test_evidence_is_not_loaded_or_rendered_for_scoped_operator(monkeypatch, tmp
     init_schema(db)
     _seed_two_teams(db)
     begin_attempt(db, "alert-a", "smtp", {"recipients": ["private@example.invalid"]})
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     evidence = Mock(side_effect=AssertionError("Do not load recipient evidence for operators"))
     monkeypatch.setattr("cert_watch.routes.alerts_view.list_attempts", evidence)
     app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
@@ -332,8 +330,7 @@ def test_main_row_surfaces_partial_and_unknown_acceptance(
             side_effect=sqlite3.OperationalError("interrupted"),
         ))
     process_pending(repo, _config())
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
     summary = response.text.split('<details class="cw-delivery-details"', 1)[0]
@@ -345,8 +342,7 @@ def test_main_row_surfaces_partial_and_unknown_acceptance(
 
 def test_historical_notification_uses_captured_subject(monkeypatch, tmp_path, reload_app):
     _, _, alert = _pending(tmp_path)
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
     assert alert.subject in response.text
@@ -537,8 +533,7 @@ def test_activity_labels_new_and_legacy_delivery_channels(
     for channel in channels:
         begin_attempt(db, alert.id, channel, {})
 
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
 
@@ -838,8 +833,7 @@ def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_pa
     """
     db, _, alert = _pending(tmp_path)
     _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         response = client.get("/alerts")
 
@@ -860,8 +854,7 @@ def test_activity_marks_an_abandoned_sending_lease_as_undelivered(
         lease_expires_at=now - timedelta(minutes=1),
         now=now - timedelta(minutes=2),
     )
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         response = client.get("/alerts")
 
@@ -884,8 +877,7 @@ def test_activity_does_not_call_a_queued_alert_late_when_nothing_sends(
     """
     db, _, alert = _pending(tmp_path)
     _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS * 30)
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
         health = client.get("/api/health").json()
@@ -902,8 +894,7 @@ def test_activity_does_not_alarm_over_a_freshly_queued_alert(monkeypatch, tmp_pa
     """Every pending alert is briefly undelivered; saying so on all of them is noise."""
     db, _, alert = _pending(tmp_path)
     _age_alert(db, alert.id, hours=1)
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
 
@@ -921,8 +912,7 @@ def test_activity_does_not_relabel_an_alert_that_already_reached_a_transport(
     attempt_id = begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
     complete_attempt(db, attempt_id, {"outcome": "failed"})
     repo.mark_failed(alert.id, "relay refused")
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         response = client.get("/alerts")
 
@@ -945,8 +935,7 @@ def test_activity_reports_both_the_attempt_outcome_and_that_nothing_arrived(
     _age_alert(db, alert.id, hours=UNDELIVERED_AFTER_HOURS + 1)
     # Started, never completed: the process died mid-send. The alert stays pending.
     begin_attempt(db, alert.id, "smtp", {"recipients": ["queued@example.invalid"]})
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         response = client.get("/alerts")
 
@@ -970,8 +959,7 @@ def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
     with _connect(db) as conn:
         conn.execute("UPDATE alerts SET created_at = ? WHERE id = ?", ("not-a-date", alert.id))
         conn.commit()
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     # SMTP is set so this exercises the timestamp path, not the no-transport one.
     with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
         page = client.get("/alerts")
@@ -984,8 +972,7 @@ def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
 def test_alerts_page_renders_warning_and_error_flash(monkeypatch, reload_app):
     """The flush route reports "delivery already in progress" and failures as
     ?warning= / ?error=; the page must show them rather than drop them."""
-    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
-    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", Mock())
     with TestClient(reload_app().app) as client:
         warned = client.get("/alerts", params={"warning": "Alert delivery already in progress"})
         errored = client.get("/alerts", params={"error": "rate limited"})

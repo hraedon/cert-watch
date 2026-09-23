@@ -10,14 +10,11 @@ from unittest.mock import patch
 import pytest
 
 from cert_watch.certificate_model import Certificate, parse_certificate
+from cert_watch.config import Settings
+from cert_watch.database import init_schema
 from cert_watch.renewal_analytics import RenewalOverdueSignal
-from cert_watch.scheduler import (
-    _check_renewal_overdue,
-    _flush_renewal_webhook_pool,
-    _send_renewal_webhook_if_configured,
-    _shutdown_renewal_webhook_pool,
-    _start_renewal_webhook_pool,
-)
+from cert_watch.scheduler import Scheduler
+from cert_watch.scheduler_context import SchedulerContext
 from tests._helpers import seed_certificate
 
 
@@ -32,22 +29,17 @@ def _signal(hostname="host.example.com", fingerprint="abc123") -> RenewalOverdue
     )
 
 
-@pytest.fixture(autouse=True)
-def _no_sleep():
-    """Keep the backoff loop from sleeping, and guarantee a live submission pool.
-
-    The pool is module-global and ``stop_scheduler`` detaches it without
-    recreating one, so *any* earlier test in the same process that tore down a
-    ``TestClient`` leaves it at ``None``. ``_submit_renewal_webhook`` then
-    refuses silently and every assertion here reads zero sends — which fails
-    the call-count tests and, worse, passes ``test_not_configured_does_not_send``
-    for entirely the wrong reason. Restarting on the way *in* makes each test
-    independent of what ran before it; under ``-n`` that ordering is chance.
-    """
-    _start_renewal_webhook_pool()
+@pytest.fixture
+def runtime(tmp_path):
+    """Each test gets an independently owned webhook executor."""
+    db = tmp_path / "scheduler.sqlite3"
+    init_schema(db)
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    scheduler = Scheduler(SchedulerContext(settings, None, None))
+    scheduler.start()
     with patch("cert_watch.retry.time.sleep"):
-        yield
-    _flush_renewal_webhook_pool()
+        yield scheduler
+    scheduler.stop(timeout=1)
 
 
 @pytest.fixture
@@ -59,23 +51,27 @@ def seeded_db(tmp_path, self_signed_leaf):
     return db, parsed
 
 
-def test_not_configured_does_not_send(seeded_db, monkeypatch):
+def test_not_configured_does_not_send(runtime, seeded_db, monkeypatch):
     db, _ = seeded_db
     monkeypatch.delenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", raising=False)
     with patch("cert_watch.renewal_webhook.send_renewal_webhook") as send:
-        _send_renewal_webhook_if_configured(_signal(), "host.example.com", 443, db)
+        runtime._send_renewal_webhook_if_configured(
+            _signal(), "host.example.com", 443, db
+        )
     send.assert_not_called()
 
 
-def test_configured_sends_built_payload(seeded_db, monkeypatch):
+def test_configured_sends_built_payload(runtime, seeded_db, monkeypatch):
     db, parsed = seeded_db
     monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
     signal = _signal(fingerprint=parsed.fingerprint_sha256)
     with patch(
         "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
     ) as send:
-        _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
-    _flush_renewal_webhook_pool()
+        runtime._send_renewal_webhook_if_configured(
+            signal, "host.example.com", 443, db
+        )
+    assert runtime.wait_for_webhooks()
     send.assert_called_once()
     payload, config = send.call_args.args
     assert payload["event"] == "renewal_needed"
@@ -84,7 +80,7 @@ def test_configured_sends_built_payload(seeded_db, monkeypatch):
     assert config.url == "https://hook.example.com/r"
 
 
-def test_retries_then_succeeds(seeded_db, monkeypatch):
+def test_retries_then_succeeds(runtime, seeded_db, monkeypatch):
     db, parsed = seeded_db
     monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
     signal = _signal(fingerprint=parsed.fingerprint_sha256)
@@ -92,30 +88,34 @@ def test_retries_then_succeeds(seeded_db, monkeypatch):
         "cert_watch.renewal_webhook.send_renewal_webhook",
         side_effect=[False, True],
     ) as send:
-        _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
-    _flush_renewal_webhook_pool()
+        runtime._send_renewal_webhook_if_configured(
+            signal, "host.example.com", 443, db
+        )
+    assert runtime.wait_for_webhooks()
     assert send.call_count == 2  # stops as soon as one attempt succeeds
 
 
-def test_retry_exhausted_is_logged(seeded_db, monkeypatch, caplog):
+def test_retry_exhausted_is_logged(runtime, seeded_db, monkeypatch, caplog):
     db, parsed = seeded_db
     monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
     signal = _signal(fingerprint=parsed.fingerprint_sha256)
     with patch(
         "cert_watch.renewal_webhook.send_renewal_webhook", return_value=False
     ) as send, caplog.at_level("WARNING", logger="cert_watch.scheduler"):
-        _send_renewal_webhook_if_configured(signal, "host.example.com", 443, db)
-    _flush_renewal_webhook_pool()
+        runtime._send_renewal_webhook_if_configured(
+            signal, "host.example.com", 443, db
+        )
+    assert runtime.wait_for_webhooks()
     assert send.call_count == 3  # three attempts: 0, +1s, +2s
     assert any("failed after retries" in r.message for r in caplog.records)
 
 
-def test_shutdown_rejects_new_renewal_webhook(seeded_db, monkeypatch):
+def test_shutdown_rejects_new_renewal_webhook(runtime, seeded_db, monkeypatch):
     db, parsed = seeded_db
     monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
-    _shutdown_renewal_webhook_pool()
+    runtime.stop(timeout=1)
     with patch("cert_watch.renewal_webhook.send_renewal_webhook") as send:
-        _send_renewal_webhook_if_configured(
+        runtime._send_renewal_webhook_if_configured(
             _signal(fingerprint=parsed.fingerprint_sha256),
             "host.example.com",
             443,
@@ -124,7 +124,9 @@ def test_shutdown_rejects_new_renewal_webhook(seeded_db, monkeypatch):
     send.assert_not_called()
 
 
-def test_check_renewal_overdue_fires_webhook_once_and_dedupes(seeded_db, monkeypatch):
+def test_check_renewal_overdue_fires_webhook_once_and_dedupes(
+    runtime, seeded_db, monkeypatch
+):
     """Full wiring: detect → emit event → deliver, and the 24h dedup guard."""
     db, parsed = seeded_db
     monkeypatch.setenv("CERT_WATCH_RENEWAL_WEBHOOK_URL", "https://hook.example.com/r")
@@ -136,16 +138,16 @@ def test_check_renewal_overdue_fires_webhook_once_and_dedupes(seeded_db, monkeyp
     ), patch(
         "cert_watch.renewal_webhook.send_renewal_webhook", return_value=True
     ) as send:
-        _check_renewal_overdue(db, hosts)
+        runtime._check_renewal_overdue(db, hosts)
         # Second cycle: the event was already emitted within 24h, so no resend.
-        _check_renewal_overdue(db, hosts)
+        runtime._check_renewal_overdue(db, hosts)
 
-    _flush_renewal_webhook_pool()
+    assert runtime.wait_for_webhooks()
     send.assert_called_once()
 
 
 def test_check_renewal_overdue_records_cooldown_only_after_event_is_persisted(
-    seeded_db, monkeypatch,
+    runtime, seeded_db, monkeypatch,
 ):
     db, parsed = seeded_db
     signal = _signal(fingerprint=parsed.fingerprint_sha256)
@@ -155,7 +157,7 @@ def test_check_renewal_overdue_records_cooldown_only_after_event_is_persisted(
     )
     monkeypatch.setattr("cert_watch.events.emit_event", lambda *a, **k: None)
 
-    _check_renewal_overdue(db, hosts)
+    runtime._check_renewal_overdue(db, hosts)
 
     from cert_watch.database.connection import _connect
 
@@ -163,18 +165,18 @@ def test_check_renewal_overdue_records_cooldown_only_after_event_is_persisted(
         assert conn.execute("SELECT COUNT(*) FROM rule_firings").fetchone()[0] == 0
 
 
-def test_check_renewal_overdue_no_signal_no_send(seeded_db):
+def test_check_renewal_overdue_no_signal_no_send(runtime, seeded_db):
     db, _ = seeded_db
     with patch(
         "cert_watch.renewal_analytics.detect_renewal_overdue", return_value=None
     ), patch(
         "cert_watch.renewal_webhook.send_renewal_webhook"
     ) as send:
-        _check_renewal_overdue(db, [("host.example.com", 443)])
+        runtime._check_renewal_overdue(db, [("host.example.com", 443)])
     send.assert_not_called()
 
 
-def test_check_renewal_overdue_db_path_none_is_noop():
+def test_check_renewal_overdue_db_path_none_is_noop(runtime):
     with patch("cert_watch.renewal_webhook.send_renewal_webhook") as send:
-        _check_renewal_overdue(None, [("host.example.com", 443)])
+        runtime._check_renewal_overdue(None, [("host.example.com", 443)])
     send.assert_not_called()
