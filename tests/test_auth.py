@@ -459,8 +459,8 @@ def test_auth_enabled_redirects_to_login(reload_app, _mock_ldap3):
         assert r.status_code == 200
 
         r = client.get("/metrics", follow_redirects=False)
-        assert r.status_code == 303
-        assert "/login" in r.headers["location"]
+        assert r.status_code == 401
+        assert r.json()["error"] == "unauthenticated"
 
         # Data API requires auth: unauthenticated requests get a 401, not the
         # inventory. (Regression guard for the previously-public /api/* gap.)
@@ -1130,6 +1130,32 @@ def test_ldaps_missing_ca_cert_warns(_mock_ldap3, caplog):
     with caplog.at_level(logging.WARNING, logger="cert_watch.auth"):
         provider._build_tls()
     assert any("LDAPS without LDAP_CA_CERT" in r.message for r in caplog.records)
+
+
+def test_allow_insecure_does_not_warn_for_ldaps_endpoints(_mock_ldap3, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="cert_watch.auth"):
+        LDAPAuthProvider(
+            server_url="ldaps://dc1.example.com, ldaps://dc2.example.com",
+            base_dn="DC=example,DC=com",
+            allow_insecure=True,
+        )
+
+    assert not any("plaintext LDAP simple binds" in record.message for record in caplog.records)
+
+
+def test_allow_insecure_warns_when_any_endpoint_is_plain(_mock_ldap3, caplog):
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="cert_watch.auth"):
+        LDAPAuthProvider(
+            server_url="ldaps://dc1.example.com, ldap://dc2.example.com",
+            base_dn="DC=example,DC=com",
+            allow_insecure=True,
+        )
+
+    assert any("plaintext LDAP simple binds" in record.message for record in caplog.records)
 
 
 def test_ldaps_ca_cert_builds_tls_with_cert_required(_mock_ldap3):

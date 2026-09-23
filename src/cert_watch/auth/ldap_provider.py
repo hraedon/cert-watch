@@ -60,8 +60,11 @@ class LDAPAuthProvider(AuthProvider):
         self.required_groups = required_groups or []
         self.connect_timeout = connect_timeout
         self.group_filter = group_filter
-        is_ldaps = any(s.lower().startswith("ldaps://") for s in server_url.split(","))
-        if not is_ldaps and not start_tls and allow_insecure:
+        endpoints = [value.strip() for value in server_url.split(",") if value.strip()]
+        has_plain_endpoint = any(
+            not endpoint.lower().startswith("ldaps://") for endpoint in endpoints
+        )
+        if has_plain_endpoint and not start_tls and allow_insecure:
             logger.warning(
                 "CERT_WATCH_LDAP_ALLOW_INSECURE=1 permits plaintext LDAP simple binds; "
                 "directory credentials will be transmitted in cleartext."

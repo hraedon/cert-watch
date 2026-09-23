@@ -41,6 +41,10 @@ def test_metrics_requires_admin_session_when_no_bearer_token(
     )
 
     with TestClient(app_mod.app, base_url="http://localhost") as client:
+        anonymous = client.get("/metrics", follow_redirects=False)
+        assert anonymous.status_code == 401
+        assert anonymous.json()["error"] == "unauthenticated"
+
         viewer = create_session(
             "scoped-viewer",
             client.app.state.security,
@@ -570,9 +574,14 @@ def test_settings_ldap_probe_refuses_plain_bind(reload_app, monkeypatch):
     assert "insecure" in response.json()["error"].lower()
 
 
-def test_request_body_limit_rejects_declared_oversize_before_parsing(reload_app):
+def test_request_body_limit_rejects_declared_oversize_before_parsing(reload_app, caplog):
+    import logging
+
     app_mod = reload_app()
-    with TestClient(app_mod.app, base_url="http://localhost") as client:
+    with (
+        caplog.at_level(logging.WARNING, logger="cert_watch.security"),
+        TestClient(app_mod.app, base_url="http://localhost") as client,
+    ):
         response = client.post(
             "/api/api-keys",
             content=b"{}",
@@ -582,9 +591,16 @@ def test_request_body_limit_rejects_declared_oversize_before_parsing(reload_app)
             },
         )
     assert response.status_code == 413
+    assert any(
+        "method=POST path=/api/api-keys client=testclient limit=12582912"
+        in record.message
+        for record in caplog.records
+    )
 
 
-def test_request_body_limit_counts_actual_streamed_bytes(reload_app):
+def test_request_body_limit_counts_actual_streamed_bytes(reload_app, caplog):
+    import logging
+
     app_mod = reload_app()
 
     def chunks():
@@ -592,13 +608,21 @@ def test_request_body_limit_counts_actual_streamed_bytes(reload_app):
         for _ in range(13):
             yield chunk
 
-    with TestClient(app_mod.app, base_url="http://localhost") as client:
+    with (
+        caplog.at_level(logging.WARNING, logger="cert_watch.security"),
+        TestClient(app_mod.app, base_url="http://localhost") as client,
+    ):
         response = client.post(
             "/api/api-keys",
             content=chunks(),
             headers={"Content-Type": "application/json"},
         )
     assert response.status_code == 413
+    assert any(
+        "method=POST path=/api/api-keys client=testclient limit=12582912"
+        in record.message
+        for record in caplog.records
+    )
 
 
 def test_new_guard_variants_have_stable_repr_and_reject_invalid_shape():

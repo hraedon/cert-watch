@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 DEFAULT_MAX_REQUEST_BODY_BYTES = 12 * 1024 * 1024
+logger = logging.getLogger("cert_watch.security")
 
 
 class RequestBodyLimitMiddleware:
@@ -20,6 +23,17 @@ class RequestBodyLimitMiddleware:
     ) -> None:
         self.app = app
         self.max_bytes = max_bytes
+
+    def _log_oversized_request(self, scope: Scope) -> None:
+        client = scope.get("client")
+        client_host = client[0] if client else "unknown"
+        logger.warning(
+            "Request body rejected: method=%s path=%s client=%s limit=%d",
+            scope.get("method", "unknown"),
+            scope.get("path", "unknown"),
+            client_host,
+            self.max_bytes,
+        )
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -41,6 +55,7 @@ class RequestBodyLimitMiddleware:
             await response(scope, receive, send)
             return
         if lengths and lengths[0] > self.max_bytes:
+            self._log_oversized_request(scope)
             response = PlainTextResponse("request body too large", status_code=413)
             await response(scope, receive, send)
             return
@@ -75,5 +90,6 @@ class RequestBodyLimitMiddleware:
         if exceeded:
             if response_started:
                 return
+            self._log_oversized_request(scope)
             response = PlainTextResponse("request body too large", status_code=413)
             await response(scope, receive, send)
