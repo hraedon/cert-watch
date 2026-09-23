@@ -167,3 +167,26 @@ def test_scope_is_checked_while_holding_the_write_lock(estate, kind, monkeypatch
     with pytest.raises(ScopeDeniedError):
         _call(kind, estate["db"], target, SCOPED_OPERATOR)
     assert held == [True]
+
+
+def test_trust_anchor_routes_map_service_refusal_to_403(monkeypatch) -> None:
+    """The service's own admin check is defence in depth behind the route guard;
+    if it ever refuses, the API answers 403, not 500."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from cert_watch.routes.api import certificates as api
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("admin required")
+
+    monkeypatch.setattr(api, "delete_trust_anchor", refuse)
+    monkeypatch.setattr(api, "_db_path", lambda _r: "db")
+    monkeypatch.setattr(api, "acting_auth", lambda _r: None)
+    monkeypatch.setattr(api, "resolve_actor", lambda _r: "t")
+    monkeypatch.setattr(api, "resolve_source_ip", lambda _r: None)
+
+    response = asyncio.run(
+        api.api_delete_trust_anchor("00000000-0000-4000-8000-000000000001", SimpleNamespace())
+    )
+    assert response.status_code == 403

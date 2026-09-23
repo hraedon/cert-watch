@@ -86,6 +86,8 @@ async def api_add_trust_anchor(
         )
     except CertificateValidationError as exc:
         return JSONResponse(status_code=400, content={"error": str(exc)})
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"error": "admin required"})
     return JSONResponse(status_code=201, content={"id": result.id, "filename": result.filename})
 
 
@@ -95,13 +97,16 @@ async def api_delete_trust_anchor(
     request: Request,
     _auth: str = Depends(admin_write_guard),
 ) -> JSONResponse:
-    deleted = delete_trust_anchor(
-        _db_path(request),
-        anchor_id,
-        auth=acting_auth(request),
-        actor=resolve_actor(request),
-        source_ip=resolve_source_ip(request),
-    )
+    try:
+        deleted = delete_trust_anchor(
+            _db_path(request),
+            anchor_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"error": "admin required"})
     if not deleted:
         return JSONResponse(status_code=404, content={"error": "trust anchor not found"})
     return JSONResponse(content={"status": "deleted", "id": anchor_id})
