@@ -40,14 +40,32 @@ Images are published to `ghcr.io/hraedon/cert-watch` for amd64 and arm64:
 | `latest` | The newest build of `main`. |
 | short commit SHA | A specific build of `main`. |
 
-Every image is signed with a keyless Sigstore signature and carries an SBOM
-and build provenance. To verify a release before you deploy it:
+### Verifying an image
+
+Every image is signed with a keyless Sigstore signature, and carries an SBOM
+and build provenance. Verifying before you deploy tells you it came from this
+repository's release workflow, and what is in it, without trusting the
+registry:
 
 ```bash
 cosign verify ghcr.io/hraedon/cert-watch:v1.0.0 \
   --certificate-identity https://github.com/hraedon/cert-watch/.github/workflows/release.yml@refs/tags/v1.0.0 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
+
+# Contents and build origin (BuildKit attestations, read with buildx)
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:v1.0.0 --format '{{ json .SBOM }}'
+docker buildx imagetools inspect ghcr.io/hraedon/cert-watch:v1.0.0 --format '{{ json .Provenance }}'
 ```
+
+Pin the identity to the exact ref, as above. A looser pattern would also accept
+a signature from a run of the same workflow on another branch.
+
+Signatures cover digests, not tags. The release job pushes tags a few seconds
+before it signs, so when timing matters, verify and deploy by digest
+(`ghcr.io/hraedon/cert-watch@sha256:…` from the release run). The Kubernetes
+manifests in this repository pin the digest the release job verified. Images
+built before signing was introduced have no signature. Failing to verify them
+is expected, not a sign of tampering.
 
 Run it with a volume for the data directory:
 

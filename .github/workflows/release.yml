@@ -173,7 +173,7 @@ jobs:
 
       # Sign the digest, not the tags: a tag can be moved, a digest cannot, and
       # one signature covers every tag that resolves to this index. See
-      # docs/runbook.md "Verifying a published image" for the verify commands.
+      # docs/install.md "Verifying an image" for the verify commands.
       - name: Sign published image
         env:
           IMAGE: ghcr.io/${{ github.repository_owner }}/cert-watch
