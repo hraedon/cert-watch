@@ -51,7 +51,7 @@ _ROLE_MAP = {
 @dataclass(frozen=True)
 class Principal:
     name: str
-    env: str  # "rbac" (role map), "legacy" (no role map), "noauth"
+    env: str  # "rbac" (role map), "legacy" / "legacy-writers-only" (no role map), "noauth"
     kind: str  # "anon" | "session" | "api_key" | "local_user" | "none"
     username: str = ""
     roles: tuple[str, ...] = ()
@@ -73,6 +73,9 @@ PRINCIPALS = [
     Principal("legacy-reader", "legacy", "session", "rita"),
     Principal("legacy-writer", "legacy", "session", "will"),
     Principal("legacy-admin-listed", "legacy", "session", "alan"),
+    # No role map, only CERT_WATCH_WRITE_USERS set: admin implies write.
+    Principal("writers-only-reader", "legacy-writers-only", "session", "rita"),
+    Principal("writers-only-writer", "legacy-writers-only", "session", "will"),
     Principal("auth-disabled", "noauth", "none"),
 ]
 
@@ -295,6 +298,8 @@ def _build_app(principal: Principal, tmp_path: Path, monkeypatch: pytest.MonkeyP
     elif principal.env == "legacy":
         monkeypatch.setenv("CERT_WATCH_WRITE_USERS", "will")
         monkeypatch.setenv("CERT_WATCH_ADMINS", "alan")
+    elif principal.env == "legacy-writers-only":
+        monkeypatch.setenv("CERT_WATCH_WRITE_USERS", "will")
     else:
         monkeypatch.setenv("AUTH_PROVIDER", "none")
         monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")

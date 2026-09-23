@@ -540,16 +540,20 @@ def _legacy_list_context(
 
     ``CERT_WATCH_ADMINS``, when set, is the allowlist for admin (README: the
     usernames allowed to reach /settings); ``CERT_WATCH_WRITE_USERS``, when
-    set, is the allowlist for writes, and listed admins always write. An
-    unset list does not restrict. With neither set, everyone is full access.
+    set, is the allowlist for writes, and listed admins always write. Admin
+    implies write: with only ``CERT_WATCH_WRITE_USERS`` set, admin requires
+    membership in it. With neither set, everyone is full access.
     Before this, the no-role-map path returned full access unconditionally,
     so ``CERT_WATCH_ADMINS`` restricted nothing and a user outside
     ``CERT_WATCH_WRITE_USERS`` could mint a write API key (plan 057 W6).
     """
-    if not admin_users or username in admin_users:
+    may_write = not write_users or username in write_users
+    # Admin implies write: with CERT_WATCH_ADMINS unset, a user who may not
+    # write data (outside a set CERT_WATCH_WRITE_USERS) never administers.
+    is_admin = username in admin_users if admin_users else may_write
+    if is_admin:
         return AuthContext.full_access(username)
-    tier = ROLE_OPERATOR if (not write_users or username in write_users) else ROLE_VIEWER
-    return AuthContext.from_tier(username, tier=tier)
+    return AuthContext.from_tier(username, tier=ROLE_OPERATOR if may_write else ROLE_VIEWER)
 
 
 def build_auth_context(

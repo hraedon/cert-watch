@@ -106,3 +106,31 @@ def test_no_lists_and_no_role_map_is_still_full_access(tmp_path, monkeypatch):
         assert client.get("/settings/roles", follow_redirects=False).status_code == 200
         r = client.post("/api/api-keys", json={"name": "k", "scope": "write"})
     assert r.status_code == 201
+
+
+# ---------- admin implies write: CERT_WATCH_WRITE_USERS set, CERT_WATCH_ADMINS not ----------
+
+
+@pytest.mark.parametrize("scope", ["read", "write", "admin"])
+def test_non_writer_cannot_administer_when_only_write_users_is_set(tmp_path, monkeypatch, scope):
+    """A user who cannot write data can never administer or mint keys."""
+    with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="")) as client:
+        _login(client, "rita")
+        r = client.post("/api/api-keys", json={"name": "k", "scope": scope})
+        assert r.status_code == 403
+        assert r.json()["detail"] == "admin required"
+        r = client.post(
+            "/settings/api-keys", data={"name": "k", "scope": scope}, follow_redirects=False,
+        )
+        assert r.headers["location"] == "/settings?error=admin%20required"
+        r = client.get("/settings/roles", follow_redirects=False)
+        assert r.headers["location"] == "/settings?error=admin%20required"
+    assert _api_keys(tmp_path) == []
+
+
+def test_writer_administers_when_only_write_users_is_set(tmp_path, monkeypatch):
+    with TestClient(_app(tmp_path, monkeypatch, writers="will", admins="")) as client:
+        _login(client, "will")
+        assert client.get("/settings/roles", follow_redirects=False).status_code == 200
+        r = client.post("/api/api-keys", json={"name": "k", "scope": "read"})
+    assert r.status_code == 201

@@ -66,8 +66,10 @@ restore the pre-migration backup.
   Settings, API-key management, trust anchors, alert groups and the other
   admin actions (they are refused with `admin required`); when
   `CERT_WATCH_WRITE_USERS` is set, only its members (and listed admins) can
-  write, as before. With neither list set, every signed-in user is still
-  full access. The break-glass admin, local accounts and role-map
+  write, as before. Admin implies write: when only `CERT_WATCH_WRITE_USERS`
+  is set, admin also requires membership in it, so a user who cannot write
+  data can never administer or create API keys. With neither list set,
+  every signed-in user is still full access. The break-glass admin, local accounts and role-map
   deployments are unaffected. **If you set `CERT_WATCH_ADMINS` and your
   administrators are not all in it, add them before upgrading** (or move to
   a role map). API keys minted by now-unlisted users keep working until

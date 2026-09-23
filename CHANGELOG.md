@@ -37,8 +37,10 @@ All notable changes to cert-watch are documented in this file.
 - **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
   every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
   read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped
-  API key. Admin now requires membership when the list is set; with neither
-  legacy list set, the full-access default is unchanged. See UPGRADING.md.
+  API key. Admin now requires membership when the list is set, and admin
+  implies write: with only `CERT_WATCH_WRITE_USERS` set, admin requires
+  membership in it. With neither legacy list set, the full-access default is
+  unchanged. See UPGRADING.md.
 
 ### Changed
 - **One way to guard a route; every write guard checks CSRF.** Routes declared
