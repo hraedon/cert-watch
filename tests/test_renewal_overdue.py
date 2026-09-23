@@ -392,3 +392,28 @@ class TestSchedulerRenewalOverdue:
         from cert_watch.scheduler import _check_renewal_overdue
 
         _check_renewal_overdue(db, [("invalid!", 443)])
+
+    def test_check_renewal_overdue_failure_does_not_skip_later_host(
+        self, db: Path, monkeypatch
+    ):
+        attempted = []
+
+        def detect(_db, hostname, *, port):
+            attempted.append((hostname, port))
+            if hostname == "bad.example.com":
+                raise ValueError("malformed renewal history")
+            return None
+
+        monkeypatch.setattr(
+            "cert_watch.renewal_analytics.detect_renewal_overdue", detect
+        )
+
+        _runtime(db)._check_renewal_overdue(
+            db,
+            [("bad.example.com", 443), ("good.example.com", 8443)],
+        )
+
+        assert attempted == [
+            ("bad.example.com", 443),
+            ("good.example.com", 8443),
+        ]
