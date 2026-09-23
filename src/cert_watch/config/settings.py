@@ -29,14 +29,14 @@ class Settings:
     smtp_host: str | None = None
     smtp_port: int = 587
     smtp_user: str | None = None
-    smtp_password: str | None = None
+    smtp_password: str | None = field(default=None, repr=False)
     alert_from: str | None = None
     alert_recipients: tuple[str, ...] = ()
     webhook_url: str | None = None
-    webhook_headers: dict[str, str] | None = None
+    webhook_headers: dict[str, str] | None = field(default=None, repr=False)
     webhook_template: str = ""
     webhook_kind: str = "generic"
-    pagerduty_routing_key: str = ""
+    pagerduty_routing_key: str = field(default="", repr=False)
     alert_digest_only: bool = False
     tls_verify: bool = False
     allow_private: bool = True
@@ -59,15 +59,15 @@ class Settings:
     ldap_server: str = ""
     ldap_base_dn: str = ""
     ldap_bind_dn: str = ""
-    ldap_bind_password: str = ""
+    ldap_bind_password: str = field(default="", repr=False)
     ldap_user_filter: str = "(sAMAccountName={username})"
     ldap_start_tls: bool = False
-    ldap_ca_cert: str = ""
+    ldap_ca_cert: str = field(default="", repr=False)
     ldap_required_groups: tuple[str, ...] = ()
     ldap_connect_timeout: int = 5
     ldap_group_filter: str = ""
     oauth_client_id: str = ""
-    oauth_client_secret: str = ""
+    oauth_client_secret: str = field(default="", repr=False)
     oauth_issuer_url: str = ""
     oauth_scope: str = "openid profile email"
     oauth_authorization_endpoint: str = ""
@@ -80,29 +80,29 @@ class Settings:
     write_users: tuple[str, ...] = ()
     role_map: dict[str, dict[str, Any]] = field(default_factory=dict)
     local_admin_user: str = ""
-    local_admin_password_hash: str = ""
+    local_admin_password_hash: str = field(default="", repr=False)
     base_url: str = ""
     allow_unauth: bool = False
     jwks_cache_ttl: int = 86400
     renewal_webhook_url: str = ""
-    renewal_webhook_headers: dict[str, str] | None = None
+    renewal_webhook_headers: dict[str, str] | None = field(default=None, repr=False)
     event_stream_config: dict[str, Any] | None = None
-    event_stream_pagerduty_routing_key: str = ""
+    event_stream_pagerduty_routing_key: str = field(default="", repr=False)
     policy_config: dict[str, Any] | None = None
-    auth_secret: str = ""
-    csrf_secret: str = ""
+    auth_secret: str = field(default="", repr=False)
+    csrf_secret: str = field(default="", repr=False)
     cookie_secure: bool = True
     bind_host: str = "0.0.0.0"
     trust_proxy: bool = False
     trusted_proxies: tuple[str, ...] = ()
-    metrics_token: str = ""
+    metrics_token: str = field(default="", repr=False)
     csp_report_uri: str = ""
     instance_id: str = field(default_factory=socket.gethostname)
     syslog_host: str = ""
     syslog_port: int = 514
     syslog_proto: str = "udp"
     hec_url: str = ""
-    hec_token: str = ""
+    hec_token: str = field(default="", repr=False)
     hec_index: str = ""
     hec_sourcetype: str = "cert_watch"
     eventlog_requested: bool = False

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import socket
-from dataclasses import MISSING, fields
+from dataclasses import MISSING, fields, replace
 
 from cert_watch.config import FIELD_SPECS, Settings
 
@@ -104,3 +104,25 @@ def test_every_env_backed_sensitive_spec_supports_file(monkeypatch, tmp_path):
 
     for field_name, value in expected.items():
         assert getattr(settings, field_name) == value, field_name
+
+
+def test_settings_repr_redacts_every_sensitive_field(tmp_path):
+    sensitive_fields = {
+        name for name, spec in FIELD_SPECS.items() if spec.sensitive
+    }
+    canaries = {
+        name: f"sensitive-canary-{index}"
+        for index, name in enumerate(sorted(sensitive_fields))
+    }
+    settings = replace(
+        Settings(db_path=tmp_path / "db", data_dir=tmp_path),
+        **canaries,
+    )
+
+    rendered = repr(settings)
+
+    assert "Settings(" in rendered
+    for field_name, canary in canaries.items():
+        assert canary not in rendered, field_name
+        assert f"{field_name}=" not in rendered, field_name
+    assert str(settings) == rendered
