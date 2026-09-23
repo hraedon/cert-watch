@@ -341,6 +341,22 @@ All notable changes to cert-watch are documented in this file.
   read, so directory users kept full access while the UI showed them mapped.
   It is now merged into the role map (env `CERT_WATCH_ROLE_MAP` wins per role)
   at startup and when saved. See UPGRADING.md before saving a first mapping.
+- **A role mapping cannot outlive its role.** Settings → Roles mappings are
+  now stored by role id: renaming a role keeps its mapping, deleting a role
+  deletes it, and an entry that names no existing role grants nothing. (Keyed
+  by name, a deleted or renamed role called `admin` left a mapping that fell
+  back to the built-in admin tier.) Legacy name-keyed entries are honoured
+  while a role of that name exists and rewritten by id on the next save.
+- **Oversized sessions fail closed.** Trimming a session to fit the cookie
+  limit could drop its roles, and with them the local-account marker, turning
+  a read-only local account into full access. Roles are never trimmed now
+  (groups, then email, are); a local login whose session cannot carry its
+  marker is refused. Local usernames are capped at 128 characters and emails
+  at 254.
+- **A local account cannot shadow the break-glass admin.** Settings → Users
+  rejects the break-glass username (case-insensitive) on create and rename,
+  and sign-in tries the break-glass password even if a same-named account
+  already exists.
 - **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
   and `POST /trust-anchors/{id}/delete` required only write access on some tag,
   so a tag-scoped operator could install or remove a fleet-wide trust anchor.

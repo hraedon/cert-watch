@@ -76,6 +76,13 @@ restore the pre-migration backup.
     access as before.
   - A directory user who shares the break-glass username is no longer treated
     as break-glass at sign-in (it was decided by name).
+  - Role mappings are stored by role id. Existing name-keyed entries keep
+    working while a role of that name exists; an entry for a role that no
+    longer exists is ignored (it grants nothing) and dropped on the next save.
+  - Settings → Users rejects usernames over 128 characters, emails over 254,
+    and the break-glass username. Existing accounts are not changed; an
+    existing account named like the break-glass admin no longer blocks the
+    break-glass password.
 
 - **An install with no alert transport no longer reports its queued alerts as
   undelivered.** With neither SMTP nor a webhook configured, `process_pending`

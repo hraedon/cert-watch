@@ -177,9 +177,12 @@ class LocalAdminProvider(AuthProvider):
                             roles=[role_name] if role_name else [],
                             local_account="user",
                         )
-                    # Wrong password for DB user — spend dummy time then fail
-                    self._dummy_verify(password, user.password_hash)
-                    return AuthResult(success=False, error="invalid credentials")
+                    # Wrong password for DB user. If the name is also the
+                    # break-glass username, fall through so a same-named local
+                    # account can never shadow break-glass (PR #78, N2).
+                    if username != self.username:
+                        self._dummy_verify(password, user.password_hash)
+                        return AuthResult(success=False, error="invalid credentials")
             except sqlite3.DatabaseError:
                 logger.debug("local auth DB lookup failed", exc_info=True)
 

@@ -195,27 +195,30 @@ def create_session(
     # loop. The login path already trims claims to the role map; warn loudly if
     # a token still lands near the limit so the cause is diagnosable from logs.
     if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-        # Try progressively trimming groups until it fits (or we run out).
-        # More aggressive: drop groups entirely, then roles, before erroring.
+        # Trim groups first, then drop the (display-only) email. Roles are
+        # NEVER dropped: they carry the reserved local-session marker, and a
+        # local session stripped of it would be authorized as a directory
+        # user -- full access when no role map is set (PR #78 review, N1).
+        # A token still too large is kept whole: the browser drops the
+        # cookie and the user is simply not signed in (fail closed).
         trimmed_groups = (groups or [])[:]
-        while trimmed_groups and len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-            trimmed_groups.pop()
-            test_payload = (
+        trimmed_email = email
+
+        def _mint() -> str:
+            p = (
                 f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
                 f":{_encode_list(trimmed_groups)}:{encoded_roles}"
             )
-            if email:
-                test_payload += f":{email}"
-            token = _sign_session(test_payload, security)
-        if len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
-            # Still too long without any groups — try stripping roles too
-            test_payload = (
-                f"{username}:{version}:{int(time.time())}:{secrets.token_hex(8)}"
-                f"::"
-            )
-            if email:
-                test_payload += f":{email}"
-            token = _sign_session(test_payload, security)
+            if trimmed_email:
+                p += f":{trimmed_email}"
+            return _sign_session(p, security)
+
+        while trimmed_groups and len(token.encode()) > _MAX_SAFE_SESSION_BYTES:
+            trimmed_groups.pop()
+            token = _mint()
+        if len(token.encode()) > _MAX_SAFE_SESSION_BYTES and trimmed_email:
+            trimmed_email = ""
+            token = _mint()
         logger.warning(
             "session token for %s is %d bytes, near the ~4KB browser cookie limit; "
             "the cookie may be dropped (login loop). A large IdP group list is the "

@@ -452,14 +452,15 @@ class Settings:
         """
         import dataclasses
 
+        from cert_watch.auth.rbac import ui_role_map_by_name
         from cert_watch.config.kv_loader import _merge_kv_settings
-        from cert_watch.database import kv_get
 
         merged = _merge_kv_settings(cls.from_env(), db_path, encryption_key)
         # The role mapping saved from Settings → Roles (kv ``ldap_role_map``)
         # was stored but never read, so the UI's mapping had no effect. Merge it
         # per role, with CERT_WATCH_ROLE_MAP winning for any role it names.
-        ui_map = _parse_role_map(kv_get(db_path, "ldap_role_map") or "")
+        # Entries for roles that no longer exist are dropped (PR #78, B1).
+        ui_map = ui_role_map_by_name(db_path)
         if not ui_map:
             return merged
         return dataclasses.replace(merged, role_map={**ui_map, **merged.role_map})

@@ -271,6 +271,71 @@ class AuthContext:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# The Settings → Roles IdP mapping (kv ``ldap_role_map``)
+# ---------------------------------------------------------------------------
+
+UI_ROLE_MAP_KV_KEY = "ldap_role_map"
+
+
+def load_ui_role_map(db_path: Any) -> dict[str, dict[str, list[str]]]:
+    """Return the Settings → Roles mapping keyed by **role id**.
+
+    Entries are stored by role id so a rename cannot orphan them and a delete
+    removes them (PR #78 review, B1). A legacy name-keyed entry is accepted
+    only while a role of that name exists. Anything that does not resolve to
+    an existing role -- a deleted role's id, a stale name -- is dropped, so a
+    UI entry can never fall back to a built-in tier such as ``admin``.
+    """
+    import json
+
+    from cert_watch.database import kv_get
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    try:
+        data = json.loads(kv_get(db_path, UI_ROLE_MAP_KV_KEY) or "{}")
+        roles = SqliteRoleRepository(db_path).list_all()
+    except (ValueError, TypeError, OSError, sqlite3.Error):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    by_id = {r.id for r in roles}
+    by_name = {r.name: r.id for r in roles}
+    out: dict[str, dict[str, list[str]]] = {}
+    for key, mapping in data.items():
+        if not isinstance(mapping, dict):
+            continue
+        role_id = key if key in by_id else by_name.get(key)
+        if role_id is None or (role_id in out and key not in by_id):
+            continue
+        out[role_id] = {
+            "groups": [str(g) for g in mapping.get("groups", []) if g],
+            "users": [str(u) for u in mapping.get("users", []) if u],
+        }
+    return out
+
+
+def ui_role_map_by_name(db_path: Any) -> dict[str, dict[str, Any]]:
+    """The UI mapping in role-map shape (keyed by current role name).
+
+    Each entry carries its ``role_id`` so :func:`_role_tiers_from_map` reads
+    the tier from that role and grants nothing if it has since been deleted,
+    even while a cached ``Settings.role_map`` still lists it.
+    """
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    ui = load_ui_role_map(db_path)
+    if not ui:
+        return {}
+    try:
+        names = {r.id: r.name for r in SqliteRoleRepository(db_path).list_all()}
+    except (OSError, sqlite3.Error):
+        return {}
+    return {
+        names[rid]: {**mapping, "role_id": rid} for rid, mapping in ui.items() if rid in names
+    }
+
+
 def _role_tiers_from_map(
     role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None,
@@ -284,18 +349,26 @@ def _role_tiers_from_map(
     """
     result: dict[str, tuple[str, str, dict[str, str]]] = {}
     db_roles: dict[str, tuple[str, str, dict[str, str]]] = {}
+    db_roles_by_id: dict[str, tuple[str, str, dict[str, str]]] = {}
     if role_repo is not None:
         try:
             overrides = role_repo.all_tag_tiers()
             for role in role_repo.list_all():
-                db_roles[role.name] = (
+                db_roles[role.name] = db_roles_by_id[role.id] = (
                     role.permission_tier,
                     role.scope_tag,
                     overrides.get(role.id, {}),
                 )
         except (OSError, sqlite3.Error):
             pass
-    for role_name in role_map:
+    for role_name, mapping in role_map.items():
+        role_id = mapping.get("role_id") if isinstance(mapping, dict) else None
+        if role_id:
+            # UI-sourced entry: bound to one role row. A deleted role grants
+            # nothing -- no fall back to the built-in tier of the same name.
+            if role_id in db_roles_by_id:
+                result[role_name] = db_roles_by_id[role_id]
+            continue
         if role_name in db_roles:
             result[role_name] = db_roles[role_name]
         elif role_name in ROLE_PERMISSIONS:

@@ -128,13 +128,13 @@
                   <div class="cw-field">
                     <label class="cw-label" for="role_map_{{ r.id }}">Groups (semicolon-separated DNs)</label>
                     <input class="cw-input mono" type="text" id="role_map_{{ r.id }}" name="role_map_{{ r.id }}"
-                           value="{{ ldap_role_map.get(r.name, {}).get('groups', []) | join('; ') }}"
+                           value="{{ ldap_role_map.get(r.id, {}).get('groups', []) | join('; ') }}"
                            placeholder="CN=Operators,OU=Groups,DC=example,DC=com">
                   </div>
                   <div class="cw-field">
                     <label class="cw-label" for="role_users_{{ r.id }}">Users (comma-separated usernames / UPNs)</label>
                     <input class="cw-input mono" type="text" id="role_users_{{ r.id }}" name="role_users_{{ r.id }}"
-                           value="{{ ldap_role_map.get(r.name, {}).get('users', []) | join(', ') }}"
+                           value="{{ ldap_role_map.get(r.id, {}).get('users', []) | join(', ') }}"
                            placeholder="jsmith, alice@example.com">
                     <div class="cw-hint">Grant this role to specific IdP users directly — for users without a suitable group.</div>
                   </div>

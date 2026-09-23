@@ -56,20 +56,18 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
 
     form = await request.form()
-    from cert_watch.database import SqliteRoleRepository, kv_get, kv_set
+    from cert_watch.database import SqliteRoleRepository, kv_set
 
     db = _db_path(request)
     role_repo = SqliteRoleRepository(db)
 
     # Merge into the existing map: each role's mapping is now edited on its own
     # row in the Roles tab, so a submit only carries the role(s) being edited.
-    # Roles not present in this form must be left untouched.
-    try:
-        map_data = json.loads(kv_get(db, "ldap_role_map") or "{}")
-        if not isinstance(map_data, dict):
-            map_data = {}
-    except (ValueError, TypeError):
-        map_data = {}
+    # Roles not present in this form must be left untouched. Keyed by role id
+    # (load_ui_role_map normalises legacy name keys and drops stale entries).
+    from cert_watch.auth.rbac import UI_ROLE_MAP_KV_KEY, load_ui_role_map
+
+    map_data: dict[str, Any] = dict(load_ui_role_map(db))
 
     # Collect the role ids referenced by either the groups or users fields.
     role_ids: set[str] = set()
@@ -92,13 +90,13 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         groups = _split(str(form.get(f"role_map_{role_id}") or ""), ";")
         users = _split(str(form.get(f"role_users_{role_id}") or ""), ",")
         if groups or users:
-            map_data[role.name] = {"groups": groups, "users": users}
+            map_data[role.id] = {"groups": groups, "users": users}
         else:
             # Both cleared → drop the mapping for this role.
-            map_data.pop(role.name, None)
+            map_data.pop(role.id, None)
 
     with get_write_lock():
-        kv_set(db, "ldap_role_map", json.dumps(map_data))
+        kv_set(db, UI_ROLE_MAP_KV_KEY, json.dumps(map_data))
     # Apply the mapping now: it is part of Settings.role_map (merged in
     # Settings.from_env_with_kv), which request-time RBAC reads.
     _rebuild_settings(request, db)

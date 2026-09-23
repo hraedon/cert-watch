@@ -16,6 +16,7 @@ from cert_watch.auth import (
     NoAuthProvider,
     check_authz,
     create_session,
+    decode_session,
 )
 from cert_watch.auth.rbac import BREAK_GLASS_CLAIM, LOCAL_USER_CLAIM, claims_for_session
 from cert_watch.database import bump_session_version, get_session_version
@@ -153,6 +154,15 @@ async def login_submit(
         roles=stored_roles,
         email=result.email,
     )
+    if result.local_account:
+        # Fail closed: a local session that cannot carry its marker would be
+        # authorized as a directory user, so refuse the login instead.
+        minted = decode_session(token, _request_security(request))
+        if minted is None or not set(stored_roles) <= set(minted.roles):
+            logger.error("refusing login for %s: session marker lost", result.username)
+            return RedirectResponse(
+                url="/login?error=session+could+not+be+created", status_code=303
+            )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",

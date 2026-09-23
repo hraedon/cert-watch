@@ -234,7 +234,7 @@ def test_ui_role_mapping_changes_directory_user_tier(env, login_csrf):
             follow_redirects=False,
         )
         assert "saved" in r.headers["location"], r.headers["location"]
-        assert json.loads(kv_get(env, "ldap_role_map"))["ops"]["groups"] == ["cn=ops"]
+        assert json.loads(kv_get(env, "ldap_role_map"))[ops_id]["groups"] == ["cn=ops"]
 
         # The mapping is live: "dirk" (group cn=ops) is an operator, not admin.
         _login(client, login_csrf, "dirk", "x")
@@ -251,11 +251,185 @@ def test_env_role_map_wins_per_role_over_ui_mapping(tmp_path, monkeypatch):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_ROLE_MAP", json.dumps({"ops": {"groups": ["env-ops"]}}))
     db = _seed(tmp_path)
+    roles = SqliteRoleRepository(db)
+    ops_id = roles.add(Role(name="ops", permission_tier="operator"))
+    admins_id = roles.add(Role(name="admins", permission_tier="admin"))
     kv_set(db, "ldap_role_map", json.dumps({
-        "ops": {"groups": ["ui-ops"]}, "admins": {"users": ["boss"]},
+        ops_id: {"groups": ["ui-ops"]}, admins_id: {"users": ["boss"]},
     }))
     from cert_watch.config import Settings
 
     s = Settings.from_env_with_kv(db)
     assert s.role_map["ops"] == {"groups": ["env-ops"]}
-    assert s.role_map["admins"] == {"users": ["boss"]}
+    assert s.role_map["admins"] == {"groups": [], "users": ["boss"], "role_id": admins_id}
+
+
+# ---------- PR #78 review: B1 -- a stale UI mapping must grant nothing ----------
+
+
+def _save_mapping(client, role_id: str, groups: str = "", users: str = ""):
+    r = client.post(
+        "/settings/ldap-role-map",
+        data={f"role_map_{role_id}": groups, f"role_users_{role_id}": users},
+        follow_redirects=False,
+    )
+    assert "saved" in r.headers["location"], r.headers["location"]
+
+
+def _mapped_env(env):
+    """A scoped viewer role literally named "admin" mapped to IT-Admins, plus an
+    unrelated mapping so the role map stays non-empty once "admin" goes."""
+    roles = SqliteRoleRepository(env)
+    admin_named = roles.add(Role(name="admin", permission_tier="viewer", scope_tag="x"))
+    staff = roles.add(Role(name="staff", permission_tier="viewer"))
+    return admin_named, staff
+
+
+def _composite(db: Path):
+    from cert_watch.auth import LocalAdminProvider, _CompositeProvider
+
+    local = LocalAdminProvider("admin", _hash("testpassword"), db_path=str(db))
+    return _CompositeProvider(local, _DirectoryProvider())
+
+
+def _it_admin_is_admin(client, login_csrf) -> bool:
+    _login(client, login_csrf, "itguy", "x")  # _DirectoryProvider: groups=["cn=ops"]
+    return "saved" in _create_role(client, "probe-by-itguy").headers["location"]
+
+
+def test_deleting_a_mapped_role_does_not_grant_admin(env, login_csrf):
+    admin_named, staff = _mapped_env(env)
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")  # break-glass
+        _save_mapping(client, admin_named, groups="cn=ops")
+        _save_mapping(client, staff, groups="cn=staff")
+        assert not _it_admin_is_admin(client, login_csrf)  # scoped viewer
+
+        _login(client, login_csrf, "admin", "testpassword")
+        r = client.post(f"/settings/roles/{admin_named}/delete", follow_redirects=False)
+        assert "saved" in r.headers["location"]
+        assert not _it_admin_is_admin(client, login_csrf)
+    stored = json.loads(kv_get(env, "ldap_role_map"))
+    assert admin_named not in stored and "admin" not in stored
+
+
+def test_renaming_a_mapped_role_does_not_grant_admin(env, login_csrf):
+    admin_named, staff = _mapped_env(env)
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        _save_mapping(client, admin_named, groups="cn=ops")
+        _save_mapping(client, staff, groups="cn=staff")
+        r = client.post(
+            f"/settings/roles/{admin_named}",
+            data={"name": "payments-team", "permission_tier": "viewer", "scope_tag": "x"},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+        assert not _it_admin_is_admin(client, login_csrf)
+        # The mapping followed the rename: itguy now holds payments-team.
+        assert client.get("/settings/users", follow_redirects=False).status_code == 303
+
+
+def test_stale_ui_mapping_key_grants_nothing(tmp_path, monkeypatch):
+    """A UI entry naming no existing role (e.g. a legacy name-keyed entry for a
+    deleted role) is dropped -- no fall back to the built-in admin tier."""
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+    db = _seed(tmp_path)
+    staff = SqliteRoleRepository(db).add(Role(name="staff", permission_tier="viewer"))
+    kv_set(db, "ldap_role_map", json.dumps({
+        "admin": {"groups": ["cn=ops"]},          # legacy key, no such role
+        "no-such-id": {"groups": ["cn=ops"]},     # id of a deleted role
+        staff: {"groups": ["cn=staff"]},
+    }))
+    from cert_watch.config import Settings
+
+    s = Settings.from_env_with_kv(db)
+    assert set(s.role_map) == {"staff"}
+
+
+def test_ui_entry_for_a_deleted_role_grants_nothing_even_before_rebuild(env):
+    """Settings are cached; a mapping whose role vanished must still grant nothing."""
+    from cert_watch.auth.rbac import build_auth_context
+
+    role_map = {
+        "admin": {"groups": ["cn=ops"], "role_id": "deleted-role-id"},
+        "staff": {"groups": ["cn=staff"]},
+    }
+    ctx = build_auth_context(
+        "itguy", ["cn=ops"], [], role_map, role_repo=SqliteRoleRepository(env),
+    )
+    assert not ctx.is_admin and not ctx.may_write()
+
+
+# ---------- PR #78 review: N1 -- an oversized session keeps its marker ----------
+
+
+def test_oversized_session_never_drops_the_local_marker():
+    from cert_watch.auth import decode_session
+    from cert_watch.auth.rbac import LOCAL_USER_CLAIM
+    from cert_watch.auth.session import create_session
+
+    token = create_session(
+        "vic", version=1, groups=["g" * 50] * 60, roles=[LOCAL_USER_CLAIM],
+        email="e" * 5000 + "@example.com",
+    )
+    info = decode_session(token)
+    assert info is not None and LOCAL_USER_CLAIM in info.roles
+
+
+def test_viewer_with_oversized_email_does_not_get_full_access(env, login_csrf):
+    SqliteUserRepository(env).add(User(
+        username="bigmail", email="e" * 5000 + "@example.com",
+        password_hash=_hash("password123"), role_id=None,
+    ))
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "bigmail")
+        assert "error" in _create_role(client, "sneaky").headers["location"]
+
+
+@pytest.mark.parametrize("field,value", [
+    ("username", "u" * 129), ("email", "e" * 250 + "@example.com"),
+])
+def test_settings_users_caps_username_and_email(env, login_csrf, field, value):
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        data = {"username": "ok", "password": "password123", "email": "a@example.com"}
+        data[field] = value
+        r = client.post("/settings/users", data=data, follow_redirects=False)
+        assert "error" in r.headers["location"]
+    assert SqliteUserRepository(env).list_all() == []
+
+
+# ---------- PR #78 review: N2 -- break-glass cannot be shadowed ----------
+
+
+def test_local_user_named_like_break_glass_does_not_shadow_it(env, login_csrf):
+    SqliteUserRepository(env).add(User(
+        username="admin", email="", password_hash=_hash("other-password"), role_id=None,
+    ))
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        assert "saved" in _create_role(client, "still-break-glass").headers["location"]
+
+
+@pytest.mark.parametrize("name", ["admin", "ADMIN", " Admin "])
+def test_settings_users_rejects_break_glass_username(env, login_csrf, name):
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        r = client.post(
+            "/settings/users",
+            data={"username": name, "password": "password123", "email": ""},
+            follow_redirects=False,
+        )
+        assert "error" in r.headers["location"]
+        SqliteUserRepository(env).add(User(
+            username="bob", email="", password_hash=_hash("password123"), role_id=None,
+        ))
+        uid = SqliteUserRepository(env).get_by_username("bob").id
+        r = client.post(
+            f"/settings/users/{uid}", data={"username": name, "email": ""},
+            follow_redirects=False,
+        )
+        assert "error" in r.headers["location"]
+    assert SqliteUserRepository(env).get_by_username("bob") is not None
