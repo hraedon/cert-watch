@@ -1857,7 +1857,7 @@ async def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monk
     from unittest.mock import MagicMock
 
     from cert_watch.auth import _CompositeProvider
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import GuardRejection, admin_page_guard
     from cert_watch.auth.local_admin import LocalAdminProvider
     from cert_watch.config import Settings
 
@@ -1887,9 +1887,9 @@ async def test_require_admin_non_admin_user_forbidden(reload_app, tmp_path, monk
         "session": {},
     }
     req = Request(scope)
-    result = require_admin_form(req)
-    assert result is not None
-    assert result.status_code == 303
+    with pytest.raises(GuardRejection) as refused:
+        await admin_page_guard(req)
+    assert refused.value.response.status_code == 303
 
 
 # ---------- API keys admin redirect ----------

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_admin, require_admin_write
+from cert_watch.auth.guards import admin_write_guard, require_admin
 from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.routes._deps import IdParam, _db_path
@@ -52,7 +52,7 @@ def api_list_keys(
 
 @router.post("/api/api-keys")
 async def api_create_key(
-    request: Request, _auth: str = Depends(require_admin_write)
+    request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     try:
         body = await request.json()
@@ -90,7 +90,7 @@ async def api_create_key(
 
 @router.delete("/api/api-keys/{key_id}")
 async def api_revoke_key(
-    key_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    key_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     repo = _repository(request)
     with get_write_lock():

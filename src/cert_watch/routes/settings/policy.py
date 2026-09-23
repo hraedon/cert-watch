@@ -5,29 +5,22 @@ from __future__ import annotations
 import contextlib
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_admin_form
 from cert_watch.database import get_write_lock
 from cert_watch.policy import PolicyRule, PolicySet, save_policy_set
 from cert_watch.routes._deps import _db_path
-from cert_watch.security.csrf import check_csrf
+from cert_watch.routes.settings.core import settings_tab_form
 
 router = APIRouter()
 
 
 @router.post("/settings/policy")
-async def save_policy_settings(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=policy&error={csrf_err}", status_code=303)
-
+async def save_policy_settings(
+    request: Request, _auth: str = Depends(settings_tab_form("policy")),
+) -> RedirectResponse:
     db = _db_path(request)
     form = await request.form()
 

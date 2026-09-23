@@ -14,10 +14,10 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import (
+    admin_form_guard,
     get_auth_context,
-    require_admin_write_form,
     require_auth,
-    require_write_form,
+    write_form_guard,
 )
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
@@ -412,10 +412,9 @@ def certificate_posture_api(
 
 
 @router.post("/certificates/{cert_id}/delete")
-async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def delete_certificate(
+    request: Request, cert_id: IdParam, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
@@ -439,11 +438,9 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
 
 @router.post("/certificates/{cert_id}/tags")
 async def update_certificate_tags(
-    request: Request, cert_id: IdParam, tags: str = Form("")
+    request: Request, cert_id: IdParam, tags: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
@@ -482,10 +479,8 @@ async def update_certificate_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     if not check_rate_limit(f"cert_owner:{_extract_client_ip(request)}", 30, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -543,10 +538,8 @@ async def upload(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
     password: str | None = Form(None),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    csrf_err = await require_write_form(request)
-    if csrf_err:
-        return csrf_err
     if not check_rate_limit(f"upload:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -592,12 +585,10 @@ async def upload(
 async def add_trust_anchor(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008
+    _auth: str = Depends(admin_form_guard),
 ) -> RedirectResponse:
     # #65: a trust anchor changes chain validation for the whole fleet, so it
     # is admin-only (like the /settings/trust-anchors page), not write-gated.
-    admin_err = await require_admin_write_form(request)
-    if admin_err:
-        return admin_err
     db = _db_path(request)
     allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
     raw_suffix = Path(file.filename or "uploaded").suffix.lower()
@@ -656,10 +647,10 @@ async def add_trust_anchor(
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
-async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectResponse:
-    admin_err = await require_admin_write_form(request)  # #65: admin-only
-    if admin_err:
-        return admin_err
+async def delete_trust_anchor(
+    request: Request, anchor_id: IdParam,
+    _auth: str = Depends(admin_form_guard),  # #65: admin-only
+) -> RedirectResponse:
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
     with get_write_lock():

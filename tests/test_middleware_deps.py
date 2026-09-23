@@ -1,4 +1,4 @@
-"""Tests for FastAPI dependency functions require_auth and require_write."""
+"""Tests for FastAPI dependency functions require_auth and write_guard."""
 
 from __future__ import annotations
 
@@ -10,9 +10,21 @@ from fastapi import Request
 from fastapi.exceptions import HTTPException
 
 from cert_watch.auth import NoAuthProvider, create_session
-from cert_watch.auth.guards import require_auth, require_write
+from cert_watch.auth.guards import require_auth, write_guard
 
 pytestmark = pytest.mark.usefixtures("csrf_strict")
+
+async def _refusal(guard, request):
+    """Run an HTML guard: None if it lets the request through, else the
+    response it refuses with."""
+    from cert_watch.auth.guards import GuardRejection
+
+    try:
+        await guard(request)
+    except GuardRejection as refused:
+        return refused.response
+    return None
+
 
 _FAKE_DB_PATH = os.path.join(tempfile.mkdtemp(prefix="test_middleware_deps_"), "fake.db")
 
@@ -120,14 +132,14 @@ async def test_require_auth_missing_session():
     assert exc_info.value.status_code == 401
 
 
-# ── require_write ──────────────────────────────────────────────────────────
+# ── write_guard ──────────────────────────────────────────────────────────
 
 
 @pytest.mark.anyio
 async def test_require_write_no_auth():
-    """When auth is off, require_write returns '' without checking CSRF."""
+    """When auth is off, write_guard returns '' without checking CSRF."""
     request = _make_request(auth_provider=None)
-    result = await require_write(request)
+    result = await write_guard(request)
     assert result == ""
 
 
@@ -143,7 +155,7 @@ async def test_require_write_csrf_missing():
     provider = _MockProvider()
     request = _make_request(auth_provider=provider, cookies={SESSION_COOKIE: token})
     with pytest.raises(HTTPException) as exc_info:
-        await require_write(request)
+        await write_guard(request)
     assert exc_info.value.status_code == 403
     assert "missing CSRF token" in exc_info.value.detail
 
@@ -164,7 +176,7 @@ async def test_require_write_csrf_invalid():
         headers={"x-csrf-token": "tampered"},
     )
     try:
-        await require_write(request)
+        await write_guard(request)
         raise AssertionError("should have raised")
     except HTTPException as exc:
         assert exc.status_code == 403
@@ -188,7 +200,7 @@ async def test_require_write_valid():
         cookies={SESSION_COOKIE: token},
         headers={"x-csrf-token": csrf},
     )
-    result = await require_write(request)
+    result = await write_guard(request)
     assert result == "alice"
 
 
@@ -306,7 +318,7 @@ async def test_may_write_no_auth_provider(monkeypatch):
 
 @pytest.mark.anyio
 async def test_require_write_readonly_user_403(monkeypatch, tmp_path):
-    """When write_users is set and user is not in it, require_write raises 403."""
+    """When write_users is set and user is not in it, write_guard raises 403."""
     from cert_watch.auth import SESSION_COOKIE
     from cert_watch.config import Settings
 
@@ -334,7 +346,7 @@ async def test_require_write_readonly_user_403(monkeypatch, tmp_path):
     request.scope["app"] = app
     request.scope["auth_user"] = "viewer"
     with pytest.raises(HTTPException) as exc_info:
-        await require_write(request)
+        await write_guard(request)
     assert exc_info.value.status_code == 403
     assert "read-only user" in exc_info.value.detail
 
@@ -342,7 +354,7 @@ async def test_require_write_readonly_user_403(monkeypatch, tmp_path):
 # ── Plan 035 RBAC: write enforcement must be consistent across API + forms ──
 #
 # Regression guard for the split-enforcement bug: when a role map is active,
-# require_write (API) honoured it but require_write_form (HTML form POSTs:
+# write_guard (API) honoured it but write_form_guard (HTML form POSTs:
 # add-host, upload, delete) did not — it fell through to _may_write, which
 # returns True when write_users is empty (the expected config under RBAC), so
 # a viewer could mutate via the form routes. Both paths now share _write_denied.
@@ -412,11 +424,11 @@ def test_write_denied_api_key_missing_auth_context_denies(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_require_write_form_rbac_viewer_denied(tmp_path):
+async def test_write_form_guard_rbac_viewer_denied(tmp_path):
     """The bug: a viewer must be blocked at the form-POST routes, not just the API."""
     from fastapi.responses import RedirectResponse
 
-    from cert_watch.auth.guards import require_write_form
+    from cert_watch.auth.guards import write_form_guard
     from cert_watch.auth.rbac import AuthContext
 
     app, Provider = _app_with_role_map(tmp_path)
@@ -425,17 +437,17 @@ async def test_require_write_form_rbac_viewer_denied(tmp_path):
     request.scope["auth_user"] = "viewer"
     request.state.auth_context = AuthContext.from_roles("viewer", ["viewer"])
 
-    result = await require_write_form(request)
+    result = await _refusal(write_form_guard, request)
     assert isinstance(result, RedirectResponse)
     assert result.status_code == 303
     assert "read-only" in result.headers["location"]
 
 
 @pytest.mark.anyio
-async def test_require_write_form_rbac_operator_allowed(tmp_path):
+async def test_write_form_guard_rbac_operator_allowed(tmp_path):
     """An operator passes the write gate at a form-POST route (CSRF still enforced)."""
     from cert_watch.auth import SESSION_COOKIE, create_session
-    from cert_watch.auth.guards import require_write_form
+    from cert_watch.auth.guards import write_form_guard
     from cert_watch.auth.rbac import AuthContext
     from cert_watch.security.csrf import make_csrf_token
 
@@ -451,7 +463,7 @@ async def test_require_write_form_rbac_operator_allowed(tmp_path):
     request.state.auth_context = AuthContext.from_roles("alice", ["operator"])
 
     # None == allowed (write gate + CSRF both pass)
-    assert await require_write_form(request) is None
+    assert await _refusal(write_form_guard, request) is None
 
 
 @pytest.mark.anyio
@@ -468,7 +480,7 @@ async def test_require_write_rbac_viewer_denied(tmp_path):
     )
     request.scope["app"] = app
     with pytest.raises(HTTPException) as exc_info:
-        await require_write(request)
+        await write_guard(request)
     assert exc_info.value.status_code == 403
     assert "read-only user" in exc_info.value.detail
 
@@ -488,8 +500,8 @@ async def test_require_write_rbac_operator_allowed(tmp_path):
         headers={"x-csrf-token": make_csrf_token(session_token)},
     )
     request.scope["app"] = app
-    # require_auth + require_write should succeed without raising
-    username = await require_write(request)
+    # require_auth + write_guard should succeed without raising
+    username = await write_guard(request)
     assert username == "alice"
     assert request.state.auth_context.may_write() is True
     assert request.state.auth_context.roles == ["operator"]
@@ -501,7 +513,7 @@ async def test_require_write_rbac_operator_allowed(tmp_path):
 @pytest.mark.anyio
 async def test_auth_middleware_sets_auth_context_for_rbac(tmp_path):
     """auth_middleware sets request.state.auth_context so that form-POST routes
-    (which use require_write_form, not require_auth) enforce RBAC.
+    (which use write_form_guard, not require_auth) enforce RBAC.
     """
     from fastapi.responses import PlainTextResponse
 
@@ -595,12 +607,10 @@ async def test_auth_middleware_no_role_map_no_auth_context(tmp_path):
     assert request.state.auth_context.may_write() is True
 
 
-# ── require_admin_form / require_admin_write_form ────────────────────────
+# ── admin_page_guard / admin_form_guard ─────────────────────────────────
 #
-# These mirror require_auth / require_write for form-POST handlers that
-# return RedirectResponse on failure (settings tabs, role/user CRUD).
-# They replace the manual ``_require_admin`` + ``check_csrf`` boilerplate
-# that used to live in routes/settings.py.
+# These mirror require_admin / admin_write_guard for HTML routes, which
+# refuse with a redirect (raised as GuardRejection) instead of a 401/403.
 
 
 class _AppWithAdmin:
@@ -656,20 +666,20 @@ def _admin_request(
 
 
 @pytest.mark.anyio
-async def test_require_admin_form_no_auth_returns_none():
+async def test_admin_page_guard_no_auth_returns_none():
     """No auth configured → no admin check, returns None."""
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import admin_page_guard
 
     request = _admin_request("/settings/roles", auth_provider=NoAuthProvider())
-    assert require_admin_form(request) is None
+    assert await _refusal(admin_page_guard, request) is None
 
 
 @pytest.mark.anyio
-async def test_require_admin_form_no_session_redirects_to_login(tmp_path):
+async def test_admin_page_guard_no_session_redirects_to_login(tmp_path):
     """Auth configured but no user → 303 to /login."""
     from fastapi.responses import RedirectResponse
 
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import admin_page_guard
 
     class _Provider:
         pass
@@ -677,18 +687,18 @@ async def test_require_admin_form_no_session_redirects_to_login(tmp_path):
     app = type("App", (), {"state": type("State", (), {"auth_provider": _Provider()})()})()
     request = _admin_request("/settings/roles", auth_provider=_Provider())
     request.scope["app"] = app
-    response = require_admin_form(request)
+    response = await _refusal(admin_page_guard, request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
 
 
 @pytest.mark.anyio
-async def test_require_admin_form_non_admin_redirects_with_error(tmp_path):
+async def test_admin_page_guard_non_admin_redirects_with_error(tmp_path):
     """An authenticated non-admin is bounced back to the page with ?error=admin+required."""
     from fastapi.responses import RedirectResponse
 
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import admin_page_guard
     from cert_watch.config import Settings
 
     class _Provider:
@@ -710,7 +720,7 @@ async def test_require_admin_form_non_admin_redirects_with_error(tmp_path):
         groups=["g-others"],
     )
     request.scope["app"] = app
-    response = require_admin_form(request)
+    response = await _refusal(admin_page_guard, request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert "error=admin" in response.headers["location"]
@@ -718,9 +728,9 @@ async def test_require_admin_form_non_admin_redirects_with_error(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_require_admin_form_rbac_admin_allowed(tmp_path):
+async def test_admin_page_guard_rbac_admin_allowed(tmp_path):
     """RBAC admin (admin group match) → None."""
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import admin_page_guard
     from cert_watch.config import Settings
 
     class _Provider:
@@ -746,13 +756,13 @@ async def test_require_admin_form_rbac_admin_allowed(tmp_path):
     from cert_watch.auth.rbac import AuthContext
 
     request.state.auth_context = AuthContext.from_roles("alice", ["admin"])
-    assert require_admin_form(request) is None
+    assert await _refusal(admin_page_guard, request) is None
 
 
 @pytest.mark.anyio
-async def test_require_admin_form_legacy_admin_users_fallback(tmp_path):
+async def test_admin_page_guard_legacy_admin_users_fallback(tmp_path):
     """No role map + user in admin_users → allowed (RBAC-off backward compat)."""
-    from cert_watch.auth.guards import require_admin_form
+    from cert_watch.auth.guards import admin_page_guard
     from cert_watch.config import Settings
 
     class _Provider:
@@ -772,15 +782,15 @@ async def test_require_admin_form_legacy_admin_users_fallback(tmp_path):
         username="alice",
     )
     request.scope["app"] = app
-    assert require_admin_form(request) is None
+    assert await _refusal(admin_page_guard, request) is None
 
 
 @pytest.mark.anyio
-async def test_require_admin_write_form_csrf_failure(tmp_path):
-    """require_admin_write_form catches CSRF failures too (admin + write + CSRF)."""
+async def test_admin_form_guard_csrf_failure(tmp_path):
+    """admin_form_guard catches CSRF failures too (admin + CSRF)."""
     from fastapi.responses import RedirectResponse
 
-    from cert_watch.auth.guards import require_admin_write_form
+    from cert_watch.auth.guards import admin_form_guard
     from cert_watch.config import Settings
 
     class _Provider:
@@ -801,7 +811,7 @@ async def test_require_admin_write_form_csrf_failure(tmp_path):
         # No CSRF token → expect CSRF failure (CSRF is re-enabled in this test file)
     )
     request.scope["app"] = app
-    response = await require_admin_write_form(request)
+    response = await _refusal(admin_form_guard, request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
     assert "error=" in response.headers["location"]
@@ -809,10 +819,10 @@ async def test_require_admin_write_form_csrf_failure(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_require_admin_write_form_all_pass(tmp_path):
+async def test_admin_form_guard_all_pass(tmp_path):
     """All three checks pass → returns None."""
     from cert_watch.auth import SESSION_COOKIE, create_session
-    from cert_watch.auth.guards import require_admin_write_form
+    from cert_watch.auth.guards import admin_form_guard
     from cert_watch.config import Settings
     from cert_watch.security.csrf import make_csrf_token
 
@@ -836,7 +846,7 @@ async def test_require_admin_write_form_all_pass(tmp_path):
     request.scope["path"] = "/settings/roles"
     request.scope["auth_user"] = "alice"
     request.scope["app"] = app
-    assert await require_admin_write_form(request) is None
+    assert await _refusal(admin_form_guard, request) is None
 
 
 # ── get_auth_context: is_admin ─────────────────────────────────────────────

@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import replace
 from urllib.parse import quote
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.alert_adapters import WEBHOOK_KIND_OPTIONS
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_admin_form
+from cert_watch.auth.guards import admin_page_guard, admin_settings_form
 from cert_watch.database import get_write_lock
 from cert_watch.events import (
     ALL_EVENT_TYPES,
@@ -22,7 +22,6 @@ from cert_watch.events import (
 from cert_watch.http_client import validate_webhook_url
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes.settings.config import _get_encryption_key
-from cert_watch.security.csrf import check_csrf
 
 templates = get_templates()
 
@@ -30,10 +29,9 @@ router = APIRouter()
 
 
 @router.get("/settings/events", response_class=HTMLResponse, response_model=None)
-def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
+def settings_events_page(
+    request: Request, _auth: str = Depends(admin_page_guard),
+) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
     config = load_event_config(db, encryption_key=_get_encryption_key(request))
     from cert_watch.auth.guards import get_auth_context
@@ -58,15 +56,9 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 
 @router.post("/settings/events")
-async def save_settings_events(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings/events?error={csrf_err}", status_code=303)
-
+async def save_settings_events(
+    request: Request, _auth: str = Depends(admin_settings_form("/settings/events")),
+) -> RedirectResponse:
     db = _db_path(request)
     form = await request.form()
     enc_key = _get_encryption_key(request)

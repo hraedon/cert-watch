@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 
-from cert_watch.auth.guards import require_admin_form
+from cert_watch.auth.guards import MutationGuard, admin_settings_form
 from cert_watch.config import Settings
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes.settings.config import _SENSITIVE_KEYS, _get_encryption_key
@@ -26,6 +26,12 @@ _IP_ADDR_RE = re.compile(
 def _sanitize_test_error(msg: str) -> str:
     """Strip IP addresses and internal details from error messages returned to the client."""
     return _IP_ADDR_RE.sub("<redacted>", msg)
+
+
+def settings_tab_form(tab: str) -> MutationGuard:
+    """The guard for a POST from the Settings *tab* page (see
+    :func:`~cert_watch.auth.guards.admin_settings_form`)."""
+    return admin_settings_form(f"/settings?tab={tab}")
 
 
 def _rebuild_settings(request: Request, db_path: Path) -> None:
@@ -51,19 +57,11 @@ async def _save_config_section(
     *encrypt*  – when True, sensitive keys (members of ``_SENSITIVE_KEYS``)
                    that are non-blank are stored encrypted (BC-082).
     *rebuild*  – when True, ``_rebuild_settings`` is called after saving.
+
+    Performs no authorization: the calling route declares
+    ``Depends(settings_tab_form(tab_name))``.
     """
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
     from cert_watch.database import get_write_lock, kv_set, kv_set_secret
-    from cert_watch.security.csrf import check_csrf
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(
-            url=f"/settings?tab={tab_name}&error={csrf_err}", status_code=303
-        )
 
     db = _db_path(request)
     form = await request.form()

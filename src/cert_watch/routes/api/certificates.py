@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_auth, require_write
+from cert_watch.auth.guards import require_auth, write_guard
 from cert_watch.database import (
     SqliteCertificateRepository,
     list_cert_history,
@@ -193,7 +193,7 @@ def api_list_tags(request: Request, _auth: str = Depends(require_auth)) -> JSONR
 
 @router.put("/api/certificates/{cert_id}/tags")
 async def api_set_cert_tags(
-    cert_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    cert_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)

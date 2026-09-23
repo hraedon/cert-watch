@@ -36,6 +36,8 @@ import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
+from tests._route_inventory import mutating_routes
+
 GOLDEN = Path(__file__).parent / "fixtures" / "authz_matrix.json"
 
 _ROLE_MAP = {
@@ -157,26 +159,6 @@ def _seed(db: Path, principal: Principal) -> Seeded:
 
 
 # ---------- route enumeration ----------
-
-
-def _walk(routes: list[Any]) -> list[Any]:
-    out: list[Any] = []
-    for r in routes:
-        if hasattr(r, "effective_candidates"):  # FastAPI >= 0.140 included router
-            out.extend(_walk(r.effective_candidates()))
-        else:
-            out.append(r)
-    return out
-
-
-def mutating_routes(app: Any) -> list[tuple[str, str, Any]]:
-    """``(method, path, route)`` for every mutating method on every route."""
-    result = []
-    for r in _walk(app.routes):
-        methods = getattr(r, "methods", None) or set()
-        for m in sorted(set(methods) - {"GET", "HEAD", "OPTIONS"}):
-            result.append((m, r.path, r))
-    return result
 
 
 # Session-ending routes run last: a password change, then logout (which

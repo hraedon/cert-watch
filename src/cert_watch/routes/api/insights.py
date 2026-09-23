@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.alerts import Alert, send_webhook
-from cert_watch.auth.guards import require_auth, require_write
+from cert_watch.auth.guards import require_auth, write_guard
 from cert_watch.database import (
     list_calendar,
     list_grade_trends,
@@ -24,7 +24,7 @@ router = APIRouter()
 
 
 @router.post("/api/webhook/test")
-async def api_webhook_test(request: Request, _auth: str = Depends(require_write)) -> JSONResponse:
+async def api_webhook_test(request: Request, _auth: str = Depends(write_guard)) -> JSONResponse:
     """Send a test payload to the configured webhook URL."""
     settings = _get_settings(request)
     # Configuration validation resolves the destination host, and delivery is

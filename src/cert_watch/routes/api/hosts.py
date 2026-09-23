@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_admin_write, require_auth, require_write
+from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
 from cert_watch.database import SqliteHostRepository, get_write_lock
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
@@ -96,7 +96,7 @@ def api_list_hosts(
 
 @router.patch("/api/hosts/{host_id}/owner")
 async def api_update_host_owner(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     """Update owner/contact and renewal status for a host."""
     db = _db_path(request)
@@ -147,7 +147,7 @@ async def api_update_host_owner(
 
 @router.patch("/api/hosts/{host_id}/notes")
 async def api_update_host_notes(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
@@ -177,7 +177,7 @@ async def api_update_host_notes(
 
 @router.put("/api/hosts/{host_id}/tags")
 async def api_set_host_tags(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
@@ -236,7 +236,7 @@ def api_get_host_issuers(
 
 @router.put("/api/hosts/{host_id}/issuers")
 async def api_set_host_issuers(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     """Update the expected-issuer CN allowlist for a host (WI-007).
 

@@ -4,12 +4,14 @@ request may proceed, plus the template-facing permission context."""
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import Callable
+from typing import Any, Literal, NoReturn
 from urllib.parse import quote
 
-from fastapi import Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import HTTPException
 from fastapi.responses import RedirectResponse
+from starlette.responses import Response
 
 from cert_watch.auth import SESSION_COOKIE
 from cert_watch.auth.rbac import AuthContext
@@ -86,7 +88,7 @@ def _may_write(request: Request, username: str) -> bool:
     """Return True if *username* is allowed to perform mutations.
 
     Uses the legacy write_users/admin_users lists only — RBAC is handled
-    by the caller (``require_write``) through the AuthContext.
+    by the caller (``_write_denied``) through the AuthContext.
     """
     if not _is_auth_enabled(request):
         return True
@@ -103,8 +105,8 @@ def _may_write(request: Request, username: str) -> bool:
 def _write_denied(request: Request, username: str) -> bool:
     """Return True if *username* must be denied write access.
 
-    Single source of truth for the write decision shared by ``require_write``
-    (API, raises) and ``require_write_form`` (HTML forms, redirects), so the
+    Single source of truth for the write decision shared by ``write_guard``
+    (API, raises) and ``write_form_guard`` (HTML forms, redirects), so the
     two paths cannot diverge. When a role map is configured (Plan 035 RBAC),
     the request's AuthContext permissions decide; otherwise the legacy
     write_users/admin_users lists apply. A missing AuthContext under the
@@ -203,71 +205,202 @@ async def _csrf_required_error(request: Request) -> str | None:
     return await check_csrf(request)
 
 
-async def require_auth(request: Request) -> str:
-    """FastAPI dependency. Returns username or raises 401."""
-    result = _check_auth(request)
-    if result.error:
+# ---------- the guard family ----------
+#
+# Every route declares its requirement as ONE dependency from this family:
+#
+#   read (no CSRF; refused on a mutating route by tests/test_route_guards.py)
+#     require_auth          JSON/any: authenticated, else 401
+#     require_admin         JSON: admin, else 401/403
+#     admin_page_guard      HTML page: admin, else redirect
+#
+#   mutation (CSRF built in -- there is no way to construct one without it)
+#     write_guard           JSON write: 401/403, CSRF 403
+#     admin_write_guard     JSON admin: 401/403, CSRF 403
+#     write_form_guard      HTML form write: redirect on refusal
+#     admin_form_guard      HTML form admin: redirect on refusal
+#     admin_settings_form(bounce)   Settings forms: admin, CSRF failure
+#                           bounces back to the settings tab
+#
+# An HTML guard cannot *return* a redirect from a dependency, so it raises
+# GuardRejection carrying the response; ``install_guard_handler`` registers
+# the handler that sends it.
+
+
+class GuardRejection(Exception):
+    """An HTML guard refused the request; ``response`` is what the client gets."""
+
+    def __init__(self, response: Response) -> None:
+        super().__init__(response.status_code)
+        self.response = response
+
+
+async def _guard_rejection_handler(request: Request, exc: Exception) -> Response:
+    assert isinstance(exc, GuardRejection)
+    return exc.response
+
+
+def install_guard_handler(application: FastAPI) -> None:
+    """Let HTML guards refuse with a redirect (see :class:`GuardRejection`)."""
+    application.add_exception_handler(GuardRejection, _guard_rejection_handler)
+
+
+def _bounce(base: str, message: str) -> RedirectResponse:
+    sep = "&" if "?" in base else "?"
+    return RedirectResponse(url=f"{base}{sep}error={quote(message)}", status_code=303)
+
+
+def _login_redirect() -> GuardRejection:
+    return GuardRejection(RedirectResponse(url="/login", status_code=303))
+
+
+def _raise_json(error: str) -> NoReturn:
+    if error == "unauthenticated":
         raise HTTPException(status_code=401, detail="unauthenticated")
-    return result.user or ""
+    raise HTTPException(status_code=403, detail=error)
 
 
-async def require_write(request: Request) -> str:
-    """Auth + CSRF + write_users check. Returns username or raises 401/403."""
-    result = _check_auth(request, require_write=True)
-    if result.error:
-        if result.error == "unauthenticated":
-            raise HTTPException(status_code=401, detail="unauthenticated")
-        raise HTTPException(status_code=403, detail=result.error)
-    if _is_auth_enabled(request):
-        csrf_err = await _csrf_required_error(request)
-        if csrf_err:
-            raise HTTPException(status_code=403, detail=csrf_err)
-    return result.user or ""
+# A CSRF failure on an HTML form: a bounce URL (``?error=`` is appended) or a
+# callable building the response (e.g. re-rendering the page with the error).
+CsrfFailure = str | Callable[[Request, str], Response]
 
 
-async def require_admin(request: Request) -> str:
-    """Auth + admin-permission check (no CSRF). Use for admin-scoped GETs."""
-    result = _check_auth(request, require_admin=True)
-    if result.error:
-        if result.error == "unauthenticated":
-            raise HTTPException(status_code=401, detail="unauthenticated")
-        raise HTTPException(status_code=403, detail=result.error)
-    return result.user or ""
+class ReadGuard:
+    """Authentication, optionally admin. No CSRF check, so read routes only."""
 
+    def __init__(self, *, admin: bool, form: bool) -> None:
+        self.admin = admin
+        self.form = form
 
-async def require_admin_write(request: Request) -> str:
-    """``require_admin`` + CSRF (skipped for API-key auth). Use for admin mutations."""
-    result = _check_auth(request, require_admin=True)
-    if result.error:
-        if result.error == "unauthenticated":
-            raise HTTPException(status_code=401, detail="unauthenticated")
-        raise HTTPException(status_code=403, detail=result.error)
-    if _is_auth_enabled(request):
-        csrf_err = await _csrf_required_error(request)
-        if csrf_err:
-            raise HTTPException(status_code=403, detail=csrf_err)
-    return result.user or ""
+    def __repr__(self) -> str:
+        return f"ReadGuard(admin={self.admin}, form={self.form})"
 
-
-def require_admin_form(request: Request) -> RedirectResponse | None:
-    """Form-POST helper: admin-only check (no CSRF), redirect on failure."""
-    if not _is_auth_enabled(request):
-        return None
-    result = _check_auth(
-        request, resolve_session=False, require_admin=True, admin_legacy=True,
-    )
-    if result.error:
-        if result.error == "unauthenticated":
-            return RedirectResponse(url="/login", status_code=303)
-        return RedirectResponse(
-            url=f"{_admin_redirect_target(request)}?error={quote(result.error)}",
-            status_code=303,
+    async def __call__(self, request: Request) -> str:
+        if not self.form:
+            result = _check_auth(request, require_admin=self.admin)
+            if result.error:
+                _raise_json(result.error if self.admin else "unauthenticated")
+            return result.user or ""
+        # HTML page (admin only in practice): relies on auth_middleware having
+        # authenticated the request; the legacy CERT_WATCH_ADMINS list applies.
+        if not _is_auth_enabled(request):
+            return ""
+        result = _check_auth(
+            request, resolve_session=False, require_admin=self.admin, admin_legacy=True,
         )
-    return None
+        if result.error:
+            if result.error == "unauthenticated":
+                raise _login_redirect()
+            raise GuardRejection(_bounce(_admin_redirect_target(request), result.error))
+        return result.user or ""
+
+
+class MutationGuard:
+    """A write- or admin-level guard for a state-changing route.
+
+    CSRF is part of every mutation guard and cannot be switched off: the
+    constructor only chooses *how a CSRF failure is reported*. API-key
+    (bearer) requests carry no ambient cookie credential and are exempt,
+    except on ``browser_only`` forms, which hold them to the check -- and so
+    refuse them -- exactly like a cookie request without a token.
+
+    JSON guards raise 401/403 and check CSRF only when an auth provider is
+    configured; HTML form guards redirect and check CSRF always.
+    """
+
+    def __init__(
+        self,
+        level: Literal["write", "admin"],
+        *,
+        form: bool,
+        csrf_failure: CsrfFailure | None = None,
+        browser_only: bool = False,
+    ) -> None:
+        if level not in ("write", "admin"):
+            raise ValueError(f"unknown guard level {level!r}")
+        if not form and (csrf_failure is not None or browser_only):
+            raise ValueError("csrf_failure / browser_only apply to HTML form guards only")
+        self.level = level
+        self.form = form
+        self.csrf_failure = csrf_failure
+        self.browser_only = browser_only
+
+    def __repr__(self) -> str:
+        return (
+            f"MutationGuard({self.level!r}, form={self.form}, "
+            f"csrf_failure={self.csrf_failure!r}, browser_only={self.browser_only})"
+        )
+
+    async def _csrf_error(self, request: Request) -> str | None:
+        if self.browser_only:
+            return await check_csrf(request)
+        return await _csrf_required_error(request)
+
+    async def __call__(self, request: Request) -> str:
+        if self.form:
+            return await self._form(request)
+        result = _check_auth(
+            request,
+            require_write=self.level == "write",
+            require_admin=self.level == "admin",
+        )
+        if result.error:
+            _raise_json(result.error)
+        if _is_auth_enabled(request):
+            csrf_err = await self._csrf_error(request)
+            if csrf_err:
+                raise HTTPException(status_code=403, detail=csrf_err)
+        return result.user or ""
+
+    async def _form(self, request: Request) -> str:
+        user = ""
+        if self.level == "write":
+            error = form_write_error(request)
+            if error:
+                if error == "unauthenticated":
+                    raise _login_redirect()
+                raise GuardRejection(_bounce("/", error))
+            user = request.scope.get("auth_user", "") or ""
+            default_bounce = "/"
+        else:
+            if _is_auth_enabled(request):
+                result = _check_auth(
+                    request, resolve_session=False, require_admin=True, admin_legacy=True,
+                )
+                if result.error:
+                    if result.error == "unauthenticated":
+                        raise _login_redirect()
+                    raise GuardRejection(
+                        _bounce(_admin_redirect_target(request), result.error)
+                    )
+                user = result.user or ""
+            default_bounce = _admin_redirect_target(request)
+        csrf_err = await self._csrf_error(request)
+        if csrf_err:
+            failure = self.csrf_failure or default_bounce
+            if callable(failure):
+                raise GuardRejection(failure(request, csrf_err))
+            raise GuardRejection(_bounce(failure, csrf_err))
+        return user
+
+
+def admin_settings_form(csrf_failure: CsrfFailure) -> MutationGuard:
+    """The guard for a Settings form POST: admin, browser-only, and a CSRF
+    failure lands back on the settings tab the form came from."""
+    return MutationGuard("admin", form=True, csrf_failure=csrf_failure, browser_only=True)
+
+
+require_auth = ReadGuard(admin=False, form=False)
+require_admin = ReadGuard(admin=True, form=False)
+admin_page_guard = ReadGuard(admin=True, form=True)
+write_guard = MutationGuard("write", form=False)
+admin_write_guard = MutationGuard("admin", form=False)
+write_form_guard = MutationGuard("write", form=True)
+admin_form_guard = MutationGuard("admin", form=True)
 
 
 def form_write_error(request: Request) -> str | None:
-    """Why ``require_write_form`` would refuse this request, or None if it would not.
+    """Why ``write_form_guard`` would refuse this request, or None if it would not.
 
     Everything that gate decides except CSRF, which needs the request body and
     is not a property of the user. Exported so a template can ask the exact
@@ -287,38 +420,3 @@ def form_write_error(request: Request) -> str | None:
     the request path would, so calling it during a render is idempotent.
     """
     return _check_auth(request, resolve_session=False, require_write=True).error
-
-
-async def require_write_form(request: Request) -> RedirectResponse | None:
-    """Form-POST helper: check write access + CSRF, return redirect on failure."""
-    error = form_write_error(request)
-    if error:
-        if error == "unauthenticated":
-            return RedirectResponse(url="/login", status_code=303)
-        return RedirectResponse(url=f"/?error={quote(error)}", status_code=303)
-    csrf_err = await _csrf_required_error(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/?error={quote(csrf_err)}", status_code=303)
-    return None
-
-
-async def require_admin_write_form(request: Request) -> RedirectResponse | None:
-    """Form-POST helper: admin + write + CSRF check, redirect on failure."""
-    result = _check_auth(
-        request, resolve_session=False, require_admin=True, admin_legacy=True,
-    )
-    if result.error:
-        if result.error == "unauthenticated":
-            return RedirectResponse(url="/login", status_code=303)
-        return RedirectResponse(
-            url=f"{_admin_redirect_target(request)}?error={quote(result.error)}",
-            status_code=303,
-        )
-    csrf_err = await _csrf_required_error(request)
-    if csrf_err:
-        return RedirectResponse(
-            url=f"{_admin_redirect_target(request)}?error={quote(csrf_err)}",
-            status_code=303,
-        )
-    return None
-

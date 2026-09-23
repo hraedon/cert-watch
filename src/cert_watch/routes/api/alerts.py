@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_admin, require_admin_write, require_auth
+from cert_watch.auth.guards import admin_write_guard, require_admin, require_auth
 from cert_watch.database import (
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
@@ -69,7 +69,7 @@ def api_list_alert_groups(request: Request, _auth: str = Depends(require_admin))
 
 @router.post("/api/alert-groups")
 async def api_create_alert_group(
-    request: Request, _auth: str = Depends(require_admin_write)
+    request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     try:
@@ -157,7 +157,7 @@ def api_get_alert_group(
 
 @router.patch("/api/alert-groups/{group_id}")
 async def api_update_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -253,7 +253,7 @@ async def api_update_alert_group(
 
 @router.delete("/api/alert-groups/{group_id}")
 async def api_delete_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -277,7 +277,7 @@ async def api_delete_alert_group(
 
 @router.post("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_assign_cert_to_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -303,7 +303,7 @@ async def api_assign_cert_to_group(
 
 @router.delete("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_unassign_cert_from_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)

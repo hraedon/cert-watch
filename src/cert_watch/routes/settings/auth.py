@@ -11,7 +11,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.auth.guards import require_admin_form, require_admin_write
+from cert_watch.auth.guards import admin_write_guard
 from cert_watch.database import get_write_lock, kv_set, kv_set_secret
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
@@ -21,14 +21,16 @@ from cert_watch.routes.settings.core import (
     _sanitize_test_error,
     _save_config_section,
     logger,
+    settings_tab_form,
 )
-from cert_watch.security.csrf import check_csrf
 
 router = APIRouter()
 
 
 @router.post("/settings/auth")
-async def save_auth_config(request: Request) -> RedirectResponse:
+async def save_auth_config(
+    request: Request, _auth: str = Depends(settings_tab_form("auth")),
+) -> RedirectResponse:
     resp = await _save_config_section(request, _AUTH_KEYS, "auth", encrypt=True, rebuild=True)
     if resp.status_code == 303 and ("saved=1" in str(resp.headers.get("location", ""))):
         try:
@@ -47,15 +49,9 @@ async def save_auth_config(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/ldap-role-map")
-async def save_ldap_role_map(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
-
+async def save_ldap_role_map(
+    request: Request, _auth: str = Depends(settings_tab_form("auth")),
+) -> RedirectResponse:
     form = await request.form()
     from cert_watch.database import SqliteRoleRepository, kv_set
 
@@ -355,7 +351,7 @@ async def _run_ldap_probe(
 @router.post("/settings/test-ldap")
 async def test_ldap_connection(
     request: Request,
-    _auth: str = Depends(require_admin_write),
+    _auth: str = Depends(admin_write_guard),
 ) -> JSONResponse:
     form = await request.form()
     parsed = _parse_ldap_form(form)
@@ -390,7 +386,7 @@ async def test_ldap_connection(
 @router.post("/settings/pin-ldap-ca")
 async def pin_ldap_ca(
     request: Request,
-    _auth: str = Depends(require_admin_write),
+    _auth: str = Depends(admin_write_guard),
 ) -> JSONResponse:
     form = await request.form()
     _pem = form.get("ldap_ca_cert", "")
