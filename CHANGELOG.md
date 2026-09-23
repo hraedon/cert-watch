@@ -375,7 +375,9 @@ All notable changes to cert-watch are documented in this file.
   Settings → Roles mapping has been saved (or one exists from an earlier
   release), an empty mapping leaves directory users read-only instead of
   reverting to the never-configured "full access" default. The Roles page
-  warns before the last mapped role is deleted.
+  warns before the last mapped role is deleted. A stored mapping that is not a
+  readable JSON object is treated the same way (and logged), rather than as
+  "never configured".
 - **Legacy name-keyed mappings are normalised once.** Entries stored by role
   name are rewritten to role ids on load (dropped if no role has that name)
   and name keys are then ignored, so a role created later with a reused name

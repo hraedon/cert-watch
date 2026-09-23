@@ -72,10 +72,6 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         normalize_ui_role_map,
     )
 
-    normalize_ui_role_map(db)
-
-    map_data: dict[str, Any] = dict(load_ui_role_map(db))
-
     # Collect the role ids referenced by either the groups or users fields.
     role_ids: set[str] = set()
     for key in form:
@@ -84,9 +80,30 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         elif key.startswith("role_users_"):
             role_ids.add(key[len("role_users_"):])
 
-    def _split(raw: str, sep: str) -> list[str]:
-        return [p.strip() for p in raw.split(sep) if p.strip()]
+    # Read-modify-write under the lock, so two admins saving at once cannot
+    # drop each other's edit.
+    with get_write_lock():
+        normalize_ui_role_map(db)
+        map_data: dict[str, Any] = dict(load_ui_role_map(db))
+        _apply_mapping_form(form, role_ids, role_repo, map_data)
+        kv_set(db, UI_ROLE_MAP_KV_KEY, json.dumps(map_data))
+        if map_data:
+            # Sticky (N-1): from now on an empty map is least privilege.
+            kv_set(db, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
+    # Apply the mapping now: it is part of Settings.role_map (merged in
+    # Settings.from_env_with_kv), which request-time RBAC reads.
+    _rebuild_settings(request, db)
+    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
+
+def _split(raw: str, sep: str) -> list[str]:
+    return [p.strip() for p in raw.split(sep) if p.strip()]
+
+
+def _apply_mapping_form(
+    form: Any, role_ids: set[str], role_repo: Any, map_data: dict[str, Any],
+) -> None:
+    """Apply one Roles-tab submit to *map_data* (keyed by role id), in place."""
     for role_id in role_ids:
         role = role_repo.get(role_id)
         if not role:
@@ -101,16 +118,6 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         else:
             # Both cleared → drop the mapping for this role.
             map_data.pop(role.id, None)
-
-    with get_write_lock():
-        kv_set(db, UI_ROLE_MAP_KV_KEY, json.dumps(map_data))
-        if map_data:
-            # Sticky (N-1): from now on an empty map is least privilege.
-            kv_set(db, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
-    # Apply the mapping now: it is part of Settings.role_map (merged in
-    # Settings.from_env_with_kv), which request-time RBAC reads.
-    _rebuild_settings(request, db)
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
 
 # ---------- Test LDAP connection ----------

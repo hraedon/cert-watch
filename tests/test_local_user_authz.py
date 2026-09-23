@@ -770,3 +770,89 @@ def test_delete_revokes_before_the_row_goes(env, login_csrf, monkeypatch):
         uid = SqliteUserRepository(env).get_by_username("dave").id
         client.post(f"/settings/users/{uid}/delete", follow_redirects=False)
     assert seen == [None]
+
+
+# ---------- final batch ----------
+
+
+def test_delete_revokes_again_after_the_row_goes(env, login_csrf, monkeypatch):
+    """A login that read its version between the first bump and the delete
+    must not keep a cookie for the vanished account."""
+    from cert_watch.auth.session import validate_session
+
+    _add_user(env, "erin", tier="viewer")
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        real = SqliteUserRepository.delete
+        minted: list[str] = []
+
+        def delete_after_racing_login(self, user_id):
+            minted.append(_residual_cookie(client, env, "erin"))  # post-bump version
+            return real(self, user_id)
+
+        monkeypatch.setattr(SqliteUserRepository, "delete", delete_after_racing_login)
+        uid = SqliteUserRepository(env).get_by_username("erin").id
+        client.post(f"/settings/users/{uid}/delete", follow_redirects=False)
+        assert validate_session(
+            minted[0], client.app.state.security, db_path=str(env),
+        ) is None
+
+
+@pytest.mark.parametrize("stored", ["{not json", "[1, 2]", '"text"'])
+def test_malformed_stored_role_map_fails_closed(tmp_path, monkeypatch, stored):
+    from cert_watch.auth.rbac import build_auth_context
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+    db = _seed(tmp_path)
+    kv_set(db, "ldap_role_map", stored)
+    s = Settings.from_env_with_kv(db)
+    ctx = build_auth_context("dirk", ["cn=ops"], [], s.role_map, SqliteRoleRepository(db))
+    assert not ctx.is_admin and not ctx.may_write()
+
+
+def test_stored_empty_object_without_flag_keeps_legacy(tmp_path, monkeypatch):
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+    db = _seed(tmp_path)
+    kv_set(db, "ldap_role_map", "{}")
+    assert Settings.from_env_with_kv(db).role_map == {}
+
+
+def test_concurrent_mapping_saves_do_not_lose_an_edit(env, login_csrf, monkeypatch):
+    import threading
+
+    import cert_watch.auth.rbac as rbac
+    from cert_watch.database import get_write_lock
+
+    roles = SqliteRoleRepository(env)
+    mine = roles.add(Role(name="mine", permission_tier="viewer"))
+    theirs = roles.add(Role(name="theirs", permission_tier="viewer"))
+    real_load = rbac.load_ui_role_map
+    other: list[threading.Thread] = []
+
+    def other_admin_saves():
+        with get_write_lock():  # a concurrent save's read-modify-write
+            data = json.loads(kv_get(env, "ldap_role_map") or "{}")
+            data[theirs] = {"groups": ["cn=theirs"], "users": []}
+            kv_set(env, "ldap_role_map", json.dumps(data))
+
+    def load_then_race(db_path):
+        result = real_load(db_path)
+        if not other:
+            t = threading.Thread(target=other_admin_saves)
+            other.append(t)
+            t.start()
+            t.join(0.3)  # blocks here only if our save holds the lock
+        return result
+
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        monkeypatch.setattr(rbac, "load_ui_role_map", load_then_race)
+        _save_mapping(client, mine, groups="cn=mine")
+        other[0].join(5)
+    stored = json.loads(kv_get(env, "ldap_role_map"))
+    assert set(stored) == {mine, theirs}

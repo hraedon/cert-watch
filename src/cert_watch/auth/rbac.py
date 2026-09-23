@@ -18,10 +18,13 @@ carries the resolved roles and permissions for the current user.
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger("cert_watch.auth.rbac")
 
 if TYPE_CHECKING:
     from cert_watch.database.users_roles import SqliteRoleRepository, SqliteUserRepository
@@ -287,19 +290,27 @@ UI_ROLE_MAP_CONFIGURED_KV_KEY = "ldap_role_map_configured"
 RBAC_ENFORCED_KEY = "cw:rbac-enforced"
 
 
-def _read_raw_ui_role_map(db_path: Any) -> dict[str, Any]:
-    """The stored mapping as-is. Malformed JSON reads as empty; a database
-    error propagates, so a failed settings rebuild keeps the last good role
-    map instead of silently emptying it (B-1)."""
+def _read_raw_ui_role_map_state(db_path: Any) -> tuple[dict[str, Any], bool]:
+    """``(mapping, malformed)`` for the stored value. A value that exists but
+    is not a JSON object reads as ``({}, True)``; a database error propagates,
+    so a failed settings rebuild keeps the last good role map instead of
+    silently emptying it (B-1)."""
     import json
 
     from cert_watch.database import kv_get
 
+    raw = kv_get(db_path, UI_ROLE_MAP_KV_KEY)
+    if raw is None or raw == "":
+        return {}, False
     try:
-        data = json.loads(kv_get(db_path, UI_ROLE_MAP_KV_KEY) or "{}")
+        data = json.loads(raw)
     except (ValueError, TypeError):
-        return {}
-    return data if isinstance(data, dict) else {}
+        return {}, True
+    return (data, False) if isinstance(data, dict) else ({}, True)
+
+
+def _read_raw_ui_role_map(db_path: Any) -> dict[str, Any]:
+    return _read_raw_ui_role_map_state(db_path)[0]
 
 
 def load_ui_role_map(db_path: Any) -> dict[str, dict[str, list[str]]]:
@@ -345,7 +356,17 @@ def normalize_ui_role_map(db_path: Any) -> None:
     from cert_watch.database.users_roles import SqliteRoleRepository
 
     with get_write_lock():
-        data = _read_raw_ui_role_map(db_path)
+        data, malformed = _read_raw_ui_role_map_state(db_path)
+        if malformed:
+            # Someone configured a mapping we cannot read: fail closed (the
+            # sticky flag makes the empty map least privilege), keep the value.
+            logger.error(
+                "stored %s is not a JSON object; directory users are treated "
+                "as unmapped (read-only) until it is re-saved", UI_ROLE_MAP_KV_KEY,
+            )
+            if kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) != "1":
+                kv_set(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
+            return
         if not data:
             return
         if kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) != "1":

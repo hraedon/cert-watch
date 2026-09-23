@@ -383,4 +383,8 @@ async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
         if user:
             bump_session_version(db, user.username)
         repo.delete(user_id)
+        if user:
+            # Again after: a login that read its version between the first
+            # bump and the delete must not keep a cookie for a vanished row.
+            bump_session_version(db, user.username)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
