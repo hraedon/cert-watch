@@ -951,7 +951,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == []
+    assert run_pending_migrations(db, backup=False) == ["0037"]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
@@ -976,7 +976,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0033"]
+    assert run_pending_migrations(db, backup=False) == ["0033", "0037"]
 
 
 # ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
@@ -1016,7 +1016,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         )
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
@@ -1046,7 +1046,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == []
+    assert run_pending_migrations(db, backup=False) == ["0037"]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
@@ -1071,7 +1071,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
 
 
 def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
@@ -1118,7 +1118,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0031", "0032", "0033", "0034", "0035", "0036"
+        "0031", "0032", "0033", "0034", "0035", "0036", "0037"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1152,7 +1152,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035", "0036"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037"
     ]
 
     with sqlite3.connect(str(db)) as conn:

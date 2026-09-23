@@ -46,6 +46,7 @@ def distinct_tags(
 
 
 def _do_replace(
+    db_path: str | Path,
     conn: sqlite3.Connection,
     hostname: str,
     port: int,
@@ -100,6 +101,8 @@ def _do_replace(
     )
     carried: list[str] = list(old_leaves) if unchanged else []
     if old_all_ids:
+        from cert_watch.database.alert_store import AlertStore
+
         ph = ",".join("?" * len(old_all_ids))
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({ph})", old_all_ids
@@ -116,17 +119,13 @@ def _do_replace(
             )
         stale = [cert_id for cert_id in old_all_ids if cert_id not in set(carried)]
         if stale:
-            # Sent/failed observations belong to the original certificate, even
-            # after a routine rescan replaces its inventory row. Keep those alert
-            # IDs (and the cascading delivery ledger) until normal alert retention.
-            # Obsolete pending alerts must still disappear so they cannot be sent.
-            sph = ",".join("?" * len(stale))
-            conn.execute(
-                f"""DELETE FROM alerts WHERE cert_id IN ({sph})
-                    AND NOT (status IN ('sent', 'failed') AND EXISTS (
-                        SELECT 1 FROM alert_delivery_events e WHERE e.alert_id = alerts.id
-                    ))""",
+            # Preserve alert history. Pending stale work is cancelled and sent
+            # conditions are closed; a dispatcher holding a live lease keeps
+            # ownership of its row and is never cancelled or deleted here.
+            AlertStore(db_path, initialize=False).close_for_cert_ids(
                 stale,
+                conn=conn,
+                reason="certificate replaced before delivery",
             )
         conn.execute(
             f"DELETE FROM alert_group_certs WHERE cert_id IN ({ph})",
@@ -248,10 +247,10 @@ def replace_scanned(
     """
     if conn is None:
         with get_write_lock(), _connect(db_path) as conn:
-            result = _do_replace(conn, hostname, port, leaf, chain, chain_valid)
+            result = _do_replace(db_path, conn, hostname, port, leaf, chain, chain_valid)
             conn.commit()
         return result
-    return _do_replace(conn, hostname, port, leaf, chain, chain_valid)
+    return _do_replace(db_path, conn, hostname, port, leaf, chain, chain_valid)
 
 
 def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> list[str]:
@@ -277,7 +276,7 @@ def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> lis
 
 
 def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
-    """Delete a leaf cert, its chain children, and associated alerts."""
+    """Delete a leaf and chain, retaining associated alerts as closed history."""
     with get_write_lock(), _connect(db_path) as conn:
         r = conn.execute(
             "SELECT id FROM certificates WHERE id = ?", (cert_id,)
@@ -292,8 +291,11 @@ def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
         ]
         all_ids = [cert_id, *child_ids]
         placeholders = ",".join("?" * len(all_ids))
-        conn.execute(
-            f"DELETE FROM alerts WHERE cert_id IN ({placeholders})", all_ids
+        from cert_watch.database.alert_store import AlertStore
+        AlertStore(db_path, initialize=False).close_for_cert_ids(
+            all_ids,
+            conn=conn,
+            reason="certificate deleted before delivery",
         )
         conn.execute(
             f"DELETE FROM scan_posture WHERE cert_id IN ({placeholders})", all_ids

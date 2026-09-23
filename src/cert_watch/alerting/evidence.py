@@ -9,7 +9,6 @@ from typing import Any
 
 from cert_watch.alerting.model import FAILURE_LABELS as FAILURE_LABELS
 from cert_watch.alerting.model import OutboundMessage, SendResult
-from cert_watch.alerting.routing import _resolve_group_config
 from cert_watch.alerting.transports.base import Transport
 from cert_watch.database.delivery_evidence import begin_attempt, complete_attempt
 
@@ -26,25 +25,6 @@ class DeliveryEvidenceUnavailable(Exception):
     deliverable. Callers must leave such an alert pending rather than spend a
     retry on it — the database, not the destination, was unavailable.
     """
-
-def _matching_groups(db_path: Path, cert_id: str) -> tuple[list[dict[str, str]], bool]:
-    # This is a snapshot of configuration at attempt time, not an attribution
-    # of queued addresses. The latter were resolved when the alert was queued.
-    from cert_watch.database.connection import _connect
-
-    matches: dict[str, list[str]] = {}
-    try:
-        _resolve_group_config(db_path, matched_groups=matches, cert_ids=(cert_id,))
-        with _connect(db_path) as conn:
-            names = {
-                row["id"]: row["name"] for row in conn.execute("SELECT id, name FROM alert_groups")
-            }
-        return [{"id": group_id, "name": names.get(group_id, "(deleted group)")}
-                for group_id in matches.get(cert_id, [])], True
-    except Exception:  # noqa: BLE001 — evidence enrichment is an optional snapshot
-        logger.warning("Matching-group snapshot unavailable for delivery evidence")
-        return [], False
-
 
 def attempt_delivery(
     db_path: Path | None,
@@ -67,7 +47,9 @@ def attempt_delivery(
     """
     if db_path is None:
         return transport.send(msg)
-    groups, groups_available = _matching_groups(db_path, msg.cert_id)
+    groups = msg.routing.get("groups", [])
+    if not isinstance(groups, list):
+        groups = []
     actual_recipients = [address for _, address in getaddresses(msg.recipients)]
     configured = {address for _, address in getaddresses(msg.global_recipients)}
     queued = {address for _, address in getaddresses(msg.queued_recipients)}
@@ -75,7 +57,7 @@ def attempt_delivery(
         "recipients": actual_recipients,
         "global_recipients": [address for address in actual_recipients if address in configured],
         "queued_recipients": [address for address in actual_recipients if address in queued],
-        "groups": groups, "groups_available": groups_available,
+        "groups": groups, "groups_available": True,
         "claim_owner": claim_owner,
     }
     try:

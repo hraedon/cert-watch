@@ -5,6 +5,11 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Endpoint-keyed alert lifecycle and persisted routing.** Migration 0037
+  adds alert dedupe keys, condition closure timestamps, versioned routing
+  snapshots, an open-queue uniqueness guard, and a `rule_firings` ledger for
+  recurring event-only rules. Policy and drift alerts now receive the same
+  alert-group, owner, and role-member routes as expiry alerts.
 - **Durable alert dispatch claims and operator retry.** Migration 0036 adds
   atomic claims, expiring leases, attempt counters and scheduled retry times.
   Activity shows the new `sending` state and offers an audited **Retry failed**
@@ -86,6 +91,22 @@ All notable changes to cert-watch are documented in this file.
   unchanged. See UPGRADING.md.
 
 ### Changed
+- **Alert rules no longer manufacture repeat notifications for a persistent
+  condition.** Renewal-stalled alerts fire once per endpoint and certificate
+  fingerprint;
+  policy violations remain quiet until the rule clears and later reappears;
+  expiry thresholds are endpoint/fingerprint-keyed and remain once-only.
+  Shared wildcard/SAN certificates retain one alert and immutable route per
+  endpoint; uploaded certificates use their row identity. Cancelled alerts that
+  never reached a recipient no longer suppress a recreated lifetime condition.
+  Renewal-overdue cadence now uses `rule_firings` after the event is persisted,
+  instead of reparsing event JSON every cycle.
+  Routes are fixed when an alert is queued (destination credentials and URLs
+  still resolve when it is sent). Certificate replacement/deletion cancels and
+  retains stale pending alerts instead of deleting them. A live leased row is
+  marked closed and settles as sent or cancelled; an expired stale lease is
+  cancelled rather than reclaimed. Failed drift edges can be retried. Cancelled
+  rows use the normal delivered retention horizon.
 - **Alert delivery failures back off before giving up.** A failed delivery
   round returns to `pending` for 1 hour, then 4 hours, then 12 hours; after 12
   transport-reaching attempts the row becomes terminal `failed`. Expiry rules

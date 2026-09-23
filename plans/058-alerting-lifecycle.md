@@ -116,23 +116,32 @@ from the ledger. No CHECK on `status`, so no table rebuild.
 ## 3. One dedupe policy per alert type
 
 Rule: at most one un-closed alert per `dedupe_key`. Rules set `closed_at` when
-the condition stops holding; a pending row is cancelled, a sent row becomes
-eligible to fire again. Keys use the certificate fingerprint, not the row id.
+the condition stops holding; a pending row is cancelled. Policy conditions may
+fire again after closing; expiry and renewal lifetime dedupe ignores cancelled
+rows but retains sent/failed history. Endpoint-bound keys include host and port
+because routing is per endpoint, even when several endpoints serve one
+fingerprint. Uploaded certificates use the certificate row id instead.
 
 Migration 0037 adds `dedupe_key`, `closed_at`, `routing`, a partial unique
 index on open keys, and `rule_firings(dedupe_key PK, first_fired_at,
-last_fired_at, fire_count)` for event-only rules; backfills keys (expiry via
-fingerprint join, policy by parsing `[rule_id]`); collapses duplicate open rows
-first.
+last_fired_at, fire_count)` for event-only rules; backfills endpoint-aware keys
+(expiry via certificate join, policy by parsing `[rule_id]`); collapses only
+duplicate open rows for the same endpoint first. A shared wildcard/SAN
+certificate therefore retains one pending row and routing snapshot per
+endpoint.
 
 | type | key | after sent | today |
 |---|---|---|---|
-| expiry | `expiry:{fp}:{type}:{threshold}` | never again for that key | row-id dedupe (bug, saved by #57); unlimited failed→pending revival (bug) |
-| renewal_stalled | `renewal:{fp}` | not again until closed | re-created every cycle after a send (bug) |
-| policy_violation | `policy:{fp}:{rule_id}` | not again while violation persists | substring match, re-alerts every scan (bug) |
+| expiry | `expiry:{host}:{port}:{fp}:{type}:{threshold}` | never again for a delivered/failed key; cancelled rows do not suppress | row-id dedupe (bug, saved by #57); unlimited failed→pending revival (bug) |
+| renewal_stalled | `renewal:{host}:{port}:{fp}` | never again for a delivered/failed key; cancelled rows do not suppress | re-created every cycle after a send (bug) |
+| policy_violation | `policy:{host}:{port}:{fp}:{rule_id}` | not again while violation persists | substring match, re-alerts every scan (bug) |
 | drift | `drift:{host}:{port}:{fp}:{sha(events)}`, closed at creation | edge alert | no dedupe; mostly intended |
 | renewal_overdue | `overdue:{host}:{port}:{fp}` in `rule_firings` | again after 24 h | re-parses event_log JSON; right cadence, wrong mechanism |
 | digests | `digest_deliveries` claims | once per period per target | claims + kv week + memory: redundant |
+
+For the first three rows, replace `{host}:{port}:{fp}` with `cert:{cert_id}`
+when the certificate has no endpoint. An empty fingerprint also uses
+`cert_id`, so every policy finding remains stable across repeat evaluation.
 
 `evaluate_policy_alerts` runs inside the scan transaction; `enqueue(conn=…)`
 keeps that, and the unique index turns a racing duplicate into a caught
@@ -221,15 +230,17 @@ New tests import only from `cert_watch.alerting` and its public submodules.
 Taken by the implementer under the owner's 2026-09-22 delegation; each is
 revisitable and each is listed in UPGRADING.md where it changes behaviour.
 
-1. `renewal_stalled` fires once per fingerprint. The weekly renewal digest is
-   the reminder channel.
+1. `renewal_stalled` fires once per endpoint and certificate fingerprint. The
+   weekly renewal digest is the reminder channel.
 2. Give-up: 12 attempts, backoff 1 h / 4 h / 12 h, plus a "Retry failed" action.
 3. Delivery stays at-least-once (today's behaviour). Losing an expiry alert is
    worse than a duplicate.
 4. Channel policy unchanged: SMTP first, webhook only if SMTP did not deliver.
 5. Policy and drift alerts route to groups, owners and roles like every other
    alert. Routing that silently excludes alert types is the surprise.
-6. Stale pending alerts are `cancelled`, not deleted; retention removes them.
+6. Stale pending alerts are `cancelled`, not deleted; a live leased row is
+   marked closed and becomes sent or cancelled when its holder settles (or the
+   lease expires). Retention removes closed history.
 7. Renewal-digest webhooks run synchronously within the cycle budget
    (coordinated with W5).
 8. The expiry digest header states the real cadence window.

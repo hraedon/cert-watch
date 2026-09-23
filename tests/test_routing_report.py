@@ -197,6 +197,22 @@ def test_adversarial_estate_matches_independent_route_matrix(estate: Estate):
         assert groups[group_id]["matched_count"] == len(cert_ids)
 
 
+def test_report_uses_the_enqueue_time_routing_resolver(estate: Estate, monkeypatch):
+    from cert_watch.alerting import routing
+
+    real_resolver = routing.resolve_routing
+    calls: list[tuple[str, ...]] = []
+
+    def recording_resolver(db_path, cert_ids, *, conn=None):
+        calls.append(cert_ids)
+        return real_resolver(db_path, cert_ids, conn=conn)
+
+    monkeypatch.setattr(routing, "resolve_routing", recording_resolver)
+    report = build_routing_report(estate.path)
+
+    assert calls == [tuple(row["cert_id"] for row in report["certificates"])]
+
+
 def test_success_preserves_source_bytes_and_is_repeatable(estate: Estate):
     before = _tree_bytes(estate.path.parent)
     first = build_routing_report(estate.path)

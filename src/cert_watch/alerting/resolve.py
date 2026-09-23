@@ -22,7 +22,7 @@ def resolve_webhook_for_renewed_cert(
     """Resolve all open incidents/alerts for a cert that has been renewed.
 
     Works for any webhook kind whose adapter exposes ``build_resolve``.
-    Looks up pending alerts for the old cert and sends a resolve event for
+    Looks up alerts for the old cert and sends a resolve event for
     each unique (alert_type, threshold_days) combination. Returns the
     number of resolve events sent.
 
@@ -43,6 +43,8 @@ def resolve_webhook_for_renewed_cert(
     seen: set[tuple[str, int | None]] = set()
     resolved = 0
     for alert in cert_alerts:
+        if alert.status != "sent":
+            continue
         key = (alert.alert_type, alert.threshold_days)
         if key in seen:
             continue
@@ -54,7 +56,7 @@ def resolve_webhook_for_renewed_cert(
         if send_webhook_resolve(
             alert.trigger_cert_id or old_cert_id, alert.alert_type, alert.threshold_days,
             webhook_config,
-            summary=f"cert-watch: certificate renewed, resolving {alert.alert_type} alert",
+            summary=f"cert-watch: condition closed, resolving {alert.alert_type} alert",
             hostname=alert.hostname,
             subject=alert.subject,
             alert_created_at=alert.created_at,

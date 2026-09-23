@@ -180,9 +180,13 @@ class SchedulerContext:
         config = self._snapshot()
         s = config.settings
         repo = SqliteAlertRepository(s.db_path)
+        closed_sent: list[Any] = []
         if s.alert_digest_only:
             evaluate_all_certs(s.db_path, repo, urgent_only=True)
-            evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
+            evaluate_renewal_window(
+                s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+            )
+            self._resolve_closed_alerts(config, closed_sent)
             result = process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
             iso = _dt.datetime.now(_dt.UTC).isocalendar()
             this_week = (iso[0], iso[1])
@@ -200,8 +204,27 @@ class SchedulerContext:
                 result["failed"] = result.get("failed", 0) + (0 if delivered else 1)
             return result
         evaluate_all_certs(s.db_path, repo)
-        evaluate_renewal_window(s.db_path, repo, s.renewal_window_days)
+        evaluate_renewal_window(
+            s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
+        )
+        self._resolve_closed_alerts(config, closed_sent)
         return process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
+
+    @staticmethod
+    def _resolve_closed_alerts(config: _JobConfig, alerts: list[Any]) -> None:
+        if not alerts or config.webhook_cfg is None:
+            return
+        try:
+            from cert_watch.alerting.resolve import resolve_webhook_for_renewed_cert
+
+            resolve_webhook_for_renewed_cert(
+                config.settings.db_path,
+                "",
+                config.webhook_cfg,
+                pending_alerts=alerts,
+            )
+        except Exception:
+            logger.warning("closed alert incidents could not be resolved", exc_info=True)
 
     def _weekly_digest(
         self, delivery_completion_callback: Callable[[bool], None] | None = None

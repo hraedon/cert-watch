@@ -180,6 +180,18 @@ def test_undelivered_alerts_survive_the_delivered_retention_window(tmp_path: Pat
     assert {a.cert_id for a in repo.list_all()} == {"never-tried", "never-reached"}
 
 
+def test_cancelled_alerts_use_the_delivered_retention_window(tmp_path: Path) -> None:
+    db = tmp_path / "cw.sqlite3"
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+
+    _make_alert(repo, created_at=_days_ago(100), status="cancelled", cert_id="closed")
+    _make_alert(repo, created_at=_days_ago(100), status="pending", cert_id="open")
+
+    assert purge_old_alerts(db, retention_days=90) == 1
+    assert [alert.cert_id for alert in repo.list_all()] == ["open"]
+
+
 def test_undelivered_alerts_are_still_bounded_by_the_longer_horizon(tmp_path: Path) -> None:
     """An install with no transport keeps every alert pending forever; the table
     must still have a bound, just a much longer one than for delivered rows.

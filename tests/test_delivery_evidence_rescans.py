@@ -91,6 +91,19 @@ def _rebound(stored, cert_id):
     return ({**alert, "cert_id": cert_id} if alert is not None else None), events
 
 
+def _assert_closed(actual, original, *, pending=False):
+    actual_alert, actual_events = actual
+    original_alert, original_events = original
+    assert actual_alert is not None and original_alert is not None
+    assert actual_alert["closed_at"] is not None
+    expected = {**original_alert, "closed_at": actual_alert["closed_at"]}
+    if pending:
+        expected["status"] = "cancelled"
+        expected["error_message"] = "certificate replaced before delivery"
+    assert actual_alert == expected
+    assert actual_events == original_events
+
+
 @pytest.mark.parametrize("changed", [False, True], ids=["identical-cert", "changed-cert"])
 @pytest.mark.parametrize("status,outcome", [
     ("sent", "accepted"), ("sent", "partial"), ("failed", "failed"), ("sent", None),
@@ -110,8 +123,8 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
     assert replaced_id == cert_id and new_id != cert_id
     if changed:
         # A different certificate. The old one's alert stays with it as
-        # history and does not follow the endpoint to its successor.
-        assert _stored_rows(db, alert_id) == original
+        # closed history and does not follow the endpoint to its successor.
+        _assert_closed(_stored_rows(db, alert_id), original)
         assert repo.list_for_cert(new_id) == []
     else:
         # The same certificate, observed again. Its alert is carried onto the
@@ -126,7 +139,7 @@ def test_rescan_preserves_original_alert_and_exact_delivery_evidence(
     assert latest_outcomes(db, [alert_id]) == {alert_id: outcome or "unknown"}
 
 
-def test_rescan_removes_pending_and_legacy_alerts_but_leaves_other_port_untouched(tmp_path):
+def test_rescan_closes_pending_and_legacy_alerts_but_leaves_other_port_untouched(tmp_path):
     db, repo, cert_id = _estate(tmp_path)
     pending = _alert(repo, cert_id, status="pending")
     # A crash can leave a start observation before the pending status is finalized.
@@ -137,11 +150,16 @@ def test_rescan_removes_pending_and_legacy_alerts_but_leaves_other_port_untouche
     other_sent = _alert(repo, other_cert_id)
     _evidence(db, other_sent)
     other_original = {item: _stored_rows(db, item) for item in (other_pending, other_sent)}
+    stale_original = {item: _stored_rows(db, item) for item in (pending, *legacy)}
 
     replace_scanned(db, HOSTNAME, 443, _certificate(changed=True), [], True)
 
-    for deleted in [pending, *legacy]:
-        assert _stored_rows(db, deleted) == (None, [])
+    _assert_closed(_stored_rows(db, pending), stale_original[pending], pending=True)
+    for alert_id, status in zip(legacy, ("pending", "sent", "failed"), strict=True):
+        _assert_closed(
+            _stored_rows(db, alert_id), stale_original[alert_id],
+            pending=status == "pending",
+        )
     assert {item: _stored_rows(db, item) for item in other_original} == other_original
     assert [item.id for item in repo.list_pending()] == [other_pending]
     with _connect(db) as conn:
@@ -162,7 +180,7 @@ def test_rescan_preserves_chain_alerts_as_historical_without_reparenting(tmp_pat
 
     replace_scanned(db, HOSTNAME, 443, _certificate(), [_certificate()], True)
 
-    assert _stored_rows(db, alert_id) == original
+    _assert_closed(_stored_rows(db, alert_id), original)
     with _connect(db) as conn:
         assert conn.execute("SELECT id FROM certificates WHERE id = ?", (chain_id,)).fetchone() \
             is None

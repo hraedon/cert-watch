@@ -772,8 +772,8 @@ def test_send_webhook_ssrf_blocked():
     assert "SSRF" in result.operator_message or "blocked" in result.operator_message
 
 
-def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
-    """Deleting a cert must also delete its alerts."""
+def test_delete_certificate_cancels_pending_alerts(tmp_path, expiring_soon_leaf):
+    """Deleting a cert retains its pending alert as closed audit history."""
     from cert_watch.certificate_model import parse_certificate
     from cert_watch.database import (
         SqliteCertificateRepository,
@@ -793,7 +793,9 @@ def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):
     assert len(alert_repo.list_for_cert(cert_id)) > 0
 
     delete_certificate_cascade(db, cert_id)
-    assert alert_repo.list_for_cert(cert_id) == []
+    [closed] = alert_repo.list_for_cert(cert_id)
+    assert closed.status == "cancelled"
+    assert closed.closed_at is not None
 
 
 def test_delete_host_cascades_alerts(tmp_path, expiring_soon_leaf):

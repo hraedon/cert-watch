@@ -8,7 +8,10 @@ only here.
 
 from __future__ import annotations
 
+import json
 import logging
+import sqlite3
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,9 +26,273 @@ logger = logging.getLogger("cert_watch.database.alert_store")
 
 
 class AlertStore:
-    def __init__(self, db_path: str | Path) -> None:
+    def __init__(self, db_path: str | Path, *, initialize: bool = True) -> None:
         self.db_path = Path(db_path)
-        init_schema(self.db_path)
+        if initialize:
+            init_schema(self.db_path)
+
+    def enqueue(
+        self,
+        alert: Alert,
+        *,
+        conn: sqlite3.Connection | None = None,
+        lifetime: bool = False,
+    ) -> str | None:
+        """Atomically queue an alert unless its dedupe condition already exists.
+
+        ``lifetime`` is used for expiry thresholds, which never fire twice for
+        the same fingerprint/type/threshold even after the certificate closes.
+        Other rules may fire again after their earlier row has ``closed_at``.
+        """
+        alert_id = alert.id or str(uuid.uuid4())
+        routing = alert.routing or {
+            "version": 1,
+            "recipients": list(alert.extra_recipients),
+            "groups": [],
+        }
+        alert.routing = routing
+        alert.extra_recipients = list(routing.get("recipients", alert.extra_recipients))
+        duplicate_predicate = "1 = 0"
+        duplicate_params: tuple[Any, ...] = ()
+        if alert.dedupe_key:
+            duplicate_predicate = (
+                "dedupe_key = ? AND status IN ('pending', 'sending', 'sent', 'failed')"
+                if lifetime else "dedupe_key = ? AND closed_at IS NULL"
+            )
+            duplicate_params = (alert.dedupe_key,)
+        params = (
+            alert_id, alert.cert_id, alert.alert_type, alert.status, alert.message,
+            alert.threshold_days, json.dumps(alert.extra_recipients), _iso(alert.created_at),
+            _iso(alert.sent_at) if alert.sent_at else None, alert.error_message,
+            alert.hostname, alert.subject, alert.trigger_cert_id or alert.cert_id,
+            alert.dedupe_key, _iso(alert.closed_at) if alert.closed_at else None,
+            json.dumps(routing, separators=(",", ":"), sort_keys=True),
+            *duplicate_params,
+        )
+        sql = f"""INSERT INTO alerts
+            (id, cert_id, alert_type, status, message, threshold_days,
+             extra_recipients, created_at, sent_at, error_message, hostname,
+             subject, trigger_cert_id, dedupe_key, closed_at, routing)
+            SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE {duplicate_predicate})"""
+
+        def execute(active_conn: sqlite3.Connection) -> bool:
+            try:
+                cursor = active_conn.execute(sql, params)
+            except sqlite3.IntegrityError as exc:
+                # The partial unique index is the final arbiter when two rule
+                # evaluators race between their NOT EXISTS checks.
+                if (
+                    exc.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+                    and str(exc) == "UNIQUE constraint failed: alerts.dedupe_key"
+                ):
+                    return False
+                raise
+            return cursor.rowcount == 1
+
+        if conn is not None:
+            inserted = execute(conn)
+        else:
+            with _connect(self.db_path) as active_conn:
+                inserted = execute(active_conn)
+                active_conn.commit()
+        if not inserted:
+            return None
+        alert.id = alert_id
+        return alert_id
+
+    def close_keys(
+        self,
+        dedupe_keys: set[str],
+        *,
+        now: datetime | None = None,
+        reason: str = "condition closed",
+        conn: sqlite3.Connection | None = None,
+    ) -> list[Alert]:
+        """Close conditions and return sent rows needing incident resolves.
+
+        Pending rows become cancelled. A live claimed row is marked closed but
+        keeps its lease; settlement records a completed send or cancels it
+        instead of returning stale work to the queue.
+        """
+        if not dedupe_keys:
+            return []
+        current = now or datetime.now(UTC)
+        placeholders = ",".join("?" for _ in dedupe_keys)
+        keys = tuple(sorted(dedupe_keys))
+
+        def execute(active_conn: sqlite3.Connection) -> list[Alert]:
+            rows = active_conn.execute(
+                f"""SELECT * FROM alerts
+                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL""",
+                keys,
+            ).fetchall()
+            active_conn.execute(
+                f"""UPDATE alerts SET
+                         closed_at = ?,
+                         status = CASE WHEN status = 'pending'
+                                            OR (status = 'sending'
+                                                AND (lease_expires_at IS NULL
+                                                     OR lease_expires_at < ?))
+                                       THEN 'cancelled' ELSE status END,
+                         error_message = CASE WHEN status IN ('pending', 'sending')
+                                              THEN ? ELSE error_message END,
+                         next_attempt_at = CASE WHEN status = 'pending'
+                                                    OR (status = 'sending'
+                                                        AND (lease_expires_at IS NULL
+                                                             OR lease_expires_at < ?))
+                                                THEN NULL ELSE next_attempt_at END,
+                         lease_owner = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
+                                            THEN NULL ELSE lease_owner END,
+                         lease_expires_at = CASE WHEN status = 'pending'
+                                                     OR (status = 'sending'
+                                                         AND (lease_expires_at IS NULL
+                                                              OR lease_expires_at < ?))
+                                                 THEN NULL ELSE lease_expires_at END,
+                         deferred_since = CASE WHEN status = 'pending'
+                                                    OR (status = 'sending'
+                                                        AND (lease_expires_at IS NULL
+                                                             OR lease_expires_at < ?))
+                                               THEN NULL ELSE deferred_since END
+                    WHERE dedupe_key IN ({placeholders}) AND closed_at IS NULL""",
+                (
+                    _iso(current), _iso(current), reason, _iso(current),
+                    _iso(current), _iso(current), _iso(current), *keys,
+                ),
+            )
+            from cert_watch.database.repo import SqliteAlertRepository
+            return [
+                SqliteAlertRepository._row_to_alert(row)
+                for row in rows if row["status"] == "sent"
+            ]
+
+        if conn is not None:
+            return execute(conn)
+        with _connect(self.db_path) as active_conn:
+            result = execute(active_conn)
+            active_conn.commit()
+        return result
+
+    def close_for_cert_ids(
+        self,
+        cert_ids: list[str],
+        *,
+        conn: sqlite3.Connection,
+        now: datetime | None = None,
+        reason: str = "certificate condition closed",
+    ) -> list[Alert]:
+        if not cert_ids:
+            return []
+        placeholders = ",".join("?" for _ in cert_ids)
+        current = now or datetime.now(UTC)
+        rows = conn.execute(
+            f"""SELECT * FROM alerts
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
+            cert_ids,
+        ).fetchall()
+        conn.execute(
+            f"""UPDATE alerts SET
+                     closed_at = ?,
+                     status = CASE WHEN status = 'pending'
+                                        OR (status = 'sending'
+                                            AND (lease_expires_at IS NULL
+                                                 OR lease_expires_at < ?))
+                                   THEN 'cancelled' ELSE status END,
+                     error_message = CASE WHEN status IN ('pending', 'sending')
+                                          THEN ? ELSE error_message END,
+                     next_attempt_at = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
+                                            THEN NULL ELSE next_attempt_at END,
+                     lease_owner = CASE WHEN status = 'pending'
+                                            OR (status = 'sending'
+                                                AND (lease_expires_at IS NULL
+                                                     OR lease_expires_at < ?))
+                                        THEN NULL ELSE lease_owner END,
+                     lease_expires_at = CASE WHEN status = 'pending'
+                                                 OR (status = 'sending'
+                                                     AND (lease_expires_at IS NULL
+                                                          OR lease_expires_at < ?))
+                                             THEN NULL ELSE lease_expires_at END,
+                     deferred_since = CASE WHEN status = 'pending'
+                                                OR (status = 'sending'
+                                                    AND (lease_expires_at IS NULL
+                                                         OR lease_expires_at < ?))
+                                           THEN NULL ELSE deferred_since END
+                WHERE cert_id IN ({placeholders}) AND closed_at IS NULL""",
+            (
+                _iso(current), _iso(current), reason, _iso(current),
+                _iso(current), _iso(current), _iso(current), *cert_ids,
+            ),
+        )
+        from cert_watch.database.repo import SqliteAlertRepository
+        return [
+            SqliteAlertRepository._row_to_alert(row)
+            for row in rows if row["status"] == "sent"
+        ]
+
+    def claim_rule_firing(
+        self,
+        dedupe_key: str,
+        *,
+        now: datetime,
+        interval_seconds: int,
+        suppression_keys: tuple[str, ...] = (),
+    ) -> bool:
+        """Atomically claim an event-only rule firing after its cooldown."""
+        from datetime import timedelta
+
+        cutoff = _iso(now - timedelta(seconds=interval_seconds))
+        with _connect(self.db_path) as conn:
+            if suppression_keys:
+                placeholders = ",".join("?" for _ in suppression_keys)
+                suppressed = conn.execute(
+                    f"""SELECT 1 FROM rule_firings
+                        WHERE dedupe_key IN ({placeholders}) AND last_fired_at > ?
+                        LIMIT 1""",
+                    (*suppression_keys, cutoff),
+                ).fetchone()
+                if suppressed is not None:
+                    return False
+            cursor = conn.execute(
+                """INSERT INTO rule_firings
+                       (dedupe_key, first_fired_at, last_fired_at, fire_count)
+                   VALUES (?, ?, ?, 1)
+                   ON CONFLICT(dedupe_key) DO UPDATE SET
+                       last_fired_at = excluded.last_fired_at,
+                       fire_count = rule_firings.fire_count + 1
+                   WHERE rule_firings.last_fired_at <= ?""",
+                (dedupe_key, _iso(now), _iso(now), cutoff),
+            )
+            conn.commit()
+        return cursor.rowcount == 1
+
+    def rule_firing_due(
+        self,
+        dedupe_key: str,
+        *,
+        now: datetime,
+        interval_seconds: int,
+        suppression_keys: tuple[str, ...] = (),
+    ) -> bool:
+        """Return whether an event-only rule is outside its cooldown window."""
+        from datetime import timedelta
+
+        keys = (dedupe_key, *suppression_keys)
+        placeholders = ",".join("?" for _ in keys)
+        cutoff = _iso(now - timedelta(seconds=interval_seconds))
+        with _connect(self.db_path) as conn:
+            recent = conn.execute(
+                f"""SELECT 1 FROM rule_firings
+                    WHERE dedupe_key IN ({placeholders}) AND last_fired_at > ?
+                    LIMIT 1""",
+                (*keys, cutoff),
+            ).fetchone()
+        return recent is None
 
     def claim(
         self,
@@ -85,6 +352,18 @@ class AlertStore:
             RETURNING *
         """
         with _connect(self.db_path) as conn:
+            # A condition may close while a worker owns a live lease. Once
+            # that lease expires, retire the row instead of reclaiming stale
+            # work. Drift is intentionally born closed because it represents
+            # an edge rather than an ongoing condition.
+            conn.execute(
+                """UPDATE alerts SET status = 'cancelled',
+                          next_attempt_at = NULL, lease_owner = NULL,
+                          lease_expires_at = NULL, deferred_since = NULL
+                   WHERE status = 'sending' AND lease_expires_at < ?
+                     AND closed_at IS NOT NULL AND alert_type != 'drift'""",
+                (_iso(now),),
+            )
             rows = conn.execute(
                 sql,
                 (lease_owner, _iso(lease_expires_at), *params),
@@ -203,7 +482,15 @@ class AlertStore:
         with _connect(self.db_path) as conn:
             cursor = conn.execute(
                 f"""UPDATE alerts SET
-                        status = ?, sent_at = ?, error_message = ?,
+                        status = CASE
+                            WHEN closed_at IS NOT NULL AND alert_type != 'drift'
+                                 AND ? != 'sent' THEN 'cancelled'
+                            ELSE ? END,
+                        sent_at = ?,
+                        error_message = CASE
+                            WHEN closed_at IS NOT NULL AND alert_type != 'drift'
+                                 AND ? != 'sent' THEN error_message
+                            ELSE ? END,
                         attempt_count = attempt_count + ?,
                         last_attempt_at = CASE WHEN ? > 0 THEN ? ELSE last_attempt_at END,
                         next_attempt_at = ?, failure_reason = ?,
@@ -212,7 +499,9 @@ class AlertStore:
                     WHERE id = ? AND status = 'sending' AND lease_owner = ?""",
                 (
                     status,
+                    status,
                     _iso(sent_at) if sent_at else None,
+                    status,
                     error_message,
                     attempts,
                     attempts,
@@ -236,13 +525,14 @@ class AlertStore:
         return True
 
     def cancel(self, alert_id: str, *, reason: str | None = None) -> bool:
+        now = datetime.now(UTC)
         with _connect(self.db_path) as conn:
             cursor = conn.execute(
-                """UPDATE alerts SET status = 'cancelled', error_message = ?,
+                """UPDATE alerts SET status = 'cancelled', error_message = ?, closed_at = ?,
                        next_attempt_at = NULL, lease_owner = NULL,
                        lease_expires_at = NULL, deferred_since = NULL
                    WHERE id = ? AND status = 'pending'""",
-                (reason, alert_id),
+                (reason, _iso(now), alert_id),
             )
             conn.commit()
         return cursor.rowcount == 1
@@ -262,7 +552,8 @@ class AlertStore:
                        next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,
                        failure_reason = NULL, error_message = NULL,
                        deferred_since = NULL, sent_at = NULL
-                   WHERE id = ? AND status = 'failed'""",
+                   WHERE id = ? AND status = 'failed'
+                     AND (closed_at IS NULL OR alert_type = 'drift')""",
                 (alert_id,),
             )
             conn.commit()
