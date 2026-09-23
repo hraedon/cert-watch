@@ -13,10 +13,10 @@
 
 {# ---- Shared row cells (used by grouped and plain rows alike) ---- #}
 {% macro tags_cell(e) %}
-  {% set _tags = e.tags.split(',') | map('trim') | select | list if e.tags else [] %}
-  {% if _tags %}
+  {# Tags are parsed and normalized by the Browse presenter. #}
+  {% if e.tag_items %}
     <div class="cw-chiprow">
-      {% for t in _tags %}<a class="cw-chip" href="{{ browse_url(q=t) }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
+      {% for t in e.tag_items %}<a class="cw-chip" href="{{ browse_url(q=t) }}" title="Filter by tag {{ t }}">{{ t }}</a>{% endfor %}
     </div>
   {% else %}<span class="cw-muted">—</span>{% endif %}
 {% endmacro %}
@@ -56,16 +56,16 @@
   <div class="cw-expiry"><div class="mono tnum">{{ e.not_after[:10] if e.not_after else '—' }}</div>
   {% if e.days_remaining is not none %}
     <div class="cw-sub {{ ui.tone_for(urg) if urg in ('expired', 'critical') else '' }}">{{ e.days_remaining | relative_short }}</div>
-    {% set bar_pct = 100 if e.days_remaining < 0 else [2, [100, (e.days_remaining / 90 * 100) | int] | min] | max %}
-    <div class="cw-expiry-track" title="{{ e.days_remaining }} days of a 90-day horizon">{{ ui.bar(bar_pct, ui.tone_for(urg)) }}</div>
+    {# Expiry-horizon arithmetic lives in the Browse presenter. #}
+    <div class="cw-expiry-track" title="{{ e.expiry_horizon_title }}">{{ ui.bar(e.expiry_bar_percent, ui.tone_for(urg)) }}</div>
   {% endif %}
   </div>
 {% endmacro %}
 
 {% macro meta_chips(e, show_owner=true) %}
   {% if e.renewal_method and (e.kind == 'grouped' or e.source == 'scanned') %}
-    {% set is_manual = e.renewal_method in ('manual', '') %}
-    <span class="cw-chip {% if is_manual %}t-warn{% endif %}">{% if is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_method or 'no auto-renew' }}</span>
+    {# Renewal classification and fallback label live in the presenter. #}
+    <span class="cw-chip {% if e.renewal_is_manual %}t-warn{% endif %}">{% if e.renewal_is_manual %}{{ icons.svg_icon('user', 11, 1.6) }}{% else %}{{ icons.svg_icon('refresh', 11, 1.6) }}{% endif %}{{ e.renewal_label }}</span>
   {% endif %}
   {% if show_owner and e.owner_name %}
     <span class="cw-chip">{{ icons.svg_icon('users', 11, 1.6) }}{{ e.owner_name }}</span>
@@ -78,21 +78,21 @@
 {% endmacro %}
 
 {% macro grade_cell(e) %}
-  {% set pg = posture_grades.get(e.id) if posture_grades else None %}
+  {% set pg = e.posture_grade %}
   {% if pg %}{{ ui.grade(pg) }}{% else %}<span class="cw-muted">—</span>{% endif %}
 {% endmacro %}
 
 {% macro freshness_cell(e) %}
   {% if e.kind == 'grouped' %}
-    {% set coverage = namespace(current=0, total=0) %}
-    {% for h in e.hosts %}
-      {% set scan = scan_evidence.get(h.host_id) %}
-      {% if scan %}{% set coverage.total = coverage.total + 1 %}{% if scan.state == 'current' %}{% set coverage.current = coverage.current + 1 %}{% endif %}{% endif %}
-    {% endfor %}
-    <div class="cw-sub {{ 't-warn' if coverage.current < coverage.total else 'cw-muted' }}">{{ coverage.current }}/{{ coverage.total }} current scans</div>
-  {% elif e.host_id and scan_evidence.get(e.host_id) %}
-    {% set scan = scan_evidence[e.host_id] %}
-    <div class="cw-sub {{ 'cw-muted' if scan.state == 'current' else 't-warn' }}">{{ scan.label }}</div>
+    {# Coverage counts are assembled by the Browse presenter. #}
+
+
+
+
+    <div class="cw-sub {{ e.freshness_tone }}">{{ e.freshness_label }}</div>
+  {% elif e.host_id and e.freshness_total %}
+    {% set scan = e %}
+    <div class="cw-sub {{ scan.freshness_tone }}">{{ scan.freshness_label }}</div>
   {% endif %}
 {% endmacro %}
 
@@ -178,7 +178,7 @@
     </div>
     <div class="cw-panel-body">
       {% for b in calendar_data %}
-        {% set empty_week = b.count == 0 %}
+        {% set empty_week = b.is_empty %}
         <div class="cw-cal-row{% if empty_week %} quiet{% endif %}">
           <div class="cw-cal-date">
             <span class="mono {{ 'cw-muted' if empty_week }}">{{ b.bucket_start }}</span>
@@ -186,7 +186,7 @@
           </div>
           {% if not empty_week %}
           <div class="cw-chiprow">
-            {% if b.count >= 3 %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
+            {% if b.is_storm %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
             <span class="cw-chip {{ b.tone }}">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
           </div>
           {% endif %}
@@ -266,7 +266,7 @@
               {% for h in e.hosts %}
               <div class="row">
                 <a href="/certificates/{{ h.id }}" class="cw-id">{{ h.host }}</a>
-                {% set h_urg = h.urgency if h.urgency else (h.days_remaining | urgency if h.days_remaining is not none else 'gray') %}
+                {% set h_urg = h.urgency %}
                 {{ ui.status(h_urg) }}
                 {{ freshness_cell(h) }}
                 {% if h.scan_status == 'failure' %}
@@ -290,19 +290,19 @@
             </td>
           </tr>
           {% else %}
-          {% set urg = e.urgency if e.urgency else (e.days_remaining | urgency if e.days_remaining is not none else 'gray') %}
+          {% set urg = e.urgency %}
           <tr class="cw-row-link" data-href="/certificates/{{ e.id }}" data-testid="cert-row" tabindex="0" role="link">
             <td data-label="Certificate">
               <div class="cw-chiprow"><span class="cw-id">{{ e.name or (e.host if e.host else '—') }}</span></div>
               <div class="cw-chiprow cw-metarow">{{ meta_chips(e) }}</div>
-              {% if e.san_dns_names %}
-                {% set san_list = e.san_dns_names if e.san_dns_names is iterable and e.san_dns_names is not string else [] %}
-                {% set _cn = e.name or e.host or '' %}
-                {% set _deduped = san_list | reject('==', _cn) | list %}
-                {% if _deduped %}
+              {% if e.visible_sans %}
+                {# SAN validation and CN de-duplication live in the presenter. #}
+                {# The view model exposes the first two and the hidden count. #}
+                {% set _deduped = e.visible_sans %}
+                {% if e.visible_sans %}
                 <div class="cw-chiprow cw-metarow">
-                  {% for san in _deduped[:2] %}<span class="cw-chip inset">{{ san }}</span>{% endfor %}
-                  {% if _deduped | length > 2 %}<span class="cw-chip t-muted">+{{ _deduped | length - 2 }} more</span>{% endif %}
+                  {% for san in e.visible_sans %}<span class="cw-chip inset">{{ san }}</span>{% endfor %}
+                  {% if e.hidden_san_count %}<span class="cw-chip t-muted">+{{ e.hidden_san_count }} more</span>{% endif %}
                 </div>
                 {% endif %}
               {% endif %}

@@ -4,15 +4,10 @@
 {% import "macros/icons.html" as icons %}
 {% import "macros/ui.html" as ui %}
 
-{# Severity → display. The queue's whole job: what needs a human, when, and
-   who fixes it — ranked by time-to-impact. #}
-{% macro sev_pill(sev) %}
-  {% if sev == 'expired' %}{{ ui.status('expired', label='Expired') }}
-  {% elif sev == 'stalled' %}{{ ui.status('critical', label='Renewal stalled') }}
-  {% elif sev == 'critical' %}{{ ui.status('critical', label='Critical') }}
-  {% elif sev == 'failing' %}{{ ui.status('warning', label='Scan failing') }}
-  {% elif sev == 'warning' %}{{ ui.status('warning', label='Warning') }}
-  {% else %}{{ ui.status('gray', label='Info') }}{% endif %}
+{# Severity semantics are supplied by the Home presenter. #}
+{% macro sev_pill(item) %}
+  {{ ui.status(item.severity_tone, label=item.severity_label) }}
+
 {% endmacro %}
 
 {% block content %}
@@ -68,7 +63,7 @@
     <div class="cw-panel-body">
       {% for it in queue %}
       <div class="cw-att-row" data-testid="attention-item" data-severity="{{ it.severity }}">
-        <div class="cw-att-sev">{{ sev_pill(it.severity) }}</div>
+        <div class="cw-att-sev">{{ sev_pill(it) }}</div>
         <div class="cw-att-main">
           <div class="cw-chiprow">
             {% if it.detail_url %}
@@ -124,14 +119,14 @@
     </div>
     <div class="cw-panel-body">
       {% for b in horizon %}
-        <div class="cw-cal-row{% if b.count == 0 %} quiet{% endif %}">
+        <div class="cw-cal-row{% if b.is_empty %} quiet{% endif %}">
           <div class="cw-cal-date">
-            <span class="mono {{ 'cw-muted' if b.count == 0 }}">{{ b.bucket_start }}</span>
+            <span class="mono {{ 'cw-muted' if b.is_empty }}">{{ b.bucket_start }}</span>
             {% if b.bucket_start == current_week_start %}<div class="cw-cal-now">this week</div>{% endif %}
           </div>
-          {% if b.count > 0 %}
+          {% if not b.is_empty %}
           <div class="cw-chiprow">
-            {% if b.count >= 3 %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
+            {% if b.is_storm %}<span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.8) }}storm</span>{% endif %}
             <span class="cw-chip {{ b.tone }}">{{ b.count }} cert{{ 's' if b.count != 1 }}</span>
           </div>
           {% endif %}
