@@ -562,7 +562,7 @@ def test_redacted_ci_output_omits_identifier_and_source_line(
     assert gate.main(["--redact-output"]) == 1
 
     err = capsys.readouterr().err
-    assert "src/settings.py:1: denylist entry #1" in err
+    assert "<path sha256:3ac2227be4f4>:1: denylist entry #1" in err  # src/settings.py
     assert identifier not in err
     assert source_line not in err
 
@@ -588,7 +588,7 @@ def test_redacted_ci_output_omits_identifier_from_path_components(
     assert gate.main(["--redact-output"]) == 1
 
     err = capsys.readouterr().err
-    assert "<redacted:entry #1>" in err
+    assert "<path sha256:" in err
     assert identifier not in err
 
 
@@ -604,7 +604,8 @@ def test_redacted_guard_report_omits_identifier_from_path(
     assert gate.main(["--redact-output"]) == 1
 
     err = capsys.readouterr().err
-    assert f"{GUARDED}/<redacted:entry #1>/capture.json" in err
+    assert "<path sha256:" in err
+    assert GUARDED not in err
     assert identifier not in err
 
 
@@ -634,7 +635,8 @@ def test_redacted_unreadable_report_omits_identifier_from_path(
     assert gate.main(["--redact-output"]) == 1
 
     err = capsys.readouterr().err
-    assert "docs/<redacted:entry #1>" in err
+    assert "<path sha256:" in err
+    assert "docs/" not in err
     assert identifier not in err
 
 
@@ -1195,7 +1197,7 @@ def test_workflow_push_with_tracked_pr_tree_scans_full_tree(repo: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert "outside-pr-tree.txt:1: denylist entry #1" in result.stderr
+    assert "<path sha256:eb973e9e39b9>:1: denylist entry #1" in result.stderr  # outside-pr-tree.txt
     assert identifier not in result.stderr
 
 
@@ -1438,3 +1440,36 @@ def test_pre_push_hook_fails_closed_for_public_repo_without_a_denylist(
     )
     assert result.returncode == 1
     assert "IDENTIFIERS" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("identifier", "path"),
+    [
+        # A phrase split across path components: no per-component match sees it.
+        ("two words", "two/words.md"),
+        # The same identifier in a different Unicode normalisation form.
+        ("priva\u0301te-widget-92831", "priv\u00e1te-widget-92831/f.txt"),
+    ],
+)
+def test_redacted_report_never_prints_a_path(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    identifier: str,
+    path: str,
+) -> None:
+    _track(repo, path, "the two words estate\n" + identifier + "\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    gate.main(["--redact-output"])
+
+    err = capsys.readouterr().err
+    assert Path(path).parts[0] not in err
+    assert Path(path).name not in err
+
+
+def test_redacted_path_digest_matches_the_documented_recipe() -> None:
+    import hashlib
+
+    digest = hashlib.sha256(b"docs/private.md").hexdigest()[:12]
+    assert gate._redact_path(Path("docs") / "private.md") == f"<path sha256:{digest}>"

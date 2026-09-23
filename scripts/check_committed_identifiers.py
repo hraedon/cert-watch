@@ -44,6 +44,7 @@ Run locally: python scripts/check_committed_identifiers.py
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
@@ -527,37 +528,23 @@ def _denylist_entry_numbers(identifiers: frozenset[str]) -> dict[str, int]:
     }
 
 
-def _redact_path(path: Path, identifiers: frozenset[str]) -> str:
-    """Replace each identifier-bearing path component with its denylist label."""
-    if not identifiers:
-        raise GateError("path redaction requires the identifier set")
-    entry_numbers = _denylist_entry_numbers(identifiers)
-    redacted_parts: list[str] = []
-    for part in path.parts:
-        entry_number = next(
-            (
-                entry_numbers[identifier]
-                for identifier in sorted(identifiers)
-                if _phrase_pattern(identifier).search(part)
-            ),
-            None,
-        )
-        redacted_parts.append(
-            f"<redacted:entry #{entry_number}>" if entry_number is not None else part
-        )
-    return str(Path(*redacted_parts))
+def _redact_path(path: Path) -> str:
+    """Return an opaque, stable label for *path*.
+
+    CI output is public. A path can carry a denylist entry in ways no
+    per-component match catches reliably (a phrase split across directories, a
+    Unicode normalisation variant), so a redacted report never prints a path at
+    all: it prints a short digest of the repository-relative path. Run the gate
+    locally, without ``--redact-output``, to see the real path; the digest is
+    ``sha256(posix path)[:12]`` so the two can be matched.
+    """
+    digest = hashlib.sha256(path.as_posix().encode("utf-8")).hexdigest()[:12]
+    return f"<path sha256:{digest}>"
 
 
-def _reported_path(
-    path: Path,
-    *,
-    identifiers: frozenset[str] | None,
-    redact_output: bool,
-) -> str:
-    """Format a path safely when redaction was requested and a denylist is available."""
-    if redact_output and identifiers:
-        return _redact_path(path, identifiers)
-    return str(path)
+def _reported_path(path: Path, *, redact_output: bool) -> str:
+    """Format a path for the report: verbatim locally, opaque under redaction."""
+    return _redact_path(path) if redact_output else str(path)
 
 
 def print_report(
@@ -578,7 +565,7 @@ def print_report(
     for v in violations:
         if redact_output:
             entry_number = entry_numbers[v.identifier]
-            reported_path = _redact_path(v.path, identifiers or frozenset())
+            reported_path = _redact_path(v.path)
             print(
                 f"  {reported_path}:{v.line_number}: denylist entry #{entry_number}",
                 file=sys.stderr,
@@ -757,7 +744,7 @@ def _report_message_violations(
     entry_numbers = _denylist_entry_numbers(identifiers)
     for v in sorted(violations, key=lambda v: (v.line_number, v.identifier)):
         if redact_output:
-            entry_number = entry_numbers[v.identifier]
+            entry_number = entry_numbers.get(v.identifier, "?")
             print(
                 f"  line {v.line_number}: denylist entry #{entry_number}",
                 file=sys.stderr,
@@ -832,24 +819,13 @@ def _run(args: argparse.Namespace) -> int:
     else:
         paths = collect_tracked_paths()
 
-    redaction_identifiers: frozenset[str] | None = None
-    if args.redact_output:
-        raw_identifiers = os.environ.get("CERT_WATCH_FORBIDDEN_IDENTIFIERS", "")
-        if raw_identifiers.strip():
-            parsed_identifiers = parse_identifier_set(raw_identifiers)
-            redaction_identifiers = parsed_identifiers or None
-
     # 1. Always-on: no tracked file under a guarded (gitignored) data dir. This
     #    catches a ``git add -f samples/...`` leak regardless of secret config.
     leaked = leaked_tracked_files(paths, _GUARDED_DIRS)
     if leaked:
         print("Tracked paths that must never be committed:", file=sys.stderr)
         for p in sorted(leaked, key=str):
-            reported_path = _reported_path(
-                p,
-                identifiers=redaction_identifiers,
-                redact_output=args.redact_output,
-            )
+            reported_path = _reported_path(p, redact_output=args.redact_output)
             print(f"  {reported_path}", file=sys.stderr)
         print(
             "\nThese are gitignored by convention, and .gitignore is advisory — "
@@ -908,7 +884,7 @@ def _run(args: argparse.Namespace) -> int:
         print(f"{what} could not be read; the gate cannot clear them:", file=sys.stderr)
         for p in sorted(unreadable, key=str):
             print(
-                f"  {_reported_path(p, identifiers=identifiers, redact_output=args.redact_output)}",
+                f"  {_reported_path(p, redact_output=args.redact_output)}",
                 file=sys.stderr,
             )
         print(
