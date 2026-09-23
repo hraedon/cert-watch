@@ -85,6 +85,30 @@ def test_blank_numeric_fields_restore_daily_and_automatic_thresholds(reload_app,
     assert host.renewal_status == "pending"
 
 
+def test_settings_writes_succeed_when_scheduler_state_is_absent(reload_app, endpoint):
+    _db, repo, host_id = endpoint
+    app = reload_app().app
+    with TestClient(app, raise_server_exceptions=False) as client:
+        scheduler = app.state.scheduler
+        del app.state.scheduler
+        html = client.post(
+            f"/hosts/{host_id}/settings", data=_form(), follow_redirects=False,
+        )
+        api = client.patch(
+            f"/api/hosts/{host_id}/settings",
+            json={
+                "scan_interval_hours": 12,
+                "threshold_days": 30,
+                "renewal_status": "pending",
+            },
+        )
+        app.state.scheduler = scheduler
+
+    assert html.status_code == 303
+    assert api.status_code == 200
+    assert repo.get(host_id).scan_interval_hours == 12
+
+
 @pytest.mark.parametrize("changes", [
     {"scan_interval_hours": "0"}, {"scan_interval_hours": "-1"},
     {"scan_interval_hours": "8761"}, {"scan_interval_hours": "1.5"},

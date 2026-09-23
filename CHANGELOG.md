@@ -172,6 +172,15 @@ All notable changes to cert-watch are documented in this file.
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Scheduler crashes recover without restart storms or false readiness.**
+  Exceptions in loop setup now retry with exponential backoff (one second up
+  to five minutes), make `/readyz` not-ready during recovery, and expose the
+  consecutive failure count plus last exception class in `/api/health`.
+  Planned bounded-stop handoff remains immediate and separate from crash
+  recovery. Immediate scans without an explicit host provider again scan all
+  registered hosts. Scheduler wake/delivery routes tolerate missing app state.
+  The last-scan metric is absent when no scheduler is attached; if refreshing
+  its timestamp hits a database error, `/metrics` serves the last known value.
 - **Scheduler restarts and shutdown are now deterministic.** Each application
   owns its scheduler thread, synchronization state, clock, and renewal-webhook
   executor. Restarting after a bounded stop hands off to exactly one new loop

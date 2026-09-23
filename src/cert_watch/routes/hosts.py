@@ -316,7 +316,7 @@ async def update_host_settings(
         )
         from cert_watch.scheduler import wake_scheduler
 
-        wake_scheduler(request.app.state.scheduler)
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostValidationError as exc:

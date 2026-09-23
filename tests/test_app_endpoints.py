@@ -771,6 +771,47 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
     assert thread_ids["delivery"] != thread_ids["event_loop"]
 
 
+def test_flush_alert_queue_without_scheduler_fails_safe(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from starlette.requests import Request
+
+    from cert_watch.routes.dashboard import flush_alert_queue
+
+    monkeypatch.setattr(
+        "cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True,
+    )
+    monkeypatch.setattr(
+        "cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db",
+    )
+    monkeypatch.setattr(
+        "cert_watch.routes.dashboard._get_settings",
+        lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
+    )
+    monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
+    process = Mock(return_value={"sent": 0, "failed": 0, "deferred": 0})
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.Dispatcher.process_pending", process,
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/alerts/flush",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "app": SimpleNamespace(state=SimpleNamespace()),
+        }
+    )
+
+    response = asyncio.run(flush_alert_queue(request))
+
+    assert response.status_code == 303
+    process.assert_called_once()
+
+
 def test_flush_alert_queue_rate_limited(tmp_path, reload_app):
     """Flush is rate-limited: too many requests returns a rate-limit redirect."""
     app_mod = reload_app()

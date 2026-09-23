@@ -69,6 +69,8 @@ def _seconds_until(hour: int, minute: int, *, now: datetime | None = None) -> fl
 
 
 FAST_RETRY_INTERVAL = 3600  # 1 hour
+LOOP_RESTART_BACKOFF_INITIAL = 1.0
+LOOP_RESTART_BACKOFF_MAX = 300.0
 
 
 def _has_pending_hosts(db_path: str | Path) -> bool:
@@ -232,6 +234,8 @@ class Scheduler:
         self._lifecycle_lock = threading.Lock()
         self._cycle_lock = threading.Lock()
         self._desired_running = False
+        self._loop_failure_count = 0
+        self._last_loop_error: str | None = None
         self._webhook_pool: concurrent.futures.ThreadPoolExecutor | None = None
         self._webhook_lock = threading.Lock()
         self._webhook_futures: set[concurrent.futures.Future[None]] = set()
@@ -251,7 +255,21 @@ class Scheduler:
     @property
     def is_running(self) -> bool:
         with self._lifecycle_lock:
-            return self._thread is not None and self._thread.is_alive()
+            return (
+                self._thread is not None
+                and self._thread.is_alive()
+                and self._last_loop_error is None
+            )
+
+    @property
+    def loop_failure_count(self) -> int:
+        with self._lifecycle_lock:
+            return self._loop_failure_count if self._last_loop_error is not None else 0
+
+    @property
+    def last_loop_error(self) -> str | None:
+        with self._lifecycle_lock:
+            return self._last_loop_error
 
     @property
     def last_scan_timestamp(self) -> float | None:
@@ -329,53 +347,98 @@ class Scheduler:
         daily_schedule: tuple[int, int] | None = None
         try:
             while not stop_event.is_set():
-                self._wake_event.clear()
-                if stop_event.is_set():
-                    return
-                current_hour, current_minute = self.context.schedule_time()
-                now = self.clock.now()
-                if daily_deadline is None or daily_schedule != (current_hour, current_minute):
-                    daily_deadline = _next_daily_time(current_hour, current_minute, now)
-                    daily_schedule = (current_hour, current_minute)
-                cycle_wait = max(0.0, (daily_deadline - now).total_seconds())
                 try:
-                    cycle_wait = min(
-                        cycle_wait,
-                        _seconds_until_next_scan(
-                            self.context.settings.db_path,
-                            current_hour,
-                            current_minute,
-                            now=now,
-                        ),
-                    )
-                except Exception:
-                    logger.exception("could not calculate host scan cadence")
-                cycle_wait = max(cycle_wait, next_cycle_allowed - self.clock.monotonic())
-                wait = min(cycle_wait, FAST_RETRY_INTERVAL)
-                if self.clock.wait(self._wake_event, wait):
-                    continue
-                if stop_event.is_set():
-                    return
-                if cycle_wait > FAST_RETRY_INTERVAL and self.clock.now() < daily_deadline:
-                    continue
-                if not self._cycle_lock.acquire(blocking=False):
-                    logger.warning("skipping scheduled cycle; previous cycle still running")
-                    next_cycle_allowed = self.clock.monotonic() + 60
-                    continue
-                try:
-                    self.run_cycle(stop_event=stop_event)
-                finally:
-                    self._cycle_lock.release()
-                    next_cycle_allowed = self.clock.monotonic() + 60
+                    self._wake_event.clear()
+                    if stop_event.is_set():
+                        return
+                    current_hour, current_minute = self.context.schedule_time()
                     now = self.clock.now()
-                    if daily_deadline <= now:
+                    if (
+                        daily_deadline is None
+                        or daily_schedule != (current_hour, current_minute)
+                    ):
                         daily_deadline = _next_daily_time(current_hour, current_minute, now)
+                        daily_schedule = (current_hour, current_minute)
+                    cycle_wait = max(0.0, (daily_deadline - now).total_seconds())
+                    try:
+                        cycle_wait = min(
+                            cycle_wait,
+                            _seconds_until_next_scan(
+                                self.context.settings.db_path,
+                                current_hour,
+                                current_minute,
+                                now=now,
+                            ),
+                        )
+                    except Exception:
+                        logger.exception("could not calculate host scan cadence")
+                    cycle_wait = max(
+                        cycle_wait, next_cycle_allowed - self.clock.monotonic(),
+                    )
+                    wait = min(cycle_wait, FAST_RETRY_INTERVAL)
+                    self._mark_loop_responsive()
+                    if self.clock.wait(self._wake_event, wait):
+                        self._mark_loop_healthy()
+                        continue
+                    if stop_event.is_set():
+                        return
+                    if cycle_wait > FAST_RETRY_INTERVAL and self.clock.now() < daily_deadline:
+                        self._mark_loop_healthy()
+                        continue
+                    if not self._cycle_lock.acquire(blocking=False):
+                        logger.warning("skipping scheduled cycle; previous cycle still running")
+                        next_cycle_allowed = self.clock.monotonic() + 60
+                        self._mark_loop_healthy()
+                        continue
+                    try:
+                        self.run_cycle(stop_event=stop_event)
+                    finally:
+                        self._cycle_lock.release()
+                        next_cycle_allowed = self.clock.monotonic() + 60
+                        now = self.clock.now()
+                        if daily_deadline <= now:
+                            daily_deadline = _next_daily_time(
+                                current_hour, current_minute, now,
+                            )
+                    self._mark_loop_healthy()
+                except Exception as exc:
+                    failure_count = self._mark_loop_failed(exc)
+                    backoff = min(
+                        LOOP_RESTART_BACKOFF_MAX,
+                        LOOP_RESTART_BACKOFF_INITIAL
+                        * 2.0 ** min(failure_count - 1, 30),
+                    )
+                    logger.exception(
+                        "scheduler loop failed; retrying in %.1fs (failure %d)",
+                        backoff,
+                        failure_count,
+                    )
+                    daily_deadline = None
+                    daily_schedule = None
+                    next_cycle_allowed = 0.0
+                    if stop_event.wait(backoff):
+                        return
         finally:
             with self._lifecycle_lock:
                 if self._thread is threading.current_thread():
                     self._thread = None
-                if self._desired_running:
+                if stop_event.is_set() and self._desired_running:
                     self._start_locked()
+
+    def _mark_loop_failed(self, exc: Exception) -> int:
+        with self._lifecycle_lock:
+            self._loop_failure_count += 1
+            self._last_loop_error = type(exc).__name__
+            return self._loop_failure_count
+
+    def _mark_loop_healthy(self) -> None:
+        with self._lifecycle_lock:
+            self._loop_failure_count = 0
+            self._last_loop_error = None
+
+    def _mark_loop_responsive(self) -> None:
+        with self._lifecycle_lock:
+            self._last_loop_error = None
 
     def run_cycle(
         self,
@@ -442,15 +505,6 @@ class Scheduler:
             self._cycle_lock.release()
 
     def run_scan_now(self, *args: Any, **kwargs: Any) -> dict[str, int]:
-        db_path = kwargs.get("db_path")
-        if kwargs.get("host_provider") is None and db_path is not None:
-            settings = self.context.settings
-            kwargs["host_provider"] = lambda: get_hosts_due_for_scan(
-                db_path,
-                hour=settings.sched_hour,
-                minute=settings.sched_min,
-                now=self.clock.now(),
-            )
         kwargs["now"] = self.clock.now
         kwargs["renewal_check"] = self._check_renewal_overdue
         return _run_scan_now(*args, **kwargs)
@@ -550,16 +604,19 @@ class Scheduler:
             self._last_scan_timestamp = timestamp
 
 
-def wake_scheduler(scheduler: Scheduler) -> None:
+def wake_scheduler(scheduler: Scheduler | None) -> None:
     """Compatibility seam for callers that receive an app-owned scheduler."""
-    scheduler.wake()
+    if scheduler is not None:
+        scheduler.wake()
 
 
 def try_run_alert_delivery(
-    scheduler: Scheduler,
+    scheduler: Scheduler | None,
     delivery_fn: Callable[[], dict[str, int]],
 ) -> dict[str, int] | None:
     """Run manual delivery through the app-owned scheduler's cycle lock."""
+    if scheduler is None:
+        return delivery_fn()
     return scheduler.try_run_alert_delivery(delivery_fn)
 
 
@@ -882,5 +939,10 @@ def _send_renewal_webhook_if_configured(
 
 
 def _hosts_from_db(db_path: str | Path) -> list[tuple[str, int]]:
-    """Return hosts due for scanning, respecting per-host intervals."""
-    return get_hosts_due_for_scan(db_path)
+    """Return every registered host for an explicit immediate scan."""
+    from cert_watch.database import SqliteHostRepository
+
+    return [
+        (host.hostname, host.port)
+        for host in SqliteHostRepository(db_path).list_all()
+    ]

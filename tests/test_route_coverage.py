@@ -217,6 +217,28 @@ def test_readyz_strips_version_and_commit(reload_app):
     assert "commit" not in data
 
 
+def test_scheduler_loop_failure_degrades_readiness_and_api_health(reload_app):
+    from types import SimpleNamespace
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        running_scheduler = app_mod.app.state.scheduler
+        app_mod.app.state.scheduler = SimpleNamespace(
+            is_running=False,
+            loop_failure_count=3,
+            last_loop_error="RuntimeError",
+        )
+        ready = client.get("/readyz")
+        health = client.get("/api/health")
+        app_mod.app.state.scheduler = running_scheduler
+
+    assert ready.status_code == 503
+    assert ready.json()["checks"]["scheduler"] == "failed"
+    assert health.json()["scheduler_running"] is False
+    assert health.json()["scheduler_failure_count"] == 3
+    assert health.json()["scheduler_last_error"] == "RuntimeError"
+
+
 # ---------- api/health ----------
 
 

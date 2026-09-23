@@ -110,6 +110,56 @@ def test_scheduler_start_is_idempotent(tmp_path):
     assert runtime.stop()
 
 
+def test_scheduler_loop_failure_backs_off_and_recovers(
+    tmp_path, monkeypatch, caplog,
+):
+    import cert_watch.scheduler as scheduler_module
+
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    original_schedule_time = runtime.context.schedule_time
+    fault_active = threading.Event()
+    fault_active.set()
+    attempts = 0
+
+    def failing_schedule_time():
+        nonlocal attempts
+        attempts += 1
+        if fault_active.is_set():
+            raise RuntimeError("schedule unavailable")
+        return original_schedule_time()
+
+    monkeypatch.setattr(runtime.context, "schedule_time", failing_schedule_time)
+    monkeypatch.setattr(scheduler_module, "LOOP_RESTART_BACKOFF_INITIAL", 0.01)
+    monkeypatch.setattr(scheduler_module, "LOOP_RESTART_BACKOFF_MAX", 0.04)
+
+    runtime.start()
+    deadline = time.monotonic() + 1
+    while attempts < 3 and time.monotonic() < deadline:
+        time.sleep(0.002)
+
+    while (
+        caplog.text.count("scheduler loop failed; retrying") < attempts
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.002)
+
+    assert 3 <= attempts <= 4
+    assert not runtime.is_running
+    assert runtime.loop_failure_count == attempts
+    assert runtime.last_loop_error == "RuntimeError"
+    assert caplog.text.count("scheduler loop failed; retrying") == attempts
+
+    fault_active.clear()
+    deadline = time.monotonic() + 1
+    while not runtime.is_running and time.monotonic() < deadline:
+        time.sleep(0.002)
+
+    assert runtime.is_running
+    assert runtime.loop_failure_count == 0
+    assert runtime.last_loop_error is None
+    assert runtime.stop(timeout=1)
+
+
 # The exception tests below drive the cycle directly via `_run_cycle` rather than
 # starting the thread at hour=23:59 (where the timer never fires in-test). What the
 # scheduler promises is *failure isolation*: one stage raising must not stop the
@@ -351,6 +401,34 @@ def test_run_scan_now_basic(tmp_path):
     assert result["scanned"] == 2
     assert result["failures"] == 0
     assert len(scanned) == 2
+
+
+def test_run_scan_now_without_provider_scans_all_hosts(tmp_path):
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.scheduler import ScanHistory, record_scan_history
+
+    db = tmp_path / "test.sqlite3"
+    init_schema(db)
+    SqliteHostRepository(db).add(
+        "fresh.example.com", 443, scan_interval_hours=24,
+    )
+    record = ScanHistory(
+        hostname="fresh.example.com",
+        port=443,
+        status="success",
+        scanned_at=datetime.now(UTC),
+    )
+    record_scan_history(db, record)
+    scanned = []
+
+    result = _scheduler(db).run_scan_now(
+        lambda hostname, port: scanned.append((hostname, port)) or object(),
+        lambda: {"sent": 0, "failed": 0},
+        db_path=db,
+    )
+
+    assert scanned == [("fresh.example.com", 443)]
+    assert result["scanned"] == 1
 
 
 def test_run_scan_now_with_scan_error(tmp_path):

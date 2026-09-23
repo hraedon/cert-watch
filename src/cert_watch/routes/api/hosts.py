@@ -329,7 +329,7 @@ async def api_update_host_settings(
         )
         from cert_watch.scheduler import wake_scheduler
 
-        wake_scheduler(request.app.state.scheduler)
+        wake_scheduler(getattr(request.app.state, "scheduler", None))
     except PydanticValidationError as exc:
         return _validation_error(exc)
     except (JsonBodyError, HostValidationError, ScopeDeniedError) as exc:
