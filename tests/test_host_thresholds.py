@@ -1,6 +1,6 @@
 import pytest
 
-from cert_watch.alerts import evaluate_all_certs, evaluate_thresholds
+from cert_watch.alerting import evaluate_all_certs, evaluate_thresholds
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import (
     SqliteAlertRepository,

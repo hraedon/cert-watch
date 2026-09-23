@@ -50,6 +50,29 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Digest delivery is synchronous and claim-ledger driven.** Expiry, renewal
+  and orphan summaries now use one engine and one three-wave retry policy.
+  Expiry webhooks therefore retry transient failures; renewal webhooks no
+  longer run in a background digest pool and instead complete synchronously
+  within the alert-cycle budget. Webhook fallback occurs only after SMTP has
+  failed and no recipient claim is busy. Orphan notices are durably claimed
+  once per weekly period, so a quiet renewal week cannot repeat the same notice
+  every scheduler cycle. Existing `digest_deliveries` rows retain their key
+  format and suppress an upgrade-week resend. The legacy
+  `_scheduler.expiry_digest_iso_week` and
+  `_scheduler.renewal_digest_iso_week` `kv_store` rows are harmless but are no
+  longer read or written. Expiry digest headers now name the actual configured
+  cadence window rather than always saying “within 30 days.” The renewal
+  webhook subject was fixed at `Renewal Digest (7d)`; it now includes the
+  configured cadence (for example `Renewal Digest (14d)`), so subject-based
+  webhook filters must be updated.
+- **Deprecated alerting import shims are removed in 1.0.** External Python code
+  importing `cert_watch.alerts`, `cert_watch.alert_delivery`,
+  `cert_watch.alert_adapters` or `cert_watch.digest` must import from
+  `cert_watch.alerting` or the corresponding public submodule instead. This is
+  an intentional compatibility break at the 1.0 boundary; HTTP APIs and URLs
+  are unchanged.
+
 - **Alert dedupe and routing are persisted (migration 0037).** Alert identity
   now uses endpoint plus certificate fingerprint rather than the replaceable
   inventory row id. Expiry thresholds never fire twice for the same endpoint,

@@ -19,7 +19,7 @@ from pathlib import Path
 
 import pytest
 
-from cert_watch.alerts import (
+from cert_watch.alerting import (
     ALERT_MAX_RETRIES,
     AlertConfig,
     WebhookConfig,

@@ -43,7 +43,7 @@ def _seed(db):
 
 
 def test_only_stalled_cert_alerts(tmp_path):
-    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository
 
     db = str(tmp_path / "t.sqlite3")
@@ -55,7 +55,7 @@ def test_only_stalled_cert_alerts(tmp_path):
 
 
 def test_idempotent(tmp_path):
-    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository
 
     db = str(tmp_path / "t.sqlite3")
@@ -66,7 +66,7 @@ def test_idempotent(tmp_path):
 
 
 def test_window_zero_disables(tmp_path):
-    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository
 
     db = str(tmp_path / "t.sqlite3")
@@ -76,7 +76,7 @@ def test_window_zero_disables(tmp_path):
 
 
 def test_current_candidates_match_evaluation_without_reading_or_writing_alerts(tmp_path):
-    from cert_watch.alerts import evaluate_renewal_window, renewal_window_candidates
+    from cert_watch.alerting import evaluate_renewal_window, renewal_window_candidates
     from cert_watch.database import SqliteAlertRepository
 
     db = str(tmp_path / "t.sqlite3")
@@ -99,7 +99,7 @@ def test_current_candidates_match_evaluation_without_reading_or_writing_alerts(t
 
 def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
     """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
-    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
 
     db = str(tmp_path / "t.sqlite3")
@@ -112,7 +112,7 @@ def test_renewal_stalled_suppressed_when_in_progress(tmp_path):
 
 def test_renewal_stalled_suppressed_when_renewed(tmp_path):
     """Regression (WI-124 #11): suppress renewal_stalled when operator flagged it."""
-    from cert_watch.alerts import evaluate_renewal_window
+    from cert_watch.alerting import evaluate_renewal_window
     from cert_watch.database import SqliteAlertRepository, SqliteHostRepository
 
     db = str(tmp_path / "t.sqlite3")

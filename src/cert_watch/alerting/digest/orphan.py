@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from cert_watch.alerting.digest.engine import _send_claimed_digest_smtp
-from cert_watch.alerting.model import AlertConfig
+from cert_watch.alerting.digest.engine import DigestTarget
+from cert_watch.alerting.model import AlertConfig, OutboundMessage
 from cert_watch.alerting.routing import find_orphan_certs
 from cert_watch.alerting.transports.smtp import _validate_email
 
@@ -60,47 +62,48 @@ def _build_orphan_message(orphans: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def send_orphan_notice(db_path: str | Path, alert_config: AlertConfig | None) -> bool | None:
-    """Email admin-tier users a flagged list of orphaned certs (no alert routing).
+@dataclass(frozen=True)
+class OrphanDigestKind:
+    """One claimed weekly SMTP notice to every local admin."""
 
-    Part of the weekly digest run (Plan 050, decision pinned 2026-06-20): admins
-    get standing visibility into certs that resolve to nobody specific, even in a
-    week with no renewal activity. Returns ``None`` when there is nothing to send
-    (no orphans, no admin recipients, or no SMTP config), ``True`` on delivery,
-    ``False`` on SMTP failure. Successful per-admin deliveries are durably
-    recorded so overlapping/repeated weekly runs do not resend them.
-    """
-    from email.message import EmailMessage
+    alert_config: AlertConfig | None
+    name: str = "orphan"
+    webhook_fanout: Literal["global"] = "global"
 
-    if not isinstance(alert_config, AlertConfig):
-        return None
-    orphans = find_orphan_certs(db_path)
-    if not orphans:
-        return None
-    admins = [a for a in _admin_emails(db_path) if _validate_email(a)]
-    if not admins:
-        return None
+    def targets(
+        self,
+        db_path: str | Path,
+        now: datetime,
+        cadence_days: int,
+    ) -> list[DigestTarget]:
+        del now, cadence_days
+        if not isinstance(self.alert_config, AlertConfig):
+            return []
+        orphans = find_orphan_certs(db_path)
+        admins = [address for address in _admin_emails(db_path) if _validate_email(address)]
+        if not orphans or not admins:
+            return []
+        return [
+            DigestTarget(
+                key="global",
+                payload=orphans,
+                smtp_recipients=tuple(admins),
+                is_global=True,
+                webhook_eligible=False,
+            )
+        ]
 
-    from cert_watch.database.digest_deliveries import digest_period_key
-
-    digest_key = digest_period_key("orphan", 7)
-
-    def _build_message(recipients: list[str]) -> EmailMessage:
-        msg = EmailMessage()
-        msg["Subject"] = (
-            f"[cert-watch] {len(orphans)} orphaned certificate(s) — no alert routing"
+    def render(self, target: DigestTarget) -> OutboundMessage:
+        orphans = target.payload
+        if not isinstance(orphans, list):
+            raise TypeError("orphan target has the wrong payload")
+        return OutboundMessage.from_digest(
+            subject=(
+                f"[cert-watch] {len(orphans)} orphaned certificate(s) — "
+                "no alert routing"
+            ),
+            body=_build_orphan_message(orphans),
+            severity="orphan_digest",
+            idempotency_key="",
+            recipients=target.smtp_recipients,
         )
-        msg["From"] = alert_config.from_addr
-        msg["To"] = ", ".join(recipients)
-        msg.set_content(_build_orphan_message(orphans))
-        return msg
-
-    outcomes, busy = _send_claimed_digest_smtp(
-        db_path,
-        digest_key,
-        admins,
-        alert_config,
-        _build_message,
-        failure_label="orphan notice delivery",
-    )
-    return bool(outcomes) and all(outcomes.values()) and not busy

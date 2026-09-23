@@ -276,11 +276,7 @@ def _drive_timer(monkeypatch, settings, on_wait, *, scan_fn=None, schedule_provi
     monkeypatch.setattr(scheduler, "_scheduler_wake", wake)
     monkeypatch.setattr(scheduler, "_scheduler_thread", None)
     monkeypatch.setattr(scheduler, "_start_renewal_webhook_pool", Mock())
-    monkeypatch.setattr("cert_watch.alerting.digest.pool.start_digest_pool", Mock())
     monkeypatch.setattr(scheduler, "_detach_renewal_webhook_pool", Mock(return_value=None))
-    monkeypatch.setattr(
-        "cert_watch.alerting.digest.pool._detach_digest_pool", Mock(return_value=None)
-    )
     monkeypatch.setattr(scheduler.threading, "Thread", lambda **kwargs: SimpleNamespace(
         start=kwargs["target"], is_alive=lambda: False, join=Mock(),
     ))
@@ -480,19 +476,26 @@ def test_alert_job_keeps_matching_transports_through_mid_job_update(monkeypatch,
         return {"sent": 0, "failed": 0}
 
     pending_spy = Mock(side_effect=pending)
-    digest = Mock(return_value=False)
+    from cert_watch.alerting.digest.engine import DigestRunResult
+
+    digest = Mock(return_value=DigestRunResult())
     monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", Mock())
     monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", Mock())
     monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", pending_spy)
-    monkeypatch.setattr("cert_watch.alerting.digest.expiry.send_expiry_digest", digest)
+    monkeypatch.setattr(context, "_run_digest", digest)
 
     context.run_alerts()
     context.run_alerts()
 
-    for spy in (pending_spy, digest):
-        assert [call.args[1].smtp_host for call in spy.call_args_list] == [
-            "old.example.invalid", "new.example.invalid",
-        ]
-        assert [call.kwargs["webhook_config"].url for call in spy.call_args_list] == [
-            "https://old.example.invalid", "https://new.example.invalid",
-        ]
+    assert [call.args[1].smtp_host for call in pending_spy.call_args_list] == [
+        "old.example.invalid", "new.example.invalid",
+    ]
+    assert [call.kwargs["webhook_config"].url for call in pending_spy.call_args_list] == [
+        "https://old.example.invalid", "https://new.example.invalid",
+    ]
+    assert [call.args[0].alert_cfg.smtp_host for call in digest.call_args_list] == [
+        "old.example.invalid", "new.example.invalid",
+    ]
+    assert [call.args[0].webhook_cfg.url for call in digest.call_args_list] == [
+        "https://old.example.invalid", "https://new.example.invalid",
+    ]
