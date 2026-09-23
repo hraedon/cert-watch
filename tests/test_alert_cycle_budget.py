@@ -174,8 +174,8 @@ def test_a_spent_budget_leaves_alerts_pending_rather_than_failed(tmp_path, monke
     assert all(a.status == "pending" for i in range(5) for a in repo.list_for_cert(f"cert-{i}"))
 
 
-def test_a_deferred_alert_goes_out_on_the_next_cycle(tmp_path, monkeypatch):
-    """Deferral must be a delay, not a quieter way of dropping the alert."""
+def test_budget_deferred_alerts_remain_deliverable(tmp_path, monkeypatch):
+    """Attempted rows back off; unattempted rows remain immediately eligible."""
     _, repo = _queue(tmp_path, 2)
 
     slow_and_failing = _hanging_relay(0.05)
@@ -191,7 +191,12 @@ def test_a_deferred_alert_goes_out_on_the_next_cycle(tmp_path, monkeypatch):
         "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
     )
 
-    assert process_pending(repo, _config()) == {"sent": 2, "failed": 0, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
+    assert process_pending(repo, _config(), ignore_backoff=True) == {
+        "sent": 1,
+        "failed": 0,
+        "deferred": 0,
+    }
     assert connection.send_message.call_count == 2
 
 

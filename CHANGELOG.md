@@ -101,6 +101,10 @@ All notable changes to cert-watch are documented in this file.
   invalid webhook channel results consume delivery rounds and eventually
   become operator-visible failures. An estate with no SMTP or webhook instead
   keeps alerts pending on normal backoff without consuming the attempt budget.
+- **Cycle-budget deferrals preserve retry pacing and diagnostics.** Alerts
+  attempted before a delivery cycle runs out of time retain their last useful
+  error and receive persisted backoff; only rows never reached in that cycle
+  remain immediately eligible.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

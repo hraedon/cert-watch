@@ -72,7 +72,10 @@ restore the pre-migration backup.
   automatic revival behaviour for those existing rows. Other legacy failed
   alert types remain failed. SSRF-blocked and invalid-channel delivery rounds
   count toward the same bounded give-up policy; having no delivery channel
-  configured does not consume attempts and remains pending with backoff.
+  configured does not consume attempts and remains pending with backoff. If a
+  delivery cycle exhausts its wall-clock budget, rows already attempted keep
+  their last diagnostic and back off; rows not reached remain immediately
+  eligible for the next worker.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

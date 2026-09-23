@@ -319,7 +319,7 @@ class Dispatcher:
                 continue
 
             new_attempt_count = alert.attempt_count + item.waves_reached
-            error = item.last_error or "unknown"
+            error = item.last_error or alert.error_message or "unknown"
             reason = item.last_reason or "unknown"
             if new_attempt_count >= ALERT_MAX_ATTEMPTS:
                 message = f"{error} (gave up after {new_attempt_count} attempts)"
@@ -334,7 +334,7 @@ class Dispatcher:
                     failed += 1
                 continue
 
-            if exhausted:
+            if exhausted and item.attempts_made == 0 and not item.configuration_missing:
                 next_attempt_at = None
             else:
                 round_index = min(
@@ -344,11 +344,11 @@ class Dispatcher:
                 next_attempt_at = now + timedelta(
                     seconds=ALERT_RETRY_ROUND_DELAYS[round_index]
                 )
-            message = (
+            message: str | None = (
                 f"{error} (after {item.attempts_made} "
                 f"{'attempt' if item.attempts_made == 1 else 'attempts'})"
                 if item.attempts_made
-                else error
+                else (item.last_error or alert.error_message)
             )
             if self.store.complete_pending(
                 alert.id,

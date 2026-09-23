@@ -223,6 +223,49 @@ def test_unconfigured_delivery_backs_off_without_spending_attempts(
     assert configured.counts == {"cert-1": 1}
 
 
+def test_cycle_budget_backs_off_attempted_rows_and_preserves_diagnostics(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "cycle-budget.sqlite3"
+    init_schema(db)
+    first_id = _alert(db, "first")
+    second_id = _alert(db, "second")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET error_message = 'relay timed out' WHERE id = ?",
+            (first_id,),
+        )
+        conn.execute(
+            "UPDATE alerts SET error_message = 'waiting for first attempt' WHERE id = ?",
+            (second_id,),
+        )
+        conn.commit()
+    times = iter((0.0, 0.0, 2.0))
+    now = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+    transport = CountingTransport(
+        SendResult("failed", "transport", operator_message="")
+    )
+
+    result = Dispatcher(
+        db,
+        transports=[transport],
+        budget_seconds=1.0,
+        clock=lambda: now,
+        monotonic_clock=lambda: next(times),
+    ).process_pending()
+
+    assert result == {"sent": 0, "failed": 0, "deferred": 2}
+    stored = {
+        alert.cert_id: alert for alert in SqliteAlertRepository(db).list_all()
+    }
+    assert stored["first"].attempt_count == 1
+    assert stored["first"].next_attempt_at == now + timedelta(hours=1)
+    assert stored["first"].error_message == "relay timed out (after 1 attempt)"
+    assert stored["second"].attempt_count == 0
+    assert stored["second"].next_attempt_at is None
+    assert stored["second"].error_message == "waiting for first attempt"
+
+
 def test_flush_and_scheduler_dispatchers_still_send_once(tmp_path: Path) -> None:
     db = tmp_path / "flush-scheduler.sqlite3"
     init_schema(db)
