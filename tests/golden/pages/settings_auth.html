@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — settings</title>
+  <script nonce="{{CSP_NONCE}}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+</head>
+<body>
+
+  <div class="cw-app">
+    <header class="cw-topbar">
+      <a href="/" class="cw-wordmark">
+        <div class="cw-mark">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
+        <span class="cw-ver">v0.9.5</span>
+      </a>
+
+  <nav class="cw-nav-desktop" aria-label="Primary">
+    <a href="/" data-testid="nav-home" >Home</a>
+    <a href="/browse" data-testid="nav-browse" >Browse</a>
+    <a href="/posture" data-testid="nav-posture" >Posture</a>
+    <a href="/activity" data-testid="nav-activity" >Activity</a>
+    <a href="/settings" data-testid="nav-settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      <div class="cw-spacer"></div>
+
+
+
+      <button type="button" class="cw-iconbtn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-dark" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+        <svg id="theme-icon-light" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <details class="cw-mobile-nav cw-nav">
+        <summary aria-label="Open section navigation"><span class="cw-muted">Section</span> Settings</summary>
+
+  <nav class="cw-nav-mobile" aria-label="Primary">
+    <a href="/" >Home</a>
+    <a href="/browse" >Browse</a>
+    <a href="/posture" >Posture</a>
+    <a href="/activity" >Activity</a>
+    <a href="/settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      </details>
+
+    </header>
+    <div class="cw-page">
+
+
+      <div id="cw-health" class="cw-health cw-hidden">
+        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
+        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+
+
+<div class="cw-wrap">
+
+<div class="cw-page-head">
+  <div>
+    <h1 data-testid="settings-heading">Settings</h1>
+    <div class="cw-page-head-sub">Instance configuration — access, alerting, and monitoring policy.</div>
+  </div>
+
+</div>
+
+  <div class="cw-sidegrid">
+
+<nav class="cw-sidenav" aria-label="Settings sections">
+  <div class="grp">Access</div>
+  <a href="/settings/auth" class="active">Authentication</a>
+  <a href="/settings/roles" class="">Roles</a>
+  <a href="/settings/users" class="">Users</a>
+  <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
+  <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
+  <div class="grp">Alerting</div>
+  <a href="/settings/channels" class="">Channels</a>
+  <a href="/settings/alert-groups" class="">Alert groups</a>
+  <a href="/settings/events" class="">Event streaming</a>
+  <div class="grp">Monitoring</div>
+  <a href="/settings/policy" class="">Policy</a>
+  <a href="/settings/trust-anchors" class="" data-testid="settings-trust-anchors-link">Trust anchors</a>
+</nav>
+
+    <div class="cw-vstack">
+
+
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Identity provider</h2>
+    <span class="cw-hint">how operators sign in — LDAP / AD, OAuth / OIDC, or open access</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/auth" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+
+      <div class="cw-field">
+        <label class="cw-label" for="auth_provider">Authentication provider
+
+        </label>
+        <select class="cw-select" id="auth_provider" name="auth_provider">
+          <option value="" selected>None (open access)</option>
+          <option value="ldap" >LDAP / Active Directory</option>
+          <option value="oauth" >OAuth / OIDC (Entra, Google)</option>
+        </select>
+      </div>
+
+
+      <div id="ldap-section" class="cw-hidden">
+        <div class="cw-divider"></div>
+        <div class="cw-kv-label">LDAP / Active Directory</div>
+        <div class="cw-form">
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_server">Server URL(s)
+
+            </label>
+            <input class="cw-input mono" type="text" id="ldap_server" name="ldap_server"
+                   value="" placeholder="ldap://dc1.example.com,ldap://dc2.example.com">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_base_dn">Base DN
+
+            </label>
+            <input class="cw-input mono" type="text" id="ldap_base_dn" name="ldap_base_dn"
+                   value="" placeholder="DC=example,DC=com">
+          </div>
+          <div class="cw-form-grid">
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_dn">Bind DN (service account)
+
+              </label>
+              <input class="cw-input mono" type="text" id="ldap_bind_dn" name="ldap_bind_dn"
+                     value="" placeholder="CN=svc,OU=ServiceAccounts,DC=example,DC=com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_bind_password">Bind password
+
+              </label>
+              <input class="cw-input" type="password" id="ldap_bind_password" name="ldap_bind_password"
+                     value="" placeholder="password"
+                     autocomplete="new-password">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_user_filter">User search filter</label>
+              <input class="cw-input mono" type="text" id="ldap_user_filter" name="ldap_user_filter"
+                     value="" placeholder="(sAMAccountName={username})">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_connect_timeout">Connect timeout (seconds)</label>
+              <input class="cw-input" type="number" id="ldap_connect_timeout" name="ldap_connect_timeout"
+                     value="" min="1" max="30">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_required_groups">Required groups (semicolon-separated DNs)</label>
+              <input class="cw-input mono" type="text" id="ldap_required_groups" name="ldap_required_groups"
+                     value="" placeholder="CN=Admins,OU=Groups,DC=example,DC=com; CN=Users,OU=Groups,DC=example,DC=com">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="ldap_start_tls">StartTLS</label>
+              <select class="cw-select" id="ldap_start_tls" name="ldap_start_tls">
+                <option value="0" selected>Disabled</option>
+                <option value="1" >Enabled</option>
+              </select>
+            </div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="ldap_ca_cert">CA certificate (PEM, for LDAPS/StartTLS)
+
+            </label>
+            <textarea class="cw-textarea mono" id="ldap_ca_cert" name="ldap_ca_cert" rows="3"
+                      placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"></textarea>
+          </div>
+          <div class="cw-form-foot">
+            <button type="button" class="cw-btn" id="ldap-test-btn">Test Connection</button>
+            <span id="ldap-test-result" class="cw-testres"></span>
+          </div>
+
+
+          <div id="ldap-tofu-panel" class="cw-hidden">
+            <div class="cw-note t-warn">
+
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+
+
+              <div>
+                <b>Could not validate TLS — server presented this CA.</b>
+                Trust on first use — verify the fingerprint against a known good
+                source if your network may be hostile.
+              </div>
+            </div>
+            <div id="ldap-tofu-chain" class="cw-vstack"></div>
+            <div class="cw-form-foot">
+              <button type="button" class="cw-btn primary" id="ldap-pin-btn">Trust &amp; pin</button>
+              <button type="button" class="cw-btn" id="ldap-copy-btn">Copy PEM</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <div id="oauth-section" class="cw-hidden">
+        <div class="cw-divider"></div>
+        <div class="cw-kv-label">OAuth / OIDC</div>
+        <div class="cw-form">
+          <div class="cw-form-grid">
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_id">Client ID
+
+              </label>
+              <input class="cw-input mono" type="text" id="oauth_client_id" name="oauth_client_id"
+                     value="" placeholder="00000000-0000-0000-0000-000000000000">
+            </div>
+            <div class="cw-field">
+              <label class="cw-label" for="oauth_client_secret">Client secret
+
+              </label>
+              <input class="cw-input" type="password" id="oauth_client_secret" name="oauth_client_secret"
+                     value="" placeholder="secret"
+                     autocomplete="new-password">
+            </div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="oauth_issuer_url">Issuer URL
+
+            </label>
+            <input class="cw-input mono" type="text" id="oauth_issuer_url" name="oauth_issuer_url"
+                   value="" placeholder="https://login.microsoftonline.com/{tenant}/v2.0">
+            <div class="cw-hint">Endpoints are auto-discovered from this URL via OIDC.</div>
+          </div>
+          <div class="cw-field">
+            <label class="cw-label" for="oauth_scope">Scopes</label>
+            <input class="cw-input mono" type="text" id="oauth_scope" name="oauth_scope"
+                   value="" placeholder="openid profile email">
+          </div>
+          <details class="cw-editor">
+            <summary class="cw-btn ghost sm">Advanced: override endpoints (skip OIDC discovery)</summary>
+            <div class="cw-editor-body">
+              <div class="cw-form">
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_authorization_endpoint">Authorization endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_authorization_endpoint"
+                         name="oauth_authorization_endpoint"
+                         value="" placeholder="(auto-discovered)">
+                </div>
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_token_endpoint">Token endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_token_endpoint" name="oauth_token_endpoint"
+                         value="" placeholder="(auto-discovered)">
+                </div>
+                <div class="cw-field">
+                  <label class="cw-label" for="oauth_userinfo_endpoint">UserInfo endpoint</label>
+                  <input class="cw-input mono" type="text" id="oauth_userinfo_endpoint" name="oauth_userinfo_endpoint"
+                         value="" placeholder="(auto-discovered)">
+                </div>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save authentication settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+
+    </div>
+  </div>
+</div>
+
+    </div>
+  </div>
+  <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+<script src="/static/js/settings.js" nonce="{{CSP_NONCE}}"></script>
+
+</body>
+</html>

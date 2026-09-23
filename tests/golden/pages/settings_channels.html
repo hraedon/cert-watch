@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — settings</title>
+  <script nonce="{{CSP_NONCE}}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+</head>
+<body>
+
+  <div class="cw-app">
+    <header class="cw-topbar">
+      <a href="/" class="cw-wordmark">
+        <div class="cw-mark">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
+        <span class="cw-ver">v0.9.5</span>
+      </a>
+
+  <nav class="cw-nav-desktop" aria-label="Primary">
+    <a href="/" data-testid="nav-home" >Home</a>
+    <a href="/browse" data-testid="nav-browse" >Browse</a>
+    <a href="/posture" data-testid="nav-posture" >Posture</a>
+    <a href="/activity" data-testid="nav-activity" >Activity</a>
+    <a href="/settings" data-testid="nav-settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      <div class="cw-spacer"></div>
+
+
+
+      <button type="button" class="cw-iconbtn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-dark" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+        <svg id="theme-icon-light" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <details class="cw-mobile-nav cw-nav">
+        <summary aria-label="Open section navigation"><span class="cw-muted">Section</span> Settings</summary>
+
+  <nav class="cw-nav-mobile" aria-label="Primary">
+    <a href="/" >Home</a>
+    <a href="/browse" >Browse</a>
+    <a href="/posture" >Posture</a>
+    <a href="/activity" >Activity</a>
+    <a href="/settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      </details>
+
+    </header>
+    <div class="cw-page">
+
+
+      <div id="cw-health" class="cw-health cw-hidden">
+        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
+        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+
+
+<div class="cw-wrap">
+
+<div class="cw-page-head">
+  <div>
+    <h1 data-testid="settings-heading">Settings</h1>
+    <div class="cw-page-head-sub">Instance configuration — access, alerting, and monitoring policy.</div>
+  </div>
+
+</div>
+
+  <div class="cw-sidegrid">
+
+<nav class="cw-sidenav" aria-label="Settings sections">
+  <div class="grp">Access</div>
+  <a href="/settings/auth" class="">Authentication</a>
+  <a href="/settings/roles" class="">Roles</a>
+  <a href="/settings/users" class="">Users</a>
+  <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
+  <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
+  <div class="grp">Alerting</div>
+  <a href="/settings/channels" class="active">Channels</a>
+  <a href="/settings/alert-groups" class="">Alert groups</a>
+  <a href="/settings/events" class="">Event streaming</a>
+  <div class="grp">Monitoring</div>
+  <a href="/settings/policy" class="">Policy</a>
+  <a href="/settings/trust-anchors" class="" data-testid="settings-trust-anchors-link">Trust anchors</a>
+</nav>
+
+    <div class="cw-vstack">
+
+
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Email (SMTP)</h2>
+    <span class="cw-hint">the mail relay used for alert and digest delivery</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/smtp" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_host">SMTP host
+
+          </label>
+          <input class="cw-input mono" type="text" id="smtp_host" name="smtp_host"
+                 value="" placeholder="smtp.example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_port">Port</label>
+          <input class="cw-input" type="number" id="smtp_port" name="smtp_port"
+                 value="" placeholder="587">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_user">Username <span class="cw-muted">(optional)</span></label>
+          <input class="cw-input" type="text" id="smtp_user" name="smtp_user"
+                 value="" placeholder="user@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="smtp_password">Password <span class="cw-muted">(optional)</span></label>
+          <input class="cw-input" type="password" id="smtp_password" name="smtp_password"
+                 value="" placeholder="password"
+                 autocomplete="new-password">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_from">From address</label>
+          <input class="cw-input" type="email" id="alert_from" name="alert_from"
+                 value="" placeholder="cert-watch@example.com">
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_recipients">Global SMTP recipients (comma-separated)</label>
+          <input class="cw-input" type="text" id="alert_recipients" name="alert_recipients"
+                 value="" placeholder="ops@example.com, security@example.com">
+          <div class="cw-hint">Receive per-certificate alerts alongside matching group and owner/team recipients.</div>
+        </div>
+      </div>
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save SMTP settings</button>
+        <button type="button" class="cw-btn" id="smtp-test-btn">Send test email</button>
+        <span id="smtp-test-result" class="cw-testres"></span>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2>Webhook &amp; behavior</h2>
+    <span class="cw-hint">webhook delivery, digest cadence, and alert engine tuning</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/alerts" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+
+      <div class="cw-kv-label">Webhook</div>
+      <p class="cw-hint">For individual alerts, this global webhook is used when SMTP fails or is not configured.
+        Weekly digests can use both SMTP and this webhook. Event streaming has its own configuration.</p>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_preset">Webhook preset</label>
+        <select class="cw-select" id="webhook_preset" name="webhook_preset">
+
+          <option value="generic" selected>Generic</option>
+
+          <option value="discord" >Discord</option>
+
+          <option value="teams" >Teams</option>
+
+          <option value="pagerduty" >PagerDuty</option>
+
+          <option value="slack" >Slack</option>
+
+          <option value="alertmanager" >Alertmanager</option>
+
+        </select>
+      </div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_url">Webhook URL <span class="cw-muted">(optional)</span></label>
+        <input class="cw-input mono" type="text" id="webhook_url" name="webhook_url"
+               value="" placeholder="https://hooks.slack.com/services/...">
+      </div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_template">Webhook template <span class="cw-muted">(optional)</span></label>
+        <textarea class="cw-textarea mono" id="webhook_template" name="webhook_template" rows="3"
+                  placeholder="Leave empty for default JSON payload"></textarea>
+      </div>
+      <input type="hidden" id="webhook_kind" name="webhook_kind" value="generic">
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_headers">Custom webhook headers (JSON)
+
+        </label>
+        <textarea class="cw-textarea mono" id="webhook_headers" name="webhook_headers" rows="3"
+                  placeholder="{&quot;Authorization&quot;: &quot;Bearer ...&quot;, &quot;X-Scope&quot;: &quot;certs&quot;}"></textarea>
+        <div class="cw-hint">A JSON object of HTTP headers added to webhook requests. Leave empty for none. Invalid JSON is ignored.</div>
+      </div>
+
+      <div class="cw-divider"></div>
+      <div class="cw-kv-label">Alert behavior</div>
+      <div class="cw-hint">
+        Env vars take precedence: a field with an <span class="cw-envbadge">env</span>
+        badge is locked to its environment value and changes here will not take
+        effect until the env var is unset.
+      </div>
+
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="alert_digest_only">Digest mode</label>
+          <select class="cw-select" id="alert_digest_only" name="alert_digest_only">
+            <option value="0" selected>Per-certificate alerts</option>
+            <option value="1" >Weekly digest (urgent alerts still sent)</option>
+          </select>
+          <div class="cw-hint">One weekly summary instead of individual routine alerts. Urgent alerts (&le;3 days to expiry) are always sent individually.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="drift_alerts">Drift alerts
+
+          </label>
+          <select class="cw-select" id="drift_alerts" name="drift_alerts">
+            <option value="1" selected>On</option>
+            <option value="0" >Off</option>
+          </select>
+          <div class="cw-hint">Alert when posture drifts: issuer change, key-size drop, SHA-1 downgrade, posture-grade drop, or TLS-version downgrade. On by default.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="renewal_window_days">Renewal-stalled window (days)
+
+          </label>
+          <input class="cw-input" type="number" min="0" id="renewal_window_days"
+                 name="renewal_window_days"
+                 value="30">
+          <div class="cw-hint">Days before expiry to fire a renewal-stalled alert for a cert with no successor. Default 30. Set 0 to disable.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="alert_retention_days">Alert retention (days)
+
+          </label>
+          <input class="cw-input" type="number" min="0" id="alert_retention_days"
+                 name="alert_retention_days"
+                 value="90">
+          <div class="cw-hint">Days of alert history to keep before purging. Default 90. Set 0 to disable purging.</div>
+        </div>
+        <div class="cw-field">
+          <span class="cw-label">Daily scan time (UTC)
+
+          </span>
+          <div class="cw-form-grid">
+            <input class="cw-input" type="number" min="0" max="23" id="sched_hour"
+                   name="sched_hour"
+                   value="6"
+                   aria-label="Hour (0-23)">
+            <input class="cw-input" type="number" min="0" max="59" id="sched_min"
+                   name="sched_min"
+                   value="0"
+                   aria-label="Minute (0-59)">
+          </div>
+          <div class="cw-hint">When the daily scan + alert cycle runs, in UTC. Default 06:00.</div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="check_revocation">OCSP/CRL endpoint reachability
+
+          </label>
+          <select class="cw-select" id="check_revocation" name="check_revocation">
+            <option value="0" selected>Off</option>
+            <option value="1" >On</option>
+          </select>
+          <div class="cw-hint">Probe OCSP/CRL endpoints during posture evaluation. This checks reachability and does not determine whether a certificate is revoked. Off by default (adds outbound network calls per scan).</div>
+        </div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary">Save alert settings</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+    </div>
+  </div>
+</div>
+
+    </div>
+  </div>
+  <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+<script src="/static/js/settings.js" nonce="{{CSP_NONCE}}"></script>
+
+</body>
+</html>

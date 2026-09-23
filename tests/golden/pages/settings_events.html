@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — settings</title>
+  <script nonce="{{CSP_NONCE}}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+</head>
+<body>
+
+  <div class="cw-app">
+    <header class="cw-topbar">
+      <a href="/" class="cw-wordmark">
+        <div class="cw-mark">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
+        <span class="cw-ver">v0.9.5</span>
+      </a>
+
+  <nav class="cw-nav-desktop" aria-label="Primary">
+    <a href="/" data-testid="nav-home" >Home</a>
+    <a href="/browse" data-testid="nav-browse" >Browse</a>
+    <a href="/posture" data-testid="nav-posture" >Posture</a>
+    <a href="/activity" data-testid="nav-activity" >Activity</a>
+    <a href="/settings" data-testid="nav-settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      <div class="cw-spacer"></div>
+
+
+
+      <button type="button" class="cw-iconbtn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-dark" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+        <svg id="theme-icon-light" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <details class="cw-mobile-nav cw-nav">
+        <summary aria-label="Open section navigation"><span class="cw-muted">Section</span> Settings</summary>
+
+  <nav class="cw-nav-mobile" aria-label="Primary">
+    <a href="/" >Home</a>
+    <a href="/browse" >Browse</a>
+    <a href="/posture" >Posture</a>
+    <a href="/activity" >Activity</a>
+    <a href="/settings" class="active" aria-current="page">Settings</a>
+  </nav>
+
+      </details>
+
+    </header>
+    <div class="cw-page">
+
+
+      <div id="cw-health" class="cw-health cw-hidden">
+        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
+        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+
+
+<div class="cw-wrap">
+
+<div class="cw-page-head">
+  <div>
+    <h1 data-testid="settings-heading">Settings</h1>
+    <div class="cw-page-head-sub">Instance configuration — access, alerting, and monitoring policy.</div>
+  </div>
+
+</div>
+
+  <div class="cw-sidegrid">
+
+<nav class="cw-sidenav" aria-label="Settings sections">
+  <div class="grp">Access</div>
+  <a href="/settings/auth" class="">Authentication</a>
+  <a href="/settings/roles" class="">Roles</a>
+  <a href="/settings/users" class="">Users</a>
+  <a href="/settings/api-keys" class="" data-testid="settings-api-keys-link">API keys</a>
+  <a href="/settings/tags" class="" data-testid="settings-tags-link">Tags</a>
+  <div class="grp">Alerting</div>
+  <a href="/settings/channels" class="">Channels</a>
+  <a href="/settings/alert-groups" class="">Alert groups</a>
+  <a href="/settings/events" class="active">Event streaming</a>
+  <div class="grp">Monitoring</div>
+  <a href="/settings/policy" class="">Policy</a>
+  <a href="/settings/trust-anchors" class="" data-testid="settings-trust-anchors-link">Trust anchors</a>
+</nav>
+
+    <div class="cw-vstack">
+
+
+
+<div class="cw-panel">
+  <div class="cw-panel-head">
+    <h2 data-testid="events-heading">Event streaming</h2>
+    <span class="cw-hint">real-time webhook delivery of scan / cert / alert events</span>
+  </div>
+  <div class="cw-panel-body">
+    <form method="post" action="/settings/events" class="cw-form">
+      <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+
+      <div class="cw-kv-label">Enabled event types</div>
+      <div class="cw-form-grid">
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="cert_added"
+                 checked
+                 data-testid="event-type-cert_added">
+          <span class="mono">cert_added</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="cert_renewed"
+                 checked
+                 data-testid="event-type-cert_renewed">
+          <span class="mono">cert_renewed</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="posture_changed"
+                 checked
+                 data-testid="event-type-posture_changed">
+          <span class="mono">posture_changed</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="scan_failed"
+                 checked
+                 data-testid="event-type-scan_failed">
+          <span class="mono">scan_failed</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="policy_violation"
+                 checked
+                 data-testid="event-type-policy_violation">
+          <span class="mono">policy_violation</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="alert_acknowledged"
+                 checked
+                 data-testid="event-type-alert_acknowledged">
+          <span class="mono">alert_acknowledged</span>
+        </label>
+
+        <label class="cw-check">
+          <input type="checkbox" name="enabled_event_types" value="renewal_overdue"
+                 checked
+                 data-testid="event-type-renewal_overdue">
+          <span class="mono">renewal_overdue</span>
+        </label>
+
+      </div>
+
+      <div class="cw-divider"></div>
+      <div class="cw-kv-label">Webhook sink</div>
+      <div class="cw-field">
+        <label class="cw-label" for="webhook_url">Webhook URL</label>
+        <input class="cw-input mono" type="url" id="webhook_url" name="webhook_url"
+               value=""
+               placeholder="https://hooks.example.com/cert-watch"
+               data-testid="events-webhook-url">
+      </div>
+      <div class="cw-form-grid">
+        <div class="cw-field">
+          <label class="cw-label" for="webhook_kind">Adapter kind</label>
+          <select class="cw-select" id="webhook_kind" name="webhook_kind"
+                  data-testid="events-webhook-kind">
+
+            <option value="generic" selected>Generic</option>
+
+            <option value="discord" >Discord</option>
+
+            <option value="teams" >Teams</option>
+
+            <option value="pagerduty" >PagerDuty</option>
+
+            <option value="slack" >Slack</option>
+
+            <option value="alertmanager" >Alertmanager</option>
+
+          </select>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="rate_limit_per_second">Rate limit (events/sec)</label>
+          <input class="cw-input" type="number" id="rate_limit_per_second"
+                 name="rate_limit_per_second" value="100"
+                 min="1" max="1000" data-testid="events-rate-limit">
+        </div>
+      </div>
+      <div class="cw-field" id="pagerduty-key-field">
+        <label class="cw-label" for="pagerduty_routing_key">PagerDuty routing key</label>
+        <input class="cw-input" type="password" id="pagerduty_routing_key" name="pagerduty_routing_key"
+               value="" autocomplete="new-password"
+               placeholder="Events API v2 integration routing key"
+               data-testid="events-pagerduty-routing-key">
+        <div class="cw-hint">Required when webhook kind is PagerDuty.</div>
+      </div>
+
+      <div class="cw-form-foot">
+        <button type="submit" class="cw-btn primary" data-testid="events-save-btn">Save</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+    </div>
+  </div>
+</div>
+
+    </div>
+  </div>
+  <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+</body>
+</html>
