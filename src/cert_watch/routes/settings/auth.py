@@ -65,7 +65,14 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
     # row in the Roles tab, so a submit only carries the role(s) being edited.
     # Roles not present in this form must be left untouched. Keyed by role id
     # (load_ui_role_map normalises legacy name keys and drops stale entries).
-    from cert_watch.auth.rbac import UI_ROLE_MAP_KV_KEY, load_ui_role_map
+    from cert_watch.auth.rbac import (
+        UI_ROLE_MAP_CONFIGURED_KV_KEY,
+        UI_ROLE_MAP_KV_KEY,
+        load_ui_role_map,
+        normalize_ui_role_map,
+    )
+
+    normalize_ui_role_map(db)
 
     map_data: dict[str, Any] = dict(load_ui_role_map(db))
 
@@ -97,6 +104,9 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
 
     with get_write_lock():
         kv_set(db, UI_ROLE_MAP_KV_KEY, json.dumps(map_data))
+        if map_data:
+            # Sticky (N-1): from now on an empty map is least privilege.
+            kv_set(db, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
     # Apply the mapping now: it is part of Settings.role_map (merged in
     # Settings.from_env_with_kv), which request-time RBAC reads.
     _rebuild_settings(request, db)

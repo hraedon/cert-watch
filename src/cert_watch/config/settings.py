@@ -452,7 +452,12 @@ class Settings:
         """
         import dataclasses
 
-        from cert_watch.auth.rbac import ui_role_map_by_name
+        from cert_watch.auth.rbac import (
+            RBAC_ENFORCED_KEY,
+            normalize_ui_role_map,
+            ui_role_map_by_name,
+            ui_role_map_configured,
+        )
         from cert_watch.config.kv_loader import _merge_kv_settings
 
         merged = _merge_kv_settings(cls.from_env(), db_path, encryption_key)
@@ -460,7 +465,14 @@ class Settings:
         # was stored but never read, so the UI's mapping had no effect. Merge it
         # per role, with CERT_WATCH_ROLE_MAP winning for any role it names.
         # Entries for roles that no longer exist are dropped (PR #78, B1).
-        ui_map = ui_role_map_by_name(db_path)
-        if not ui_map:
+        # Database errors propagate: a failed rebuild keeps the previous
+        # Settings rather than one with an empty (= full access) role map.
+        normalize_ui_role_map(db_path)
+        role_map = {**ui_role_map_by_name(db_path), **merged.role_map}
+        if not role_map and ui_role_map_configured(db_path):
+            # Mapping was configured and then emptied: least privilege, not
+            # the never-configured "full access" default (N-1).
+            role_map = {RBAC_ENFORCED_KEY: {}}
+        if role_map == merged.role_map:
             return merged
-        return dataclasses.replace(merged, role_map={**ui_map, **merged.role_map})
+        return dataclasses.replace(merged, role_map=role_map)

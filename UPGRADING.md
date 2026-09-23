@@ -80,9 +80,20 @@ restore the pre-migration backup.
     access as before.
   - A directory user who shares the break-glass username is no longer treated
     as break-glass at sign-in (it was decided by name).
-  - Role mappings are stored by role id. Existing name-keyed entries keep
-    working while a role of that name exists; an entry for a role that no
-    longer exists is ignored (it grants nothing) and dropped on the next save.
+  - Role mappings are stored by role id. On first load after the upgrade,
+    name-keyed entries are rewritten to the id of the role with that name,
+    and entries for which no such role exists are dropped; name keys are not
+    honoured after that.
+  - **Mapping is sticky.** If a mapping exists (from an earlier release or
+    saved now), cert-watch records that RBAC mapping is configured. Removing
+    or clearing every mapping afterwards leaves directory users **read-only**
+    rather than restoring "no role map = full access". Only an install that
+    never had a UI mapping (and no `CERT_WATCH_ROLE_MAP`) keeps the legacy
+    full-access default. To deliberately return to it, delete the kv keys
+    `ldap_role_map` and `ldap_role_map_configured`.
+  - If persisted settings cannot be read at startup, directory users start
+    read-only (unless `CERT_WATCH_ROLE_MAP` maps them) and an error is
+    logged; local accounts and the break-glass admin are unaffected.
   - Settings → Users rejects usernames over 128 characters, emails over 254,
     and the break-glass username. Existing accounts are not changed; an
     existing account named like the break-glass admin no longer blocks the

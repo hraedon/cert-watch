@@ -119,8 +119,18 @@ def _sign_state(
     payload = f"{state}:{nonce}" if nonce else state
     if code_verifier:
         payload = f"{payload}|{code_verifier}"
-    sig = hmac.new(_key(security).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
-    return f"{payload}:{sig}"
+    return f"{payload}:{_state_mac(payload, security)}"
+
+
+# OAuth state tokens get their own MAC domain, distinct from sessions, so
+# neither token type (nor a pre-1.0 bare-MAC session) verifies as the other
+# (PR #78 re-verification, N-3).
+_STATE_FORMAT = b"cert-watch-oauth-state-v1\x00"
+
+
+def _state_mac(payload: str, security: SecurityContext | None) -> str:
+    mac = hmac.new(_key(security).encode(), _STATE_FORMAT + payload.encode(), hashlib.sha256)
+    return mac.hexdigest()[:64]
 
 
 def _verify_state(
@@ -141,10 +151,7 @@ def _verify_state(
     sig = parts[-1]
     payload = ":".join(parts[:-1])
     # Verify HMAC over the FULL payload (including code_verifier if present).
-    expected = hmac.new(
-        _key(security).encode(), payload.encode(), hashlib.sha256
-    ).hexdigest()[:64]
-    if not hmac.compare_digest(sig, expected):
+    if not hmac.compare_digest(sig, _state_mac(payload, security)):
         return None
     # Extract optional PKCE code_verifier (pipe-separated; L12).
     code_verifier: str | None = None

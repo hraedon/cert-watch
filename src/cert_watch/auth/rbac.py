@@ -276,43 +276,99 @@ class AuthContext:
 # ---------------------------------------------------------------------------
 
 UI_ROLE_MAP_KV_KEY = "ldap_role_map"
+# Sticky: set the first time a Settings → Roles mapping exists. From then on
+# an empty map means "directory users are least-privileged", never the
+# legacy "no role map = full access" (PR #78 re-verification, N-1).
+UI_ROLE_MAP_CONFIGURED_KV_KEY = "ldap_role_map_configured"
+# A role-map entry that matches nobody. Its presence makes the map non-empty,
+# so every "role map configured?" check takes the RBAC path and an unmatched
+# directory user resolves to viewer. Used when mapping is configured but no
+# mapping is left, and when the role map cannot be read at startup.
+RBAC_ENFORCED_KEY = "cw:rbac-enforced"
+
+
+def _read_raw_ui_role_map(db_path: Any) -> dict[str, Any]:
+    """The stored mapping as-is. Malformed JSON reads as empty; a database
+    error propagates, so a failed settings rebuild keeps the last good role
+    map instead of silently emptying it (B-1)."""
+    import json
+
+    from cert_watch.database import kv_get
+
+    try:
+        data = json.loads(kv_get(db_path, UI_ROLE_MAP_KV_KEY) or "{}")
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def load_ui_role_map(db_path: Any) -> dict[str, dict[str, list[str]]]:
     """Return the Settings → Roles mapping keyed by **role id**.
 
     Entries are stored by role id so a rename cannot orphan them and a delete
-    removes them (PR #78 review, B1). A legacy name-keyed entry is accepted
-    only while a role of that name exists. Anything that does not resolve to
-    an existing role -- a deleted role's id, a stale name -- is dropped, so a
-    UI entry can never fall back to a built-in tier such as ``admin``.
+    removes them (PR #78 review, B1). Only keys that are the id of an existing
+    role count: name keys are rewritten once by :func:`normalize_ui_role_map`
+    and ignored afterwards, so a later role that happens to reuse a name
+    never adopts a stale entry (N-2). Database errors propagate.
+    """
+    from cert_watch.database.users_roles import SqliteRoleRepository
+
+    data = _read_raw_ui_role_map(db_path)
+    if not data:
+        return {}
+    role_ids = {r.id for r in SqliteRoleRepository(db_path).list_all()}
+    return {
+        key: _clean_mapping(mapping)
+        for key, mapping in data.items()
+        if key in role_ids and isinstance(mapping, dict)
+    }
+
+
+def _clean_mapping(mapping: dict[str, Any]) -> dict[str, list[str]]:
+    return {
+        "groups": [str(g) for g in mapping.get("groups", []) if g],
+        "users": [str(u) for u in mapping.get("users", []) if u],
+    }
+
+
+def normalize_ui_role_map(db_path: Any) -> None:
+    """One-time rewrite of the stored mapping to role-id keys.
+
+    A name key (as written by earlier releases) is rewritten to the id of the
+    role that has that name now; entries that resolve to no role are dropped.
+    A non-empty stored map also sets the sticky "configured" flag. Writes
+    only when something changes, so it is cheap to call on every load.
     """
     import json
 
-    from cert_watch.database import kv_get
+    from cert_watch.database import get_write_lock, kv_get, kv_set
     from cert_watch.database.users_roles import SqliteRoleRepository
 
-    try:
-        data = json.loads(kv_get(db_path, UI_ROLE_MAP_KV_KEY) or "{}")
+    with get_write_lock():
+        data = _read_raw_ui_role_map(db_path)
+        if not data:
+            return
+        if kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) != "1":
+            kv_set(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
         roles = SqliteRoleRepository(db_path).list_all()
-    except (ValueError, TypeError, OSError, sqlite3.Error):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    by_id = {r.id for r in roles}
-    by_name = {r.name: r.id for r in roles}
-    out: dict[str, dict[str, list[str]]] = {}
-    for key, mapping in data.items():
-        if not isinstance(mapping, dict):
-            continue
-        role_id = key if key in by_id else by_name.get(key)
-        if role_id is None or (role_id in out and key not in by_id):
-            continue
-        out[role_id] = {
-            "groups": [str(g) for g in mapping.get("groups", []) if g],
-            "users": [str(u) for u in mapping.get("users", []) if u],
-        }
-    return out
+        by_id = {r.id for r in roles}
+        by_name = {r.name: r.id for r in roles}
+        out: dict[str, dict[str, list[str]]] = {}
+        for key, mapping in data.items():
+            if not isinstance(mapping, dict):
+                continue
+            if key in by_id:
+                out[key] = _clean_mapping(mapping)
+            elif key in by_name and by_name[key] not in data:
+                out.setdefault(by_name[key], _clean_mapping(mapping))
+        if out != data:
+            kv_set(db_path, UI_ROLE_MAP_KV_KEY, json.dumps(out))
+
+
+def ui_role_map_configured(db_path: Any) -> bool:
+    from cert_watch.database import kv_get
+
+    return kv_get(db_path, UI_ROLE_MAP_CONFIGURED_KV_KEY) == "1"
 
 
 def ui_role_map_by_name(db_path: Any) -> dict[str, dict[str, Any]]:
@@ -320,17 +376,15 @@ def ui_role_map_by_name(db_path: Any) -> dict[str, dict[str, Any]]:
 
     Each entry carries its ``role_id`` so :func:`_role_tiers_from_map` reads
     the tier from that role and grants nothing if it has since been deleted,
-    even while a cached ``Settings.role_map`` still lists it.
+    even while a cached ``Settings.role_map`` still lists it. Database errors
+    propagate (B-1).
     """
     from cert_watch.database.users_roles import SqliteRoleRepository
 
     ui = load_ui_role_map(db_path)
     if not ui:
         return {}
-    try:
-        names = {r.id: r.name for r in SqliteRoleRepository(db_path).list_all()}
-    except (OSError, sqlite3.Error):
-        return {}
+    names = {r.id: r.name for r in SqliteRoleRepository(db_path).list_all()}
     return {
         names[rid]: {**mapping, "role_id": rid} for rid, mapping in ui.items() if rid in names
     }

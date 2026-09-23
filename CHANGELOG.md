@@ -363,6 +363,25 @@ All notable changes to cert-watch are documented in this file.
   local user revokes sessions for the old and new names, and creating a user
   revokes any residual session for that name; previously an old `alice`
   cookie resolved to a later account created as `alice`.
+- **A role-map read error no longer grants full access.** A database error
+  while reading the Settings → Roles mapping (e.g. `database is locked`
+  during a settings rebuild) used to produce an empty role map, which means
+  "full access" for directory users. The error now propagates and the last
+  good settings stay in force; if settings cannot be loaded at startup,
+  directory users are read-only until they load cleanly.
+- **Removing the last IdP mapping no longer restores full access.** Once a
+  Settings → Roles mapping has been saved (or one exists from an earlier
+  release), an empty mapping leaves directory users read-only instead of
+  reverting to the never-configured "full access" default. The Roles page
+  warns before the last mapped role is deleted.
+- **Legacy name-keyed mappings are normalised once.** Entries stored by role
+  name are rewritten to role ids on load (dropped if no role has that name)
+  and name keys are then ignored, so a role created later with a reused name
+  never inherits an old mapping.
+- **OAuth state and session tokens are signed in separate domains.** A
+  session token (including a pre-1.0 one) no longer verifies as an OAuth
+  state token, or vice versa. An OAuth sign-in in progress during the
+  upgrade must be restarted.
 - **A local account cannot shadow the break-glass admin.** Settings → Users
   rejects the break-glass username (case-insensitive) on create and rename,
   and sign-in tries the break-glass password even if a same-named account

@@ -528,3 +528,169 @@ def test_renamed_user_old_cookie_is_revoked(env, login_csrf):
         )
         client.cookies.delete(SESSION_COOKIE)
         assert _signed_out_with(client, alice_cookie.strip('"'))
+
+
+# ---------- PR #78 re-verification: B-1 -- a DB error never empties the role map ----------
+
+
+def test_role_map_db_error_during_rebuild_keeps_last_good_settings(env, login_csrf, monkeypatch):
+    import sqlite3
+
+    staff = SqliteRoleRepository(env).add(Role(name="ops", permission_tier="viewer"))
+    app = _app(_composite(env))
+    with TestClient(app, raise_server_exceptions=False) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        _save_mapping(client, staff, groups="cn=ops")
+
+        def locked(self):
+            raise sqlite3.OperationalError("database is locked")
+
+        with monkeypatch.context() as m:
+            m.setattr(SqliteRoleRepository, "list_all", locked)
+            client.post("/settings/smtp", data={}, follow_redirects=False)
+        assert app.state.settings.role_map, "a failed rebuild replaced the role map"
+        assert not _it_admin_is_admin(client, login_csrf)  # dirk/itguy: mapped viewer
+
+
+def test_startup_role_map_failure_fails_closed(env, monkeypatch):
+    from cert_watch.app import create_app
+    from cert_watch.config import Settings
+
+    def boom(*_a, **_k):
+        raise OSError("disk I/O error")
+
+    monkeypatch.setattr(Settings, "from_env_with_kv", classmethod(boom))
+    app = create_app()
+    with TestClient(app):
+        assert app.state.settings.role_map, "startup fell back to an empty role map"
+
+
+# ---------- N-1: once mapping is configured, an empty map is least privilege ----------
+
+
+def test_deleting_the_last_mapped_role_does_not_restore_full_access(env, login_csrf):
+    ops = SqliteRoleRepository(env).add(Role(name="ops", permission_tier="viewer"))
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        _save_mapping(client, ops, groups="cn=ops")
+        r = client.post(f"/settings/roles/{ops}/delete", follow_redirects=False)
+        assert "saved" in r.headers["location"]
+        assert not _it_admin_is_admin(client, login_csrf)
+        host_id = SqliteHostRepository(env).add("a.example.com", 443)
+        assert "error" in _post_notes(client, host_id).headers["location"]
+
+
+def test_clearing_the_last_mapping_does_not_restore_full_access(env, login_csrf):
+    ops = SqliteRoleRepository(env).add(Role(name="ops", permission_tier="viewer"))
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        _save_mapping(client, ops, groups="cn=ops")
+        _save_mapping(client, ops)  # both fields cleared
+        assert not _it_admin_is_admin(client, login_csrf)
+
+
+def test_existing_nonempty_ui_map_counts_as_configured(tmp_path, monkeypatch):
+    """Upgrade path: a map saved by an earlier release sets the sticky flag."""
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+    db = _seed(tmp_path)
+    kv_set(db, "ldap_role_map", json.dumps({"gone-role": {"groups": ["cn=x"]}}))
+    from cert_watch.auth.rbac import build_auth_context
+    from cert_watch.config import Settings
+
+    s = Settings.from_env_with_kv(db)
+    ctx = build_auth_context("dirk", ["cn=x"], [], s.role_map, SqliteRoleRepository(db))
+    assert not ctx.is_admin and not ctx.may_write()
+
+
+def test_never_configured_install_keeps_legacy_full_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+    db = _seed(tmp_path)
+    from cert_watch.config import Settings
+
+    assert Settings.from_env_with_kv(db).role_map == {}
+
+
+def test_roles_page_warns_before_deleting_the_last_mapping(env, login_csrf):
+    ops = SqliteRoleRepository(env).add(Role(name="ops", permission_tier="viewer"))
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        _save_mapping(client, ops, groups="cn=ops")
+        page = client.get("/settings/roles").text
+    assert "last IdP mapping" in page
+
+
+# ---------- N-2: legacy name-keyed entries are normalised, never adopted ----------
+
+
+def test_legacy_name_key_is_not_adopted_by_a_recreated_role(env, login_csrf):
+    roles = SqliteRoleRepository(env)
+    old = roles.add(Role(name="admin", permission_tier="viewer", scope_tag="x"))
+    roles.add(Role(name="staff", permission_tier="viewer"))
+    # As stored by a pre-PR release: keyed by role NAME.
+    kv_set(env, "ldap_role_map", json.dumps({
+        "admin": {"groups": [], "users": ["helpdesk"]},
+        "staff": {"groups": ["cn=staff"], "users": []},
+    }))
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        r = client.post(
+            f"/settings/roles/{old}",
+            data={"name": "helpdesk-team", "permission_tier": "viewer", "scope_tag": "x"},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+        r = client.post(
+            "/settings/roles", data={"name": "admin", "permission_tier": "admin"},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+        client.post("/settings/smtp", data={}, follow_redirects=False)  # any rebuild
+        _login(client, login_csrf, "helpdesk", "x")
+        assert "error" in _create_role(client, "by-helpdesk").headers["location"]
+    stored = json.loads(kv_get(env, "ldap_role_map"))
+    assert "admin" not in stored and "staff" not in stored  # no name keys remain
+
+
+def test_name_keys_are_ignored_once_normalised(tmp_path, monkeypatch):
+    from cert_watch.auth.rbac import load_ui_role_map, normalize_ui_role_map
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
+    db = _seed(tmp_path)
+    ops = SqliteRoleRepository(db).add(Role(name="ops"))
+    kv_set(db, "ldap_role_map", json.dumps({
+        "ops": {"groups": ["cn=ops"]}, "ghost": {"groups": ["cn=g"]},
+    }))
+    normalize_ui_role_map(db)
+    assert json.loads(kv_get(db, "ldap_role_map")) == {
+        ops: {"groups": ["cn=ops"], "users": []},
+    }
+    # A name key written later (e.g. by hand) is not honoured.
+    kv_set(db, "ldap_role_map", json.dumps({"ops": {"groups": ["cn=ops"]}}))
+    assert load_ui_role_map(db) == {}
+
+
+# ---------- N-3: session and OAuth-state MACs are domain-separated ----------
+
+
+def test_session_token_is_not_a_valid_oauth_state():
+    import hashlib
+    import hmac as _hmac
+    import time as _t
+
+    from cert_watch.auth.session import _key, _verify_state, create_session
+
+    assert _verify_state(create_session("alice", version=1)) is None
+    payload = f"alice:1:{int(_t.time())}:0123456789abcdef"  # pre-1.0 session shape
+    mac = _hmac.new(_key(None).encode(), payload.encode(), hashlib.sha256).hexdigest()[:64]
+    legacy = f"{payload}:{mac}"
+    assert _verify_state(legacy) is None
+
+
+def test_oauth_state_is_not_a_valid_session_token():
+    from cert_watch.auth.session import _sign_state, _verify_state, decode_session
+
+    state = _sign_state("alice:1:1790000000", nonce="0123456789abcdef")
+    assert _verify_state(state) is not None  # control: it is a valid state
+    assert decode_session(state) is None

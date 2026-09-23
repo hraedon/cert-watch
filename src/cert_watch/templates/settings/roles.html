@@ -142,7 +142,9 @@
                 </form>
               </div>
             </details>
-            <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role? Members lose its access and alert routing.">
+            {% set last_mapping = ldap_role_map | length == 1 and r.id in ldap_role_map %}
+            {% if last_mapping %}<div class="cw-hint">This role holds the last IdP mapping: once it is deleted, directory users are read-only until another role is mapped.</div>{% endif %}
+            <form method="post" action="/settings/roles/{{ r.id }}/delete" class="cw-inline confirm-form" data-confirm="Delete this role? Members lose its access and alert routing.{% if last_mapping %} This is the last IdP mapping: directory users become read-only until another role is mapped.{% endif %}">
               <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="cw-btn danger sm">Delete</button>
             </form>
