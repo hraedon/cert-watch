@@ -52,8 +52,8 @@ docker run -d --name cert-watch -p 8000:8000 \
 docker exec cert-watch cat /var/lib/cert-watch/initial-admin-password
 ```
 
-Open <http://localhost:8000>, sign in as `admin`, and add a host from
-**Browse → Add**. The first scan runs immediately.
+Open <http://localhost:8000>, sign in as `admin`, and add a host with
+**Browse → Add host**. The first scan runs immediately.
 
 For anything longer-lived, follow [docs/install.md](docs/install.md). It covers
 pinning and verifying a release, and sets out what to configure before

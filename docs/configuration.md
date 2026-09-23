@@ -8,10 +8,9 @@ combine, then lists every setting.
 
 For each setting, cert-watch takes the first of these that exists:
 
-1. **The environment variable**, if it is set to something other than blank
-   space. A blank value counts as unset, so a placeholder such as
-   `SMTP_PASSWORD: ""` in a Compose file doesn't hide what you saved in
-   Settings.
+1. **The environment variable**, if it is set. For settings that can also be
+   saved in Settings, a blank value counts as unset, so a placeholder such as
+   `SMTP_PASSWORD: ""` in a Compose file doesn't hide what you saved there.
 2. **The `_FILE` variant.** Every secret can instead be read from a file named
    by `<VARIABLE>_FILE`, e.g. `SMTP_PASSWORD_FILE=/run/secrets/smtp`. Use this
    with Docker, Kubernetes or systemd secrets. If a `_FILE` variable is set but
