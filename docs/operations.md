@@ -31,12 +31,13 @@ beyond their status to anonymous callers.
 | Endpoint | Returns | Use it for |
 |----------|---------|------------|
 | `/healthz` | `200 {"status": "ok"}` while the process is serving | Liveness probes |
-| `/readyz` | `200` when ready; `503` if the database can't be read or written, or the scheduler isn't running | Readiness probes and uptime checks |
+| `/readyz` | `200` when ready; `503` if the database can't be read or written, or the scheduler isn't running or is repeatedly failing | Readiness probes and uptime checks |
 
 **Metrics.** `/metrics` exposes Prometheus gauges. With authentication
 enabled, it answers only the dedicated bearer token (`CERT_WATCH_METRICS_TOKEN`,
 not an API key) or an administrator's browser session, so set the token for
-your scraper. With authentication disabled, it is open like everything else.
+your scraper. With authentication disabled it is open, unless a metrics token is set, in which
+case the token is still required.
 The labels include host names and certificate subjects, so also restrict it to
 your monitoring network at the ingress or firewall.
 
@@ -50,6 +51,8 @@ your monitoring network at the ingress or firewall.
 | `cert_watch_hosts_tracked` | | Hosts tracked |
 | `cert_watch_scan_errors` | `host`, `reason` | Recorded scan failures (until retention removes them) |
 | `cert_watch_last_scan_timestamp_seconds` | | When the most recent scan finished |
+| `cert_watch_alerts` | `status` | Alerts by lifecycle state (pending, sending, failed, …) |
+| `cert_watch_alerts_failed_recent` | | Alerts that gave up in the last 24 hours; the `CertWatchAlertDeliveryFailed` rule uses it |
 
 `deploy/k8s/prometheus-rules.yaml` contains ready-made rules. The one to keep
 even if you use no others is **`CertWatchScanStalled`**: no scan for 36 hours.
@@ -70,7 +73,9 @@ configuration.
 cert-watch backup /backups/cert-watch-$(date +%F).sqlite3
 ```
 
-This uses SQLite's online backup, so it's safe while cert-watch is running.
+This writes a consistent copy with SQLite's `VACUUM INTO`, so it's safe while
+cert-watch is running. It refuses to overwrite an existing file, so give each
+backup a new name.
 Don't copy the database file directly while the process is up: with
 write-ahead logging, a plain copy can miss committed data. Keep the generated
 `.auth_secret` file from the data directory with your backups, or set
@@ -97,7 +102,7 @@ Old records are purged at startup and daily. `0` keeps a record type forever.
 | Setting | Default | Covers |
 |---------|---------|--------|
 | `CERT_WATCH_HISTORY_RETENTION_DAYS` | 365 | Per-scan certificate snapshots and trend data |
-| `CERT_WATCH_ALERT_RETENTION_DAYS` | 90 | Delivered alerts. Undelivered ones are kept four times as long, so the record of an outage outlives it. |
+| `CERT_WATCH_ALERT_RETENTION_DAYS` | 90 | Delivered and cancelled alerts. Undelivered ones are kept four times as long, so the record of an outage outlives it. |
 | `CERT_WATCH_AUDIT_RETENTION_DAYS` | 90 | Audit log |
 | `CERT_WATCH_EVENT_RETENTION_DAYS` | 30 | Lifecycle event log |
 
@@ -124,8 +129,9 @@ the upgrade wrote.
 - **API keys**: create the replacement, move the client over, revoke the old
   key under **Settings → API keys**.
 - **The break-glass password**: generate a new hash with
-  `cert-watch hash-password` and set `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`, or
-  change it under **Settings** while signed in as the break-glass admin.
+  `cert-watch hash-password` and set `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`, or,
+  if the hash isn't set in the environment, change it under **Settings →
+  Authentication** while signed in as the break-glass admin.
 
 ## Command line
 
@@ -152,8 +158,8 @@ outside the scanning policy. Private addresses need to be inside
 metadata addresses are always refused.
 
 **Alerts aren't arriving.** **Activity → Alerts** shows each alert's delivery
-attempts: channel, outcome, and the reason for any failure. Use the test
-buttons under **Settings → Alerts** to send a test message through SMTP or the
+attempts: channel, outcome, and the reason for any failure. **Settings →
+Channels → Send test email** tests SMTP. `POST /api/webhook/test` tests the
 webhook. [alerting.md](alerting.md) explains how alerts are created, routed and
 retried.
 

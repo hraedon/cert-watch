@@ -49,7 +49,7 @@ cert-manager, your inventory, and Cert Spotter do those better;
 ```bash
 docker run -d --name cert-watch -p 8000:8000 \
   -v cert-watch-data:/var/lib/cert-watch ghcr.io/hraedon/cert-watch:latest
-docker logs cert-watch    # prints a one-time admin password
+docker exec cert-watch cat /var/lib/cert-watch/initial-admin-password
 ```
 
 Open <http://localhost:8000>, sign in as `admin`, and add a host from

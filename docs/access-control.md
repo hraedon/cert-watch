@@ -52,8 +52,10 @@ rely on it.
 A role mapping connects directory groups, IdP roles or usernames to
 cert-watch roles. You can define it in two places, and they are merged:
 
-- **Settings → Roles**, where each role has a list of groups, roles and users.
-- `CERT_WATCH_ROLE_MAP`, a JSON object for configuration-as-code:
+- **Settings → Roles**, where each role lists the directory groups and
+  usernames that receive it.
+- `CERT_WATCH_ROLE_MAP`, a JSON object for configuration-as-code, which can
+  also map OIDC roles:
 
   ```json
   {"operator": {"groups": ["CN=cert-ops,OU=Groups,DC=example,DC=com"]},
@@ -62,11 +64,15 @@ cert-watch roles. You can define it in two places, and they are merged:
 
   For any role named in both places, the environment variable wins.
 
-A user receives every role whose groups, roles or users match, and the most
-permissive tier among them applies. A user who matches nothing is a viewer.
+A user receives every role whose groups, roles or usernames match. Among
+their unscoped roles, the most permissive tier applies. A scoped role's tier
+applies only to its own tags (see scoping below). A user who matches nothing
+is a viewer.
 
-Once a mapping has been saved in Settings, cert-watch remembers that role
-mapping is in use. Removing every mapping afterwards leaves directory users as
+Once a mapping has been saved under **Settings → Roles**, cert-watch remembers
+that role mapping is in use. A mapping that exists only in
+`CERT_WATCH_ROLE_MAP` isn't remembered this way; removing it returns directory
+users to the username lists below. Removing every mapping afterwards leaves directory users as
 viewers; it doesn't return them to full access. The same applies if the
 stored mapping becomes unreadable. Going back to the unmapped behaviour is
 deliberately awkward. With cert-watch stopped, delete the `ldap_role_map` and
@@ -98,9 +104,9 @@ break-glass admin.
 
 ## Scoping people to part of the estate
 
-A role can carry a **scope**: one or more tags. Someone whose roles are all
-scoped sees and changes only hosts and certificates carrying one of their
-tags. A role can also grant a different tier on specific tags, for example
+A role can carry a **scope**: one or more tags. A non-administrator who holds
+any scoped role sees and changes only hosts and certificates carrying one of
+their scope tags, even if they also hold an unscoped role. A role can also grant a different tier on specific tags, for example
 viewer everywhere in scope but operator on `payments`.
 
 Scope applies to the inventory, certificate and host pages, alerts, scan
@@ -146,5 +152,5 @@ Rotating `CERT_WATCH_AUTH_SECRET` also signs everyone out and requires
 
 - **Settings → Users** and **Settings → Roles** show each local account's role,
   each role's tier, scope and per-tag tiers, and the directory mapping.
-- The audit log (**Activity → Audit**, administrators only) records every
+- The audit log (**Activity → Audit log**, administrators only) records every
   sign-in, every change and the account or API key that made it.

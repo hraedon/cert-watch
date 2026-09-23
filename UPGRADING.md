@@ -44,8 +44,8 @@ items can lock someone out or change who gets alerted.
 - [ ] **If you have saved a role mapping under Settings → Roles,** it now
       takes effect. It had been saved but never used. Directory users who
       match no mapping become read-only, so map your administrators first.
-      Once any mapping exists, clearing it leaves directory users read-only
-      rather than restoring full access. See
+      Once a mapping has been saved there, clearing it leaves directory users
+      read-only rather than restoring full access. See
       [access-control.md](docs/access-control.md#1-role-mapping-recommended).
 - [ ] **Review three saved settings** that earlier releases saved but
       ignored, because they now apply: the OAuth scope, the LDAP user filter,
@@ -61,9 +61,9 @@ items can lock someone out or change who gets alerted.
 - [ ] **Anything that imports cert-watch in Python:** `cert_watch.alerts`,
       `cert_watch.alert_delivery`, `cert_watch.alert_adapters` and
       `cert_watch.digest` are gone. Import from `cert_watch.alerting`.
-- [ ] **Renewal-webhook consumers that match on the subject:** it now shows
-      the configured window, e.g. `Renewal Digest (14d)`, instead of a fixed
-      `(7d)`.
+- [ ] **Alert-webhook consumers that match the renewal digest's subject:** it
+      now shows the digest window, e.g. `Renewal Digest (14d)`, instead of a
+      fixed `(7d)`.
 - [ ] **If you scan carrier-grade NAT addresses (`100.64.0.0/10`)**, they now
       count as private: allow private addresses, and include the range in
       `CERT_WATCH_ALLOWED_SUBNETS` if you use it.
@@ -79,7 +79,9 @@ items can lock someone out or change who gets alerted.
 - **Kubernetes:** update the image and apply. The `Recreate` strategy ensures
   the old pod has stopped before the new one migrates.
 - **Linux:** re-run `scripts/install-linux.sh`, or install the new version into
-  the existing virtual environment and restart the service.
+  the existing virtual environment and restart the service. The script
+  rewrites the unit file, so keep local settings in a drop-in
+  (`systemctl edit cert-watch`), not in the unit itself.
 - **Windows / IIS:** re-run `install-windows.ps1` with your original arguments.
   It stops the application pool, which releases the database, updates the
   code, and starts the pool again. It never touches the database file,
