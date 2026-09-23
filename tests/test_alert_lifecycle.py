@@ -202,7 +202,7 @@ def test_unconfigured_delivery_backs_off_without_spending_attempts(
     assert Dispatcher(db, transports=[], clock=clock).process_pending() == {
         "sent": 0,
         "failed": 0,
-        "deferred": 1,
+        "deferred": 0,
     }
     stored = SqliteAlertRepository(db).list_for_cert("cert-1")[0]
     assert stored.status == "pending"

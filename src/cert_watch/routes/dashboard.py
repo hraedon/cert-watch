@@ -395,18 +395,29 @@ async def retry_failed_alert(
 ) -> RedirectResponse:
     """Return one terminal failed alert to the eligible queue."""
     db = _db_path(request)
-    with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT cert_id, status FROM alerts WHERE id = ?", (alert_id,)
-        ).fetchone()
-    if row is None:
-        return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
     try:
         with get_write_lock():
             retried = AlertStore(db).operator_retry(alert_id, auth=acting_auth(request))
-    except ScopeDeniedError as exc:
-        return RedirectResponse(url=f"/alerts?error={quote(str(exc))}", status_code=303)
+    except ScopeDeniedError:
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert.retry_denied",
+            target_type="alert",
+            target_id=alert_id,
+            detail={"reason": "scope_denied"},
+            source_ip=resolve_source_ip(request),
+        )
+        return RedirectResponse(url="/alerts?error=alert+not+found", status_code=303)
     if not retried:
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT status FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+        if row is None:
+            return RedirectResponse(
+                url="/alerts?error=alert+not+found", status_code=303
+            )
         return RedirectResponse(
             url="/alerts?warning=only+failed+alerts+can+be+retried", status_code=303
         )
@@ -416,7 +427,7 @@ async def retry_failed_alert(
         action="alert.retry_failed",
         target_type="alert",
         target_id=alert_id,
-        detail={"previous_status": row["status"]},
+        detail={"previous_status": "failed"},
         source_ip=resolve_source_ip(request),
     )
     return RedirectResponse(url="/alerts?saved=alert+queued+for+retry", status_code=303)

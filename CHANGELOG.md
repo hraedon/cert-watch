@@ -116,6 +116,9 @@ All notable changes to cert-watch are documented in this file.
   now forwards dispatch settlement metadata to its inner SQLite repository, so
   evidence deferrals and give-ups transition `sending` rows instead of silently
   leaving them leased.
+- **Retry failed no longer reveals cross-team alert IDs.** HTML and API retry
+  routes return the same not-found response for missing and out-of-scope
+  alerts, while denied attempts are recorded in the audit log.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

@@ -80,7 +80,9 @@ restore the pre-migration backup.
   Successful deliveries settle immediately rather than waiting for the whole
   queue, and database refusal during evidence-deferral recovery is isolated to
   that row so later alerts continue processing. Tag-scoped flushes use the same
-  lease-guarded deferral and give-up transitions as unscoped workers.
+  lease-guarded deferral and give-up transitions as unscoped workers. Failed
+  alert retries outside a caller's team scope now look identical to a missing
+  alert and create an `alert.retry_denied` audit event.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

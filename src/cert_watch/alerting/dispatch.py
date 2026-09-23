@@ -387,7 +387,10 @@ class Dispatcher:
                 next_attempt_at=next_attempt_at,
                 error_message=message,
             ):
-                deferred += 1
+                # No configured channel is an intentional operating mode, not
+                # an outage to surface as a failed manual flush. The persisted
+                # backoff still prevents a hot loop until settings change.
+                deferred += not item.configuration_missing
         return {"sent": sent, "failed": failed, "deferred": deferred}
 
     def _complete_evidence_deferral(self, item: _Delivery, *, now: datetime) -> str:

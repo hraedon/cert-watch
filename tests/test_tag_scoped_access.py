@@ -487,6 +487,48 @@ class TestMarkAllAlertsReadRoute:
         assert reads == {"alert-a": 1, "alert-b": 1}
 
 
+class TestRetryAlertScopePrivacy:
+    """Missing and out-of-scope alerts are indistinguishable to team users."""
+
+    def test_html_and_api_hide_existence_and_audit_scope_denials(
+        self, db, tmp_path
+    ):
+        _seed_two_teams(db)
+        hidden_id = "00000000-0000-4000-8000-000000000002"
+        missing_id = "00000000-0000-4000-8000-000000000003"
+        with _connect(db) as conn:
+            conn.execute("UPDATE alerts SET status = 'failed'")
+            _insert_alert(
+                conn, hidden_id, "cert-b", status="failed", message="hidden"
+            )
+            conn.commit()
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+
+        with _scoped_client(app, groups) as client:
+            html_missing = client.post(
+                f"/alerts/{missing_id}/retry", follow_redirects=False
+            )
+            html_hidden = client.post(
+                f"/alerts/{hidden_id}/retry", follow_redirects=False
+            )
+            api_missing = client.post(f"/api/alerts/{missing_id}/retry")
+            api_hidden = client.post(f"/api/alerts/{hidden_id}/retry")
+
+        assert html_hidden.status_code == html_missing.status_code == 303
+        assert html_hidden.headers["location"] == html_missing.headers["location"]
+        assert api_hidden.status_code == api_missing.status_code == 404
+        assert api_hidden.json() == api_missing.json() == {"error": "alert not found"}
+        with _connect(db) as conn:
+            denied = conn.execute(
+                "SELECT action, target_id FROM audit_log "
+                "WHERE action = 'alert.retry_denied' ORDER BY id"
+            ).fetchall()
+        assert [tuple(row) for row in denied] == [
+            ("alert.retry_denied", hidden_id),
+            ("alert.retry_denied", hidden_id),
+        ]
+
+
 class TestFlushAlertQueueRoute:
     """WI-078: POST /alerts/flush only sends the caller's in-scope alerts."""
 

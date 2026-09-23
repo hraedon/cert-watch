@@ -81,20 +81,29 @@ def api_retry_failed_alert(
     _auth: str = Depends(write_guard),
 ) -> JSONResponse:
     db = _db_path(request)
-    from cert_watch.database import _connect
-
-    with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT cert_id, status FROM alerts WHERE id = ?", (alert_id,)
-        ).fetchone()
-    if row is None:
-        return JSONResponse(content={"error": "alert not found"}, status_code=404)
     try:
         with get_write_lock():
             retried = AlertStore(db).operator_retry(alert_id, auth=acting_auth(request))
-    except ScopeDeniedError as exc:
-        return JSONResponse(content={"error": str(exc)}, status_code=403)
+    except ScopeDeniedError:
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert.retry_denied",
+            target_type="alert",
+            target_id=alert_id,
+            detail={"reason": "scope_denied"},
+            source_ip=resolve_source_ip(request),
+        )
+        return JSONResponse(content={"error": "alert not found"}, status_code=404)
     if not retried:
+        from cert_watch.database import _connect
+
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT status FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+        if row is None:
+            return JSONResponse(content={"error": "alert not found"}, status_code=404)
         return JSONResponse(
             content={"error": "only failed alerts can be retried"}, status_code=409
         )
@@ -104,7 +113,7 @@ def api_retry_failed_alert(
         action="alert.retry_failed",
         target_type="alert",
         target_id=alert_id,
-        detail={"previous_status": row["status"]},
+        detail={"previous_status": "failed"},
         source_ip=resolve_source_ip(request),
     )
     return JSONResponse(content={"ok": True, "id": alert_id, "status": "pending"})
