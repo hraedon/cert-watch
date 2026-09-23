@@ -1,0 +1,419 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cert-watch — certificates</title>
+  <script nonce="{{CSP_NONCE}}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+
+</head>
+<body>
+
+  <div class="cw-app">
+    <header class="cw-topbar">
+      <a href="/" class="cw-wordmark">
+        <div class="cw-mark">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/><path d="M9 12l2 2 4-4"/>
+          </svg>
+        </div>
+        <span class="cw-name">cert<span class="cw-muted">·</span>watch</span>
+        <span class="cw-ver">v0.9.5</span>
+      </a>
+
+  <nav class="cw-nav-desktop" aria-label="Primary">
+    <a href="/" data-testid="nav-home" >Home</a>
+    <a href="/browse" data-testid="nav-browse" class="active" aria-current="page">Browse</a>
+    <a href="/posture" data-testid="nav-posture" >Posture</a>
+    <a href="/activity" data-testid="nav-activity" >Activity</a>
+    <a href="/settings" data-testid="nav-settings" >Settings</a>
+  </nav>
+
+      <div class="cw-spacer"></div>
+
+
+
+      <button type="button" class="cw-iconbtn" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-dark" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" class="cw-hidden"><path d="M12 17a5 5 0 100-10 5 5 0 000 10z"/><path d="M12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4"/></svg>
+        <svg id="theme-icon-light" aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/></svg>
+      </button>
+      <details class="cw-mobile-nav cw-nav">
+        <summary aria-label="Open section navigation"><span class="cw-muted">Section</span> Browse</summary>
+
+  <nav class="cw-nav-mobile" aria-label="Primary">
+    <a href="/" >Home</a>
+    <a href="/browse" class="active" aria-current="page">Browse</a>
+    <a href="/posture" >Posture</a>
+    <a href="/activity" >Activity</a>
+    <a href="/settings" >Settings</a>
+  </nav>
+
+      </details>
+
+    </header>
+    <div class="cw-page">
+
+
+      <div id="cw-health" class="cw-health cw-hidden">
+        <span class="cw-status"><span class="dot" id="cw-health-dot" aria-hidden="true"></span><span id="cw-health-text">Loading…</span></span>
+        <button type="button" class="x" data-dismiss="cw-health" data-dismiss-key="cw-health-dismissed" id="cw-health-dismiss" title="Dismiss" aria-label="Dismiss">&times;</button>
+      </div>
+
+
+<div class="cw-wrap">
+
+<div class="cw-page-head">
+  <div>
+    <h1 data-testid="dashboard-heading">Certificates</h1>
+    <div class="cw-page-head-sub">Status covers expiry and chain trust. Grades describe the last TLS scan.</div>
+  </div>
+  <div class="cw-page-actions">
+    <div class="cw-menuwrap">
+      <button type="button" class="cw-btn" data-menu="export-menu" aria-haspopup="true" aria-expanded="false" id="reports-btn">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+
+Export
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+
+</button>
+      <div class="cw-menu cw-hidden" id="export-menu" role="menu" aria-label="Export data">
+        <div class="cw-menu-label">Point-in-time snapshot · UTC</div>
+        <a class="cw-menu-item" role="menuitem" href="/api/reports/inventory.csv">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+
+Certificate inventory (CSV)</a>
+        <a class="cw-menu-item" role="menuitem" href="/api/export/certificates.json">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+
+Certificate inventory (JSON)</a>
+        <a class="cw-menu-item" role="menuitem" href="/api/export/hosts.csv">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
+
+Hosts — owners · renewal · tags (CSV)</a>
+      </div>
+    </div>
+
+    <button type="button" class="cw-btn primary" id="add-host-trigger" data-drawer-open="add-drawer" data-testid="add-host-btn">
+
+    <svg aria-hidden="true" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+
+Add host</button>
+
+  </div>
+</div>
+
+
+
+  <div class="cw-stats">
+
+
+<div class="cw-stat">
+  <span class="cw-stat-label">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2l7 3v6c0 4.5-3 8.3-7 9.5C8 19.3 5 15.5 5 11V5l7-3z"/></svg>
+
+Tracked</span>
+  <div class="cw-stat-val">2</div>
+  <div class="cw-stat-sub">endpoints</div>
+</div>
+
+
+
+<div class="cw-stat">
+  <span class="cw-stat-label">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+
+Expired</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">none</div>
+</div>
+
+
+
+<div class="cw-stat">
+  <span class="cw-stat-label">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9L2.4 18a2 2 0 001.7 3h15.8a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/></svg>
+
+Critical</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">none</div>
+</div>
+
+
+
+<div class="cw-stat">
+  <span class="cw-stat-label">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 7v5l3 2"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+
+Warning</span>
+  <div class="cw-stat-val t-warn">1</div>
+  <div class="cw-stat-sub">expiry or trust issue</div>
+</div>
+
+
+
+<div class="cw-stat">
+  <span class="cw-stat-label">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 12l2 2 4-4"/><path d="M12 21a9 9 0 100-18 9 9 0 000 18z"/></svg>
+
+Healthy</span>
+  <div class="cw-stat-val">0</div>
+  <div class="cw-stat-sub">30+ days · trusted chain</div>
+</div>
+
+  </div>
+
+
+  <div class="cw-filterbar">
+
+    <nav class="cw-seg" aria-label="Inventory views">
+      <a href="/browse?sort_by=days&amp;sort_order=asc&amp;grouped=1" class="" >Inventory</a>
+      <a href="/browse?view=issuer" class="" >By issuer · all</a>
+      <a href="/browse?view=owner" class="" >By owner · all</a>
+      <a href="/browse?view=renewal_method" class="on" aria-current="page">By method · all</a>
+      <a href="/browse?view=calendar" class="" >
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M8 2v4"/><path d="M16 2v4"/><path d="M3 10h18"/></svg>
+
+Calendar · all</a>
+    </nav>
+  </div>
+
+    <p class="cw-hint">Group views cover all scanned endpoints and pending hosts in your scope. Inventory filters do not apply.</p>
+
+
+
+
+  <div class="cw-panel">
+    <div class="cw-table-clip">
+
+    <table class="cw-table">
+      <thead>
+        <tr>
+          <th>Renewal_method / Method</th>
+          <th class="num">Certs</th>
+          <th>Worst status</th>
+          <th class="num">Earliest expiry</th>
+        </tr>
+      </thead>
+      <tbody>
+
+        <tr data-expand="pivot-detail-1" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-1">
+          <td><span class="chev">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+
+</span> <span class="cw-id">Manual</span></td>
+          <td class="num">1</td>
+          <td><span class="cw-status t-ok">
+  <span class="dot" aria-hidden="true"></span>Healthy
+</span></td>
+          <td class="num">59 days</td>
+        </tr>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-1" data-pivot="renewal_method" data-group-key="Manual">
+          <td colspan="4">Click to load 1 certificate…</td>
+        </tr>
+
+        <tr data-expand="pivot-detail-2" tabindex="0" role="button" aria-expanded="false" aria-controls="pivot-detail-2">
+          <td><span class="chev">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+
+</span> <span class="cw-id">cert-manager</span></td>
+          <td class="num">1</td>
+          <td><span class="cw-status t-muted">
+  <span class="dot" aria-hidden="true"></span>Unknown
+</span></td>
+          <td class="num">—</td>
+        </tr>
+        <tr class="cw-subrow cw-hidden" id="pivot-detail-2" data-pivot="renewal_method" data-group-key="cert-manager">
+          <td colspan="4">Click to load 1 certificate…</td>
+        </tr>
+
+      </tbody>
+    </table>
+
+    </div>
+
+
+  </div>
+
+
+
+
+
+</div>
+
+
+<div class="cw-drawer-bg" id="add-drawer-bg" data-drawer-close="add-drawer" role="presentation"></div>
+<div class="cw-drawer" id="add-drawer" role="dialog" aria-modal="true" aria-labelledby="add-drawer-heading" data-tabset>
+  <div class="cw-drawer-head">
+    <div>
+      <h2 class="cw-drawer-title" id="add-drawer-heading">Add certificates</h2>
+      <div class="cw-sub">Scan a host, upload a file, or import in bulk.</div>
+    </div>
+    <button type="button" class="cw-iconbtn" data-drawer-close="add-drawer" aria-label="Close">
+
+    <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>
+
+</button>
+  </div>
+  <div class="cw-drawer-tabs">
+    <div class="cw-seg" role="tablist" aria-label="Add certificates method">
+      <button type="button" class="on" data-tab-target="scan" data-testid="tab-scan-btn" role="tab" aria-selected="true">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2V6z"/><path d="M3 15a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2H5a2 2 0 01-2-2v-3z"/></svg>
+
+Scan host</button>
+      <button type="button" data-tab-target="upload" data-testid="tab-upload-btn" role="tab" aria-selected="false">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
+
+Upload file</button>
+      <button type="button" data-tab-target="bulk" data-testid="tab-bulk-btn" role="tab" aria-selected="false">
+
+    <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+
+Bulk import</button>
+    </div>
+  </div>
+  <div class="cw-drawer-body">
+
+    <div data-tab-pane="scan" role="tabpanel">
+      <form method="post" action="/hosts" class="cw-form">
+        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+        <div class="cw-field">
+          <label class="cw-label">Hostname</label>
+          <input class="cw-input mono" type="text" name="hostname" required placeholder="example.com" data-testid="scan-hostname-input">
+        </div>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label">Port</label>
+            <input class="cw-input mono" type="number" name="port" value="443" min="1" max="65535">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label">Alert threshold (days)</label>
+            <input class="cw-input mono" type="number" name="threshold_days" placeholder="14, 7, 3, 1" min="1">
+          </div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label" for="scan-starttls">TLS mode</label>
+          <select class="cw-select" name="starttls_mode" id="scan-starttls" data-testid="scan-starttls-select">
+            <option value="">Implicit TLS (default)</option>
+            <option value="smtp">STARTTLS — SMTP (587)</option>
+            <option value="imap">STARTTLS — IMAP (143)</option>
+            <option value="pop3">STARTTLS — POP3 (110)</option>
+            <option value="ldap">STARTTLS — LDAP (389)</option>
+            <option value="postgres">STARTTLS — Postgres (5432)</option>
+            <option value="mysql">STARTTLS — MySQL (3306)</option>
+          </select>
+        </div>
+        <div class="cw-form-grid">
+          <div class="cw-field">
+            <label class="cw-label">Tags <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input" type="text" name="tags" placeholder="production, edge">
+          </div>
+          <div class="cw-field">
+            <label class="cw-label">Scan cadence (hours) <span class="cw-muted">(optional)</span></label>
+            <input class="cw-input mono" type="number" name="scan_interval_hours" min="1" max="8760" placeholder="Daily schedule">
+          </div>
+        </div>
+        <div class="cw-field">
+          <label class="cw-label">Notes <span class="cw-muted">(optional)</span></label>
+          <textarea class="cw-input" name="notes" rows="3" placeholder="Runbook context or operational notes"></textarea>
+        </div>
+        <label class="cw-check">
+          <input type="checkbox" name="common_ports" value="true"> Scan common TLS ports (443, 8443, 993, 995…)
+        </label>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary" data-testid="scan-submit-btn">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+
+Add &amp; scan</button>
+        </div>
+      </form>
+    </div>
+    <div data-tab-pane="upload" role="tabpanel" class="cw-hidden">
+      <form method="post" action="/upload" enctype="multipart/form-data" class="cw-form">
+        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+        <label class="cw-drop" for="file-input">
+          <div class="cw-drop-icon">
+
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+
+</div>
+          <div><b>Drop a certificate, or <span class="cw-link">browse</span></b></div>
+          <div class="cw-sub">PEM · DER · CER · CRT · PKCS#12 · PKCS#7 · chain bundles</div>
+          <input type="file" id="file-input" name="file" required accept=".pem,.crt,.cer,.der,.pfx,.p12,.p7b,.p7c" class="cw-hidden" data-testid="upload-file-input">
+        </label>
+        <div class="cw-field">
+          <label class="cw-label">Password <span class="cw-muted">(PKCS#12 only, optional)</span></label>
+          <input class="cw-input" type="password" name="password" placeholder="optional">
+        </div>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary" data-testid="upload-submit-btn">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4"/><path d="M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>
+
+Upload</button>
+        </div>
+      </form>
+    </div>
+    <div data-tab-pane="bulk" role="tabpanel" class="cw-hidden">
+      <form method="post" action="/hosts/import" enctype="multipart/form-data" class="cw-form">
+        <input type="hidden" name="_csrf_token" value="{{CSRF_TOKEN}}">
+        <label class="cw-drop" for="csv-input">
+          <div class="cw-drop-icon">
+
+    <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5"/><path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z"/></svg>
+
+</div>
+          <div><b>Drop a CSV, or <span class="cw-link">browse</span></b></div>
+          <div class="cw-sub">Needs <span class="mono">hostname</span> · optional <span class="mono">port</span>, <span class="mono">threshold_days</span>, <span class="mono">tags</span>, <span class="mono">notes</span>, <span class="mono">scan_interval_hours</span>, <span class="mono">starttls_mode</span></div>
+          <input type="file" id="csv-input" name="file" required accept=".csv" class="cw-hidden">
+        </label>
+        <div class="cw-note">
+          <code class="mono">hostname,port,threshold_days,tags<br>api.example.com,443,30,production<br>vpn.example.com,4443,14,edge</code>
+        </div>
+        <div class="cw-form-foot">
+          <button type="button" class="cw-btn" data-drawer-close="add-drawer">Cancel</button>
+          <button type="submit" class="cw-btn primary">
+
+    <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
+
+Import</button>
+        </div>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+    </div>
+  </div>
+  <script src="/static/js/core.js" nonce="{{CSP_NONCE}}"></script>
+
+<script src="/static/js/dashboard.js" nonce="{{CSP_NONCE}}"></script>
+
+</body>
+</html>
