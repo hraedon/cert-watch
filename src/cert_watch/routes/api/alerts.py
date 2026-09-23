@@ -129,16 +129,16 @@ async def api_create_alert_group(
             name, recipients_raw, match_tags_raw, webhook_url,
             threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
         )
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.create",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
-                    "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.create",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
+                "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
+        source_ip=resolve_source_ip(request),
+    )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g), status_code=201)
 
@@ -238,15 +238,15 @@ async def api_update_alert_group(
             threshold_days=threshold_days,
             digest_cadence_days=digest_cadence_days,
         )
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.update",
-            target_type="alert_group",
-            target_id=group_id,
-            detail=dict(body),
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.update",
+        target_type="alert_group",
+        target_id=group_id,
+        detail=dict(body),
+        source_ip=resolve_source_ip(request),
+    )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g))
 
@@ -263,15 +263,15 @@ async def api_delete_alert_group(
             return JSONResponse(content={"error": "not found"}, status_code=404)
 
         repo.delete(group_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.delete",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"name": g.name},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.delete",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"name": g.name},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "deleted"})
 
 
@@ -289,15 +289,15 @@ async def api_assign_cert_to_group(
             return JSONResponse(content={"error": "certificate not found"}, status_code=404)
 
         group_repo.assign_cert(group_id, cert_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.assign_cert",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"cert_id": cert_id},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.assign_cert",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"cert_id": cert_id},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "assigned", "group_id": group_id, "cert_id": cert_id})
 
 
@@ -312,15 +312,15 @@ async def api_unassign_cert_from_group(
             return JSONResponse(content={"error": "group not found"}, status_code=404)
 
         group_repo.unassign_cert(group_id, cert_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.unassign_cert",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"cert_id": cert_id},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.unassign_cert",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"cert_id": cert_id},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "unassigned", "group_id": group_id, "cert_id": cert_id})
 
 

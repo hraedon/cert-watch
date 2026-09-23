@@ -72,15 +72,15 @@ async def api_create_key(
     repo = _repository(request)
     with get_write_lock():
         entry, raw_token = repo.create_key(name, scope)
-        record_audit(
-            _db_path(request),
-            actor=resolve_actor(request),
-            action="api_key.create",
-            target_type="api_key",
-            target_id=entry.id,
-            detail={"name": name, "scope": scope},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        _db_path(request),
+        actor=resolve_actor(request),
+        action="api_key.create",
+        target_type="api_key",
+        target_id=entry.id,
+        detail={"name": name, "scope": scope},
+        source_ip=resolve_source_ip(request),
+    )
     # The raw token is returned exactly once here and never stored.
     return JSONResponse(
         content={**_entry_json(entry), "token": raw_token},
@@ -97,12 +97,12 @@ async def api_revoke_key(
         revoked = repo.revoke_key(key_id)
         if not revoked:
             return JSONResponse(content={"error": "not found"}, status_code=404)
-        record_audit(
-            _db_path(request),
-            actor=resolve_actor(request),
-            action="api_key.revoke",
-            target_type="api_key",
-            target_id=key_id,
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        _db_path(request),
+        actor=resolve_actor(request),
+        action="api_key.revoke",
+        target_type="api_key",
+        target_id=key_id,
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "revoked", "id": key_id})

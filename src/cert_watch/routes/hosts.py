@@ -311,17 +311,24 @@ async def add_host(
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
-    with get_write_lock():
-        for p in ports:
-            host_id = host_repo.add(
-                hostname,
-                p,
-                threshold_days=threshold_days,
-                tags=tags_with_scope(request, tags),
-                scan_interval_hours=scan_interval_hours,
-                notes=notes,
-                starttls_mode=starttls_mode,
-            )
+    added: list[tuple[str, int]] = []
+    try:
+        with get_write_lock():
+            for p in ports:
+                host_id = host_repo.add(
+                    hostname,
+                    p,
+                    threshold_days=threshold_days,
+                    tags=tags_with_scope(request, tags),
+                    scan_interval_hours=scan_interval_hours,
+                    notes=notes,
+                    starttls_mode=starttls_mode,
+                )
+                added.append((host_id, p))
+    finally:
+        # Audit after the lock (record_audit exports to the SIEM -- network
+        # I/O), and still for every port added before any failure.
+        for host_id, p in added:
             record_audit(
                 db,
                 actor=actor,

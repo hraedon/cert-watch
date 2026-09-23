@@ -259,13 +259,13 @@ async def api_set_host_issuers(
         if host is None:
             return JSONResponse(content={"error": "host not found"}, status_code=404)
         repo.set_expected_issuers(host_id, issuers_csv)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="host.set_expected_issuers",
-            target_type="host",
-            target_id=host_id,
-            detail={"expected_issuers": issuers_list},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.set_expected_issuers",
+        target_type="host",
+        target_id=host_id,
+        detail={"expected_issuers": issuers_list},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"id": host_id, "expected_issuers": issuers_list})
