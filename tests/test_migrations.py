@@ -932,7 +932,8 @@ def _mk_pre0033_db(db: Path) -> None:
     the 0033 column (0034 is stamped so only 0033 stays pending)."""
     ensure_base(db)
     _stamp_feature_branch_migrations(
-        db, (*tuple(f"{number:04d}" for number in range(1, 33)), "0034", "0035")
+        db,
+        (*tuple(f"{number:04d}" for number in range(1, 33)), "0034", "0035", "0036"),
     )
 
 
@@ -1027,7 +1028,7 @@ def _mk_pre0034_db(db: Path) -> None:
     """A database whose ledger says 0001–0033 but whose alerts lack the column."""
     ensure_base(db)
     _stamp_feature_branch_migrations(
-        db, (*tuple(f"{number:04d}" for number in range(1, 34)), "0035")
+        db, (*tuple(f"{number:04d}" for number in range(1, 34)), "0035", "0036")
     )
 
 
@@ -1116,7 +1117,9 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033", "0034", "0035"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0031", "0032", "0033", "0034", "0035", "0036"
+    ]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
@@ -1149,7 +1152,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036"
     ]
 
     with sqlite3.connect(str(db)) as conn:

@@ -189,6 +189,9 @@ class WebhookConfig:
 
 ALERT_MAX_RETRIES = 3
 ALERT_RETRY_DELAY = 2  # seconds between retries
+ALERT_MAX_ATTEMPTS = 12
+ALERT_RETRY_ROUND_DELAYS = (60 * 60, 4 * 60 * 60, 12 * 60 * 60)
+NO_DELIVERY_CHANNEL_MESSAGE = "No SMTP or webhook delivery channel is configured"
 
 # Wall-clock ceiling on one process_pending cycle. The scheduler calls the
 # alert phase synchronously, so whatever this costs, the rest of the cycle --

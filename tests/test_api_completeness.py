@@ -12,6 +12,9 @@ from tests._route_inventory import _walk, mutating_routes
 # concepts that already have a JSON API are included.
 HTML_TO_JSON: dict[tuple[str, str], tuple[str, str]] = {
     ("POST", "/alerts/mark-all-read"): ("POST", "/api/alerts/mark-all-read"),
+    ("POST", "/alerts/{alert_id}/retry"): (
+        "POST", "/api/alerts/{alert_id}/retry"
+    ),
     ("POST", "/hosts"): ("POST", "/api/hosts"),
     ("POST", "/hosts/import"): ("POST", "/api/hosts/import"),
     ("POST", "/hosts/all/scan"): ("POST", "/api/hosts/scan"),

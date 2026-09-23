@@ -5,6 +5,10 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Durable alert dispatch claims and operator retry.** Migration 0036 adds
+  atomic claims, expiring leases, attempt counters and scheduled retry times.
+  Activity shows the new `sending` state and offers an audited **Retry failed**
+  action (HTML and JSON API) that resets a terminal alert's attempt budget.
 - **The JSON API is now the operational presentation seam.** Every inventory
   mutation has a JSON counterpart over the same application service as its
   server-rendered form. New endpoints are:
@@ -82,6 +86,12 @@ All notable changes to cert-watch are documented in this file.
   unchanged. See UPGRADING.md.
 
 ### Changed
+- **Alert delivery failures back off before giving up.** A failed delivery
+  round returns to `pending` for 1 hour, then 4 hours, then 12 hours; after 12
+  transport-reaching attempts the row becomes terminal `failed`. Expiry rules
+  no longer revive failed alerts indefinitely. Manual flush ignores the delay
+  but uses the same atomic claim path, so concurrent scheduler/flush workers do
+  not both send the same queued row.
 - **Host creation exposes the fields it accepts.** The add-host drawer now
   includes optional tags, notes, and scan cadence, and the CSV help lists every
   supported optional column. This closes the prior route/UI contract mismatch.
@@ -130,6 +140,47 @@ All notable changes to cert-watch are documented in this file.
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Alert delivery outages no longer evict the serving pod.** `/readyz`
+  reports overdue pending alerts and stale `sending` leases without failing
+  Kubernetes readiness. `/api/health` dates terminal give-ups from their last
+  attempt, Activity labels them as requiring operator retry, and `/metrics`
+  exports `cert_watch_alerts{status=...}` plus the self-clearing
+  `cert_watch_alerts_failed_recent` 24-hour gauge used by the example
+  failed-delivery rule.
+- **Legacy failed expiry alerts remain deliverable after migration 0036.** The
+  migration marks pre-lifecycle `expiry_warning` and `expired` rows but leaves
+  them failed. On the next threshold evaluation, only a row for a certificate
+  that still exists as the current, unsuperseded leaf, is not marked renewed,
+  and represents the most urgent currently crossed threshold is revived once.
+  Deleted, renewed, superseded and obsolete-threshold rows stay failed and
+  remain available for an operator-initiated **Retry failed**.
+- **Delivery recovery no longer waits on stale no-channel backoff.** Saving a
+  valid SMTP or webhook channel clears the scheduled delay on pending rows
+  deferred solely because no channel existed. Repeated failures keep one
+  attempt-count suffix, and a scoped worker no longer reports a deferral after
+  another worker steals the row's lease.
+- **Pre-transport policy failures now obey bounded give-up.** SSRF blocks and
+  invalid webhook channel results consume delivery rounds and eventually
+  become operator-visible failures. An estate with no SMTP or webhook instead
+  keeps alerts pending on normal backoff without consuming the attempt budget.
+- **Cycle-budget deferrals preserve retry pacing and diagnostics.** Alerts
+  attempted before a delivery cycle runs out of time retain their last useful
+  error and receive persisted backoff; only rows never reached in that cycle
+  remain immediately eligible.
+- **Manual Flush queue no longer exhausts alert retries.** Operator-initiated
+  flushes still record append-only delivery evidence and schedule normal
+  backoff after failure, but do not advance the persisted give-up counter.
+- **Alert settlement is failure-isolated and prompt.** A second refused
+  database update in either evidence-deferral recovery branch no longer aborts
+  the delivery cycle. Accepted alerts are marked `sent` immediately, closing
+  the lease window in which a long cycle and concurrent flush could resend one.
+- **Scoped alert settlement retains lease guards.** The tag-scoped repository
+  now forwards dispatch settlement metadata to its inner SQLite repository, so
+  evidence deferrals and give-ups transition `sending` rows instead of silently
+  leaving them leased.
+- **Retry failed no longer reveals cross-team alert IDs.** HTML and API retry
+  routes return the same not-found response for missing and out-of-scope
+  alerts, while denied attempts are recorded in the audit log.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

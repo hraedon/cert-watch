@@ -50,6 +50,47 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Alert delivery has a persisted retry lifecycle (migration 0036).** Alerts
+  are atomically claimed as `sending` under a lease. A failed round is returned
+  to `pending` with a 1-hour, 4-hour, then 12-hour backoff instead of becoming
+  immediately terminal. After 12 transport-reaching attempts, `failed` means
+  cert-watch has given up; expiry evaluation no longer revives that row on
+  every cycle. An operator with write access can use **Retry failed** in
+  Activity or `POST /api/alerts/{id}/retry` to reset the attempt count and queue
+  it again. **Failed alerts do not fire again automatically, including an
+  `expired` alert after delivery gives up; an operator must correct the channel
+  and select Retry failed.** Activity, `/api/health`, and the
+  `cert_watch_alerts{status="failed"}` metric make those rows visible. Manual
+  **Flush queue** ignores scheduled backoff, but still claims
+  rows and is serialized with scheduled delivery. The Activity and certificate
+  detail pages may briefly show the new `sending` status; an expired sending
+  lease is reported by health/readiness checks without making the Kubernetes
+  readiness probe fail.
+
+  Migration 0036 labels legacy failed `expiry_warning` and `expired` rows that
+  have no lifecycle failure reason as `legacy_failed`, but leaves them failed.
+  On the next threshold evaluation, cert-watch revives such a row at most once
+  only when its certificate still exists as the current, unsuperseded leaf,
+  its host is not marked renewed, and the row is the most urgent threshold
+  currently crossed for that certificate and alert type. Revival resets its
+  attempt count and clears its failure reason. Deleted-certificate rows,
+  renewed or superseded certificates, obsolete threshold stages, and other
+  legacy alert types stay failed and visible; use **Retry failed** if an
+  operator deliberately wants to send one. SSRF-blocked and invalid-channel
+  delivery rounds count toward the same bounded give-up policy; having no
+  delivery channel configured does not consume attempts and remains pending
+  with backoff. Saving a valid SMTP or webhook channel makes those no-channel
+  deferrals immediately eligible for the next cycle. If a
+  delivery cycle exhausts its wall-clock budget, rows already attempted keep
+  their last diagnostic and back off; rows not reached remain immediately
+  eligible for the next worker. Operator-initiated **Flush queue** attempts are
+  recorded in delivery evidence but do not consume the bounded give-up budget.
+  Successful deliveries settle immediately rather than waiting for the whole
+  queue, and database refusal during evidence-deferral recovery is isolated to
+  that row so later alerts continue processing. Tag-scoped flushes use the same
+  lease-guarded deferral and give-up transitions as unscoped workers. Failed
+  alert retries outside a caller's team scope now look identical to a missing
+  alert and create an `alert.retry_denied` audit event.
 - **Scoped writers can no longer create or import hosts with out-of-scope
   tags.** This closes a scope-widening path: a writer scoped to `A` who submits
   `B` is refused instead of storing `B,A`. Remove out-of-scope tags from the
@@ -195,8 +236,8 @@ restore the pre-migration backup.
   under `CERT_WATCH_ALERT_RETENTION_DAYS`. Two side effects worth knowing: a
   pending alert now keeps its original `created_at` across rescans, so the
   "undelivered for more than 24h" signal can actually reach its threshold on a
-  daily-scan estate; and a `failed` alert is now retried on the next cycle
-  instead of being stranded and duplicated.
+  daily-scan estate. A `failed` alert now remains terminal until an operator
+  explicitly retries it; expiry evaluation will not revive it indefinitely.
 
 - **Per-certificate notes are merged into host notes (migration 0031).** Every
   non-empty `certificates.notes` value is concatenated into the matching

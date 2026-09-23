@@ -19,6 +19,7 @@ from cert_watch.auth.guards import (
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
+    SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteHostRepository,
     SqliteTrustAnchorRepository,
@@ -351,6 +352,11 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
     slack_configured = (
         getattr(settings, "webhook_kind", "") == "slack" if settings else False
     )
+    certificate_alerts = sorted(
+        SqliteAlertRepository(db).list_for_cert(cert_id),
+        key=lambda alert: alert.created_at,
+        reverse=True,
+    )[:5]
 
     return templates.TemplateResponse(
         request=request,
@@ -384,6 +390,7 @@ def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | Red
             "now": datetime.now(UTC),
             "posture": posture_data,
             "drift_events": drift_events,
+            "certificate_alerts": certificate_alerts,
             "slack_configured": slack_configured,
             **csrf_ctx,
         },

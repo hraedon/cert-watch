@@ -1,53 +1,92 @@
-"""Pending-alert delivery cycle: waves, budget, and evidence-deferral settling."""
+"""Claimed alert delivery with leases, bounded retries, and persisted backoff."""
 
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
+import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
+from typing import Any
 
 from cert_watch.alerting.evidence import DeliveryEvidenceUnavailable, attempt_delivery
 from cert_watch.alerting.model import (
     ALERT_CYCLE_BUDGET_SECONDS,
+    ALERT_MAX_ATTEMPTS,
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
+    ALERT_RETRY_ROUND_DELAYS,
     EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
+    NO_DELIVERY_CHANNEL_MESSAGE,
     AlertConfig,
     OutboundMessage,
     WebhookConfig,
 )
+from cert_watch.alerting.transports.base import Transport
 from cert_watch.alerting.transports.smtp import SmtpTransport, _smtp_recipients
 from cert_watch.alerting.transports.webhook import WebhookTransport
-from cert_watch.database import Alert, AlertRepository
+from cert_watch.database import Alert, AlertRepository, AlertStore
 from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
 
+_ATTEMPT_SUFFIX_RE = re.compile(r"(?: \(after \d+ attempts?\))+$")
+
+
+def _utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
 
 @dataclass
 class _Delivery:
-    """One alert's progress through the cycle. Mutable; one per pending alert."""
+    """One claimed alert's mutable progress through the current cycle."""
 
     alert: Alert
     delivered: bool = False
     last_error: str = ""
-    attempts_made: int = 0
-    # Whether the MOST RECENT wave reached a transport. Judged per wave, never
-    # accumulated: an earlier wave may have reached the relay and failed, and if
-    # the evidence store then becomes unwritable a stale "yes" would let a
-    # database outage mark an alert failed that the relay might still accept.
+    last_reason: str = ""
+    attempts_made: int = 0  # channel attempts, retained for operator diagnostics
+    waves_reached: int = 0  # persisted attempt_count unit
     reached_transport: bool = False
-    # Set when every configured channel refused before sending. Such an alert
-    # leaves the cycle immediately -- further waves cannot help, because there
-    # is nothing to back off from.
+    evidence_recorded: bool = False
     evidence_unavailable: bool = False
+    configuration_missing: bool = False
+    settled: bool = False
+    lease_lost: bool = False
 
     @property
     def done(self) -> bool:
-        return self.delivered or self.evidence_unavailable
+        return (
+            self.delivered
+            or self.evidence_unavailable
+            or self.configuration_missing
+            or self.lease_lost
+        )
+
+    @property
+    def attempts_remaining(self) -> int:
+        return max(ALERT_MAX_ATTEMPTS - self.alert.attempt_count - self.waves_reached, 0)
+
+
+def _message_for_transport(
+    alert: Alert, transport: Transport, config: AlertConfig | None
+) -> OutboundMessage:
+    if isinstance(transport, SmtpTransport) and config is not None:
+        base_msg = OutboundMessage.from_alert(alert)
+        recipients = tuple(_smtp_recipients(base_msg, config))
+        global_recipients = tuple(
+            address for address in recipients if address in config.recipients
+        )
+        return OutboundMessage.from_alert(
+            alert,
+            recipients=recipients,
+            global_recipients=global_recipients,
+        )
+    return OutboundMessage.from_alert(alert)
 
 
 def _attempt_once(
@@ -56,71 +95,82 @@ def _attempt_once(
     evidence_db: Path | None,
     config: AlertConfig | None,
     webhook_config: WebhookConfig | None,
+    transports: Sequence[Transport] | None = None,
+    claim_owner: str = "",
 ) -> None:
-    """One pass over every configured channel for a single alert."""
+    """One wave over configured channels, stopping after acceptance."""
     alert = item.alert
     item.reached_transport = False
-    if config is not None:
-        smtp_transport = SmtpTransport(config)
-        base_msg = OutboundMessage.from_alert(alert)
-        recipients = tuple(_smtp_recipients(base_msg, config))
-        global_recipients = tuple(address for address in recipients if address in config.recipients)
-        smtp_msg = OutboundMessage.from_alert(
-            alert,
-            recipients=recipients,
-            global_recipients=global_recipients,
-        )
+    item.evidence_recorded = False
+    item.configuration_missing = False
+    configured: Sequence[Transport]
+    if transports is not None:
+        configured = transports
+    else:
+        built: list[Transport] = []
+        if config is not None:
+            built.append(SmtpTransport(config))
+        if webhook_config is not None:
+            built.append(WebhookTransport(webhook_config))
+        configured = built
+
+    if not configured:
+        item.configuration_missing = True
+        item.last_error = NO_DELIVERY_CHANNEL_MESSAGE
+        item.last_reason = "unknown"
+        return
+
+    count_wave = False
+    for transport in configured:
+        if item.delivered:
+            break
+        msg = _message_for_transport(alert, transport, config)
         try:
-            result = attempt_delivery(evidence_db, alert.id, smtp_transport, smtp_msg)
+            result = attempt_delivery(
+                evidence_db,
+                alert.id,
+                transport,
+                msg,
+                claim_owner=claim_owner,
+            )
+            item.evidence_recorded = True
             item.delivered = result.delivered
+            item.reached_transport = item.reached_transport or result.reached_transport
+            count_wave = count_wave or result.reached_transport or result.reason in {
+                "blocked",
+                "invalid_channel",
+            }
+            if result.reason:
+                item.last_reason = result.reason
             if not item.delivered and result.operator_message:
                 item.last_error = result.operator_message
-            item.reached_transport = True
             item.attempts_made += 1
         except DeliveryEvidenceUnavailable:
-            # Guard this call only. A begin_attempt failure is per-statement --
-            # typically a transient SQLITE_BUSY from a concurrent scan write --
-            # so the webhook fallback below may well succeed.
+            # A later channel can still record evidence and deliver.
             item.delivered = False
-    if not item.delivered and webhook_config is not None:
-        webhook_transport = WebhookTransport(webhook_config)
-        webhook_msg = OutboundMessage.from_alert(alert)
-        try:
-            result = attempt_delivery(evidence_db, alert.id, webhook_transport, webhook_msg)
-            item.delivered = result.delivered
-            if not item.delivered and result.operator_message:
-                item.last_error = result.operator_message
-            item.reached_transport = True
-            item.attempts_made += 1
-        except DeliveryEvidenceUnavailable:
-            item.delivered = False
+    if count_wave:
+        item.waves_reached += 1
     if item.delivered:
         return
-    item.evidence_unavailable = not item.reached_transport
+    item.evidence_unavailable = not item.evidence_recorded
 
 
 def _settle_evidence_deferral(
-    alert_repo: AlertRepository, item: _Delivery, *, now: datetime,
+    alert_repo: AlertRepository,
+    item: _Delivery,
+    *,
+    now: datetime,
 ) -> str:
-    """Persist a deferral, or give up on one that has outlived its bound.
-
-    Returns ``"failed"`` or ``"deferred"``. Every write here targets the
-    database that has just refused one, so each is tolerated: a failure is
-    logged and the alert stays pending, which is the state it is already in.
-    Nothing here may raise, or one refused UPDATE would abort the cycle and
-    skip every alert after it (#38).
-    """
+    """Backward-compatible unclaimed #38 helper; Dispatcher uses lease guards."""
     alert = item.alert
-    # An attempt recorded in THIS cycle proves the store was writable more
-    # recently than any earlier stamp, so the outage is younger than that stamp.
     restart = item.attempts_made > 0
     since = None if restart else alert.deferred_since
-    if since is not None and since.tzinfo is None:
-        since = since.replace(tzinfo=UTC)
+    if since is not None:
+        since = _utc(since)
     if since is not None and now - since >= timedelta(hours=EVIDENCE_DEFERRAL_GIVE_UP_HOURS):
         hours = int((now - since).total_seconds() // 3600)
         message = (
-            f"delivery evidence could not be recorded since "
+            "delivery evidence could not be recorded since "
             f"{since.astimezone(UTC).isoformat(timespec='minutes')} ({hours}h); "
             "no transport was reached in that time"
         )
@@ -128,24 +178,350 @@ def _settle_evidence_deferral(
             alert_repo.mark_failed(alert.id, message)
         except (sqlite3.Error, OSError):
             logger.error(
-                "Alert %s has been deferred for %dh and the failure could not be "
-                "recorded either; leaving it pending", alert.id, hours, exc_info=True,
+                "Alert %s exceeded its evidence deferral bound but the failure "
+                "could not be recorded; leaving it pending",
+                alert.id,
+                exc_info=True,
             )
             return "deferred"
-        logger.error("Alert %s failed: %s", alert.id, message)
         return "failed"
     try:
         alert_repo.note_deferral(alert.id, now, restart=restart)
     except (sqlite3.Error, OSError):
         logger.warning(
-            "Alert %s deferred (delivery evidence unavailable) and the deferral itself "
-            "could not be recorded; leaving it pending", alert.id, exc_info=True,
-        )
-    else:
-        logger.warning(
-            "Alert %s deferred (delivery evidence unavailable), leaving it pending", alert.id,
+            "Alert %s evidence deferral could not be recorded", alert.id, exc_info=True
         )
     return "deferred"
+
+
+class Dispatcher:
+    """Claim and deliver one eligible alert queue under a unique lease owner."""
+
+    def __init__(
+        self,
+        db_path: str | Path,
+        config: AlertConfig | None = None,
+        webhook_config: WebhookConfig | None = None,
+        *,
+        transports: Sequence[Transport] | None = None,
+        budget_seconds: float = ALERT_CYCLE_BUDGET_SECONDS,
+        scope_tags: tuple[str, ...] = (),
+        ignore_backoff: bool = False,
+        clock: Callable[[], datetime] | None = None,
+        monotonic_clock: Callable[[], float] = monotonic,
+        lease_owner: str | None = None,
+        claim_limit: int = 1000,
+        settlement_repo: AlertRepository | None = None,
+    ) -> None:
+        self.db_path = Path(db_path)
+        self.config = config
+        self.webhook_config = webhook_config
+        self.transports = tuple(transports) if transports is not None else None
+        self.budget_seconds = budget_seconds
+        self.scope_tags = scope_tags
+        self.ignore_backoff = ignore_backoff
+        self.clock = clock or (lambda: datetime.now(UTC))
+        self.monotonic_clock = monotonic_clock
+        self.lease_owner = lease_owner or uuid.uuid4().hex
+        self.claim_limit = claim_limit
+        self.settlement_repo = settlement_repo
+        self.store = AlertStore(self.db_path)
+
+    @property
+    def lease_seconds(self) -> float:
+        return max(self.budget_seconds, 0.0) + 120.0
+
+    def _lease_expiry(self) -> datetime:
+        return _utc(self.clock()) + timedelta(seconds=self.lease_seconds)
+
+    def _attempts_to_persist(self, item: _Delivery) -> int:
+        """Manual flush observes outcomes without consuming give-up budget."""
+        return 0 if self.ignore_backoff else item.waves_reached
+
+    def _has_attempts_remaining(self, item: _Delivery) -> bool:
+        return self.ignore_backoff or item.attempts_remaining > 0
+
+    def process_pending(self) -> dict[str, int]:
+        claimed_at = _utc(self.clock())
+        alerts = self.store.claim(
+            lease_owner=self.lease_owner,
+            lease_expires_at=claimed_at + timedelta(seconds=self.lease_seconds),
+            now=claimed_at,
+            limit=self.claim_limit,
+            scope_tags=self.scope_tags,
+            ignore_backoff=self.ignore_backoff,
+        )
+        queue = [_Delivery(alert) for alert in alerts]
+        started = self.monotonic_clock()
+        exhausted = False
+
+        active = [item for item in queue if self._has_attempts_remaining(item)]
+        for wave in backoff_range(
+            ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
+        ):
+            for item in active:
+                if self.monotonic_clock() - started >= self.budget_seconds:
+                    exhausted = True
+                    logger.warning(
+                        "Alert cycle budget of %.0fs spent during attempt %d; %d "
+                        "alert(s) left pending for the next cycle",
+                        self.budget_seconds,
+                        wave + 1,
+                        sum(1 for entry in queue if not entry.done),
+                    )
+                    break
+                _attempt_once(
+                    item,
+                    evidence_db=self.db_path,
+                    config=self.config,
+                    webhook_config=self.webhook_config,
+                    transports=self.transports,
+                    claim_owner=self.lease_owner,
+                )
+                if item.delivered:
+                    try:
+                        item.settled = self.store.complete_sent(
+                            item.alert.id,
+                            lease_owner=self.lease_owner,
+                            attempts=self._attempts_to_persist(item),
+                            now=_utc(self.clock()),
+                        )
+                    except (sqlite3.Error, OSError):
+                        logger.error(
+                            "Alert %s was delivered but its sent state could not "
+                            "be recorded; leaving the lease to expire",
+                            item.alert.id,
+                            exc_info=True,
+                        )
+                    if not item.settled:
+                        item.lease_lost = True
+
+            active = [
+                item
+                for item in active
+                if not item.done and self._has_attempts_remaining(item)
+            ]
+            if not active or exhausted:
+                break
+
+            # Extend every unsettled row before the shared inter-wave delay.
+            unsettled = [item for item in queue if not item.done]
+            renewed = self.store.renew_lease(
+                [item.alert.id for item in unsettled],
+                lease_owner=self.lease_owner,
+                lease_expires_at=self._lease_expiry(),
+            )
+            for item in unsettled:
+                if item.alert.id not in renewed:
+                    item.lease_lost = True
+                    logger.warning(
+                        "Alert %s lease was lost between delivery waves; abandoning it",
+                        item.alert.id,
+                    )
+            active = [item for item in active if not item.lease_lost]
+            if not active:
+                break
+
+        return self._settle(queue, exhausted=exhausted)
+
+    def _settle(self, queue: list[_Delivery], *, exhausted: bool) -> dict[str, int]:
+        sent = failed = deferred = 0
+        now = _utc(self.clock())
+        for item in queue:
+            alert = item.alert
+            if item.settled:
+                sent += 1
+                continue
+            if item.lease_lost:
+                continue
+            if item.delivered:
+                if self.store.complete_sent(
+                    alert.id,
+                    lease_owner=self.lease_owner,
+                    attempts=self._attempts_to_persist(item),
+                    now=now,
+                ):
+                    sent += 1
+                continue
+
+            if item.evidence_unavailable:
+                outcome = self._complete_evidence_deferral(item, now=now)
+                failed += outcome == "failed"
+                deferred += outcome == "deferred"
+                continue
+
+            attempts_to_persist = self._attempts_to_persist(item)
+            new_attempt_count = alert.attempt_count + attempts_to_persist
+            error = item.last_error or alert.error_message or "unknown"
+            error = _ATTEMPT_SUFFIX_RE.sub("", error)
+            reason = item.last_reason or "unknown"
+            if new_attempt_count >= ALERT_MAX_ATTEMPTS:
+                failure_message = (
+                    f"{error} (gave up after {new_attempt_count} attempts)"
+                )
+                if self.store.complete_failed(
+                    alert.id,
+                    lease_owner=self.lease_owner,
+                    attempts=attempts_to_persist,
+                    now=now,
+                    failure_reason=reason,
+                    error_message=failure_message,
+                ):
+                    failed += 1
+                continue
+
+            if exhausted and item.attempts_made == 0 and not item.configuration_missing:
+                next_attempt_at = None
+            else:
+                round_index = min(
+                    max(new_attempt_count - 1, 0) // ALERT_MAX_RETRIES,
+                    len(ALERT_RETRY_ROUND_DELAYS) - 1,
+                )
+                next_attempt_at = now + timedelta(
+                    seconds=ALERT_RETRY_ROUND_DELAYS[round_index]
+                )
+            pending_message: str | None = (
+                f"{error} (after {item.attempts_made} "
+                f"{'attempt' if item.attempts_made == 1 else 'attempts'})"
+                if item.attempts_made
+                else (item.last_error or alert.error_message)
+            )
+            if self.store.complete_pending(
+                alert.id,
+                lease_owner=self.lease_owner,
+                attempts=attempts_to_persist,
+                now=now,
+                next_attempt_at=next_attempt_at,
+                error_message=pending_message,
+            ):
+                # No configured channel is an intentional operating mode, not
+                # an outage to surface as a failed manual flush. The persisted
+                # backoff still prevents a hot loop until settings change.
+                deferred += not item.configuration_missing
+        return {"sent": sent, "failed": failed, "deferred": deferred}
+
+    def _complete_evidence_deferral(self, item: _Delivery, *, now: datetime) -> str:
+        alert = item.alert
+        restart = item.attempts_made > 0
+        since = None if restart else alert.deferred_since
+        if since is not None:
+            since = _utc(since)
+        if since is not None and now - since >= timedelta(
+            hours=EVIDENCE_DEFERRAL_GIVE_UP_HOURS
+        ):
+            hours = int((now - since).total_seconds() // 3600)
+            message = (
+                "delivery evidence could not be recorded since "
+                f"{since.isoformat(timespec='minutes')} ({hours}h); "
+                "no transport was reached in that time"
+            )
+            try:
+                if self.settlement_repo is not None:
+                    self._prepare_repo_settlement(
+                        attempts=self._attempts_to_persist(item),
+                        now=now,
+                        failure_reason="evidence_unavailable",
+                    )
+                    self.settlement_repo.mark_failed(alert.id, message)
+                    completed = True
+                else:
+                    completed = self.store.complete_failed(
+                        alert.id,
+                        lease_owner=self.lease_owner,
+                        attempts=self._attempts_to_persist(item),
+                        now=now,
+                        failure_reason="evidence_unavailable",
+                        error_message=message,
+                    )
+            except (sqlite3.Error, OSError):
+                logger.error(
+                    "Alert %s exceeded its evidence deferral bound but the failure "
+                    "could not be recorded; leaving its lease to expire",
+                    alert.id,
+                    exc_info=True,
+                )
+                completed = self._fallback_complete_pending(item, now=now)
+                return "deferred" if completed else "lost"
+            finally:
+                self._clear_repo_settlement()
+            return "failed" if completed else "lost"
+
+        try:
+            if self.settlement_repo is not None:
+                self._prepare_repo_settlement(
+                    attempts=self._attempts_to_persist(item), now=now
+                )
+                completed = self.settlement_repo.note_deferral(
+                    alert.id, now, restart=restart
+                )
+            else:
+                completed = self.store.complete_pending(
+                    alert.id,
+                    lease_owner=self.lease_owner,
+                    attempts=self._attempts_to_persist(item),
+                    now=now,
+                    next_attempt_at=None,
+                    deferred_since=now,
+                    preserve_deferral=not restart,
+                )
+        except (sqlite3.Error, OSError):
+            logger.warning(
+                "Alert %s evidence deferral could not be recorded; leaving its "
+                "lease to expire",
+                alert.id,
+                exc_info=True,
+            )
+            completed = self._fallback_complete_pending(item, now=now)
+            return "deferred" if completed else "lost"
+        finally:
+            self._clear_repo_settlement()
+        return "deferred" if completed else "lost"
+
+    def _fallback_complete_pending(self, item: _Delivery, *, now: datetime) -> bool:
+        """Best-effort release after the primary evidence settlement refused."""
+        try:
+            return self.store.complete_pending(
+                item.alert.id,
+                lease_owner=self.lease_owner,
+                attempts=self._attempts_to_persist(item),
+                now=now,
+                next_attempt_at=None,
+            )
+        except (sqlite3.Error, OSError):
+            logger.error(
+                "Alert %s fallback settlement also failed; leaving its lease "
+                "to expire",
+                item.alert.id,
+                exc_info=True,
+            )
+            return False
+
+    def _prepare_repo_settlement(
+        self,
+        *,
+        attempts: int,
+        now: datetime,
+        failure_reason: str = "unknown",
+    ) -> None:
+        if self.settlement_repo is None:
+            return
+        repo: Any = self.settlement_repo
+        repo._dispatch_lease_owner = self.lease_owner
+        repo._dispatch_attempts = attempts
+        repo._dispatch_now = now
+        repo._dispatch_failure_reason = failure_reason
+
+    def _clear_repo_settlement(self) -> None:
+        if self.settlement_repo is None:
+            return
+        for name in (
+            "_dispatch_lease_owner",
+            "_dispatch_attempts",
+            "_dispatch_now",
+            "_dispatch_failure_reason",
+        ):
+            if hasattr(self.settlement_repo, name):
+                delattr(self.settlement_repo, name)
 
 
 def process_pending(
@@ -154,92 +530,19 @@ def process_pending(
     webhook_config: WebhookConfig | None = None,
     *,
     budget_seconds: float = ALERT_CYCLE_BUDGET_SECONDS,
+    ignore_backoff: bool = False,
 ) -> dict[str, int]:
-    """See AC-04. No-ops when both configs are None. Tries webhook if SMTP fails or is absent.
-
-    Retries in **waves**: every alert is attempted once before any is attempted
-    a second time. Each alert still gets ``ALERT_MAX_RETRIES`` attempts, but the
-    backoff sleeps are shared by the queue instead of paid per alert -- the
-    sleeps used to sit inside the per-alert loop, so a failing relay cost ~6s
-    *each* and a 100-alert queue blocked the scheduler for ten minutes (#43).
-
-    Waves alone do not bound that. An unreachable relay does not refuse, it
-    hangs to the 15s socket timeout, and there is one connect per attempt: 100
-    alerts x 3 attempts x 15s is 75 minutes of transport with no sleeping at
-    all. So the cycle also carries a wall-clock ``budget_seconds``. When it is
-    spent, the alerts not yet resolved stay ``pending`` and are counted as
-    deferred -- the state #36 already defined for "nothing was dispatched and
-    the alert is still deliverable", reused rather than reinvented.
-
-    Breadth before depth is why the two belong together: spending a budget down
-    the per-alert loop would give the first few alerts three attempts each and
-    the rest none. Under an outage, having tried everything once is worth more
-    than having tried three things thrice.
-    """
-    if config is None and webhook_config is None:
-        return {"sent": 0, "failed": 0, "deferred": 0}
-
+    """Compatibility entry point around :class:`Dispatcher`."""
     repository_path = getattr(alert_repo, "db_path", None)
-    evidence_db = Path(repository_path) if isinstance(repository_path, str | Path) else None
-    queue = [_Delivery(alert=alert) for alert in alert_repo.list_pending()]
-    started = monotonic()
-    exhausted = False
-
-    active = [item for item in queue if not item.done]
-    for wave in backoff_range(ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"):
-        for item in active:
-            if monotonic() - started >= budget_seconds:
-                exhausted = True
-                logger.warning(
-                    "Alert cycle budget of %.0fs spent during attempt %d; %d alert(s) "
-                    "left pending for the next cycle",
-                    budget_seconds, wave + 1,
-                    sum(1 for entry in queue if not entry.done),
-                )
-                break
-            _attempt_once(
-                item, evidence_db=evidence_db, config=config, webhook_config=webhook_config,
-            )
-        # Decided here, at the END of the wave, so abandoning the generator
-        # skips its sleep. Testing it at the top instead still pays one backoff
-        # after the last useful wave -- a queue that delivered everything on the
-        # first pass would sit there sleeping with nothing left to retry.
-        active = [item for item in active if not item.done]
-        if not active or exhausted:
-            break
-
-    sent = failed = deferred = 0
-    now = datetime.now(UTC)
-    for item in queue:
-        alert = item.alert
-        if item.delivered:
-            alert.sent_at = now
-            alert_repo.mark_sent(alert.id)
-            sent += 1
-        elif item.reached_transport and not exhausted and item.attempts_made:
-            # A real delivery failure, and the alert had its full run of waves.
-            plural = "attempt" if item.attempts_made == 1 else "attempts"
-            alert_repo.mark_failed(
-                alert.id,
-                f"{item.last_error or 'unknown'} (after {item.attempts_made} {plural})",
-            )
-            failed += 1
-        elif item.evidence_unavailable:
-            # No transport was reached: the database was unavailable, not the
-            # destination. The alert stays deliverable, so it stays pending
-            # rather than spending its retries on an outage that never reached
-            # a destination. The deferral is stamped on the row (best effort --
-            # the same database just refused a write) and, once it has outlived
-            # EVIDENCE_DEFERRAL_GIVE_UP_HOURS on that persisted clock, the alert
-            # is marked failed with a message that says since when (#38).
-            if _settle_evidence_deferral(alert_repo, item, now=now) == "failed":
-                failed += 1
-            else:
-                deferred += 1
-        else:
-            # The cycle ran out of budget before this alert had its full run.
-            # It is still deliverable and goes out next cycle; the deferral
-            # clock is for the evidence store, so it is not touched here.
-            logger.warning("Alert %s deferred (cycle budget spent), leaving it pending", alert.id)
-            deferred += 1
-    return {"sent": sent, "failed": failed, "deferred": deferred}
+    if not isinstance(repository_path, (str, Path)):
+        raise TypeError("claimed alert dispatch requires a SQLite-backed repository")
+    scope_tags = tuple(getattr(alert_repo, "_scope_tags", ()))
+    return Dispatcher(
+        repository_path,
+        config,
+        webhook_config,
+        budget_seconds=budget_seconds,
+        scope_tags=scope_tags,
+        ignore_backoff=ignore_backoff,
+        settlement_repo=alert_repo,
+    ).process_pending()

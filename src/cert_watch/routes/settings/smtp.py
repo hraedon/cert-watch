@@ -48,7 +48,9 @@ def _send_smtp_test(
 async def save_smtp_config(
     request: Request, _auth: str = Depends(settings_tab_form("smtp")),
 ) -> RedirectResponse:
-    return await _save_config_section(request, _SMTP_KEYS, "smtp", encrypt=True, rebuild=True)
+    return await _save_config_section(
+        request, _SMTP_KEYS, "smtp", encrypt=True, rebuild=True, wake_alerts=True
+    )
 
 
 @router.post("/settings/test-smtp")

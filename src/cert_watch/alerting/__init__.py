@@ -10,7 +10,9 @@ submodules.
 
 from __future__ import annotations
 
+from cert_watch.alerting.dispatch import Dispatcher
 from cert_watch.alerting.model import (
+    ALERT_MAX_ATTEMPTS,
     AlertConfig,
     OutboundMessage,
     SendResult,
@@ -20,7 +22,9 @@ from cert_watch.alerting.model import (
 from cert_watch.alerting.transports.base import Transport
 
 __all__ = [
+    "ALERT_MAX_ATTEMPTS",
     "AlertConfig",
+    "Dispatcher",
     "OutboundMessage",
     "SendResult",
     "Transport",
