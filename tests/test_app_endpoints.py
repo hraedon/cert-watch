@@ -263,6 +263,58 @@ def test_lifespan_starts_scheduler(tmp_path, monkeypatch, reload_app):
     assert not runtime.is_running
 
 
+def test_lifespan_configures_logging_before_schema_migrations(
+    tmp_path, monkeypatch, capsys,
+):
+    """Migration progress reaches the application's configured handler."""
+    import asyncio
+    import logging
+
+    import pytest
+
+    import cert_watch.app as app_module
+
+    data_dir = tmp_path / "upgrade"
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
+
+    real_init_schema = app_module.init_schema
+
+    class SchemaInitialized(Exception):
+        pass
+
+    def init_schema_then_stop(db_path):
+        real_init_schema(db_path)
+        raise SchemaInitialized
+
+    monkeypatch.setattr(app_module, "init_schema", init_schema_then_stop)
+
+    cert_watch_logger = logging.getLogger("cert_watch")
+    previous_handlers = list(cert_watch_logger.handlers)
+    previous_level = cert_watch_logger.level
+    for handler in previous_handlers:
+        cert_watch_logger.removeHandler(handler)
+
+    try:
+        application = app_module.create_app()
+
+        async def start_application():
+            async with application.router.lifespan_context(application):
+                pass
+
+        with pytest.raises(SchemaInitialized):
+            asyncio.run(start_application())
+    finally:
+        for handler in list(cert_watch_logger.handlers):
+            cert_watch_logger.removeHandler(handler)
+        for handler in previous_handlers:
+            cert_watch_logger.addHandler(handler)
+        cert_watch_logger.setLevel(previous_level)
+
+    output = capsys.readouterr().out
+    assert "cert_watch.migrations backed up" in output
+    assert "cert_watch.migrations applying migration 0001:" in output
+
+
 def test_lifespan_respects_sched_env(tmp_path, monkeypatch, reload_app):
     monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", "3")
     monkeypatch.setenv("CERT_WATCH_SCHED_MIN", "15")

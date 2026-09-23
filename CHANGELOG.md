@@ -9,6 +9,17 @@ All notable changes to cert-watch are documented in this file.
 - `cert-watch verify-report` prints a clean `FAIL` and exits 1 when the report
   file is missing, unreadable, not UTF-8, or nested too deeply to parse,
   instead of a Python traceback (#66).
+- Configure application logging before startup schema migration so the
+  pre-migration backup path and each applied migration reach the configured
+  handler.
+
+### Documentation
+
+- Correct the 0.9-to-1.0 migration list and expand the Windows/IIS upgrade
+  procedure: back up IIS secret files, recover installer arguments and TLS
+  binding details, use a tagged source archive, verify the migration without
+  relying on logs, account for PyPI dependency resolution, and recycle the app
+  pool after editing `web.config`.
 
 ## [1.0.0] - 2026-09-23
 

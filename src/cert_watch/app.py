@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import typing
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -182,6 +183,11 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     """
     s = getattr(app.state, "_injected_settings", None)
     if s is None:
+        # Logging must be live before settings resolution, secret persistence,
+        # and schema migration: each of those startup paths can emit operator-
+        # relevant warnings or progress. LOG_FORMAT is environment-only, so it
+        # does not depend on the database-backed settings merge below.
+        _setup_logging(log_format=os.environ.get("CERT_WATCH_LOG_FORMAT", "text"))
         # Two-phase boot: env first (to get data_dir), then merge kv_store for
         # auth/smtp/alert persistence (BC-159). Without this, GUI-configured LDAP,
         # OAuth, SMTP, and alert settings evaporate on restart.
@@ -211,6 +217,7 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
         # reads it from app.state.security. Module-level globals remain as an
         # import-time fallback for unit tests only (set via conftest).
     else:
+        _setup_logging(log_format=s.log_format)
         security = getattr(app.state, "_injected_security", None) or _resolve_security(s)
         init_schema(s.db_path)
         encryption_key = derive_encryption_key(security.signing_key)
@@ -229,7 +236,6 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
     assert s is not None
     encryption_key = derive_encryption_key(security.signing_key)
 
-    _setup_logging(log_format=s.log_format)
     _init_rate_db(s.db_path)
     from cert_watch.siem import configure_exporter
 

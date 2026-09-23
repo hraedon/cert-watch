@@ -31,8 +31,23 @@ items can lock someone out or change who gets alerted.
 
 ### Before you upgrade
 
-- [ ] **Back up**, and keep the data directory's `.auth_secret` with the
-      backup: `cert-watch backup /backups/cert-watch-pre-1.0.sqlite3`.
+- [ ] **Back up the database and its secrets.** On a command-line install, run
+      `cert-watch backup /backups/cert-watch-pre-1.0.sqlite3` and keep the data
+      directory's `.auth_secret` if cert-watch generated it. A Windows/IIS
+      install instead uses `secrets\auth_secret` and `secrets\csrf_secret`
+      through the `*_FILE` settings in `web.config`. Its CLI is inside the
+      data directory and does not inherit the environment variables from
+      `web.config`; for a default install, use an elevated PowerShell:
+
+      ```powershell
+      $dataDir = "C:\ProgramData\cert-watch"
+      $env:CERT_WATCH_DATA_DIR = $dataDir
+      & "$dataDir\venv\Scripts\cert-watch.exe" backup "C:\backups\cert-watch-pre-1.0.sqlite3"
+      Copy-Item "$dataDir\secrets\auth_secret", "$dataDir\secrets\csrf_secret" "C:\backups"
+      ```
+
+      Set `$dataDir` and `CERT_WATCH_DATA_DIR` to the actual data directory if
+      `-InstallDir` was used.
 - [ ] **LDAP over plain `ldap://` is refused.** A simple bind now needs
       `ldaps://` or `LDAP_START_TLS=1`. If you can't change that yet, set
       `CERT_WATCH_LDAP_ALLOW_INSECURE=1`, knowing it sends directory
@@ -82,15 +97,53 @@ items can lock someone out or change who gets alerted.
   the existing virtual environment and restart the service. The script
   rewrites the unit file, so keep local settings in a drop-in
   (`systemctl edit cert-watch`), not in the unit itself.
-- **Windows / IIS:** re-run `install-windows.ps1` with your original arguments.
-  It stops the application pool, which releases the database, updates the
-  code, and starts the pool again. It never touches the database file,
-  signing keys or your `web.config` settings. For any *manual* file operation,
-  such as restoring a backup, stop the pool first; Windows won't let you
-  replace an open database.
+- **Windows / IIS:** download and extract the `vX.Y.Z` source archive from the
+  repository's GitHub **Tags** page (or a release page's generated **Source
+  code** link), then run `scripts\install-windows.ps1` from that extracted
+  tree with your original arguments. The release workflow publishes container
+  images; it does not attach a Windows installer asset.
 
-Then watch the log for `applying migration …` lines, and open the web
-interface.
+  If the original command was not recorded, recover the important IIS values
+  before re-running it:
+
+  ```powershell
+  $dataDir = "C:\ProgramData\cert-watch" # change if -InstallDir was used
+  & "$dataDir\venv\Scripts\python.exe" -m pip show ldap3 authlib
+  Import-Module WebAdministration
+  Get-WebBinding -Name cert-watch -Protocol https |
+      Select-Object bindingInformation, sslFlags
+  netsh http show sslcert ipport=0.0.0.0:443
+  # For an SNI binding, use the host from bindingInformation instead:
+  netsh http show sslcert hostnameport=certs.example.com:443
+  ```
+
+  If both Python packages are present, retain `-WithAuthExtras`. An IIS binding
+  such as `*:443:certs.example.com` supplies `-HostName certs.example.com`;
+  `sslFlags=1` supplies `-SharePort443`. The matching `netsh` entry reports the
+  certificate hash to pass as `-TlsCertThumbprint`. Also retain any non-default
+  `-InstallDir`, `-AppPool`, or `-SitePath`. **Do not re-run `-ConfigureIIS`
+  with the default binding arguments: with no `-HostName` or `-SharePort443`,
+  the installer rewrites the HTTPS binding to `*:443:` (and switches out of
+  SNI mode).** (`-SharePort443` by itself is rejected.)
+
+  The installer stops the application pool, which releases the database,
+  updates the code, and starts the pool again. It does not replace the database,
+  signing keys, or an existing `web.config`; the restarted application applies
+  the pending database migrations. For any *manual* file operation, such as
+  restoring a backup, stop the pool first; Windows won't let you replace an
+  open database.
+
+  The script installs cert-watch from the extracted source tree, but resolves
+  and upgrades its dependencies from PyPI at install time; it does not install
+  from `uv.lock`. Dependency versions can therefore differ between installer
+  runs unless your environment supplies a constrained package mirror.
+
+Then watch the log for `backed up …` and `applying migration …` lines, and open
+the web interface. Those lines are visible from 1.0.1 onward. Independently of
+the application version, confirm that a new
+`cert-watch-pre-migration-*.sqlite3` file appeared beside the database and
+inspect the database's `schema_version` table: every migration through the
+target release's head must have a row. For 1.0, that final row is `0037`.
 
 ### What to expect afterwards
 
@@ -99,12 +152,22 @@ because the session format changed. API keys keep working. On Windows/IIS, a
 form left open across the upgrade fails once, because the CSRF secret file is
 now honoured; reload the page.
 
-**Three migrations run:**
+**A v0.9.5 database runs nine migrations, 0029–0037:**
 
+- **0029** adds the durable digest-delivery claim ledger.
+- **0030** adds per-tag permission tiers to roles.
+- **0031** merges certificate notes into host notes and drops the old column.
+- **0032** adds append-only alert-delivery evidence.
+- **0033** adds the clock used to bound alert-evidence deferral.
+- **0034** records the certificate that triggered each alert.
 - **0035** reconciles the schema of databases that had drifted from a fresh
   install: it adds `hosts.notes` and four indexes, and drops a duplicate column.
 - **0036** gives alerts a delivery lifecycle.
 - **0037** gives each alert a dedupe key and a saved routing snapshot.
+
+Earlier 0.9.x databases can run additional migrations according to the highest
+ID already present in `schema_version`; for example, the supported v0.9.0
+fixture ends at `0023`, so it runs `0024`–`0037`.
 
 **Alerting behaves better, and slightly differently.** See
 [alerting.md](docs/alerting.md) for the whole picture.
