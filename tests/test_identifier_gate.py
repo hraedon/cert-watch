@@ -1208,7 +1208,7 @@ def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
         ("pull_request", "contributor/fork", set()),
         ("pull_request_target", "owner/cert-watch", set()),
         ("pull_request_target", "contributor/fork", {"reject"}),
-        ("pull_request_target", None, set()),
+        ("pull_request_target", None, {"reject"}),  # deleted fork: fail closed
     ]
     def step_name(step: dict[str, object]) -> str:
         name = step.get("name")
