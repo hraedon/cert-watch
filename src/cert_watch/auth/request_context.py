@@ -162,6 +162,8 @@ def attach_session_context(request: Request, username: str, info: SessionInfo) -
     auth_ctx = build_auth_context(
         username, info.groups, info.roles, role_map,
         role_repo=role_repo, user_repo=user_repo,
+        write_users=tuple(getattr(settings, "write_users", ()) or ()),
+        admin_users=tuple(getattr(settings, "admin_users", ()) or ()),
     )
     request.state.auth_context = auth_ctx
     request.scope["auth_user"] = username
