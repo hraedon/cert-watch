@@ -114,7 +114,7 @@ days (2027-03-15) to a final 47 days (2029-03-15). This is the one predictable
 demand shock in the certificate-observability niche: every public-trust
 certificate in an SMB's estate must be re-issued more frequently, and renewal
 failures that were tolerable on a 12-month cadence become outages on a 47-day
-one. cert-watch's SC-081 readiness report (Plan 048), lifetime-relative alert
+one. cert-watch's SC-081 readiness report, lifetime-relative alert
 thresholds, and per-host renewal-analytics are the specific response. The
 window is 2026–2029: demand for renewal monitoring rises, cert-watch is
 positioned for it. The date-keyed policy pack
