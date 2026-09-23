@@ -1,10 +1,11 @@
 """Fleet pivot and grouping queries."""
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.database.dashboard import _load_unified_filtered
 from cert_watch.database.schema import init_schema
 
@@ -14,6 +15,8 @@ def list_fleet_pivot(
     db_path: str | Path,
     pivot: str,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    *,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Return fleet pivot groups using SQL-level aggregation.
 
@@ -53,11 +56,11 @@ def list_fleet_pivot(
                         -- Expired certs map to -1 so the group's worst_urgency
                         -- reaches "expired" (min_days < 0). Using julianday keeps
                         -- the comparison robust to the stored T-separated ISO format;
-                        -- a plain string compare against datetime('now') (space-sep)
+                        -- a plain string compare against a space-separated datetime
                         -- and CAST-toward-zero would both miss same-day expiries.
-                        WHEN julianday(c.not_after) < julianday('now') THEN -1
+                        WHEN julianday(c.not_after) < julianday(?) THEN -1
                         ELSE CAST(
-                            (julianday(c.not_after) - julianday('now'))
+                            (julianday(c.not_after) - julianday(?))
                             AS INTEGER
                         )
                    END) AS INTEGER) AS min_days,
@@ -66,7 +69,8 @@ def list_fleet_pivot(
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
             WHERE c.is_leaf = 1
         """
-        scanned_params: list[Any] = []
+        # Both placeholders so far are the reference instant in the SELECT list.
+        scanned_params: list[Any] = [_sql_now(now)] * scanned_sql.count("?")
         scanned_sql, scanned_params = _add_effective_tag_filter(
             scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
         )

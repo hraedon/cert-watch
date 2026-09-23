@@ -237,7 +237,10 @@ class SchedulerContext:
             config.settings.db_path,
             transports,
             budget_seconds=max(0.0, deadline - self._clock.monotonic()),
-            clock=lambda: now,
+            # A live clock, not the frozen cycle start: the engine stamps and
+            # renews delivery leases from it, so a frozen value would stop
+            # renewals from extending a lease during a long cycle.
+            clock=self._clock.now,
             stop_event=stop_event,
         )
         return engine.run(

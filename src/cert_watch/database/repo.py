@@ -13,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.connection import _connect, _iso, _parse_iso, parse_san_dns_names
+from cert_watch.database.connection import (
+    _connect,
+    _iso,
+    _parse_iso,
+    _sql_now,
+    parse_san_dns_names,
+)
 from cert_watch.host_validation import hostname_is_valid
 
 # ---------- dataclasses ----------
@@ -101,7 +107,9 @@ class CertificateRepository(ABC):
     def list_all(self) -> list[Certificate]: ...
 
     @abstractmethod
-    def list_expiring_within(self, days: int) -> list[Certificate]: ...
+    def list_expiring_within(
+        self, days: int, *, now: datetime | None = None
+    ) -> list[Certificate]: ...
 
     @abstractmethod
     def update_expiry(self, cert_id: str, not_after: datetime) -> None: ...
@@ -183,13 +191,15 @@ class SqliteCertificateRepository(CertificateRepository):
             rows = conn.execute("SELECT * FROM certificates").fetchall()
         return [_row_to_cert(r) for r in rows]
 
-    def list_expiring_within(self, days: int) -> list[Certificate]:
+    def list_expiring_within(
+        self, days: int, *, now: datetime | None = None
+    ) -> list[Certificate]:
         from cert_watch.database.connection import _row_to_cert
         with _connect(self.db_path) as conn:
             rows = conn.execute(
                 "SELECT * FROM certificates "
-                "WHERE julianday(not_after) <= julianday('now', '+' || ? || ' days')",
-                (days,),
+                "WHERE julianday(not_after) <= julianday(?, '+' || ? || ' days')",
+                (_sql_now(now), days),
             ).fetchall()
         return [_row_to_cert(r) for r in rows]
 
