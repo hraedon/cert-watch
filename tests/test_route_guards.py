@@ -77,3 +77,20 @@ def test_mutation_guard_cannot_be_built_without_csrf():
         MutationGuard("read", form=False)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         MutationGuard("write", form=False, browser_only=True)
+
+
+def test_inventory_sees_routes_inside_a_mounted_sub_application() -> None:
+    from fastapi import FastAPI
+
+    from tests._route_inventory import mutating_routes
+
+    sub = FastAPI()
+
+    @sub.post("/danger")
+    def danger() -> dict[str, str]:  # pragma: no cover - never called
+        return {}
+
+    outer = FastAPI()
+    outer.mount("/sub", sub)
+
+    assert any(method == "POST" for method, _path, _route in mutating_routes(outer))
