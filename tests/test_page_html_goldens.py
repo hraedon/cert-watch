@@ -261,7 +261,7 @@ def characterized_pages(tmp_path: Path, reload_app) -> Iterator[dict[str, str]]:
             settings=Settings(db_path=empty_db, data_dir=empty_dir, allow_unauth=True),
             auth_provider=NoAuthProvider(),
         )
-        with TestClient(empty_app) as client:
+        with TestClient(empty_app, base_url="http://localhost") as client:
             for name, path in (("home_empty", "/"), ("browse_empty", "/browse")):
                 response = client.get(path)
                 assert response.status_code == 200, (name, path, response.status_code)

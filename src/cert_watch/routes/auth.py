@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import logging
+import unicodedata
 from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
@@ -71,7 +73,13 @@ async def login_submit(
     password: str = Form(...),
 ) -> RedirectResponse:
     client_ip = _extract_client_ip(request)
-    if not check_rate_limit(f"login:{client_ip}", 10, 300):
+    normalized_username = unicodedata.normalize("NFKC", username).strip().casefold()
+    username_key = hashlib.sha256(normalized_username.encode()).hexdigest()
+    account_allowed = check_rate_limit(
+        f"login-account:{client_ip}:{username_key}", 10, 300
+    )
+    ip_allowed = check_rate_limit(f"login-ip:{client_ip}", 50, 300)
+    if not account_allowed or not ip_allowed:
         return RedirectResponse(
             url="/login?error=rate+limited:+too+many+login+attempts", status_code=303
         )

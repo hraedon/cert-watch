@@ -213,10 +213,15 @@ async def _csrf_required_error(request: Request) -> str | None:
 #     require_auth          JSON/any: authenticated, else 401
 #     require_admin         JSON: admin, else 401/403
 #     admin_page_guard      HTML page: admin, else redirect
+#     require_admin_session / admin_session_page_guard
+#                           API-key management: admin browser session only
 #
 #   mutation (CSRF built in -- there is no way to construct one without it)
 #     write_guard           JSON write: 401/403, CSRF 403
 #     admin_write_guard     JSON admin: 401/403, CSRF 403
+#     json_write_guard / admin_json_write_guard
+#                           JSON-body variants requiring application/json
+#     admin_session_*       API-key management: admin browser session only
 #     write_form_guard      HTML form write: redirect on refusal
 #     admin_form_guard      HTML form admin: redirect on refusal
 #     admin_settings_form(bounce)   Settings forms: admin, CSRF failure
@@ -268,18 +273,24 @@ CsrfFailure = str | Callable[[Request, str], Response]
 class ReadGuard:
     """Authentication, optionally admin. No CSRF check, so read routes only."""
 
-    def __init__(self, *, admin: bool, form: bool) -> None:
+    def __init__(self, *, admin: bool, form: bool, session_only: bool = False) -> None:
         self.admin = admin
         self.form = form
+        self.session_only = session_only
 
     def __repr__(self) -> str:
-        return f"ReadGuard(admin={self.admin}, form={self.form})"
+        return (
+            f"ReadGuard(admin={self.admin}, form={self.form}, "
+            f"session_only={self.session_only})"
+        )
 
     async def __call__(self, request: Request) -> str:
         if not self.form:
             result = _check_auth(request, require_admin=self.admin)
             if result.error:
                 _raise_json(result.error if self.admin else "unauthenticated")
+            if self.session_only and result.api_key_auth:
+                raise HTTPException(status_code=403, detail="admin browser session required")
             return result.user or ""
         # HTML page (admin only in practice): relies on auth_middleware having
         # authenticated the request; the legacy CERT_WATCH_ADMINS list applies.
@@ -293,6 +304,10 @@ class ReadGuard:
             if result.error == "unauthenticated":
                 raise _login_redirect()
             raise GuardRejection(_bounce(_admin_redirect_target(request), result.error))
+        if self.session_only and getattr(request.state, "api_key_auth", False):
+            raise GuardRejection(
+                _bounce(_admin_redirect_target(request), "admin browser session required")
+            )
         return result.user or ""
 
 
@@ -305,8 +320,9 @@ class MutationGuard:
     except on ``browser_only`` forms, which hold them to the check -- and so
     refuse them -- exactly like a cookie request without a token.
 
-    JSON guards raise 401/403 and check CSRF only when an auth provider is
-    configured; HTML form guards redirect and check CSRF always.
+    JSON guards raise 401/403. They check CSRF whenever authentication is
+    configured and for cookie-carrying/browser requests in open mode. HTML
+    form guards redirect and check CSRF always.
     """
 
     def __init__(
@@ -316,20 +332,27 @@ class MutationGuard:
         form: bool,
         csrf_failure: CsrfFailure | None = None,
         browser_only: bool = False,
+        json_only: bool = False,
+        session_only: bool = False,
     ) -> None:
         if level not in ("write", "admin"):
             raise ValueError(f"unknown guard level {level!r}")
         if not form and (csrf_failure is not None or browser_only):
             raise ValueError("csrf_failure / browser_only apply to HTML form guards only")
+        if form and json_only:
+            raise ValueError("json_only applies to JSON guards only")
         self.level = level
         self.form = form
         self.csrf_failure = csrf_failure
         self.browser_only = browser_only
+        self.json_only = json_only
+        self.session_only = session_only
 
     def __repr__(self) -> str:
         return (
             f"MutationGuard({self.level!r}, form={self.form}, "
-            f"csrf_failure={self.csrf_failure!r}, browser_only={self.browser_only})"
+            f"csrf_failure={self.csrf_failure!r}, browser_only={self.browser_only}, "
+            f"json_only={self.json_only}, session_only={self.session_only})"
         )
 
     async def _csrf_error(self, request: Request) -> str | None:
@@ -340,6 +363,12 @@ class MutationGuard:
     async def __call__(self, request: Request) -> str:
         if self.form:
             return await self._form(request)
+        if self.json_only:
+            media_type = request.headers.get("content-type", "").split(";", 1)[0]
+            if media_type.strip().lower() != "application/json":
+                raise HTTPException(
+                    status_code=415, detail="Content-Type must be application/json"
+                )
         result = _check_auth(
             request,
             require_write=self.level == "write",
@@ -347,7 +376,12 @@ class MutationGuard:
         )
         if result.error:
             _raise_json(result.error)
-        if _is_auth_enabled(request):
+        if self.session_only and result.api_key_auth:
+            raise HTTPException(status_code=403, detail="admin browser session required")
+        browser_request = bool(request.cookies) or any(
+            header in request.headers for header in ("origin", "sec-fetch-site")
+        )
+        if _is_auth_enabled(request) or browser_request:
             csrf_err = await self._csrf_error(request)
             if csrf_err:
                 raise HTTPException(status_code=403, detail=csrf_err)
@@ -378,6 +412,8 @@ class MutationGuard:
             else:
                 _check_auth(request, resolve_session=False, require_admin=True)
             default_bounce = _admin_redirect_target(request)
+        if self.session_only and getattr(request.state, "api_key_auth", False):
+            raise GuardRejection(_bounce(default_bounce, "admin browser session required"))
         csrf_err = await self._csrf_error(request)
         if csrf_err:
             failure = self.csrf_failure or default_bounce
@@ -387,17 +423,60 @@ class MutationGuard:
         return user
 
 
-def admin_settings_form(csrf_failure: CsrfFailure) -> MutationGuard:
+def admin_settings_form(
+    csrf_failure: CsrfFailure, *, session_only: bool = False
+) -> MutationGuard:
     """The guard for a Settings form POST: admin, browser-only, and a CSRF
     failure lands back on the settings tab the form came from."""
-    return MutationGuard("admin", form=True, csrf_failure=csrf_failure, browser_only=True)
+    return MutationGuard(
+        "admin",
+        form=True,
+        csrf_failure=csrf_failure,
+        browser_only=True,
+        session_only=session_only,
+    )
 
 
 require_auth = ReadGuard(admin=False, form=False)
 require_admin = ReadGuard(admin=True, form=False)
 admin_page_guard = ReadGuard(admin=True, form=True)
+require_admin_session = ReadGuard(admin=True, form=False, session_only=True)
+admin_session_page_guard = ReadGuard(admin=True, form=True, session_only=True)
 write_guard = MutationGuard("write", form=False)
 admin_write_guard = MutationGuard("admin", form=False)
+json_write_guard = MutationGuard("write", form=False, json_only=True)
+admin_json_write_guard = MutationGuard("admin", form=False, json_only=True)
+admin_session_write_guard = MutationGuard("admin", form=False, session_only=True)
+admin_session_json_write_guard = MutationGuard(
+    "admin", form=False, json_only=True, session_only=True
+)
+
+
+class MetricsGuard:
+    """Authorize a metrics bearer token or an admin browser session."""
+
+    async def __call__(self, request: Request) -> str:
+        from cert_watch.auth.request_context import (
+            check_metrics_token,
+            metrics_token_configured,
+        )
+
+        token_configured = metrics_token_configured(request)
+        if token_configured and check_metrics_token(request):
+            return ""
+        if token_configured and not _is_auth_enabled(request):
+            raise HTTPException(status_code=401, detail="unauthorized")
+        result = _check_auth(request, require_admin=True)
+        if result.error:
+            if result.error == "unauthenticated" and token_configured:
+                raise HTTPException(status_code=401, detail="unauthorized")
+            _raise_json(result.error)
+        if result.api_key_auth:
+            raise HTTPException(status_code=403, detail="admin browser session required")
+        return result.user or ""
+
+
+metrics_guard = MetricsGuard()
 write_form_guard = MutationGuard("write", form=True)
 admin_form_guard = MutationGuard("admin", form=True)
 

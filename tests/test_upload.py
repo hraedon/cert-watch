@@ -1,4 +1,5 @@
 from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption, PrivateFormat
 
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import SqliteCertificateRepository
@@ -56,6 +57,30 @@ def test_upload_pfx_with_password(pfx_file_with_password):
     assert isinstance(entry, UploadedEntry)
     assert len(entry.chain) == 2
     assert "CN=chain-leaf.example.com" in entry.leaf.subject
+
+
+def test_upload_pfx_discards_private_key_from_storage_and_logs(
+    pfx_file_no_password, chain_triplet, tmp_path, caplog
+):
+    """A PKCS#12 key may be parsed transiently, but never leaves certificate-only state."""
+    from cert_watch.database.connection import _connect
+
+    private_der = chain_triplet["leaf"].key.private_bytes(
+        Encoding.DER, PrivateFormat.PKCS8, NoEncryption()
+    )
+    entry = upload_certificate(pfx_file_no_password)
+    assert isinstance(entry, UploadedEntry)
+    assert not hasattr(entry, "private_key")
+    assert not hasattr(entry.leaf, "private_key")
+
+    db = tmp_path / "private-key-discard.sqlite3"
+    store_uploaded(entry, db)
+    with _connect(db) as conn:
+        stored_blobs = [row[0] for row in conn.execute("SELECT raw_der FROM certificates")]
+
+    assert private_der not in stored_blobs
+    assert private_der.hex() not in caplog.text
+    assert "BEGIN PRIVATE KEY" not in caplog.text
 
 
 def test_upload_pfx_wrong_password(pfx_file_with_password):

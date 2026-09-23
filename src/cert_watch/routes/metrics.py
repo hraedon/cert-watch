@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
-from cert_watch.auth.request_context import check_metrics_token
+from cert_watch.auth.guards import metrics_guard
 from cert_watch.database import get_posture_grades_for_certs
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import compute_urgency
@@ -42,9 +42,9 @@ def _scan_error_reason(error_message: str | None) -> str:
     response_class=PlainTextResponse,
     dependencies=[Depends(rate_limit("metrics", 120, 60))],
 )
-def metrics(request: Request) -> PlainTextResponse:
-    if not check_metrics_token(request):
-        return PlainTextResponse("unauthorized", status_code=401)
+def metrics(
+    request: Request, _auth: str = Depends(metrics_guard)
+) -> PlainTextResponse:
     db = _db_path(request)
     registry = CollectorRegistry()
 

@@ -102,6 +102,11 @@ def check_metrics_token(request: Request) -> bool:
     return False
 
 
+def metrics_token_configured(request: Request) -> bool:
+    """Return whether this app configured the dedicated metrics bearer token."""
+    return bool(_metrics_token(request))
+
+
 # ---------- API-key (bearer) authentication (Plan 039 / BC-104) ----------
 
 # API-key scope → cert-watch RBAC role. read=viewer, write=operator, admin=admin.
@@ -221,7 +226,7 @@ async def auth_middleware(
 ) -> Response:
     """Enforce authentication when AUTH_PROVIDER is configured.
 
-    Public paths (/healthz, /metrics, /static, /login, /auth/*) are exempt.
+    Public paths (/healthz, token-gated /metrics, /static, /login, /auth/*) are exempt.
     The /api/* data routes require auth: unauthenticated API requests get a
     401, unauthenticated UI requests redirect to /login.
     """
@@ -236,6 +241,6 @@ async def auth_middleware(
         return await call_next(request)
 
     # Unauthenticated
-    if path.startswith("/api/"):
+    if path.rstrip("/") == "/metrics" or path.startswith("/api/"):
         return JSONResponse(content={"error": "unauthenticated"}, status_code=401)
     return RedirectResponse(url="/login", status_code=303)

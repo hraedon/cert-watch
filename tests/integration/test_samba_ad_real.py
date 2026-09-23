@@ -275,6 +275,7 @@ class Test_LDAPAuthProvider_Integration:
             start_tls=False,
             ca_cert=samba_ad.ca_cert_pem,
             required_groups=[],
+            allow_insecure=True,
         )
         result = provider.authenticate("cw-admin", "Test1234!")
         assert result.success, f"Expected success, got: {result.error}"
@@ -297,6 +298,7 @@ class Test_LDAPAuthProvider_Integration:
             required_groups=[
                 f"CN=cert-watch-admins,CN=Users,{samba_ad.base_dn}",
             ],
+            allow_insecure=True,
         )
         # Verify the default filter shape uses the AD transitive OID.
         group_dn = f"CN=cert-watch-admins,CN=Users,{samba_ad.base_dn}"
@@ -372,6 +374,7 @@ class Test_LdapLoginViaSettings:
         )
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+        monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
 
         settings = Settings.from_env()
         provider = settings.build_auth_provider()
@@ -391,6 +394,7 @@ class Test_LdapLoginViaSettings:
         monkeypatch.setenv("LDAP_REQUIRED_GROUPS", f"{g1};{g2}")
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+        monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
 
         settings = Settings.from_env()
         provider = settings.build_auth_provider()

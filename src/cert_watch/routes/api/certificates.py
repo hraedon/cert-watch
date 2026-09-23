@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
+from cert_watch.auth.guards import (
+    admin_write_guard,
+    json_write_guard,
+    require_auth,
+    write_guard,
+)
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -315,7 +320,7 @@ def api_list_tags(request: Request, _auth: str = Depends(require_auth)) -> JSONR
 
 @router.put("/api/certificates/{cert_id}/tags")
 async def api_set_cert_tags(
-    cert_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    cert_id: IdParam, request: Request, _auth: str = Depends(json_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     raw = await request.body()

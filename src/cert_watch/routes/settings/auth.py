@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.auth.guards import admin_write_guard
+from cert_watch.auth.ldap_provider import insecure_ldap_error
 from cert_watch.database import get_write_lock, kv_set, kv_set_secret
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
@@ -360,6 +361,13 @@ async def test_ldap_connection(
 
     server = parsed[0]
     settings = _get_settings(request)
+    insecure_error = insecure_ldap_error(
+        server,
+        start_tls=parsed[5],
+        allow_insecure=settings.ldap_allow_insecure,
+    )
+    if insecure_error:
+        return JSONResponse({"ok": False, "error": insecure_error})
     ssrf_err, resolved_ips = _check_ldap_ssrf(
         server,
         allow_private=settings.allow_private,

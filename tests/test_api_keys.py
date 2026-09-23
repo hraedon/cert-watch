@@ -375,7 +375,7 @@ def test_bearer_auth_http_end_to_end(reload_app):
 
 
 def test_api_keys_management_routes(reload_app):
-    """The /api/api-keys CRUD routes: admin-gated, create/list/revoke."""
+    """API-key CRUD requires an admin browser session, never another API key."""
     from fastapi.testclient import TestClient
 
     from cert_watch.auth.local_admin import _scrypt_hash
@@ -393,13 +393,25 @@ def test_api_keys_management_routes(reload_app):
     admin_hdr = {"Authorization": f"Bearer {admin_raw}"}
 
     with TestClient(app_mod.app) as client:
-        # A non-admin (read) key cannot manage keys.
+        from cert_watch.auth import SESSION_COOKIE, create_session
+        from cert_watch.auth.rbac import BREAK_GLASS_CLAIM
+
+        # No API key, including an admin-scoped key, can manage keys.
         read_hdr = {"Authorization": f"Bearer {read_raw}"}
         assert client.get("/api/api-keys", headers=read_hdr).status_code == 403
+        assert client.get("/api/api-keys", headers=admin_hdr).status_code == 403
+        assert client.post(
+            "/api/api-keys", headers=admin_hdr, json={"name": "x", "scope": "read"}
+        ).status_code == 403
 
-        # Admin creates a key and gets the raw token exactly once.
+        token = create_session(
+            "admin", client.app.state.security, version=0, roles=[BREAK_GLASS_CLAIM]
+        )
+        client.cookies.set(SESSION_COOKIE, token)
+
+        # The admin browser session creates a key and gets the raw token once.
         created = client.post(
-            "/api/api-keys", headers=admin_hdr, json={"name": "deploy", "scope": "write"}
+            "/api/api-keys", json={"name": "deploy", "scope": "write"}
         )
         assert created.status_code == 201
         body = created.json()
@@ -409,14 +421,14 @@ def test_api_keys_management_routes(reload_app):
 
         # Bad scope is rejected.
         assert client.post(
-            "/api/api-keys", headers=admin_hdr, json={"name": "x", "scope": "root"}
+            "/api/api-keys", json={"name": "x", "scope": "root"}
         ).status_code == 400
 
         # List shows the key, never a token/hash.
-        listed = client.get("/api/api-keys", headers=admin_hdr).json()["api_keys"]
+        listed = client.get("/api/api-keys").json()["api_keys"]
         assert any(k["id"] == new_id for k in listed)
         assert all("token" not in k and "key_hash" not in k for k in listed)
 
         # Revoke it; revoking again 404s.
-        assert client.delete(f"/api/api-keys/{new_id}", headers=admin_hdr).status_code == 200
-        assert client.delete(f"/api/api-keys/{new_id}", headers=admin_hdr).status_code == 404
+        assert client.delete(f"/api/api-keys/{new_id}").status_code == 200
+        assert client.delete(f"/api/api-keys/{new_id}").status_code == 404

@@ -62,6 +62,7 @@ class Settings:
     ldap_bind_password: str = field(default="", repr=False)
     ldap_user_filter: str = "(sAMAccountName={username})"
     ldap_start_tls: bool = False
+    ldap_allow_insecure: bool = False
     ldap_ca_cert: str = field(default="", repr=False)
     ldap_required_groups: tuple[str, ...] = ()
     ldap_connect_timeout: int = 5
@@ -201,6 +202,7 @@ class Settings:
             ldap_bind_password=self.ldap_bind_password,
             ldap_user_filter=self.ldap_user_filter,
             ldap_start_tls=self.ldap_start_tls,
+            ldap_allow_insecure=self.ldap_allow_insecure,
             ldap_ca_cert=self.ldap_ca_cert,
             ldap_required_groups=list(self.ldap_required_groups),
             ldap_connect_timeout=self.ldap_connect_timeout,

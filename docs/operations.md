@@ -33,9 +33,12 @@ beyond their status to anonymous callers.
 | `/healthz` | `200 {"status": "ok"}` while the process is serving | Liveness probes |
 | `/readyz` | `200` when ready; `503` if the database can't be read or written, or the scheduler isn't running | Readiness probes and uptime checks |
 
-**Metrics.** `/metrics` exposes Prometheus gauges. If it is reachable by
-anyone but your monitoring, set `CERT_WATCH_METRICS_TOKEN` and scrape with
-that bearer token.
+**Metrics.** `/metrics` exposes Prometheus gauges. With authentication
+enabled, it answers only the dedicated bearer token (`CERT_WATCH_METRICS_TOKEN`,
+not an API key) or an administrator's browser session, so set the token for
+your scraper. With authentication disabled, it is open like everything else.
+The labels include host names and certificate subjects, so also restrict it to
+your monitoring network at the ingress or firewall.
 
 | Metric | Labels | Meaning |
 |--------|--------|---------|

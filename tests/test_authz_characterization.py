@@ -294,6 +294,7 @@ _DENIALS = (
     "team scope",
     "tags is read-only",
     "outside your",
+    "browser session required",
 )
 
 
