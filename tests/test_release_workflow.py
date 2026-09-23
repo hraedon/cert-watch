@@ -280,3 +280,12 @@ def test_eventlog_readback_window_tolerates_whole_second_timestamps() -> None:
     step = step[: step.index("Start app on loopback")]
     assert "$started = (Get-Date).AddSeconds(-" in step
     assert "$started = Get-Date\n" not in step
+
+
+def test_container_image_installs_the_sign_in_extras() -> None:
+    """LDAP and OAuth are optional for pip installs, but the published image must
+    support every AUTH_PROVIDER; before 1.0 it shipped without ldap3/authlib."""
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
+    assert "uv sync --frozen --no-dev --extra auth" in dockerfile
+    smoke = _workflow("deploy-smoke.yml")
+    assert "import ldap3, authlib, joserfc, requests" in smoke
