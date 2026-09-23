@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -68,10 +69,16 @@ class DigestRunResult:
     skipped: int = 0
     attempts: int = 0
     budget_exhausted: bool = False
+    cancelled: bool = False
 
     @property
     def succeeded(self) -> bool:
-        return self.failed == 0 and self.busy == 0 and not self.budget_exhausted
+        return (
+            self.failed == 0
+            and self.busy == 0
+            and not self.budget_exhausted
+            and not self.cancelled
+        )
 
 
 @dataclass
@@ -82,6 +89,7 @@ class _Progress:
     skipped: int = 0
     attempts: int = 0
     budget_exhausted: bool = False
+    cancelled: bool = False
 
     def result(self) -> DigestRunResult:
         return DigestRunResult(
@@ -91,6 +99,7 @@ class _Progress:
             skipped=self.skipped,
             attempts=self.attempts,
             budget_exhausted=self.budget_exhausted,
+            cancelled=self.cancelled,
         )
 
 
@@ -130,15 +139,20 @@ class DigestEngine:
         *,
         clock: Callable[[], datetime] | None = None,
         monotonic_clock: Callable[[], float] = monotonic,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.db_path = Path(db_path)
         self.transports = tuple(transports)
         self.budget_seconds = max(budget_seconds, 0.0)
         self.clock = clock or (lambda: datetime.now(UTC))
         self.monotonic_clock = monotonic_clock
+        self.stop_event = stop_event
 
     def run(self, kind: DigestKind, period_key: str) -> DigestRunResult:
         started = self.monotonic_clock()
+        progress = _Progress()
+        if self._stopped(progress):
+            return progress.result()
         cadence_days = _cadence_from_period_key(period_key)
         targets = kind.targets(self.db_path, self.clock(), cadence_days)
         if not targets:
@@ -146,7 +160,6 @@ class DigestEngine:
 
         smtp = next((t for t in self.transports if t.channel == "smtp"), None)
         webhooks = tuple(t for t in self.transports if t.channel.startswith("webhook:"))
-        progress = _Progress()
         webhook_targets = self._webhook_targets(kind, targets)
 
         # A prior successful fallback completes the period even though the
@@ -173,6 +186,8 @@ class DigestEngine:
                 kind, targets, period_key, smtp, started, progress
             )
 
+        if progress.cancelled:
+            return progress.result()
         if progress.busy:
             return progress.result()
         if had_smtp_work and not smtp_failed:
@@ -193,6 +208,14 @@ class DigestEngine:
         if webhook_failed:
             progress.failed += webhook_failed
         return progress.result()
+
+    def _stopped(self, progress: _Progress) -> bool:
+        if self.stop_event is None or not self.stop_event.is_set():
+            return False
+        if not progress.cancelled:
+            logger.info("Digest delivery stopped at scheduler shutdown")
+        progress.cancelled = True
+        return True
 
     def _within_budget(self, started: float, progress: _Progress) -> bool:
         if self.monotonic_clock() - started < self.budget_seconds:
@@ -223,16 +246,24 @@ class DigestEngine:
         for _wave in backoff_range(
             ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
         ):
-            if not pending or not self._within_budget(started, progress):
+            if (
+                not pending
+                or self._stopped(progress)
+                or not self._within_budget(started, progress)
+            ):
                 break
             next_pending: dict[str, dict[str, str]] = {}
             for key, recipients in pending.items():
+                if self._stopped(progress):
+                    return True
                 if not self._within_budget(started, progress):
                     next_pending[key] = recipients
                     continue
                 claims, live, retry = self._claim_smtp_recipients(
                     period_key, recipients, progress
                 )
+                if self._stopped(progress):
+                    return True
                 if not claims:
                     if retry:
                         next_pending[key] = retry
@@ -241,6 +272,8 @@ class DigestEngine:
                 renewed_claims: list[DigestDeliveryClaim] = []
                 renewed_recipients: list[str] = []
                 for claim, recipient in zip(claims, live, strict=True):
+                    if self._stopped(progress):
+                        return True
                     if renew_digest_delivery(self.db_path, claim):
                         renewed_claims.append(claim)
                         renewed_recipients.append(recipient)
@@ -248,6 +281,8 @@ class DigestEngine:
                         progress.busy += 1
                 if not renewed_claims:
                     continue
+                if self._stopped(progress):
+                    return True
 
                 message = replace(
                     kind.render(targets_by_key[key]),
@@ -335,10 +370,16 @@ class DigestEngine:
         for _wave in backoff_range(
             ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
         ):
-            if not pending or not self._within_budget(started, progress):
+            if (
+                not pending
+                or self._stopped(progress)
+                or not self._within_budget(started, progress)
+            ):
                 break
             next_pending: dict[tuple[str, str], tuple[Transport, DigestTarget]] = {}
             for identity, (transport, target) in pending.items():
+                if self._stopped(progress):
+                    return len(pending)
                 if not self._within_budget(started, progress):
                     next_pending[identity] = (transport, target)
                     continue
@@ -346,6 +387,8 @@ class DigestEngine:
                 claim = claim_digest_delivery(
                     self.db_path, period_key, channel, claim_target
                 )
+                if self._stopped(progress):
+                    return len(pending)
                 if claim.state == "sent":
                     progress.skipped += 1
                     continue
@@ -355,6 +398,8 @@ class DigestEngine:
                 if not renew_digest_delivery(self.db_path, claim):
                     progress.busy += 1
                     continue
+                if self._stopped(progress):
+                    return len(pending)
 
                 rendered = kind.render(target)
                 message = replace(

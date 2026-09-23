@@ -10,6 +10,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from cert_watch.config import Settings, publish_settings
@@ -31,8 +32,10 @@ class SchedulerContext:
     settings: Settings
     alert_cfg: Any
     webhook_cfg: Any
+    stop_event: threading.Event | None = None
     _config_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _job_config: _JobConfig = field(init=False, repr=False)
+    _digest_deadline: float | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._job_config = _JobConfig(self.settings, self.alert_cfg, self.webhook_cfg)
@@ -131,6 +134,7 @@ class SchedulerContext:
     def run_alerts(self) -> dict[str, Any]:
         from cert_watch.alerting.digest.expiry import ExpiryDigestKind
         from cert_watch.alerting.dispatch import process_pending
+        from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
         from cert_watch.alerting.rules.expiry import evaluate_all_certs
         from cert_watch.alerting.rules.renewal import evaluate_renewal_window
 
@@ -144,11 +148,20 @@ class SchedulerContext:
                 s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
             )
             self._resolve_closed_alerts(config, closed_sent)
-            result = process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
+            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+            self._digest_deadline = deadline
+            result = process_pending(
+                repo,
+                config.alert_cfg,
+                webhook_config=config.webhook_cfg,
+                budget_seconds=ALERT_CYCLE_BUDGET_SECONDS,
+            )
             digest = self._run_digest(
                 config,
                 ExpiryDigestKind(config.alert_cfg),
                 self._max_group_cadence(s.db_path),
+                deadline=deadline,
+                stop_event=self.stop_event,
             )
             result["sent"] = result.get("sent", 0) + digest.sent
             result["failed"] = result.get("failed", 0) + digest.failed
@@ -159,10 +172,23 @@ class SchedulerContext:
             s.db_path, repo, s.renewal_window_days, closed_sent=closed_sent,
         )
         self._resolve_closed_alerts(config, closed_sent)
-        return process_pending(repo, config.alert_cfg, webhook_config=config.webhook_cfg)
+        self._digest_deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
+        return process_pending(
+            repo,
+            config.alert_cfg,
+            webhook_config=config.webhook_cfg,
+            budget_seconds=ALERT_CYCLE_BUDGET_SECONDS,
+        )
 
     @staticmethod
-    def _run_digest(config: _JobConfig, kind: Any, cadence_days: int) -> Any:
+    def _run_digest(
+        config: _JobConfig,
+        kind: Any,
+        cadence_days: int,
+        *,
+        deadline: float,
+        stop_event: threading.Event | None,
+    ) -> Any:
         from datetime import UTC, datetime
 
         from cert_watch.alerting.digest.engine import DigestEngine
@@ -180,7 +206,9 @@ class SchedulerContext:
         engine = DigestEngine(
             config.settings.db_path,
             transports,
+            budget_seconds=max(0.0, deadline - monotonic()),
             clock=lambda: now,
+            stop_event=stop_event,
         )
         return engine.run(
             kind,
@@ -211,16 +239,31 @@ class SchedulerContext:
         cadence_days = self._max_group_cadence(
             config.settings.db_path, default=7
         )
+        from cert_watch.alerting.model import ALERT_CYCLE_BUDGET_SECONDS
+
+        deadline = self._digest_deadline
+        if deadline is None:
+            deadline = monotonic() + ALERT_CYCLE_BUDGET_SECONDS
         try:
             renewal = self._run_digest(
-                config, RenewalDigestKind(config.alert_cfg), cadence_days
+                config,
+                RenewalDigestKind(config.alert_cfg),
+                cadence_days,
+                deadline=deadline,
+                stop_event=self.stop_event,
             )
             orphan = self._run_digest(
-                config, OrphanDigestKind(config.alert_cfg), 7
+                config,
+                OrphanDigestKind(config.alert_cfg),
+                7,
+                deadline=deadline,
+                stop_event=self.stop_event,
             )
         except Exception:
             logger.exception("weekly digest failed")
             return {"sent": 0, "failed": 1, "deferred": 0}
+        finally:
+            self._digest_deadline = None
         return {
             "sent": renewal.sent + orphan.sent,
             "failed": renewal.failed + orphan.failed,

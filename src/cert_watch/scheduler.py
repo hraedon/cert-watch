@@ -187,6 +187,11 @@ _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
 
 
+def scheduler_stop_event() -> threading.Event:
+    """Return the scheduler lifecycle signal for stop-aware cycle work."""
+    return _scheduler_stop
+
+
 def try_run_alert_delivery(
     delivery_fn: Callable[[], dict[str, int]],
 ) -> dict[str, int] | None:

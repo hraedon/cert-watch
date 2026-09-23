@@ -163,7 +163,9 @@ All notable changes to cert-watch are documented in this file.
   once per ISO-week period. The old scheduler `kv_store` week keys remain in
   existing databases but are no longer read or written; `digest_deliveries`
   claims are the sole cadence guard. Expiry digest headers now state the actual
-  configured cadence window instead of always saying 30 days.
+  configured cadence window instead of always saying 30 days. The renewal
+  webhook subject was fixed at `Renewal Digest (7d)`; it now includes the
+  active cadence, for example `Renewal Digest (14d)`.
 - **Activity uses one alert-channel vocabulary.** New delivery attempts are
   recorded as `smtp` or `webhook:<kind>` (for example `webhook:teams` and
   `webhook:alertmanager`); legacy ledger names are normalized on read and the

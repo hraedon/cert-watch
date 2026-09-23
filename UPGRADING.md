@@ -62,7 +62,10 @@ restore the pre-migration backup.
   `_scheduler.expiry_digest_iso_week` and
   `_scheduler.renewal_digest_iso_week` `kv_store` rows are harmless but are no
   longer read or written. Expiry digest headers now name the actual configured
-  cadence window rather than always saying “within 30 days.”
+  cadence window rather than always saying “within 30 days.” The renewal
+  webhook subject was fixed at `Renewal Digest (7d)`; it now includes the
+  configured cadence (for example `Renewal Digest (14d)`), so subject-based
+  webhook filters must be updated.
 - **Deprecated alerting import shims are removed in 1.0.** External Python code
   importing `cert_watch.alerts`, `cert_watch.alert_delivery`,
   `cert_watch.alert_adapters` or `cert_watch.digest` must import from

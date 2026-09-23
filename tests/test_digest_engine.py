@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import threading
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -274,3 +274,36 @@ def test_stop_after_claim_abandons_lease_for_later_recovery(
 
     assert recovered.sent == 1
     assert len(smtp.messages) == 1
+
+
+def test_stop_between_targets_prevents_further_delivery(
+    tmp_path, fake_transport
+) -> None:
+    stopped = threading.Event()
+    smtp = fake_transport(channel="smtp")
+    send = smtp.send
+
+    def send_then_stop(message):
+        result = send(message)
+        stopped.set()
+        return result
+
+    smtp.send = send_then_stop
+    kind = StaticKind(
+        "renewal",
+        "per_target",
+        (
+            DigestTarget("one@test", "one", ("one@test",)),
+            DigestTarget("two@test", "two", ("two@test",)),
+        ),
+    )
+
+    result = DigestEngine(
+        tmp_path / "digest.sqlite3",
+        [smtp],
+        clock=lambda: NOW,
+        stop_event=stopped,
+    ).run(kind, _period("renewal"))
+
+    assert result.cancelled
+    assert [message.recipients for message in smtp.messages] == [("one@test",)]
