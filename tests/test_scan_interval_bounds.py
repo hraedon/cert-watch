@@ -91,6 +91,32 @@ def test_an_unusable_interval_is_reported_not_swallowed(tmp_path, caplog):
     assert any("unusable scan_interval_hours" in r.message for r in caplog.records)
 
 
+def test_malformed_scan_timestamp_does_not_poison_estate_deadlines(tmp_path):
+    from cert_watch.scheduler import get_hosts_due_for_scan
+
+    db = tmp_path / "malformed-history.sqlite3"
+    init_schema(db)
+    repo = SqliteHostRepository(db)
+    repo.add("malformed.example.invalid", 443)
+    repo.add("unobserved.example.invalid", 443)
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO scan_history (id, hostname, port, status, scanned_at) "
+            "VALUES ('bad-scan', 'malformed.example.invalid', 443, 'success', 'not-a-date')"
+        )
+        conn.commit()
+
+    try:
+        due = set(get_hosts_due_for_scan(db))
+    except ValueError:
+        due = set()
+
+    assert {
+        ("malformed.example.invalid", 443),
+        ("unobserved.example.invalid", 443),
+    } <= due
+
+
 @pytest.mark.parametrize("interval", [MIN_SCAN_INTERVAL_HOURS, 24, MAX_SCAN_INTERVAL_HOURS])
 def test_add_host_accepts_a_storable_cadence(interval, tmp_path, reload_app):
     with TestClient(reload_app().app) as client:

@@ -5,6 +5,16 @@ All notable changes to cert-watch are documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Published container images are signed and attested, and verified before
+  deploy.** The release workflow signs the pushed digest with keyless cosign,
+  attaches an SPDX SBOM and max-detail SLSA provenance, then re-verifies the
+  signature (exact workflow-and-ref identity) and the attestations (they must
+  name the released commit) before the deployment pointer may move
+  (`scripts/verify_release_attestations.py`). The pointer itself now pins the
+  verified digest, so Argo CD pulls what was verified rather than whatever a
+  mutable tag resolves to at sync time. Verification commands and caveats are
+  in `docs/runbook.md`; Dependabot watches the pinned actions and base images,
+  with the release-pipeline actions split into their own review PR group.
 - **Scan freshness and coverage.** Home counts current observations across the
   visible monitored fleet; Browse and endpoint details distinguish overdue,
   incomplete and unobserved scans. Daily/custom cadence shares the scheduler's
@@ -28,6 +38,18 @@ All notable changes to cert-watch are documented in this file.
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
   SIEM filters on the old names need updating.
+
+### Fixed
+- **Alerts page flash messages.** `/alerts` now shows `?warning=` and `?error=`
+  messages (flush busy, flush failures, rate limits); they were silently dropped.
+- **Signed compliance reports reject unsigned additions.** Verification now
+  requires the file to be exactly what its signed values render to, so an
+  added key (anywhere in the document) fails instead of passing.
+- **SIEM export no longer runs under the write lock.** Audit events recorded
+  inside a transaction are now sent to the SIEM after the transaction commits
+  and the global write lock is released, so a slow or unreachable syslog/HEC
+  sink cannot stall other writers on those paths, and the event is not sent
+  before its row commits.
 
 ### Removed
 - **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
@@ -63,6 +85,23 @@ All notable changes to cert-watch are documented in this file.
 - **The owner and renewal-method pivot drill-downs no longer fail.** The
   loader's host filter referenced an un-aliased table and raised an SQL error
   (`GET /api/pivot/owner/…`, `/api/pivot/renewal_method/…`).
+- **Saved settings no longer disable environment-configured renewal webhooks.**
+  KV overrides now replace only their declared fields instead of rebuilding and
+  silently dropping newer `Settings` fields.
+- **Manual alert flushes no longer block or race scheduled delivery.** The
+  blocking send runs in a worker thread and skips with a clear busy message
+  while a scheduler cycle owns delivery.
+- **Digest delivery remains retryable.** Short-lived certificates retain their
+  final lifetime-relative threshold in digest mode, and background webhook or
+  orphan-notice exceptions are logged and release the weekly in-flight guard
+  (#60, #61).
+- **Compliance report verification covers derived presentation fields.** Changes
+  to metric percentages/displays or remediation counts now fail verification;
+  malformed reports fail cleanly instead of raising `KeyError` (#66).
+- **Scheduler failures stay isolated and shutdown stays bounded.** Scan-history
+  write errors, malformed timestamps, per-host renewal analysis, and deferred
+  post-commit work no longer abort unrelated work; queued pool tasks are
+  cancelled during shutdown (#67, #68).
 - **A genuine renewal now resolves the PagerDuty incident the trigger actually
   opened.** The dedup key was derived from the certificate row id, but an
   unchanged rescan rewrites that row (#57) and carries the alert to the new
@@ -281,6 +320,16 @@ All notable changes to cert-watch are documented in this file.
   requests.
 
 ### Changed
+- **The identifier gate now fails closed everywhere it runs.** The local hooks
+  previously exited before invoking the gate whenever no denylist was
+  configured, so the always-on swap-file/`.env`/guarded-dir guards and the
+  public-repo fail-closed logic never fired outside CI; they are now always
+  invoked and the script itself decides. In `--staged` mode the publication
+  declaration is read from the index — the bytes the commit actually records —
+  not the worktree, and staged type-changes (`T`) are scanned, not just
+  adds/copies/modifications. The CI job runs on `pull_request_target` with the
+  base ref's script scanning an untrusted PR tree (new `--tree` mode), so fork
+  PRs are gated instead of hard-failing on a secret they cannot hold.
 - **Information architecture: Home / Browse split.** The landing page is now a
   **Home** view organized around the operator's actual question — "what needs
   a human, and when?" — instead of the raw inventory table. Home shows a

@@ -26,8 +26,10 @@
 # The shared canonical denylist holds work-domain identifiers only; homelab/lab
 # identifiers are deliberately NOT in it — lab topology is allowed in public
 # repos (docs/publication-review.md). Multi-word entries must be double-quoted.
-# Fail-open if no denylist is found so a fresh clone is not bricked; CI remains
-# the hard gate.
+# The gate is ALWAYS invoked: the script itself decides what a missing denylist
+# means — a no-op for a repo with no public declaration, a hard failure for one
+# that declares visibility="public" (fail closed), and the always-on swap-file /
+# .env / guarded-dir guards apply either way.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -42,13 +44,6 @@ if [ -z "${CERT_WATCH_FORBIDDEN_IDENTIFIERS:-}" ]; then
       break
     fi
   done
-fi
-
-if [ -z "${CERT_WATCH_FORBIDDEN_IDENTIFIERS:-}" ]; then
-  echo "cert-watch pre-commit: identifier gate INACTIVE — no denylist found." >&2
-  echo "  Set \$CERT_WATCH_FORBIDDEN_IDENTIFIERS, or create .identifiers-denylist.local (gitignored)" >&2
-  echo "  or ~/.config/agent-suite/forbidden-identifiers to enable it. Allowing commit." >&2
-  exit 0
 fi
 
 python_bin="$repo_root/.venv/bin/python"
