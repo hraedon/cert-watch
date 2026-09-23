@@ -638,7 +638,8 @@ def test_read_secret_missing_file(tmp_path):
     os.environ.pop("TEST_SECRET_MISS", None)
     os.environ["TEST_SECRET_MISS_FILE"] = str(tmp_path / "nonexistent")
     try:
-        assert read_secret("TEST_SECRET_MISS") is None
+        with pytest.raises(ValueError, match="TEST_SECRET_MISS_FILE"):
+            read_secret("TEST_SECRET_MISS")
     finally:
         os.environ.pop("TEST_SECRET_MISS_FILE", None)
 

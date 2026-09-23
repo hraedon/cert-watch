@@ -16,6 +16,21 @@ from cert_watch.config.field_specs import default_data_dir
 logger = logging.getLogger("cert_watch.config")
 
 
+def _read_secret_file(variable: str, path: str) -> str:
+    """Read a configured secret file or fail closed without disclosing it."""
+    try:
+        value = Path(path).read_text().strip()
+    except (OSError, UnicodeError):
+        raise ValueError(
+            f"{variable} is configured but its secret file cannot be read"
+        ) from None
+    if not value:
+        raise ValueError(
+            f"{variable} is configured but its secret file is empty"
+        )
+    return value
+
+
 def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> str:
     """Return env/_FILE secret if set (treating empty/whitespace as unset);
     else read data_dir/filename; else generate 32-byte hex, persist 0600, return it.
@@ -128,11 +143,7 @@ def read_secret(name: str) -> str | None:
         return value
     file_path = os.environ.get(f"{name}_FILE")
     if file_path:
-        try:
-            return Path(file_path).read_text().strip()
-        except OSError:
-            logger.warning("read_secret: %s_FILE=%s could not be read", name, file_path)
-            return None
+        return _read_secret_file(f"{name}_FILE", file_path)
     return None
 
 

@@ -44,12 +44,9 @@ def setting_env_is_set(field_name: str, env: Mapping[str, str] | None = None) ->
 
 def _read_env(spec: FieldSpec, source: str, env: Mapping[str, str]) -> str:
     if source.endswith("_FILE") and spec.sensitive:
-        path = env[source]
-        try:
-            return Path(path).read_text().strip()
-        except OSError:
-            logger.warning("read_secret: %s=%s could not be read", source, path)
-            return ""
+        from cert_watch.config.helpers import _read_secret_file
+
+        return _read_secret_file(source, env[source])
     return env[source]
 
 

@@ -199,3 +199,53 @@ def test_blank_env_does_not_lock_settings_ui_field(monkeypatch, tmp_path):
     monkeypatch.setenv("SMTP_PASSWORD", "  ")
 
     assert "smtp_password" not in _env_overrides(_SMTP_KEYS, tmp_path / "unused.db")
+
+
+def test_blank_direct_secret_env_allows_file_source(monkeypatch, tmp_path):
+    from cert_watch.config import Settings
+
+    secret_file = tmp_path / "ldap-password"
+    secret_file.write_text("from-file\n")
+    monkeypatch.setenv("LDAP_BIND_PASSWORD", " ")
+    monkeypatch.setenv("LDAP_BIND_PASSWORD_FILE", str(secret_file))
+
+    assert Settings.from_env().ldap_bind_password == "from-file"
+
+
+@pytest.mark.parametrize("failure", ["missing", "directory", "empty", "unreadable"])
+def test_explicit_secret_file_failures_are_configuration_errors(
+    monkeypatch, tmp_path, failure
+):
+    from cert_watch.config import Settings
+
+    secret_path = tmp_path / failure
+    if failure == "directory":
+        secret_path.mkdir()
+    elif failure == "empty":
+        secret_path.write_text(" \n")
+    elif failure == "unreadable":
+        secret_path.write_text("must-not-leak")
+        secret_path.chmod(0)
+
+    monkeypatch.setenv("LDAP_BIND_PASSWORD_FILE", str(secret_path))
+
+    with pytest.raises(ValueError) as exc_info:
+        Settings.from_env()
+
+    message = str(exc_info.value)
+    assert "LDAP_BIND_PASSWORD_FILE" in message
+    assert str(secret_path) not in message
+    assert "must-not-leak" not in message
+
+
+def test_empty_secret_file_variable_is_unset_and_kv_falls_back(monkeypatch, tmp_path):
+    from cert_watch.config import Settings
+    from cert_watch.database import init_schema
+    from cert_watch.database.kv_store import kv_set
+
+    db_path = tmp_path / "cert-watch.sqlite3"
+    init_schema(db_path)
+    kv_set(db_path, "ldap_bind_password", "saved-password")
+    monkeypatch.setenv("LDAP_BIND_PASSWORD_FILE", "")
+
+    assert Settings.from_env_with_kv(db_path).ldap_bind_password == "saved-password"
