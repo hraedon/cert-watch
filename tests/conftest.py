@@ -281,9 +281,6 @@ def _isolated_data_dir(tmp_path, monkeypatch):
     # mode now accepts only loopback or CERT_WATCH_BASE_URL, so declare that
     # synthetic host explicitly for the existing route suite.
     monkeypatch.setenv("CERT_WATCH_BASE_URL", "http://testserver")
-    # Legacy LDAP unit tests intentionally model plaintext transports. Keep
-    # those fixtures explicit while security-hardening tests remove this env.
-    monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
     monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "test-auth-secret-for-tests")
     monkeypatch.setenv("CERT_WATCH_CSRF_SECRET", "test-csrf-secret-for-tests")
 
@@ -322,6 +319,12 @@ def csrf_strict(monkeypatch):
     import cert_watch.security.csrf as csrf_mod
 
     monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
+
+
+@pytest.fixture
+def plain_ldap_allowed(monkeypatch):
+    """Opt a test's intentional plaintext LDAP fixture into the legacy escape hatch."""
+    monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
 
 
 @pytest.fixture(autouse=True)

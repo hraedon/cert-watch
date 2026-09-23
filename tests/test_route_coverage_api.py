@@ -1347,7 +1347,7 @@ def test_test_ldap_missing_fields(reload_app):
     assert r.json()["ok"] is False
 
 
-def test_test_ldap_no_ldap3(reload_app, monkeypatch):
+def test_test_ldap_no_ldap3(reload_app, monkeypatch, plain_ldap_allowed):
     app_mod = reload_app()
     # Simulate ldap3 not installed by making import fail
     import sys

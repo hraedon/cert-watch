@@ -718,7 +718,9 @@ def test_authz_allows_group_or_role_match():
 # ---------- AuthZ gate in login flow ----------
 
 
-def test_authz_gate_denies_user_without_group(reload_app, _mock_ldap3):
+def test_authz_gate_denies_user_without_group(
+    reload_app, _mock_ldap3, plain_ldap_allowed
+):
     """When CERT_WATCH_ALLOWED_GROUPS is set, a user not in any allowed group is denied."""
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -753,7 +755,9 @@ def test_authz_gate_denies_user_without_group(reload_app, _mock_ldap3):
         assert "access%20denied" in loc
 
 
-def test_authz_no_gate_when_no_groups_configured(reload_app, _mock_ldap3):
+def test_authz_no_gate_when_no_groups_configured(
+    reload_app, _mock_ldap3, plain_ldap_allowed
+):
     """When ALLOWED_GROUPS is empty, any authenticated user is accepted."""
     mock_conn = MagicMock()
     mock_entry = MagicMock()

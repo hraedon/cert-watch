@@ -384,7 +384,7 @@ def test_test_smtp_send_failure_reports_error(reload_app, monkeypatch):
 # ---------- Test LDAP endpoint ----------
 
 
-def test_test_ldap_connect_success(reload_app, monkeypatch):
+def test_test_ldap_connect_success(reload_app, monkeypatch, plain_ldap_allowed):
     """A successful LDAP test binds read-only and unbinds cleanly."""
     ldap3 = pytest.importorskip("ldap3")
 
@@ -416,7 +416,9 @@ def test_test_ldap_connect_success(reload_app, monkeypatch):
     assert calls.get("read_only") is True  # the probe never mutates the directory
 
 
-def test_test_ldap_connect_failure_reports_error(reload_app, monkeypatch):
+def test_test_ldap_connect_failure_reports_error(
+    reload_app, monkeypatch, plain_ldap_allowed
+):
     """A bind failure is surfaced as ok=False with the underlying message."""
     ldap3 = pytest.importorskip("ldap3")
 
@@ -527,7 +529,9 @@ def test_test_smtp_blank_port_returns_json_not_500(reload_app):
     assert r.json()["ok"] in (True, False)
 
 
-def test_test_ldap_multi_server_reports_bad_source(reload_app, monkeypatch):
+def test_test_ldap_multi_server_reports_bad_source(
+    reload_app, monkeypatch, plain_ldap_allowed
+):
     """A bad URL anywhere in the list must fail the test, not be skipped.
 
     The old pooled FIRST-strategy probe short-circuited on the first reachable
@@ -2042,7 +2046,7 @@ def test_capture_starttls_chain_import_error(monkeypatch):
 # ---------- LDAP test SSRF block ----------
 
 
-def test_test_ldap_ssrf_blocked_ip(reload_app):
+def test_test_ldap_ssrf_blocked_ip(reload_app, plain_ldap_allowed):
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         # Link-local/cloud metadata is blocked regardless of allow_private.

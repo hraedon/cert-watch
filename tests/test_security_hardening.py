@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 from pathlib import Path
 from typing import Any
 
@@ -502,8 +503,12 @@ def test_plain_ldap_login_is_refused_by_default(monkeypatch):
     assert "insecure" in (result.error or "").lower()
 
 
+def test_suite_does_not_globally_allow_plain_ldap():
+    assert "CERT_WATCH_LDAP_ALLOW_INSECURE" not in os.environ
+
+
 def test_plain_ldap_login_route_surfaces_clear_refusal(reload_app, monkeypatch):
-    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE")
+    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE", raising=False)
     app_mod = reload_app(
         AUTH_PROVIDER="ldap",
         LDAP_SERVER="ldap://dc.example.test",
@@ -533,7 +538,7 @@ def test_plain_ldap_can_be_explicitly_allowed():
 def test_ldap_insecure_override_loads_from_env(monkeypatch):
     from cert_watch.config import Settings
 
-    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE")
+    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE", raising=False)
     assert Settings.from_env().ldap_allow_insecure is False
     monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
     assert Settings.from_env().ldap_allow_insecure is True
@@ -547,7 +552,7 @@ def test_settings_ldap_probe_refuses_plain_bind(reload_app, monkeypatch):
 
     monkeypatch.setattr(settings_auth, "_run_ldap_probe", must_not_probe)
     monkeypatch.setattr(settings_auth, "_check_ldap_ssrf", lambda *_a, **_k: (None, {}))
-    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE")
+    monkeypatch.delenv("CERT_WATCH_LDAP_ALLOW_INSECURE", raising=False)
     app_mod = reload_app()
     with TestClient(
         app_mod.app, base_url="http://localhost", raise_server_exceptions=False
