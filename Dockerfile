@@ -17,7 +17,9 @@ COPY pyproject.toml README.md uv.lock ./
 COPY src ./src
 
 RUN printf '%s\n%s\n' "$GIT_TAG" "$GIT_COMMIT" > src/cert_watch/_version.txt
-RUN uv sync --frozen --no-dev --no-install-project
+# The directory sign-in libraries are optional for pip installs but the
+# image must support every AUTH_PROVIDER the docs describe.
+RUN uv sync --frozen --no-dev --extra auth --no-install-project
 RUN uv pip install --no-deps . --python /build/.venv/bin/python
 # Fix shebangs so scripts point to the runtime venv path (/opt/venv)
 RUN sed -i 's|/build/.venv/bin/python|/opt/venv/bin/python|g' /build/.venv/bin/*
