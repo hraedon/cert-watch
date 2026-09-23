@@ -83,9 +83,13 @@ def test_dedup_prevents_duplicate_policy_alerts(tmp_path):
     violations = [
         PolicyViolation("key_size_rsa", "critical", "RSA key too small", "Replace"),
     ]
-    created1 = evaluate_policy_alerts("cert-6", "host6.example.com", violations, db)
+    created1 = evaluate_policy_alerts(
+        "cert-6", "host6.example.com", violations, db, fingerprint="fp-6"
+    )
     assert len(created1) == 1
-    created2 = evaluate_policy_alerts("cert-6", "host6.example.com", violations, db)
+    created2 = evaluate_policy_alerts(
+        "cert-6", "host6.example.com", violations, db, fingerprint="fp-6"
+    )
     assert len(created2) == 0
     repo = SqliteAlertRepository(db)
     pending = [a for a in repo.list_pending() if a.alert_type == "policy_violation"]

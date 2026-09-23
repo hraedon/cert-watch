@@ -130,24 +130,20 @@ def _copy_routing_rows(source: Path, scratch: Path) -> str:
 
 
 def _inspect_routing(scratch: Path) -> dict[str, Any]:
-    matches: dict[str, list[str]] = {}
-    recipients, _ = routing._resolve_group_config(scratch, matched_groups=matches)
-    _, owners = routing._load_host_owner_maps(scratch)
-    members = routing._load_role_user_emails(scratch)
     with _connect(scratch) as conn:
         leaves = conn.execute(
             "SELECT id, hostname, port, subject FROM certificates WHERE is_leaf = 1 "
             "ORDER BY COALESCE(hostname, ''), COALESCE(port, 0), subject, id"
         ).fetchall()
         group_rows = conn.execute("SELECT id, name FROM alert_groups ORDER BY name, id").fetchall()
+    snapshots = routing.resolve_routing(
+        scratch, tuple(leaf["id"] for leaf in leaves)
+    )
     certificates: list[dict[str, Any]] = []
     for leaf in leaves:
-        owner = (
-            owners.get((leaf["hostname"], leaf["port"]))
-            if leaf["hostname"] and leaf["port"] else None
-        )
-        specific = routing.resolve_cert_recipients(recipients.get(leaf["id"], []), owner, members)
-        group_ids = sorted(matches.get(leaf["id"], []))
+        snapshot = snapshots[leaf["id"]]
+        specific = snapshot["recipients"]
+        group_ids = sorted(group["id"] for group in snapshot["groups"])
         certificates.append({
             "cert_id": leaf["id"], "hostname": leaf["hostname"] or "", "port": leaf["port"],
             "subject": leaf["subject"] or "", "group_ids": group_ids, "recipients": specific,
@@ -176,9 +172,9 @@ def _inspect_routing(scratch: Path) -> dict[str, Any]:
             "not loaded. Delivery tries SMTP first, then one global webhook on failure/absence; "
             "stored group webhook URLs do not dispatch here. Invalid addresses are rejected at "
             "send time. Thresholds, renewal state and digest eligibility are not evaluated. "
-            "Recipients shown route expiry alerts only: renewal-stalled alerts and weekly "
-            "digests carry the owner address alone, without alert-group or role-member "
-            "addresses."
+            "Recipients shown use the same resolver that creates the versioned route saved "
+            "when expiry, renewal-stalled, policy, or drift alerts are queued. Digests resolve "
+            "their own targets."
         ),
     }
 

@@ -84,6 +84,7 @@ class OutboundMessage:
     recipients: tuple[str, ...] = ()
     global_recipients: tuple[str, ...] = ()
     queued_recipients: tuple[str, ...] = ()
+    routing: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_alert(
@@ -111,6 +112,7 @@ class OutboundMessage:
                 if recipients
                 else queued
             ),
+            routing=dict(alert.routing),
         )
 
     @classmethod

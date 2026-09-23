@@ -284,7 +284,7 @@ def test_evidence_is_not_loaded_or_rendered_for_scoped_operator(monkeypatch, tmp
     evidence.assert_not_called()
 
 
-def test_group_snapshot_and_envelope_survive_configuration_edits(
+def test_persisted_group_snapshot_and_envelope_survive_configuration_edits(
     monkeypatch, tmp_path, self_signed_leaf,
 ):
     from cert_watch.certificate_model import parse_certificate
@@ -296,20 +296,28 @@ def test_group_snapshot_and_envelope_survive_configuration_edits(
         conn.execute("UPDATE alerts SET cert_id = ? WHERE id = ?", (cert_id, alert.id))
         conn.commit()
     groups = SqliteAlertGroupRepository(db)
-    group_id = groups.create("Group at attempt", ["new-group@example.invalid"], [])
+    group_id = groups.create("Group at enqueue", ["new-group@example.invalid"], [])
     groups.assign_cert(group_id, cert_id)
+    from cert_watch.alerting.routing import resolve_routing
+    snapshot = resolve_routing(db, (cert_id,))[cert_id]
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET routing = ? WHERE id = ?",
+            (json.dumps(snapshot), alert.id),
+        )
+        conn.commit()
+    groups.update(group_id, name="Renamed before send", recipients=["later@example.invalid"])
     config = _config()
     config.recipients = ["Global Operator <global@example.invalid>"]
     _smtp(monkeypatch)
     assert process_pending(repo, config) == {"sent": 1, "failed": 0, "deferred": 0}
-    groups.update(group_id, name="Renamed afterward", recipients=["later@example.invalid"])
     config.recipients = ["later-global@example.invalid"]
 
     routing = list_attempts(db, [alert.id])[alert.id][0]["routing"]
     assert routing["recipients"] == ["global@example.invalid", "queued@example.invalid"]
     assert routing["global_recipients"] == ["global@example.invalid"]
     assert routing["queued_recipients"] == ["queued@example.invalid"]
-    assert routing["groups"] == [{"id": group_id, "name": "Group at attempt"}]
+    assert routing["groups"] == [{"id": group_id, "name": "Group at enqueue"}]
     assert "new-group@example.invalid" not in routing["recipients"]
 
 

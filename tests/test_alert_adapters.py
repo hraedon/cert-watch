@@ -493,11 +493,11 @@ class TestPagerDutyResolve:
         init_schema(db)
         alert_repo = SqliteAlertRepository(db)
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=7,
         ))
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
@@ -772,11 +772,11 @@ class TestAlertmanagerAdapter:
         init_schema(db)
         alert_repo = SqliteAlertRepository(db)
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=7,
         ))
         alert_repo.create(Alert(
-            cert_id="old-cert-1", alert_type="expiry_warning", status="pending",
+            cert_id="old-cert-1", alert_type="expiry_warning", status="sent",
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="alertmanager")

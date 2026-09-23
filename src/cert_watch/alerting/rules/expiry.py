@@ -6,6 +6,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from cert_watch.alerting.keys import certificate_alert_key
 from cert_watch.alerting.messages import _format_message
 from cert_watch.alerting.model import (
     CHAIN_THRESHOLDS,
@@ -17,9 +18,7 @@ from cert_watch.alerting.model import (
 )
 from cert_watch.alerting.routing import (
     _load_host_owner_maps,
-    _load_role_user_emails,
-    _resolve_group_config,
-    resolve_cert_recipients,
+    resolve_routing,
 )
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import Alert, AlertRepository
@@ -47,7 +46,9 @@ def evaluate_thresholds(
     custom_thresholds: tuple[int, ...] | None = None,
     owner_info: dict[str, Any] | None = None,
     extra_recipients: list[str] | None = None,
+    routing: dict[str, Any] | None = None,
     hostname: str = "",
+    port: int | None = None,
     urgent_only: bool = False,
 ) -> list[Alert]:
     """Create a pending alert for the most urgent newly-tripped threshold.
@@ -128,25 +129,44 @@ def evaluate_thresholds(
     if any(e < most_urgent for e in existing_for_type):
         return []
 
+    recipients = (
+        list(extra_recipients)
+        if extra_recipients
+        else (
+            [owner_info["owner_email"]]
+            if owner_info and owner_info.get("owner_email")
+            else []
+        )
+    )
     alert = Alert(
         cert_id=cid,
         alert_type="expired" if days < 0 else "expiry_warning",
         status="pending",
         message=_format_message(cert, days, most_urgent, owner_info=owner_info),
         threshold_days=most_urgent,
-        extra_recipients=(
-            list(extra_recipients)
-            if extra_recipients
-            else (
-                [owner_info["owner_email"]]
-                if owner_info and owner_info.get("owner_email")
-                else []
-            )
-        ),
+        extra_recipients=recipients,
         hostname=hostname,
         subject=cert.subject,
+        dedupe_key=certificate_alert_key(
+            "expiry",
+            cert_id=cid,
+            fingerprint=cert.fingerprint_sha256,
+            hostname=hostname,
+            port=port,
+            suffix=(
+                "expired" if days < 0 else "expiry_warning",
+                str(most_urgent),
+            ),
+        ),
+        routing=routing or {
+            "version": 1,
+            "recipients": recipients,
+            "groups": [],
+        },
     )
-    alert_id = alert_repo.create(alert)
+    alert_id = alert_repo.enqueue(alert, lifetime=True)
+    if alert_id is None:
+        return []
     alert.id = alert_id
     return [alert]
 
@@ -178,12 +198,11 @@ def evaluate_all_certs(
             "WHERE successor.replaces_cert_id = current.id)"
         ).fetchall()
 
-    # Batch-resolve group recipients and threshold overrides in a single pass
-    all_group_recipients, group_threshold_map = _resolve_group_config(db_path)
-
-    # Role-based alert routing: users in a role get alerts for certs owned by
-    # the role's team email (host.owner_email matches role.email).
-    role_user_emails = _load_role_user_emails(db_path)
+    # Resolve the complete immutable route once for the batch. The snapshot
+    # also carries the matching groups' threshold override.
+    routing_map = resolve_routing(
+        db_path, tuple(leaf_row["id"] for leaf_row in leaves)
+    )
 
     all_alerts: list[Alert] = []
     for leaf_row in leaves:
@@ -210,22 +229,22 @@ def evaluate_all_certs(
         # Per-group threshold override: if any matching group has threshold_days
         # set, use the most urgent (smallest) group threshold.
         cert_id = leaf_row["id"]
-        group_td = group_threshold_map.get(cert_id)
+        routing = routing_map[cert_id]
+        group_td = routing.get("threshold_days")
         if group_td is not None:
             custom = (group_td, max(group_td // 2, 1), max(group_td // 4, 1), 1)
 
         # Resolve alert-group recipients for this cert (batch result), then merge
         # with owner + role members through the shared resolver (single source of
         # truth shared with orphan detection — see resolve_cert_recipients).
-        group_recipients = all_group_recipients.get(cert_id, [])
-        merged_extra = resolve_cert_recipients(
-            group_recipients, owner_info, role_user_emails
-        )
+        merged_extra = list(routing["recipients"])
 
         alerts = evaluate_thresholds(
             cert, alert_repo, cert_id=leaf_row["id"], custom_thresholds=custom,
             owner_info=owner_info, extra_recipients=merged_extra or None,
             hostname=leaf_row["hostname"] or "", urgent_only=urgent_only,
+            port=port,
+            routing=routing,
         )
         all_alerts.extend(alerts)
     return all_alerts
