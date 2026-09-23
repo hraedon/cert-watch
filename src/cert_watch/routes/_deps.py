@@ -10,6 +10,7 @@ from fastapi import Path as PathParam
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
 
+from cert_watch.auth.rbac import AuthContext
 from cert_watch.config import Settings
 from cert_watch.filters import register_filters
 
@@ -40,6 +41,11 @@ def _get_settings(request: Request) -> Settings:
 
 def _db_path(request: Request) -> Path:
     return _get_settings(request).db_path
+
+
+def acting_auth(request: Request) -> AuthContext | None:
+    """The request's AuthContext, handed to services that enforce scope."""
+    return getattr(request.state, "auth_context", None)
 
 
 def _csv_safe(value: object) -> str:

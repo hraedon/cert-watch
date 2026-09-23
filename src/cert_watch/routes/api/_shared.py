@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, cast
 
@@ -25,6 +26,27 @@ def _normalize_pagination(page: int, limit: int, total: int) -> tuple[int, int, 
     return page, limit, pages, offset
 
 
+class JsonBodyError(ValueError):
+    """The request body is not the JSON the route needs; ``str(exc)`` is the
+    400 message."""
+
+
+def json_body(raw: bytes, *, require_object: bool = True) -> Any:
+    """Parse a request body as ``Request.json()`` would, raising
+    :class:`JsonBodyError` with the message the API has always returned.
+
+    Used as the deferred input of a scope-enforcing service, so the body is
+    judged only after the caller's scope on the target has been checked.
+    """
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise JsonBodyError("invalid JSON") from None
+    if require_object and not isinstance(body, dict):
+        raise JsonBodyError("JSON body must be an object")
+    return body
+
+
 def _tags_from_body(body: dict[str, Any] | None) -> str | None:
     """Extract tags from a request body as a normalized csv string.
 
@@ -39,6 +61,15 @@ def _tags_from_body(body: dict[str, Any] | None) -> str | None:
     if isinstance(raw, list) and all(isinstance(t, str) for t in raw):
         return format_tags(raw)
     return None
+
+
+def tags_from_json_body(raw: bytes) -> str:
+    """The deferred tags input of the tag-setting API routes: parse the body,
+    extract its tags, or raise :class:`JsonBodyError` with the API's message."""
+    tags = _tags_from_body(json_body(raw, require_object=False))
+    if tags is None:
+        raise JsonBodyError("tags must be a string or list of strings")
+    return tags
 
 
 def _pagination_links(

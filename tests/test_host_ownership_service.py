@@ -48,6 +48,7 @@ def test_ownership_update_is_partial_and_audited(tmp_path: Path) -> None:
             owner_name="After",
             runbook_url="https://wiki.example.test/renewal",
         ),
+        auth=None,
         actor="operator",
         source_ip="192.0.2.10",
     )
@@ -74,6 +75,7 @@ def test_ownership_validation_precedes_mutation(tmp_path: Path) -> None:
             db,
             host_id,
             HostOwnershipUpdate(owner_name="After", owner_email="not-an-email"),
+            auth=None,
             actor="operator",
             source_ip=None,
         )
@@ -101,6 +103,7 @@ def test_audit_failure_rolls_back_ownership_update(
             db,
             host_id,
             HostOwnershipUpdate(owner_name="After"),
+            auth=None,
             actor="operator",
             source_ip=None,
         )

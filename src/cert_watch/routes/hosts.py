@@ -21,10 +21,11 @@ from cert_watch.auth.guards import (
     require_auth,
     write_form_guard,
 )
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
 from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
-from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
+from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied, tags_with_scope
 from cert_watch.scan import (
     STARTTLS_MODES,
@@ -43,7 +44,6 @@ from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
 )
 from cert_watch.services.resource_metadata import (
     update_host_notes as persist_host_notes,
@@ -527,17 +527,17 @@ async def update_host_notes(
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     try:
         persist_host_notes(
             db,
             host_id,
             notes,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except ResourceMetadataValidationError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except ResourceMetadataNotFoundError:
@@ -552,27 +552,20 @@ async def update_host_tags(
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return RedirectResponse(
-            url=f"/hosts/{host_id}?error={quote(str(exc))}", status_code=303,
-        )
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     try:
         persist_host_tags(
             db,
             host_id,
-            normalized,
+            tags,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/hosts/{host_id}?error={quote(str(exc))}", status_code=303,
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)

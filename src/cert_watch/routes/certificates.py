@@ -19,6 +19,7 @@ from cert_watch.auth.guards import (
     require_auth,
     write_form_guard,
 )
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
@@ -34,7 +35,7 @@ from cert_watch.database import (
 )
 from cert_watch.filters import issuer_cn
 from cert_watch.presenters.certificate_detail import present_certificate_technical_details
-from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
@@ -56,7 +57,6 @@ from cert_watch.services.host_ownership import (
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
 )
 from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
@@ -442,27 +442,20 @@ async def update_certificate_tags(
     _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
-        )
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     try:
         persist_certificate_tags(
             db,
             cert_id,
-            normalized,
+            tags,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -499,17 +492,11 @@ async def update_certificate_owner(
             url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
         )
 
-    scope_target = (
-        {"host_id": target.host_id} if target.source == "host" else {"cert_id": cert_id}
-    )
-    denied = scope_write_denied(request, db, **scope_target)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     host_id = target.host_id
     try:
         update_host_ownership(
             db,
-            host_id,
+            target,
             HostOwnershipUpdate(
                 owner_name=owner_name,
                 owner_email=owner_email,
@@ -517,9 +504,12 @@ async def update_certificate_owner(
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
             ),
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(
