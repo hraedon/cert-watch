@@ -8,29 +8,27 @@ from __future__ import annotations
 import json
 import logging
 import os
-from pathlib import Path, PureWindowsPath
+from pathlib import Path
 from typing import Any
+
+from cert_watch.config.field_specs import default_data_dir
 
 logger = logging.getLogger("cert_watch.config")
 
 
-# Setting keys (kv_store column names) whose values are secrets: encrypted at
-# rest when written via the GUI, decrypted on read, and masked in the UI. Single
-# source of truth — `routes/settings.py` imports this so the encrypt/decrypt/mask
-# sides cannot drift.
-SENSITIVE_SETTING_KEYS = frozenset({
-    "ldap_bind_password",
-    "ldap_ca_cert",
-    "oauth_client_secret",
-    "smtp_password",
-    "pagerduty_routing_key",
-    "local_admin_password_hash",
-    # A Bearer token or shared secret commonly lives in a custom webhook header
-    # (the UI placeholder suggests ``Authorization: Bearer ...``); treat the
-    # whole JSON blob as sensitive so it is encrypted at rest and masked in the
-    # UI rather than stored / rendered in cleartext.
-    "webhook_headers",
-})
+def _read_secret_file(variable: str, path: str) -> str:
+    """Read a configured secret file or fail closed without disclosing it."""
+    try:
+        value = Path(path).read_text().strip()
+    except (OSError, UnicodeError):
+        raise ValueError(
+            f"{variable} is configured but its secret file cannot be read"
+        ) from None
+    if not value:
+        raise ValueError(
+            f"{variable} is configured but its secret file is empty"
+        )
+    return value
 
 
 def resolve_or_persist_secret(env_name: str, data_dir: Path, filename: str) -> str:
@@ -145,25 +143,8 @@ def read_secret(name: str) -> str | None:
         return value
     file_path = os.environ.get(f"{name}_FILE")
     if file_path:
-        try:
-            return Path(file_path).read_text().strip()
-        except OSError:
-            logger.warning("read_secret: %s_FILE=%s could not be read", name, file_path)
-            return None
+        return _read_secret_file(f"{name}_FILE", file_path)
     return None
-
-
-def _default_data_dir_str(os_name: str, programdata: str | None) -> str:
-    """Compute the default data-dir path string for *os_name*.
-
-    Split out so the platform branch is testable on any host (building a
-    concrete ``WindowsPath`` is impossible on POSIX, so we join with
-    ``PureWindowsPath`` and return a plain string).
-    """
-    if os_name == "nt":
-        base = programdata or r"C:\ProgramData"
-        return str(PureWindowsPath(base, "cert-watch"))
-    return "/var/lib/cert-watch"
 
 
 def _default_data_dir() -> Path:
@@ -173,7 +154,7 @@ def _default_data_dir() -> Path:
     ``/var`` hierarchy, so default to ``%PROGRAMDATA%\cert-watch`` (normally
     ``C:\ProgramData\cert-watch``); on POSIX keep ``/var/lib/cert-watch``.
     """
-    return Path(_default_data_dir_str(os.name, os.environ.get("PROGRAMDATA")))
+    return default_data_dir()
 
 
 def _validate_range(

@@ -110,6 +110,27 @@ def test_security_context_pepper_is_used_for_new_keys(tmp_path, monkeypatch):
     assert row["key_hash"] != hash_token(raw)
 
 
+def test_legacy_pepper_caches_env_settings_resolution(monkeypatch):
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", "cache-test-environment-pepper")
+    original = Settings.from_env.__func__
+    calls = 0
+
+    def counted(cls):
+        nonlocal calls
+        calls += 1
+        return original(cls)
+
+    monkeypatch.setattr(Settings, "from_env", classmethod(counted))
+
+    first = hash_token("cwk_first")
+    second = hash_token("cwk_second")
+
+    assert first != second
+    assert calls == 1
+
+
 @pytest.mark.parametrize(
     ("legacy_pepper", "environment_pepper"),
     [

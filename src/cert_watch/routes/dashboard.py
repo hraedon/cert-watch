@@ -8,17 +8,16 @@ from typing import Any
 from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import get_auth_context, write_form_guard, write_guard
+from cert_watch.auth.guards import get_auth_context, write_form_guard
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     AlertStore,
-    SqliteAlertRepository,
     dashboard_urgency_stats,
     distinct_tags,
     get_posture_grades_for_certs,
@@ -37,10 +36,11 @@ from cert_watch.routes._deps import (
     acting_auth,
     get_templates,
 )
-from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
+from cert_watch.routes._scoped import scope_tags_from_auth
 from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -294,33 +294,6 @@ def dashboard(
     )
 
 
-@router.post("/api/alerts/{alert_id}/read", response_model=None)
-async def mark_alert_read(
-    request: Request,
-    alert_id: IdParam,
-    _auth: str = Depends(write_guard),
-) -> dict[str, Any] | JSONResponse:
-    """Mark an alert as read."""
-    db = _db_path(request)
-    with _connect(db) as conn:
-        row = conn.execute(
-            "SELECT cert_id FROM alerts WHERE id = ?",
-            (alert_id,),
-        ).fetchone()
-        if not row:
-            return {"ok": False, "error": "alert not found"}
-        denied = scope_write_denied(request, db, cert_id=row["cert_id"])
-        if denied:
-            return JSONResponse({"ok": False, "error": denied}, status_code=403)
-    with get_write_lock(), _connect(db) as conn:
-        cur = conn.execute(
-            "UPDATE alerts SET read = 1 WHERE id = ?",
-            (alert_id,),
-        )
-        conn.commit()
-    return {"ok": True, "id": alert_id, "updated": cur.rowcount > 0}
-
-
 @router.post("/alerts/flush")
 async def flush_alert_queue(
     request: Request, _auth: str = Depends(write_form_guard),
@@ -445,21 +418,12 @@ async def mark_all_alerts_read(
         )
     db = _db_path(request)
 
-    # Tag-scoped access control (WI-078): a scoped user only clears alerts inside
-    # their team scope; admins / unscoped users clear everything.
-    auth_ctx = getattr(request.state, "auth_context", None)
-    scope_tags = scope_tags_from_auth(auth_ctx)
+    from cert_watch.routes._deps import acting_auth
 
-    with get_write_lock():
-        count = SqliteAlertRepository(db).mark_all_read(scope_tags)
-
-    record_audit(
+    count = mark_all_alerts_read_service(
         db,
+        auth=acting_auth(request),
         actor=resolve_actor(request),
-        action="alert.mark_all_read",
-        target_type="alert",
-        target_id="all",
-        detail={"count": count},
         source_ip=resolve_source_ip(request),
     )
     plural = "alert" if count == 1 else "alerts"

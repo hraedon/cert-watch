@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-import os
 import secrets
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -22,13 +21,11 @@ from starlette.responses import Response
 from cert_watch.auth import SESSION_COOKIE
 from cert_watch.security import SecurityContext, _request_security
 
-_COOKIE_SECURE = os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") == "1"
+_COOKIE_SECURE = True  # Direct-call/test fallback; request paths use Settings.
 
 # ---------- CSRF protection (double-submit cookie) ----------
 
-_csrf_secret_val = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
-if not _csrf_secret_val:
-    _csrf_secret_val = secrets.token_hex(32)
+_csrf_secret_val = secrets.token_hex(32)
 _CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 2  # 2 hours
 _SID_COOKIE_TTL = 3600 * 8  # 8 hours — matches session cookie TTL
@@ -102,6 +99,15 @@ def get_session_token(request: Request) -> str:
     return get_session_id(request)
 
 
+def _cookie_secure(request: Request | None = None) -> bool:
+    if not _COOKIE_SECURE:
+        return False
+    app = request.scope.get("app") if request is not None else None
+    settings = getattr(getattr(app, "state", None), "settings", None)
+    configured = getattr(settings, "cookie_secure", True)
+    return configured if isinstance(configured, bool) else _COOKIE_SECURE
+
+
 async def check_csrf(request: Request) -> str | None:
     """Validate CSRF double-submit cookie. Returns error message or None.
 
@@ -152,7 +158,7 @@ async def csrf_session_middleware(
         # Keeping it HttpOnly denies an XSS one more primitive at zero cost.
         response.set_cookie(
             "cw_sid", sid, httponly=True, samesite="strict", max_age=_SID_COOKIE_TTL,
-            secure=_COOKIE_SECURE, path="/",
+            secure=_cookie_secure(request), path="/",
         )
         return response
     return await call_next(request)

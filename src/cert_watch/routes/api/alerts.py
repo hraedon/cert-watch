@@ -32,6 +32,13 @@ from cert_watch.routes.api._shared import (
     _pagination_links,
     _validate_webhook_url,
 )
+from cert_watch.services.alert_groups import (
+    AlertGroupConflictError,
+    AlertGroupNotFoundError,
+    create_alert_group,
+    delete_alert_group,
+    update_alert_group,
+)
 
 logger = logging.getLogger("cert_watch.routes.api.alerts")
 
@@ -181,29 +188,21 @@ async def api_create_alert_group(
         if "@" not in r:
             return JSONResponse(content={"error": f"invalid email: {r}"}, status_code=400)
 
-    repo = SqliteAlertGroupRepository(db)
-    with get_write_lock():
-        if repo.get_by_name(name):
-            return JSONResponse(
-                content={"error": f"alert group '{name}' already exists"}, status_code=409
-            )
-
-        group_id = repo.create(
-            name, recipients_raw, match_tags_raw, webhook_url,
+    try:
+        group = create_alert_group(
+            db,
+            name=name,
+            recipients=recipients_raw,
+            match_tags=match_tags_raw,
+            webhook_url=webhook_url,
             threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.create",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
-                "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
-        source_ip=resolve_source_ip(request),
-    )
-    g = repo.get(group_id)
-    return JSONResponse(content=_alert_group_json(g), status_code=201)
+    except AlertGroupConflictError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=409)
+    return JSONResponse(content=_alert_group_json(group), status_code=201)
 
 
 @router.get("/api/alert-groups/{group_id}")
@@ -223,7 +222,6 @@ async def api_update_alert_group(
     group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
-    repo = SqliteAlertGroupRepository(db)
     try:
         body = await request.json()
     except ValueError:
@@ -280,19 +278,9 @@ async def api_update_alert_group(
             status_code=400,
         )
 
-    with get_write_lock():
-        if repo.get(group_id) is None:
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-
-        # Check unique name on rename
-        if name is not None:
-            existing = repo.get_by_name(name)
-            if existing and existing.id != group_id:
-                return JSONResponse(
-                    content={"error": f"alert group '{name}' already exists"}, status_code=409
-                )
-
-        repo.update(
+    try:
+        group = update_alert_group(
+            db,
             group_id,
             name=name,
             recipients=recipients_raw,
@@ -300,18 +288,15 @@ async def api_update_alert_group(
             webhook_url=webhook_url,
             threshold_days=threshold_days,
             digest_cadence_days=digest_cadence_days,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
         )
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.update",
-        target_type="alert_group",
-        target_id=group_id,
-        detail=dict(body),
-        source_ip=resolve_source_ip(request),
-    )
-    g = repo.get(group_id)
-    return JSONResponse(content=_alert_group_json(g))
+    except AlertGroupNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
+    except AlertGroupConflictError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=409)
+    return JSONResponse(content=_alert_group_json(group))
 
 
 @router.delete("/api/alert-groups/{group_id}")
@@ -319,22 +304,16 @@ async def api_delete_alert_group(
     group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
-    repo = SqliteAlertGroupRepository(db)
-    with get_write_lock():
-        g = repo.get(group_id)
-        if g is None:
-            return JSONResponse(content={"error": "not found"}, status_code=404)
-
-        repo.delete(group_id)
-    record_audit(
-        db,
-        actor=resolve_actor(request),
-        action="alert_group.delete",
-        target_type="alert_group",
-        target_id=group_id,
-        detail={"name": g.name},
-        source_ip=resolve_source_ip(request),
-    )
+    try:
+        delete_alert_group(
+            db,
+            group_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except AlertGroupNotFoundError:
+        return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(content={"status": "deleted"})
 
 

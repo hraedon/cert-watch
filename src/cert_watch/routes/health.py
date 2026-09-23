@@ -8,12 +8,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.auth import SESSION_COOKIE, validate_session
-from cert_watch.auth.guards import require_auth
 from cert_watch.auth.request_context import _is_auth_enabled, authenticate_api_key
 from cert_watch.database.connection import _connect
 from cert_watch.routes._deps import _db_path, _get_settings
@@ -198,8 +197,7 @@ def _count(checks: dict[str, object], key: str) -> int:
     return value if isinstance(value, int) else 0
 
 
-@router.get("/api/health", dependencies=[Depends(require_auth)])
-def api_health(request: Request) -> JSONResponse:
+def build_api_health_response(request: Request) -> JSONResponse:
     """Structured health data for the dashboard banner."""
     db = _db_path(request)
     checks: dict[str, object] = {}
@@ -299,3 +297,8 @@ def api_health(request: Request) -> JSONResponse:
 
     checks["overall"] = overall
     return JSONResponse(content=checks)
+
+
+# Import compatibility for callers that inspected the former route function.
+# The registered /api/health endpoint is owned by routes.api.system.
+api_health = build_api_health_response

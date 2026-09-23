@@ -183,7 +183,7 @@
           <details class="cw-editor">
             <summary class="cw-btn ghost sm" data-testid="{{ 'owner-edit-btn' if cert else 'host-edit-btn' }}">{{ icons.svg_icon('edit', 13) }}Edit host details</summary>
             <div class="cw-editor-body">
-              <form method="post" action="/certificates/{{ cert_id if cert else host_id }}/owner" class="cw-form">
+              <form method="post" action="/hosts/{{ host_id }}/owner" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <div class="cw-form-grid">
                   <div class="cw-field">

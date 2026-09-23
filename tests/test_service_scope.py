@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -53,7 +55,7 @@ def estate(tmp_path: Path) -> dict[str, object]:
     return {"db": db, "in": in_scope, "out": out_of_scope, "cert_b": cert_b}
 
 
-def _call(kind: str, db: Path, target: str, auth: AuthContext | None, value: object = "x"):
+def _call(kind: str, db: Path, target: str, auth: Any, value: object = "x"):
     kw = {"auth": auth, "actor": "t", "source_ip": None}
     if kind == "notes":
         return update_host_notes(db, target, value, **kw)
@@ -116,8 +118,17 @@ def test_deferred_input_is_not_evaluated_for_a_refused_caller(estate, kind):
         _call(kind, estate["db"], estate["out"], SCOPED_OPERATOR, value=parser)
 
 
-def test_no_auth_context_is_unrestricted(estate):
-    _call("notes", estate["db"], estate["out"], None)
+@pytest.mark.parametrize(
+    "invalid_auth",
+    [None, object(), SimpleNamespace(is_admin=True, scope_tag="")],
+)
+def test_invalid_auth_context_fails_closed(estate, invalid_auth):
+    with pytest.raises(RuntimeError, match="auth context is required"):
+        _call("notes", estate["db"], estate["out"], invalid_auth)
+
+
+def test_explicit_system_principal_is_unrestricted(estate):
+    _call("notes", estate["db"], estate["out"], AuthContext.system())
     assert SqliteHostRepository(estate["db"]).get(estate["out"]).notes == "x"
 
 
@@ -156,3 +167,26 @@ def test_scope_is_checked_while_holding_the_write_lock(estate, kind, monkeypatch
     with pytest.raises(ScopeDeniedError):
         _call(kind, estate["db"], target, SCOPED_OPERATOR)
     assert held == [True]
+
+
+def test_trust_anchor_routes_map_service_refusal_to_403(monkeypatch) -> None:
+    """The service's own admin check is defence in depth behind the route guard;
+    if it ever refuses, the API answers 403, not 500."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from cert_watch.routes.api import certificates as api
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError("admin required")
+
+    monkeypatch.setattr(api, "delete_trust_anchor", refuse)
+    monkeypatch.setattr(api, "_db_path", lambda _r: "db")
+    monkeypatch.setattr(api, "acting_auth", lambda _r: None)
+    monkeypatch.setattr(api, "resolve_actor", lambda _r: "t")
+    monkeypatch.setattr(api, "resolve_source_ip", lambda _r: None)
+
+    response = asyncio.run(
+        api.api_delete_trust_anchor("00000000-0000-4000-8000-000000000001", SimpleNamespace())
+    )
+    assert response.status_code == 403

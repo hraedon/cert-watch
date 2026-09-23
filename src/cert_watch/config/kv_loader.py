@@ -6,13 +6,10 @@ Decomposed from the monolithic config.py (BC-144a / config decomposition).
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 
-from cert_watch.config.helpers import (
-    SENSITIVE_SETTING_KEYS,
-    split_group_dns,
-)
+from cert_watch.config.loader import merge_kv_values
 from cert_watch.config.settings import Settings
 
 logger = logging.getLogger("cert_watch.config.kv_loader")
@@ -33,7 +30,7 @@ def _merge_kv_settings(
     if not db_path:
         return base
     try:
-        from cert_watch.database import fernet_decrypt, kv_all
+        from cert_watch.database import kv_all
         kv = kv_all(db_path)
     except Exception:
         logger.warning("kv_store load failed; using env-only settings", exc_info=True)
@@ -41,225 +38,10 @@ def _merge_kv_settings(
     if not kv:
         return base
 
-    def _decrypt(key: str, val: str) -> str:
-        if encryption_key and key in SENSITIVE_SETTING_KEYS:
-            result = fernet_decrypt(val, encryption_key)
-            return result if result is not None else ""
-        return val
-
-    def _kv(env_val: str, kv_key: str, default: str = "") -> str:
-        """Return env_val if set, else kv_store value, else default."""
-        if env_val:
-            return env_val
-        raw = kv.get(kv_key, "")
-        return _decrypt(kv_key, raw) if raw else default
-
-    def _kv_bool(env_val: bool, kv_key: str, env_name: str) -> bool:
-        """Env wins when explicitly set (even to 0); else kv_store; else default."""
-        import os
-        if env_name in os.environ:
-            return env_val
-        kv_val = kv.get(kv_key, "")
-        if kv_val:
-            return kv_val == "1" or kv_val.lower() == "true"
-        return env_val
-
-    def _kv_tuple(env_val: tuple[str, ...], kv_key: str) -> tuple[str, ...]:
-        """Return env_val if set, else parse kv_store csv."""
-        if env_val:
-            return env_val
-        raw = kv.get(kv_key, "")
-        if raw:
-            return tuple(g.strip() for g in raw.split(",") if g.strip())
-        return env_val
-
-    def _kv_int(env_val: int, kv_key: str, env_name: str) -> int:
-        """Env wins when its var is set; else kv_store int; else env_val default.
-
-        Falls back to ``env_val`` (the env-derived base) when the kv value is
-        absent or not a whole number, mirroring the ldap_connect_timeout /
-        smtp_port int-parse pattern but with an explicit env-source guard so a
-        kv value can never clobber an explicitly-set env var.
-        """
-        import os
-        if env_name in os.environ:
-            return env_val
-        kv_raw = kv.get(kv_key, "")
-        if kv_raw:
-            try:
-                return int(kv_raw)
-            except ValueError:
-                return env_val
-        return env_val
-
-    # Merge auth fields
-    auth_provider = _kv(base.auth_provider, "auth_provider")
-    ldap_server = _kv(base.ldap_server, "ldap_server")
-    ldap_base_dn = _kv(base.ldap_base_dn, "ldap_base_dn")
-    ldap_bind_dn = _kv(base.ldap_bind_dn, "ldap_bind_dn")
-    ldap_bind_password = _kv(base.ldap_bind_password, "ldap_bind_password")
-    ldap_user_filter = _kv(
-        base.ldap_user_filter, "ldap_user_filter", "(sAMAccountName={username})"
+    base_values = {item.name: getattr(base, item.name) for item in fields(base)}
+    merged = merge_kv_values(
+        base_values,
+        kv,
+        encryption_key=encryption_key,
     )
-    ldap_start_tls = _kv_bool(base.ldap_start_tls, "ldap_start_tls", "LDAP_START_TLS")
-    allowed_subnets = _kv_tuple(base.allowed_subnets, "allowed_subnets")
-    ldap_ca_cert = _kv(base.ldap_ca_cert, "ldap_ca_cert")
-    ldap_required_groups = base.ldap_required_groups or split_group_dns(
-        kv.get("ldap_required_groups", "")
-    )
-    ldap_connect_timeout_str = kv.get("ldap_connect_timeout", "")
-    if ldap_connect_timeout_str:
-        try:
-            ldap_connect_timeout = int(ldap_connect_timeout_str)
-        except ValueError:
-            ldap_connect_timeout = base.ldap_connect_timeout
-    else:
-        ldap_connect_timeout = base.ldap_connect_timeout
-    ldap_group_filter = _kv(base.ldap_group_filter, "ldap_group_filter")
-    oauth_client_id = _kv(base.oauth_client_id, "oauth_client_id")
-    oauth_client_secret = _kv(base.oauth_client_secret, "oauth_client_secret")
-    oauth_issuer_url = _kv(base.oauth_issuer_url, "oauth_issuer_url")
-    oauth_scope = _kv(base.oauth_scope, "oauth_scope", "openid profile email")
-    oauth_authorization_endpoint = _kv(
-        base.oauth_authorization_endpoint, "oauth_authorization_endpoint"
-    )
-    oauth_token_endpoint = _kv(base.oauth_token_endpoint, "oauth_token_endpoint")
-    oauth_userinfo_endpoint = _kv(base.oauth_userinfo_endpoint, "oauth_userinfo_endpoint")
-
-    # Merge SMTP fields
-    smtp_host = _kv(base.smtp_host or "", "smtp_host") or None
-    smtp_port_str = kv.get("smtp_port", "")
-    try:
-        smtp_port = int(smtp_port_str) if smtp_port_str else base.smtp_port
-    except ValueError:
-        smtp_port = base.smtp_port
-    smtp_user = _kv(base.smtp_user or "", "smtp_user") or None
-    smtp_password = _kv(base.smtp_password or "", "smtp_password") or None
-    alert_from = _kv(base.alert_from or "", "alert_from") or None
-    alert_recipients_raw = kv.get("alert_recipients", "")
-    if not base.alert_recipients and alert_recipients_raw:
-        alert_recipients = tuple(
-            r.strip() for r in alert_recipients_raw.split(",") if r.strip()
-        )
-    else:
-        alert_recipients = base.alert_recipients
-
-    # Merge alert fields
-    webhook_url = _kv(base.webhook_url or "", "webhook_url") or None
-    webhook_template = _kv(base.webhook_template, "webhook_template")
-    webhook_kind = _kv(base.webhook_kind, "webhook_kind")
-    pagerduty_routing_key = _kv(base.pagerduty_routing_key, "pagerduty_routing_key")
-    alert_digest_only_str = kv.get("alert_digest_only", "")
-    alert_digest_only = base.alert_digest_only
-    if alert_digest_only_str and not base.alert_digest_only:
-        alert_digest_only = alert_digest_only_str == "1"
-
-    # Merge the six env-var-only alert settings (WI-058). Booleans use _kv_bool
-    # (env wins, else kv "1"/"0", else base default); ints parse with fallback;
-    # webhook_headers is a JSON object string.
-    drift_alerts = _kv_bool(
-        base.drift_alerts, "drift_alerts", "CERT_WATCH_DRIFT_ALERTS"
-    )
-    check_revocation = _kv_bool(
-        base.check_revocation, "check_revocation", "CERT_WATCH_CHECK_REVOCATION"
-    )
-    renewal_window_days = _kv_int(
-        base.renewal_window_days, "renewal_window_days",
-        "CERT_WATCH_RENEWAL_WINDOW_DAYS",
-    )
-    alert_retention_days = _kv_int(
-        base.alert_retention_days, "alert_retention_days",
-        "CERT_WATCH_ALERT_RETENTION_DAYS",
-    )
-    sched_hour = _kv_int(
-        base.sched_hour, "sched_hour", "CERT_WATCH_SCHED_HOUR"
-    )
-    sched_min = _kv_int(
-        base.sched_min, "sched_min", "CERT_WATCH_SCHED_MIN"
-    )
-    # Match the env parser's clock bounds. Legacy/invalid saved values must
-    # not terminate the scheduler when settings are applied without a restart.
-    if not 0 <= sched_hour <= 23:
-        logger.warning("Invalid saved schedule hour; using the environment/default hour")
-        sched_hour = base.sched_hour
-    if not 0 <= sched_min <= 59:
-        logger.warning("Invalid saved schedule minute; using the environment/default minute")
-        sched_min = base.sched_min
-    # Same reason, same bounds as from_env: the settings UI writes these through
-    # kv, which had no range check, so a saved value could put every leaf inside
-    # the renewal window and alert on the whole estate.
-    if not 0 <= renewal_window_days <= 365:
-        logger.warning("Invalid saved renewal window; using the environment/default window")
-        renewal_window_days = base.renewal_window_days
-    if not 0 <= alert_retention_days <= 3650:
-        logger.warning("Invalid saved alert retention; using the environment/default retention")
-        alert_retention_days = base.alert_retention_days
-
-    import json
-    import os
-    webhook_headers = base.webhook_headers
-    if "ALERT_WEBHOOK_HEADERS" not in os.environ:
-        raw_headers = kv.get("webhook_headers", "")
-        if raw_headers:
-            # webhook_headers is a SENSITIVE_SETTING_KEY: decrypt the stored
-            # blob before parsing. fernet_decrypt passes plaintext through
-            # unchanged (no ``enc:v1:`` prefix), so values written before this
-            # key became sensitive still load until they are re-saved.
-            decrypted_headers = _decrypt("webhook_headers", raw_headers)
-            try:
-                webhook_headers = json.loads(decrypted_headers)
-            except (json.JSONDecodeError, ValueError):
-                webhook_headers = base.webhook_headers
-
-    # Merge local admin from kv_store
-    local_admin_user = base.local_admin_user
-    local_admin_password_hash = base.local_admin_password_hash
-    if not local_admin_user:
-        local_admin_user = kv.get(LOCAL_ADMIN_USER, "")
-    if not local_admin_password_hash:
-        local_admin_password_hash = _decrypt(
-            LOCAL_ADMIN_PASSWORD_HASH, kv.get(LOCAL_ADMIN_PASSWORD_HASH, "")
-        )
-
-    return replace(
-        base,
-        sched_hour=sched_hour,
-        sched_min=sched_min,
-        smtp_host=smtp_host,
-        smtp_port=smtp_port,
-        smtp_user=smtp_user,
-        smtp_password=smtp_password,
-        alert_from=alert_from,
-        alert_recipients=alert_recipients,
-        webhook_url=webhook_url,
-        webhook_headers=webhook_headers,
-        webhook_template=webhook_template,
-        webhook_kind=webhook_kind,
-        pagerduty_routing_key=pagerduty_routing_key,
-        alert_digest_only=alert_digest_only,
-        allowed_subnets=allowed_subnets,
-        alert_retention_days=alert_retention_days,
-        drift_alerts=drift_alerts,
-        renewal_window_days=renewal_window_days,
-        check_revocation=check_revocation,
-        auth_provider=auth_provider,
-        ldap_server=ldap_server,
-        ldap_base_dn=ldap_base_dn,
-        ldap_bind_dn=ldap_bind_dn,
-        ldap_bind_password=ldap_bind_password,
-        ldap_user_filter=ldap_user_filter,
-        ldap_start_tls=ldap_start_tls,
-        ldap_ca_cert=ldap_ca_cert,
-        ldap_required_groups=ldap_required_groups,
-        ldap_connect_timeout=ldap_connect_timeout,
-        ldap_group_filter=ldap_group_filter,
-        oauth_client_id=oauth_client_id,
-        oauth_client_secret=oauth_client_secret,
-        oauth_issuer_url=oauth_issuer_url,
-        oauth_scope=oauth_scope,
-        oauth_authorization_endpoint=oauth_authorization_endpoint,
-        oauth_token_endpoint=oauth_token_endpoint,
-        oauth_userinfo_endpoint=oauth_userinfo_endpoint,
-        local_admin_user=local_admin_user,
-        local_admin_password_hash=local_admin_password_hash,
-    )
+    return replace(base, **merged)

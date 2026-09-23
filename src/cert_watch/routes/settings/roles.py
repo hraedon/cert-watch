@@ -215,10 +215,9 @@ def _break_glass_username(request: Request) -> str:
         auth = auth._local
     if isinstance(auth, LocalAdminProvider):
         return auth.username
-    from cert_watch.config import LOCAL_ADMIN_USER
-    from cert_watch.database import kv_get
+    from cert_watch.routes._deps import _get_settings
 
-    return kv_get(_db_path(request), LOCAL_ADMIN_USER) or ""
+    return _get_settings(request).local_admin_user
 
 
 def _account_identity_error(request: Request, username: str, email: str) -> str | None:

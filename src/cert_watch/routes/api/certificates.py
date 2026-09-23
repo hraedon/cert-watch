@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import require_auth, write_guard
+from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
     SqliteCertificateRepository,
@@ -24,6 +24,15 @@ from cert_watch.routes.api._shared import (
     _pagination_links,
     tags_from_json_body,
 )
+from cert_watch.security.ratelimit import rate_limit
+from cert_watch.services.certificate_management import (
+    MAX_UPLOAD_BYTES,
+    CertificateValidationError,
+    add_trust_anchor,
+    delete_certificate,
+    delete_trust_anchor,
+    upload_certificate_bytes,
+)
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
@@ -34,6 +43,73 @@ from cert_watch.tags import parse_tags
 logger = logging.getLogger("cert_watch.routes.api.certificates")
 
 router = APIRouter()
+
+
+@router.post("/api/certificates/upload")
+async def api_upload_certificate(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008
+    password: str | None = Form(None),
+    _auth: str = Depends(write_guard),
+    _rl: None = Depends(rate_limit("upload", 10, 60)),
+) -> JSONResponse:
+    try:
+        result = upload_certificate_bytes(
+            _db_path(request),
+            await file.read(MAX_UPLOAD_BYTES + 1),
+            file.filename or "uploaded",
+            password,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except (CertificateValidationError, ScopeDeniedError) as exc:
+        status = 403 if isinstance(exc, ScopeDeniedError) else 400
+        return JSONResponse(status_code=status, content={"error": str(exc)})
+    return JSONResponse(status_code=201, content={"id": result.id, "filename": result.filename})
+
+
+@router.post("/api/trust-anchors")
+async def api_add_trust_anchor(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008
+    _auth: str = Depends(admin_write_guard),
+) -> JSONResponse:
+    try:
+        result = add_trust_anchor(
+            _db_path(request),
+            await file.read(MAX_UPLOAD_BYTES + 1),
+            file.filename or "uploaded",
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except CertificateValidationError as exc:
+        return JSONResponse(status_code=400, content={"error": str(exc)})
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"error": "admin required"})
+    return JSONResponse(status_code=201, content={"id": result.id, "filename": result.filename})
+
+
+@router.delete("/api/trust-anchors/{anchor_id}")
+async def api_delete_trust_anchor(
+    anchor_id: IdParam,
+    request: Request,
+    _auth: str = Depends(admin_write_guard),
+) -> JSONResponse:
+    try:
+        deleted = delete_trust_anchor(
+            _db_path(request),
+            anchor_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except PermissionError:
+        return JSONResponse(status_code=403, content={"error": "admin required"})
+    if not deleted:
+        return JSONResponse(status_code=404, content={"error": "trust anchor not found"})
+    return JSONResponse(content={"status": "deleted", "id": anchor_id})
 
 
 @router.get("/api/certificates")
@@ -95,6 +171,51 @@ def api_get_certificate(
             "effective_tags": repo.effective_tags(cert_id),
         }
     )
+
+
+@router.get("/api/certificates/{cert_id}/posture", response_model=None)
+def api_certificate_posture(
+    request: Request, cert_id: IdParam, _auth: str = Depends(require_auth)
+) -> dict[str, object]:
+    """Return the latest posture evaluation for a certificate as JSON."""
+    db = _db_path(request)
+    denied = scope_read_denied(request, db, cert_id=cert_id)
+    if denied:
+        return {"error": "not found", "cert_id": cert_id}
+    from cert_watch.database import get_posture_for_cert
+
+    posture = get_posture_for_cert(db, cert_id)
+    if posture is None:
+        return {"error": "no posture data", "cert_id": cert_id}
+    return {
+        "cert_id": cert_id,
+        "grade": posture["grade"],
+        "findings": posture["findings"],
+        "protocol_version": posture.get("protocol_version", ""),
+        "ocsp_stapling": posture.get("ocsp_stapling"),
+        "hsts": posture.get("hsts"),
+        "must_staple": posture.get("must_staple", False),
+        "scanned_at": posture.get("scanned_at", ""),
+    }
+
+
+@router.delete("/api/certificates/{cert_id}")
+async def api_delete_certificate(
+    cert_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+) -> JSONResponse:
+    try:
+        deleted = delete_certificate(
+            _db_path(request),
+            cert_id,
+            auth=acting_auth(request),
+            actor=resolve_actor(request),
+            source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    if not deleted:
+        return JSONResponse(status_code=404, content={"error": "certificate not found"})
+    return JSONResponse(content={"status": "deleted", "id": cert_id})
 
 
 @router.get("/api/certificates/{cert_id}/pem")

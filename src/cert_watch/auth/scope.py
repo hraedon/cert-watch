@@ -1,8 +1,9 @@
 """Tag-scope authorization decisions (WI-051 / WI-052 / Plan 053).
 
 The predicates take the acting :class:`~cert_watch.auth.rbac.AuthContext`
-(``None`` for auth-disabled / system callers) rather than a request, so the
-application services can enforce them inside their write transaction.
+rather than a request, so application services can enforce them inside their
+write transaction. Service entry points require a context; trusted internal
+and auth-disabled callers use :meth:`AuthContext.system` explicitly.
 ``routes/_scoped.py`` wraps them for request-level callers.
 """
 
@@ -10,6 +11,19 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+
+from cert_watch.auth.rbac import AuthContext
+
+
+class MissingAuthContextError(RuntimeError):
+    """A service mutation was attempted without an explicit principal."""
+
+
+def require_auth_context(auth_ctx: Any) -> AuthContext:
+    """Fail closed unless a service caller supplies a real acting principal."""
+    if not isinstance(auth_ctx, AuthContext):
+        raise MissingAuthContextError("auth context is required")
+    return auth_ctx
 
 
 def _folded(tags: Any) -> set[str]:
@@ -55,10 +69,11 @@ def write_scope_error(
 ) -> str | None:
     """Return an error message if *auth_ctx* may not mutate the target.
 
-    Admins, unscoped users and a missing context (auth disabled, system
-    callers) pass. Targets whose effective tags do not include any of the
-    user's scope tags are denied. The services call this inside their write
-    transaction; :func:`scope_write_denied` is the request-level wrapper.
+    Admins, unscoped users and the low-level request helper's missing-context
+    case pass. Targets whose effective tags do not include any of the user's
+    scope tags are denied. Services first reject missing contexts, then call
+    this inside their write transaction; :func:`scope_write_denied` is the
+    request-level wrapper.
     """
     if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
         return None
@@ -84,7 +99,8 @@ def new_tags_scope_error(auth_ctx: Any, new_tags: str) -> str | None:
     """Return an error message if *new_tags* are not all within *auth_ctx*'s scope.
 
     For scoped users, every submitted tag must be in their scope set.
-    Admins, unscoped users and a missing context can set any tags.
+    Admins, unscoped users and the low-level request helper's missing-context
+    case can set any tags. Services reject a missing context before this check.
     """
     if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
         return None
@@ -113,6 +129,7 @@ def ensure_write_scope(
     host_id: str | None = None,
 ) -> None:
     """Raise :class:`ScopeDeniedError` unless *auth_ctx* may mutate the target."""
+    require_auth_context(auth_ctx)
     error = write_scope_error(auth_ctx, db_path, cert_id=cert_id, host_id=host_id)
     if error:
         raise ScopeDeniedError(error)
@@ -120,6 +137,7 @@ def ensure_write_scope(
 
 def ensure_new_tags_in_scope(auth_ctx: Any, new_tags: str) -> None:
     """Raise :class:`ScopeDeniedError` unless every tag is within scope."""
+    require_auth_context(auth_ctx)
     error = new_tags_scope_error(auth_ctx, new_tags)
     if error:
         raise ScopeDeniedError(error)

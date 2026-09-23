@@ -264,7 +264,7 @@ cert-watch supports two alerting modes:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ALERT_WEBHOOK_URL` | — | Webhook URL for JSON POST alerts (also the incoming-webhook URL for Teams / Discord) |
-| `ALERT_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers |
+| `ALERT_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (`*_FILE` supported) |
 | `ALERT_WEBHOOK_TEMPLATE` | — | Optional payload template (generic kind only); when unset a default JSON body is sent |
 | `ALERT_WEBHOOK_KIND` | `generic` | `generic`, `teams` (Adaptive Card via Workflows), `discord`, or `pagerduty` — selects the payload format |
 | `ALERT_PAGERDUTY_ROUTING_KEY` | — | PagerDuty Events API v2 routing key (triggers an incident; auto-resolves on renewal). `*_FILE` supported |
@@ -287,7 +287,7 @@ cert-watch itself does not renew certificates.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CERT_WATCH_RENEWAL_WEBHOOK_URL` | — | Destination URL; setting it enables the renewal webhook |
-| `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (e.g. an auth token) |
+| `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (e.g. an auth token; `*_FILE` supported) |
 | `CERT_WATCH_BASE_URL` | — | If set, adds a `cert_watch_url` deep-link to the cert detail page in the payload |
 
 Delivery is fired from the daily scan cycle, routed through the same
@@ -351,7 +351,7 @@ anyway (dev / air-gapped), set `CERT_WATCH_ALLOW_UNAUTH=1`.
 | `LDAP_SERVER` | — | LDAP server URL(s), comma-separated for DC failover (e.g. `ldap://dc1.example.com,ldap://dc2.example.com`) |
 | `LDAP_BASE_DN` | — | Base DN for user search |
 | `LDAP_BIND_DN` | — | Service account DN for search phase |
-| `LDAP_BIND_PASSWORD` | — | Service account password |
+| `LDAP_BIND_PASSWORD` | — | Service account password (`*_FILE` supported) |
 | `LDAP_USER_FILTER` | `(sAMAccountName={username})` | Search filter; `{username}` is replaced |
 | `LDAP_START_TLS` | `0` | Set `1` to use StartTLS |
 | `LDAP_CA_CERT` | — | CA cert for LDAPS (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
@@ -367,7 +367,7 @@ Requires: `pip install cert-watch[auth-ldap]`
 |----------|---------|-------------|
 | `AUTH_PROVIDER` | — | Set to `oauth`, `entra`, `azure`, or `oidc` |
 | `OAUTH_CLIENT_ID` | — | OAuth application client ID |
-| `OAUTH_CLIENT_SECRET` | — | OAuth application client secret |
+| `OAUTH_CLIENT_SECRET` | — | OAuth application client secret (`*_FILE` supported) |
 | `OAUTH_ISSUER_URL` | — | OIDC issuer URL (e.g. `https://login.microsoftonline.com/{tenant}/v2.0`) |
 | `OAUTH_SCOPE` | `openid profile email` | OAuth scopes |
 | `OAUTH_AUTHORIZATION_ENDPOINT` | — | Override (skip discovery) |
@@ -441,6 +441,11 @@ full (including key management). Revoke a key from the same page or
 `DELETE /api/api-keys/{id}`. Key use is recorded in the audit log under the key's
 name. API-key requests are exempt from CSRF (CSRF protects the cookie session
 only); they remain subject to the same per-IP rate limits as the rest of `/api/*`.
+The API-key HMAC pepper is loaded once per process. If
+`CERT_WATCH_AUTH_SECRET_FILE` points at a rotated file, restart cert-watch after
+replacing the file; changing its contents alone does not refresh the cached
+pepper. Reissue API keys as part of an auth-secret rotation because keys hashed
+under the old secret no longer authenticate under the new one.
 
 ### Secrets, sessions & CSRF
 
@@ -466,7 +471,7 @@ cert-watch (see [`deploy/iis/README.md`](deploy/iis/README.md)).
 | `CERT_WATCH_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` / `X-Real-IP` (for rate limiting + audit log) instead of the proxy's connection IP |
 | `CERT_WATCH_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for the above; restricts which sources may set forwarded headers |
 | `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Builds the OAuth redirect URI from a trusted value rather than the request `Host` header. **Required when OAuth/OIDC is enabled** |
-| `CERT_WATCH_METRICS_TOKEN` | — | When set, `/metrics` requires `Authorization: Bearer <token>` |
+| `CERT_WATCH_METRICS_TOKEN` | — | When set, `/metrics` requires `Authorization: Bearer <token>` (`*_FILE` supported) |
 | `CERT_WATCH_ALLOW_UNAUTH` | `0` | Set `1` to allow running with no auth provider on a non-loopback bind (suppresses the secure-by-default refusal and the `/setup` redirect) |
 
 ## CLI commands

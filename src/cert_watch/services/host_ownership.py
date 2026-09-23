@@ -14,7 +14,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from cert_watch.audit import export_audit, record_audit
-from cert_watch.auth.scope import ensure_write_scope
+from cert_watch.auth.scope import ensure_write_scope, require_auth_context
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.host_ops import (
     resolve_host_target,
@@ -162,8 +162,10 @@ def update_host_ownership(
     scope may be judged through the certificate the route named). *update*
     may be a callable -- e.g. a JSON body parser raising
     :class:`HostOwnershipValidationError` -- run after the scope check.
-    *auth* is the acting AuthContext (``None``: unrestricted).
+    *auth* is the required acting AuthContext; internal callers use the
+    explicit system principal when unrestricted access is intended.
     """
+    require_auth_context(auth)
     if isinstance(target, str):
         target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
     host_id = target.host_id

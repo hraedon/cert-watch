@@ -11,7 +11,6 @@ request) and by the guards' session re-resolution
 from __future__ import annotations
 
 import hmac
-import os
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -60,10 +59,19 @@ _PUBLIC_PATHS = frozenset({
     "/setup", "/favicon.ico",
 })
 
-_METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None
+_METRICS_TOKEN: str | None = None  # Direct-call/test fallback.
 
 
-def is_public_path(path: str) -> bool:
+def _metrics_token(request: Request | None = None) -> str:
+    if _METRICS_TOKEN is not None:
+        return _METRICS_TOKEN
+    app = request.scope.get("app") if request is not None else None
+    settings = getattr(getattr(app, "state", None), "settings", None)
+    value = getattr(settings, "metrics_token", "")
+    return value if isinstance(value, str) else ""
+
+
+def is_public_path(path: str, request: Request | None = None) -> bool:
     # NOTE: /api/* is intentionally NOT public. The data API (cert/host
     # inventory, CSV export, posture) requires auth when AUTH_PROVIDER is set;
     # unauthenticated API requests get a 401 (see auth_middleware). Only
@@ -75,7 +83,7 @@ def is_public_path(path: str) -> bool:
         # /metrics is public only when gated by a bearer token
         # (CERT_WATCH_METRICS_TOKEN). Without a token, it requires a
         # session to prevent fleet metadata disclosure.
-        return _METRICS_TOKEN is not None
+        return bool(_metrics_token(request))
     return bool(path.startswith("/static/"))
 
 
@@ -84,12 +92,13 @@ def check_metrics_token(request: Request) -> bool:
 
     Returns True if the request is authorized (or no token is configured).
     """
-    if not _METRICS_TOKEN:
+    metrics_token = _metrics_token(request)
+    if not metrics_token:
         return True
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        return hmac.compare_digest(token, _METRICS_TOKEN)
+        return hmac.compare_digest(token, metrics_token)
     return False
 
 
@@ -220,7 +229,7 @@ async def auth_middleware(
         return await call_next(request)
 
     path = request.url.path
-    if is_public_path(path):
+    if is_public_path(path, request):
         return await call_next(request)
 
     if resolve_session_user(request).error is None:
