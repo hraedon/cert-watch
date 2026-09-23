@@ -30,8 +30,16 @@ COVERAGE_JSON = Path(__file__).resolve().parent.parent / "coverage.json"
 MODULE_FLOORS: dict[str, int] = {
     "src/cert_watch/auth/ldap_provider.py": 90,
     "src/cert_watch/auth/oauth_provider.py": 84,
-    "src/cert_watch/middleware.py": 88,
+    # middleware.py (floor 88) was split by concern in plan 057 W6; each
+    # piece is floored at its own unit-suite coverage.
+    "src/cert_watch/middleware.py": 100,
+    "src/cert_watch/auth/guards.py": 96,
+    "src/cert_watch/auth/request_context.py": 98,
+    "src/cert_watch/auth/scope.py": 98,
     "src/cert_watch/security/__init__.py": 100,
+    "src/cert_watch/security/csrf.py": 97,
+    "src/cert_watch/security/headers.py": 91,
+    "src/cert_watch/security/ratelimit.py": 88,
     "src/cert_watch/routes/settings/api_keys.py": 90,
     "src/cert_watch/routes/settings/auth.py": 96,
     "src/cert_watch/routes/settings/password.py": 89,

@@ -645,8 +645,10 @@ Most JSON endpoints are at `/api/`; list endpoints support `?page=` and
 src/cert_watch/
   app.py               FastAPI app factory + lifespan
   routes/              HTTP route handlers (api, views, hosts, certificates, …)
-  middleware.py        Security middleware + FastAPI deps (auth, CSRF, rate limit, CSP)
-  auth/                Authentication package (session, LDAP, OAuth, local admin, factory)
+  middleware.py        HTTP middleware wiring (install order only)
+  security/            CSRF, rate limiting, CSP nonce + security headers, SecurityContext
+  auth/                Authentication + authorization (session, LDAP, OAuth, local admin,
+                       request context, route guards, tag scope)
   alerts.py            Email + webhook alerting
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
