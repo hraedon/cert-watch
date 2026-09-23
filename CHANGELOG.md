@@ -353,6 +353,16 @@ All notable changes to cert-watch are documented in this file.
   (groups, then email, are); a local login whose session cannot carry its
   marker is refused. Local usernames are capped at 128 characters and emails
   at 254.
+- **Sessions from earlier releases are rejected (everyone signs in once).**
+  They carry no local-account marker, so an unmarked session would have been
+  authorized as a directory user (full access with no role map), and a
+  directory session holding the literal claim `cw:break-glass` would have
+  read as break-glass. The session format version is now bound into the
+  signature; older tokens fail verification.
+- **A renamed account's cookie cannot attach to a new account.** Renaming a
+  local user revokes sessions for the old and new names, and creating a user
+  revokes any residual session for that name; previously an old `alice`
+  cookie resolved to a later account created as `alice`.
 - **A local account cannot shadow the break-glass admin.** Settings → Users
   rejects the break-glass username (case-insensitive) on create and rename,
   and sign-in tries the break-glass password even if a same-named account

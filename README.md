@@ -422,6 +422,8 @@ write buttons, and a viewer's write request is rejected (303 redirect for forms,
 directory users keep full access (backward compat). Local accounts created in
 Settings → Users are always authorized by their own assigned role (none, or a
 deleted role, means viewer), and the break-glass admin is always admin.
+Scope tags, and usernames in a role map's `users` list, compare by Unicode
+casefold (`Payments` = `payments`, `straße` = `strasse`).
 
 #### API keys (machine-to-machine)
 

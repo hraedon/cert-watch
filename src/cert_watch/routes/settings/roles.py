@@ -290,8 +290,12 @@ async def create_user(request: Request) -> RedirectResponse:
         password_hash=_scrypt_hash(password),
         role_id=role_id,
     )
+    db = _db_path(request)
     with get_write_lock():
-        SqliteUserRepository(_db_path(request)).add(user)
+        SqliteUserRepository(db).add(user)
+    # Revoke any residual session minted for this username (a renamed or
+    # deleted account's cookie must not bind to the new account; S2).
+    bump_session_version(db, username)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 
@@ -326,6 +330,7 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
     ident_err = _account_identity_error(request, username, email)
     if ident_err:
         return RedirectResponse(url=f"/settings?tab=users&error={ident_err}", status_code=303)
+    old_username = user.username
     user.username = username
     user.email = email
     user.role_id = role_id
@@ -342,8 +347,12 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
     with get_write_lock():
         repo.update(user)
     # Invalidate active sessions for this user — a password change or role
-    # reassignment must take effect immediately, not at TTL expiry.
+    # reassignment must take effect immediately, not at TTL expiry. On a
+    # rename the old name's cookies are revoked too, or they would bind to a
+    # future account created under that name (PR #78 review, S2).
     bump_session_version(db, username)
+    if old_username != username:
+        bump_session_version(db, old_username)
     return RedirectResponse(url="/settings?tab=users&saved=1", status_code=303)
 
 

@@ -50,6 +50,12 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Everyone signs in again once after upgrading.** The session format
+  changed (the version is bound into the session signature), and sessions
+  minted by earlier releases are rejected: they cannot say whether they
+  belong to a local account, the break-glass admin or a directory user.
+  Expect every user, including the break-glass admin, to land on the sign-in
+  page on first visit after the upgrade. API keys are unaffected.
 - **Local accounts are authorized by their own role; the Settings → Roles IdP
   mapping now takes effect.** Review both before upgrading.
   - Accounts created in Settings → Users can now sign in (#59; before, every
@@ -60,9 +66,7 @@ restore the pre-migration backup.
     do not widen a local account, and `CERT_WATCH_ALLOWED_GROUPS` /
     `_ROLES` (a directory login gate) does not apply to one.
   - The break-glass local admin is always admin, including under a role map
-    that does not map it. **Existing break-glass sessions from before the
-    upgrade** carry no marker and are authorized as before until they sign in
-    again.
+    that does not map it.
   - The group/user → role mapping edited on Settings → Roles was saved but
     never read; it is now merged into the role map at startup and on save.
     `CERT_WATCH_ROLE_MAP` wins for any role it names. **Saving any mapping
@@ -83,6 +87,12 @@ restore the pre-migration backup.
     and the break-glass username. Existing accounts are not changed; an
     existing account named like the break-glass admin no longer blocks the
     break-glass password.
+  - Renaming a local account signs out sessions under both the old and new
+    name, and creating an account signs out any leftover session for that
+    name, so an old cookie can never attach to a different account.
+  - Scope tags and usernames in role mappings compare by Unicode casefold,
+    not only ASCII case: `Payments` matches `payments`, and `straße` matches
+    `strasse`.
 
 - **An install with no alert transport no longer reports its queued alerts as
   undelivered.** With neither SMTP nor a webhook configured, `process_pending`

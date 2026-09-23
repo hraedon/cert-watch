@@ -158,9 +158,20 @@ def _verify_state(
     return state, nonce, code_verifier
 
 
+# Session format version, bound into the MAC input (not the visible payload).
+# Tokens minted before 1.0 were MACed over the bare payload; they carry no
+# local-account marker, so they fail verification and the holder is signed
+# out once (PR #78 review, S1). Bump this to invalidate every session again.
+_SESSION_FORMAT = b"cert-watch-session-v2\x00"
+
+
+def _session_mac(data: str, security: SecurityContext | None) -> str:
+    mac = hmac.new(_key(security).encode(), _SESSION_FORMAT + data.encode(), hashlib.sha256)
+    return mac.hexdigest()[:64]
+
+
 def _sign_session(data: str, security: SecurityContext | None = None) -> str:
-    sig = hmac.new(_key(security).encode(), data.encode(), hashlib.sha256).hexdigest()[:64]
-    return f"{data}:{sig}"
+    return f"{data}:{_session_mac(data, security)}"
 
 
 def create_session(
@@ -246,10 +257,8 @@ def decode_session(
     last_colon = token.rfind(":")
     payload = token[:last_colon]
     sig = token[last_colon + 1 :]
-    key = _key(security).encode()
-    expected = hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]
-    if not hmac.compare_digest(sig, expected):
-        return None
+    if not hmac.compare_digest(sig, _session_mac(payload, security)):
+        return None  # forged, or minted in a previous session format
     parts = payload.split(":")
     if len(parts) < 3:
         return None

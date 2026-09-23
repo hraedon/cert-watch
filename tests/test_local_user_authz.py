@@ -433,3 +433,98 @@ def test_settings_users_rejects_break_glass_username(env, login_csrf, name):
         )
         assert "error" in r.headers["location"]
     assert SqliteUserRepository(env).get_by_username("bob") is not None
+
+
+# ---------- PR #78 review 2: S1 -- pre-upgrade session tokens are rejected ----------
+
+
+def _pre_pr_token(client, payload: str) -> str:
+    """A token exactly as the pre-PR create_session minted it: the HMAC is over
+    the bare payload."""
+    import hashlib
+    import hmac as _hmac
+
+    key = client.app.state.security.signing_key.encode()
+    return f"{payload}:{_hmac.new(key, payload.encode(), hashlib.sha256).hexdigest()[:64]}"
+
+
+def _signed_out_with(client, token: str) -> bool:
+    client.cookies.set(SESSION_COOKIE, token)
+    r = client.get("/browse", follow_redirects=False)
+    return r.status_code == 303 and r.headers["location"] == "/login"
+
+
+@pytest.mark.parametrize("username", ["vic", "admin", "dirk"])
+def test_pre_upgrade_unmarked_session_is_signed_out(env, username):
+    """Local user, break-glass admin and directory user alike: 4-part token."""
+    import time as _t
+
+    _add_user(env, "vic", tier="viewer")
+    with TestClient(_app(_composite(env))) as client:
+        payload = f"{username}:1:{int(_t.time())}:0123456789abcdef"
+        assert _signed_out_with(client, _pre_pr_token(client, payload))
+
+
+def test_pre_upgrade_token_claiming_break_glass_is_signed_out(env):
+    import time as _t
+
+    from cert_watch.auth.rbac import BREAK_GLASS_CLAIM
+    from cert_watch.auth.session import _encode_list
+
+    with TestClient(_app(_composite(env))) as client:
+        payload = (
+            f"dirk:1:{int(_t.time())}:0123456789abcdef:"
+            f":{_encode_list([BREAK_GLASS_CLAIM])}"
+        )
+        assert _signed_out_with(client, _pre_pr_token(client, payload))
+
+
+def test_freshly_minted_session_is_accepted(env, login_csrf):
+    """Control for the S1 tests: a normal login still works."""
+    with TestClient(_app(_composite(env))) as client:
+        _login(client, login_csrf, "admin", "testpassword")
+        assert client.get("/browse", follow_redirects=False).status_code == 200
+
+
+# ---------- PR #78 review 2: S2 -- a renamed user's cookie cannot be rebound ----------
+
+
+def test_renamed_user_cookie_does_not_bind_to_a_recreated_username(env, login_csrf):
+    _add_user(env, "alice", tier="viewer")
+    admin_role = SqliteRoleRepository(env).add(Role(name="admins", permission_tier="admin"))
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "alice")
+        alice_cookie = client.cookies.get(SESSION_COOKIE)
+
+        _login(client, login_csrf, "admin", "testpassword")
+        uid = SqliteUserRepository(env).get_by_username("alice").id
+        r = client.post(
+            f"/settings/users/{uid}", data={"username": "alice-old", "email": ""},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+        r = client.post(
+            "/settings/users",
+            data={"username": "alice", "password": "password123", "email": "",
+                  "role_id": admin_role},
+            follow_redirects=False,
+        )
+        assert "saved" in r.headers["location"]
+
+        client.cookies.delete(SESSION_COOKIE)
+        assert _signed_out_with(client, alice_cookie.strip('"'))
+
+
+def test_renamed_user_old_cookie_is_revoked(env, login_csrf):
+    _add_user(env, "alice", tier="viewer")
+    with TestClient(_app()) as client:
+        _login(client, login_csrf, "alice")
+        alice_cookie = client.cookies.get(SESSION_COOKIE)
+        _login(client, login_csrf, "admin", "testpassword")
+        uid = SqliteUserRepository(env).get_by_username("alice").id
+        client.post(
+            f"/settings/users/{uid}", data={"username": "alice-old", "email": ""},
+            follow_redirects=False,
+        )
+        client.cookies.delete(SESSION_COOKIE)
+        assert _signed_out_with(client, alice_cookie.strip('"'))
