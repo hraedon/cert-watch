@@ -40,6 +40,10 @@ def upgrade(conn: sqlite3.Connection) -> None:
         row[1] for row in conn.execute("PRAGMA table_info(scan_posture)")
     }
     if "tls_verified" in posture_columns and "verify_requested" in posture_columns:
+        conn.execute(
+            "UPDATE scan_posture SET verify_requested = "
+            "COALESCE(verify_requested, tls_verified)"
+        )
         conn.execute("ALTER TABLE scan_posture DROP COLUMN tls_verified")
     elif "tls_verified" in posture_columns:
         conn.execute(

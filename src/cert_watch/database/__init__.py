@@ -224,7 +224,7 @@ from cert_watch.database.repo import (
 # Schema / connection
 from cert_watch.database.schema import _BASE_INDEXES as _BASE_INDEXES
 from cert_watch.database.schema import _BASE_TABLES as _BASE_TABLES
-from cert_watch.database.schema import ensure_base, init_schema
+from cert_watch.database.schema import init_schema
 
 # Session versions
 from cert_watch.database.session_versions import (
@@ -244,7 +244,6 @@ from cert_watch.database.users_roles import (
 __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     # schema
     "init_schema",
-    "ensure_base",
     # connection
     "get_write_lock",
     # repo

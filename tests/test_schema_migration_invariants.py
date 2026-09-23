@@ -177,6 +177,36 @@ def _upgrade_historical_0001(db_path: Path) -> None:
     run_pending_migrations(db_path, backup=False)
 
 
+def _forbidden_transaction_calls(source: str, filename: str = "<test>") -> list[str]:
+    tree = ast.parse(source, filename=filename)
+    violations: list[str] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+        ):
+            continue
+        if node.func.attr in {"commit", "executescript"}:
+            violations.append(f"{filename}:{node.lineno} {node.func.attr}()")
+            continue
+        if (
+            node.func.attr == "execute"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, str)
+        ):
+            match = re.match(
+                r"\s*(BEGIN|COMMIT|END)\b",
+                node.args[0].value,
+                flags=re.IGNORECASE,
+            )
+            if match:
+                violations.append(
+                    f"{filename}:{node.lineno} execute({match.group(1).upper()})"
+                )
+    return violations
+
+
 def test_fresh_schema_matches_genuine_0001_upgrade(tmp_path: Path) -> None:
     fresh = tmp_path / "fresh.sqlite3"
     upgraded = tmp_path / "upgraded.sqlite3"
@@ -203,22 +233,35 @@ def test_v090_schema_upgrades_to_fresh_schema(tmp_path: Path) -> None:
     assert _schema_snapshot(fresh) == _schema_snapshot(upgraded)
 
 
-def test_migration_modules_do_not_commit_or_use_executescript() -> None:
+def test_migration_modules_do_not_control_transactions() -> None:
     migrations_dir = (
         Path(__file__).resolve().parents[1] / "src" / "cert_watch" / "migrations"
     )
     violations: list[str] = []
     for module in sorted(migrations_dir.glob("m[0-9][0-9][0-9][0-9]_*.py")):
-        tree = ast.parse(module.read_text(encoding="utf-8"), filename=str(module))
-        for node in ast.walk(tree):
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in {"commit", "executescript"}
-            ):
-                violations.append(f"{module.name}:{node.lineno} {node.func.attr}()")
+        violations.extend(
+            _forbidden_transaction_calls(
+                module.read_text(encoding="utf-8"),
+                filename=module.name,
+            )
+        )
 
     assert violations == []
+
+
+@pytest.mark.parametrize(
+    "statement",
+    ["BEGIN", " begin immediate", "COMMIT", "END TRANSACTION"],
+)
+def test_migration_transaction_checker_rejects_execute_strings(statement: str) -> None:
+    assert _forbidden_transaction_calls(f"conn.execute({statement!r})")
+
+
+def test_ensure_base_is_not_exported_from_database_package() -> None:
+    import cert_watch.database as database
+
+    assert not hasattr(database, "ensure_base")
+    assert "ensure_base" not in database.__all__
 
 
 def test_backup_is_taken_before_any_migration_work(tmp_path: Path) -> None:
