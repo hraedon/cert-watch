@@ -8,13 +8,17 @@ the OAuth provider receives it at construction (``OAuthProvider(security=…)``)
 The module globals remain only as an import-time fallback for direct unit-test
 calls that don't go through the app (set via ``conftest``).
 
-Keeping this in its own leaf module avoids an import cycle between
-``auth.session`` and ``middleware`` (which already import each other's symbols).
+Keeping this in its own leaf package root avoids an import cycle between
+``auth.session`` and the request-path modules. The package also holds the
+HTTP security layers: :mod:`.csrf` (double-submit CSRF), :mod:`.ratelimit`
+(the SQLite-backed limiter) and :mod:`.headers` (CSP nonce + security
+headers). This module must not import them -- ``auth.session`` imports it.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -23,3 +27,8 @@ class SecurityContext:
 
     signing_key: str
     csrf_secret: str
+
+
+def _request_security(request: Any) -> SecurityContext | None:
+    """The SecurityContext carried on app.state, if the lifespan set one."""
+    return getattr(request.app.state, "security", None)

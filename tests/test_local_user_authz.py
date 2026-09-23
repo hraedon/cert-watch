@@ -58,13 +58,13 @@ def _add_user(db: Path, username: str, *, tier: str | None, scope: str = "") -> 
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    import cert_watch.middleware as mw
     import cert_watch.routes.auth as auth_routes
+    import cert_watch.security.csrf as csrf_mod
 
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     monkeypatch.delenv("CERT_WATCH_ROLE_MAP", raising=False)
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    monkeypatch.setattr(csrf_mod, "_COOKIE_SECURE", False)
     monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
     return _seed(tmp_path)
 

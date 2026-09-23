@@ -12,8 +12,8 @@ from cert_watch import __commit__, __version__
 from cert_watch.auth import _scrypt_hash
 from cert_watch.config import LOCAL_ADMIN_PASSWORD_HASH, LOCAL_ADMIN_USER, SETUP_COMPLETE
 from cert_watch.database import bump_session_version, get_write_lock, kv_set
-from cert_watch.middleware import check_csrf, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
+from cert_watch.security.csrf import check_csrf, get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.setup")
 

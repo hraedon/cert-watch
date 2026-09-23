@@ -2777,7 +2777,7 @@ class TestPasswordLengthCap:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        monkeypatch.setattr("cert_watch.security.csrf._COOKIE_SECURE", False)
         app_mod = reload_app(
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
@@ -2795,7 +2795,7 @@ class TestPasswordLengthCap:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        monkeypatch.setattr("cert_watch.security.csrf._COOKIE_SECURE", False)
         app_mod = reload_app(
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
@@ -2804,7 +2804,7 @@ class TestPasswordLengthCap:
             from starlette.requests import Request as StRequest
 
             from cert_watch.auth import SESSION_COOKIE, create_session
-            from cert_watch.middleware import _request_security
+            from cert_watch.security import _request_security
 
             scope = {
                 "type": "http", "method": "GET", "path": "/",

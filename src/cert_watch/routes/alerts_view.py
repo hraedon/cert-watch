@@ -16,14 +16,15 @@ from cert_watch.alerting.model import (
     delivery_is_configured,
     normalize_channel,
 )
+from cert_watch.auth.guards import get_auth_context
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,
 )
 from cert_watch.database.delivery_evidence import latest_outcomes, list_attempts
-from cert_watch.middleware import get_auth_context, get_csrf_context
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.security.csrf import get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.alerts_view")
 

@@ -15,18 +15,17 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from cert_watch.alerting import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import (
+    admin_form_guard,
+    form_write_error,
+    require_auth,
+    write_form_guard,
+)
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
 from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
-    form_write_error,
-    require_admin_write_form,
-    require_auth,
-    require_write_form,
-)
-from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
+from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings, acting_auth
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied, tags_with_scope
 from cert_watch.scan import (
     STARTTLS_MODES,
@@ -41,10 +40,10 @@ from cert_watch.scan_freshness import (
     scan_interval_out_of_range,
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
 )
 from cert_watch.services.resource_metadata import (
     update_host_notes as persist_host_notes,
@@ -185,11 +184,9 @@ async def update_host_settings(
     scan_interval_hours: str = Form(""),
     threshold_days: str = Form(""),
     renewal_status: str = Form("pending"),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
     """Edit cadence, expiry thresholds, and the operator's renewal report."""
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
@@ -266,10 +263,8 @@ async def add_host(
     common_ports: bool = Form(False),
     notes: str = Form(""),
     starttls_mode: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     hostname = hostname.strip()
     if not _hostname_within_octet_limit(hostname):
         return RedirectResponse(
@@ -316,17 +311,24 @@ async def add_host(
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     actor = resolve_actor(request)
     source_ip = resolve_source_ip(request)
-    with get_write_lock():
-        for p in ports:
-            host_id = host_repo.add(
-                hostname,
-                p,
-                threshold_days=threshold_days,
-                tags=tags_with_scope(request, tags),
-                scan_interval_hours=scan_interval_hours,
-                notes=notes,
-                starttls_mode=starttls_mode,
-            )
+    added: list[tuple[str, int]] = []
+    try:
+        with get_write_lock():
+            for p in ports:
+                host_id = host_repo.add(
+                    hostname,
+                    p,
+                    threshold_days=threshold_days,
+                    tags=tags_with_scope(request, tags),
+                    scan_interval_hours=scan_interval_hours,
+                    notes=notes,
+                    starttls_mode=starttls_mode,
+                )
+                added.append((host_id, p))
+    finally:
+        # Audit after the lock (record_audit exports to the SIEM -- network
+        # I/O), and still for every port added before any failure.
+        for host_id, p in added:
             record_audit(
                 db,
                 actor=actor,
@@ -367,10 +369,11 @@ async def add_host(
 
 
 @router.post("/hosts/import")
-async def import_hosts(request: Request, file: UploadFile = File(...)) -> RedirectResponse:  # noqa: B008
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def import_hosts(
+    request: Request,
+    file: UploadFile = File(...),  # noqa: B008
+    _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     if not check_rate_limit(f"import_hosts:{_extract_client_ip(request)}", 5, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -527,23 +530,21 @@ async def import_hosts(request: Request, file: UploadFile = File(...)) -> Redire
 
 @router.post("/hosts/{host_id}/notes")
 async def update_host_notes(
-    request: Request, host_id: IdParam, notes: str = Form(...)
+    request: Request, host_id: IdParam, notes: str = Form(...),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     try:
         persist_host_notes(
             db,
             host_id,
             notes,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except ResourceMetadataValidationError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except ResourceMetadataNotFoundError:
@@ -554,33 +555,24 @@ async def update_host_notes(
 
 @router.post("/hosts/{host_id}/tags")
 async def update_host_tags(
-    request: Request, host_id: IdParam, tags: str = Form("")
+    request: Request, host_id: IdParam, tags: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return RedirectResponse(
-            url=f"/hosts/{host_id}?error={quote(str(exc))}", status_code=303,
-        )
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     try:
         persist_host_tags(
             db,
             host_id,
-            normalized,
+            tags,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/hosts/{host_id}?error={quote(str(exc))}", status_code=303,
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
@@ -591,11 +583,9 @@ async def update_host_tags(
 @router.post("/hosts/{host_id}/expected-issuers")
 async def update_host_expected_issuers(
     request: Request, host_id: IdParam, expected_issuers: str = Form(""),
+    _auth: str = Depends(admin_form_guard),
 ) -> RedirectResponse:
     """Update the CT expected-issuer allowlist for a host."""
-    write_err = await require_admin_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
 
     repo = SqliteHostRepository(db)
@@ -626,10 +616,9 @@ async def update_host_expected_issuers(
 
 
 @router.post("/hosts/{host_id}/delete")
-async def delete_host(request: Request, host_id: IdParam) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def delete_host(
+    request: Request, host_id: IdParam, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, host_id=host_id)
     if denied:
@@ -649,10 +638,9 @@ async def delete_host(request: Request, host_id: IdParam) -> RedirectResponse:
 
 
 @router.post("/hosts/all/scan")
-async def scan_all_hosts(request: Request) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def scan_all_hosts(
+    request: Request, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     if not check_rate_limit(f"scan_all:{_extract_client_ip(request)}", 3, 300):
         return RedirectResponse(
             url=f"/scan-history?error={quote('rate limited: too many scan-all requests')}",
@@ -711,10 +699,9 @@ async def scan_all_hosts(request: Request) -> RedirectResponse:
 
 
 @router.post("/hosts/{host_id}/scan")
-async def scan_host_now(request: Request, host_id: IdParam) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def scan_host_now(
+    request: Request, host_id: IdParam, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303

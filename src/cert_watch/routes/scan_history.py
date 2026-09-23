@@ -9,14 +9,16 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.auth.guards import get_auth_context, require_auth
 from cert_watch.caa_check import (
     _DOMAIN_RE,
     _MAX_DOMAIN_LEN,
 )
 from cert_watch.database import list_scan_batches
-from cert_watch.middleware import get_auth_context, get_csrf_context, rate_limit, require_auth
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.security.csrf import get_csrf_context
+from cert_watch.security.ratelimit import rate_limit
 
 logger = logging.getLogger("cert_watch.routes.scan_history")
 

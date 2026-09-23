@@ -80,7 +80,7 @@ def test_csrf_query_param_token_rejected(csrf_strict, tmp_path, monkeypatch):
         sid_cookie = r.cookies.get("cw_sid")
     assert sid_cookie
 
-    from cert_watch.middleware import make_csrf_token
+    from cert_watch.security.csrf import make_csrf_token
 
     token = make_csrf_token(sid_cookie)
 
@@ -97,7 +97,7 @@ def test_csrf_query_param_token_rejected(csrf_strict, tmp_path, monkeypatch):
 
 def test_csrf_header_token_still_accepted(tmp_path, monkeypatch):
     """Regression guard: the x-csrf-token header path still validates."""
-    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    from cert_watch.security.csrf import make_csrf_token, validate_csrf_token
 
     token = make_csrf_token("sid-1")
     assert validate_csrf_token(token, "sid-1")
@@ -125,9 +125,9 @@ def test_csrf_bypass_defaults_false(csrf_strict):
     The ``csrf_strict`` fixture re-enables real validation by setting the flag
     back to ``False``, confirming the production default.
     """
-    import cert_watch.middleware as mw
+    import cert_watch.security.csrf as csrf_mod
 
-    assert mw._CSRF_BYPASS is False
+    assert csrf_mod._CSRF_BYPASS is False
 
 
 class _FakeApp:
@@ -155,8 +155,8 @@ def _make_request(method="GET", headers=None, cookies=None):
 @pytest.mark.anyio
 async def test_csrf_bypass_exercises_validation_path(monkeypatch):
     """In bypass mode check_csrf mints a token and validates it (WI-099)."""
-    from cert_watch import middleware as _mw
-    from cert_watch.middleware import check_csrf, validate_csrf_token
+    import cert_watch.security.csrf as csrf_mod
+    from cert_watch.security.csrf import check_csrf, validate_csrf_token
 
     original = validate_csrf_token
     calls = []
@@ -165,8 +165,8 @@ async def test_csrf_bypass_exercises_validation_path(monkeypatch):
         calls.append((token, session_id, security))
         return original(token, session_id, security)
 
-    monkeypatch.setattr(_mw, "validate_csrf_token", _spy)
-    monkeypatch.setattr(_mw, "_CSRF_BYPASS", True)
+    monkeypatch.setattr(csrf_mod, "validate_csrf_token", _spy)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", True)
 
     request = _make_request()
     assert await check_csrf(request) is None
@@ -178,10 +178,10 @@ async def test_csrf_bypass_exercises_validation_path(monkeypatch):
 @pytest.mark.anyio
 async def test_csrf_bypass_false_rejects_missing_token(monkeypatch):
     """With bypass disabled and no token, check_csrf reports a missing token."""
-    from cert_watch import middleware as _mw
-    from cert_watch.middleware import check_csrf
+    import cert_watch.security.csrf as csrf_mod
+    from cert_watch.security.csrf import check_csrf
 
-    monkeypatch.setattr(_mw, "_CSRF_BYPASS", False)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
 
     request = _make_request()
     result = await check_csrf(request)
@@ -198,7 +198,7 @@ class TestLoginCsrf:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        monkeypatch.setattr("cert_watch.security.csrf._COOKIE_SECURE", False)
         return reload_app(
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,

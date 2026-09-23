@@ -9,11 +9,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CollectorRegistry, Gauge, generate_latest
 
+from cert_watch.auth.request_context import check_metrics_token
 from cert_watch.database import get_posture_grades_for_certs
 from cert_watch.database.connection import _connect, _parse_iso
 from cert_watch.filters import compute_urgency
-from cert_watch.middleware import check_metrics_token, rate_limit
 from cert_watch.routes._deps import _db_path
+from cert_watch.security.ratelimit import rate_limit
 
 logger = logging.getLogger("cert_watch.routes.metrics")
 

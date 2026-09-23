@@ -531,6 +531,31 @@ def _local_user_context(
     )
 
 
+def _legacy_list_context(
+    username: str,
+    write_users: tuple[str, ...] | list[str],
+    admin_users: tuple[str, ...] | list[str],
+) -> AuthContext:
+    """A directory user's context with no role map: the documented legacy lists.
+
+    ``CERT_WATCH_ADMINS``, when set, is the allowlist for admin (README: the
+    usernames allowed to reach /settings); ``CERT_WATCH_WRITE_USERS``, when
+    set, is the allowlist for writes, and listed admins always write. Admin
+    implies write: with only ``CERT_WATCH_WRITE_USERS`` set, admin requires
+    membership in it. With neither set, everyone is full access.
+    Before this, the no-role-map path returned full access unconditionally,
+    so ``CERT_WATCH_ADMINS`` restricted nothing and a user outside
+    ``CERT_WATCH_WRITE_USERS`` could mint a write API key (plan 057 W6).
+    """
+    may_write = not write_users or username in write_users
+    # Admin implies write: with CERT_WATCH_ADMINS unset, a user who may not
+    # write data (outside a set CERT_WATCH_WRITE_USERS) never administers.
+    is_admin = username in admin_users if admin_users else may_write
+    if is_admin:
+        return AuthContext.full_access(username)
+    return AuthContext.from_tier(username, tier=ROLE_OPERATOR if may_write else ROLE_VIEWER)
+
+
 def build_auth_context(
     username: str,
     user_groups: list[str],
@@ -538,6 +563,9 @@ def build_auth_context(
     role_map: dict[str, dict[str, Any]],
     role_repo: SqliteRoleRepository | None = None,
     user_repo: SqliteUserRepository | None = None,
+    *,
+    write_users: tuple[str, ...] | list[str] = (),
+    admin_users: tuple[str, ...] | list[str] = (),
 ) -> AuthContext:
     """Build an AuthContext by resolving IdP groups/roles to cert-watch roles.
 
@@ -545,8 +573,10 @@ def build_auth_context(
     always admin, and a users-table account resolves from its assigned role
     (see :func:`_local_user_context`).
 
-    For directory users: if *role_map* is empty, returns a full-access context
-    (backward compat). When *role_repo* is supplied, the permission tier and
+    For directory users: if *role_map* is empty, the legacy lists decide
+    (:func:`_legacy_list_context`): with neither ``CERT_WATCH_ADMINS``
+    (*admin_users*) nor ``CERT_WATCH_WRITE_USERS`` (*write_users*) set, a
+    full-access context (backward compat). When *role_repo* is supplied, the permission tier and
     scope tag are read from the Role row (WI-050). Otherwise the legacy
     role-name → permission mapping is used.
     """
@@ -555,7 +585,7 @@ def build_auth_context(
     if LOCAL_USER_CLAIM in user_roles:
         return _local_user_context(username, role_repo, user_repo)
     if not role_map:
-        return AuthContext.full_access(username)
+        return _legacy_list_context(username, write_users, admin_users)
 
     resolved = resolve_roles(user_groups, user_roles, role_map, username=username)
     role_tiers = _role_tiers_from_map(role_map, role_repo)

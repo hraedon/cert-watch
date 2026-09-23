@@ -33,7 +33,32 @@ All notable changes to cert-watch are documented in this file.
   The receipt suite runs explicitly in CI, including TLS certificate and hostname
   refusal checks, rather than being silently excluded by integration markers.
 
+### Security
+- **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
+  every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
+  read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped
+  API key. Admin now requires membership when the list is set, and admin
+  implies write: with only `CERT_WATCH_WRITE_USERS` set, admin requires
+  membership in it. With neither legacy list set, the full-access default is
+  unchanged. See UPGRADING.md.
+
 ### Changed
+- **One way to guard a route; every write guard checks CSRF.** Routes declared
+  authorization four different ways, and one of them (`require_admin_form`)
+  left CSRF to a separate call each handler had to remember. Every route now
+  declares a single guard dependency from `auth/guards.py` (`write_guard` /
+  `admin_write_guard` for JSON, `write_form_guard` / `admin_form_guard` /
+  `admin_settings_form` for HTML forms, `require_auth` / `require_admin` /
+  `admin_page_guard` for reads); a mutation guard cannot be built without
+  CSRF, and a test fails any mutating route without exactly one.
+  `middleware.py` is split by concern into `security/csrf.py`,
+  `security/ratelimit.py`, `security/headers.py`, `auth/request_context.py`
+  (one AuthContext builder instead of two) and `auth/guards.py`. The host
+  notes, tags and ownership services now enforce tag scope themselves, inside
+  the write lock. Nine handlers that exported audit events to the SIEM while
+  holding the global write lock now do so after releasing it. No
+  authorization decision, redirect or message changes (pinned by a
+  2016-observation route x principal matrix).
 - **Schema creation now has one source of truth.** Fresh databases and upgrades
   both traverse the numbered migration chain, each migration commits its schema
   work and version row atomically, and migration 0035 reconciles objects that

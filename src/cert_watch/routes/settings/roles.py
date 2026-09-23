@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.auth import _scrypt_hash
+from cert_watch.auth.guards import admin_page_guard
 from cert_watch.auth.rbac import PERMISSION_TIERS
 from cert_watch.database import (
     Role,
@@ -17,14 +18,16 @@ from cert_watch.database import (
     bump_session_version,
     get_write_lock,
 )
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
-from cert_watch.routes.settings.core import _rebuild_settings
+from cert_watch.routes.settings.core import _rebuild_settings, settings_tab_form
 from cert_watch.routes.settings.render import _render_settings
 
 templates = get_templates()
 
 router = APIRouter()
+
+_ROLES_FORM = settings_tab_form("roles")
+_USERS_FORM = settings_tab_form("users")
 
 
 def _normalize_permission_tier(tier: str) -> str:
@@ -79,24 +82,16 @@ def _parse_tag_tiers(raw: str, scope_tag: str) -> tuple[dict[str, str], str | No
 
 @router.get("/settings/roles", response_class=HTMLResponse, response_model=None)
 def roles_page(
-    request: Request, saved: str | None = None, error: str | None = None
+    request: Request, saved: str | None = None, error: str | None = None,
+    _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
     return _render_settings(request, "roles", saved=saved, error=error)
 
 
 @router.post("/settings/roles")
-async def create_role(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=roles&error={csrf_err}", status_code=303)
-
+async def create_role(
+    request: Request, _auth: str = Depends(_ROLES_FORM),
+) -> RedirectResponse:
     form = await request.form()
     name = str(form.get("name") or "").strip()
     email = str(form.get("email") or "").strip()
@@ -126,15 +121,9 @@ async def create_role(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/roles/{role_id}")
-async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=roles&error={csrf_err}", status_code=303)
-
+async def update_role(
+    role_id: IdParam, request: Request, _auth: str = Depends(_ROLES_FORM),
+) -> RedirectResponse:
     repo = SqliteRoleRepository(_db_path(request))
     role = repo.get(role_id)
     if role is None:
@@ -170,15 +159,9 @@ async def update_role(role_id: IdParam, request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/roles/{role_id}/delete")
-async def delete_role(role_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=roles&error={csrf_err}", status_code=303)
-
+async def delete_role(
+    role_id: IdParam, request: Request, _auth: str = Depends(_ROLES_FORM),
+) -> RedirectResponse:
     db = _db_path(request)
     # Invalidate active sessions for all users with this role before the role
     # is deleted (delete() clears their role_id).
@@ -212,11 +195,9 @@ def _drop_ui_mapping(db: Any, role_id: str) -> None:
 
 @router.get("/settings/users", response_class=HTMLResponse, response_model=None)
 def users_page(
-    request: Request, saved: str | None = None, error: str | None = None
+    request: Request, saved: str | None = None, error: str | None = None,
+    _auth: str = Depends(admin_page_guard),
 ) -> HTMLResponse | RedirectResponse:
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
     return _render_settings(request, "users", saved=saved, error=error)
 
 
@@ -254,15 +235,9 @@ def _account_identity_error(request: Request, username: str, email: str) -> str 
 
 
 @router.post("/settings/users")
-async def create_user(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=users&error={csrf_err}", status_code=303)
-
+async def create_user(
+    request: Request, _auth: str = Depends(_USERS_FORM),
+) -> RedirectResponse:
     form = await request.form()
     username = str(form.get("username") or "").strip()
     email = str(form.get("email") or "").strip()
@@ -303,15 +278,9 @@ async def create_user(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/users/{user_id}")
-async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=users&error={csrf_err}", status_code=303)
-
+async def update_user(
+    user_id: IdParam, request: Request, _auth: str = Depends(_USERS_FORM),
+) -> RedirectResponse:
     repo = SqliteUserRepository(_db_path(request))
     user = repo.get(user_id)
     if user is None:
@@ -364,15 +333,9 @@ async def update_user(user_id: IdParam, request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/users/{user_id}/delete")
-async def delete_user(user_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(url=f"/settings?tab=users&error={csrf_err}", status_code=303)
-
+async def delete_user(
+    user_id: IdParam, request: Request, _auth: str = Depends(_USERS_FORM),
+) -> RedirectResponse:
     db = _db_path(request)
     repo = SqliteUserRepository(db)
     user = repo.get(user_id)

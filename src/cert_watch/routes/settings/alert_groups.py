@@ -13,14 +13,15 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import admin_page_guard
 from cert_watch.database import SqliteAlertGroupRepository, get_write_lock
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.routes.api._shared import _validate_webhook_url
+from cert_watch.routes.settings.core import settings_tab_form
 from cert_watch.routes.settings.render import _settings_context
 from cert_watch.tags import parse_tags
 
@@ -29,6 +30,7 @@ templates = get_templates()
 router = APIRouter()
 
 _TAB = "alert-groups"
+_FORM = settings_tab_form(_TAB)
 
 
 def _redirect_err(msg: str) -> RedirectResponse:
@@ -95,10 +97,9 @@ def _parse_form(form: Any) -> tuple[dict[str, Any] | None, str | None]:
 
 
 @router.get("/settings/alert-groups", response_class=HTMLResponse, response_model=None)
-def alert_groups_page(request: Request) -> HTMLResponse | RedirectResponse:
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
+def alert_groups_page(
+    request: Request, _auth: str = Depends(admin_page_guard),
+) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
     groups = SqliteAlertGroupRepository(db).list_all()
     # Inline match count per existing group (WI-060): how many leaf certs would
@@ -113,7 +114,9 @@ def alert_groups_page(request: Request) -> HTMLResponse | RedirectResponse:
 
 
 @router.get("/settings/alert-groups/preview", response_class=HTMLResponse, response_model=None)
-def alert_groups_preview(request: Request) -> HTMLResponse | RedirectResponse:
+def alert_groups_preview(
+    request: Request, _auth: str = Depends(admin_page_guard),
+) -> HTMLResponse | RedirectResponse:
     """Live 'which certs match these tags' preview (WI-060).
 
     Read-only GET: the operator enters candidate match tags and sees the count
@@ -121,9 +124,6 @@ def alert_groups_preview(request: Request) -> HTMLResponse | RedirectResponse:
     intersect them, before committing a group to those tags. Reuses the same
     escaped-LIKE effective-tag matching as the dashboard scope filter.
     """
-    redirect_resp = require_admin_form(request)
-    if redirect_resp:
-        return redirect_resp
     db = _db_path(request)
     raw_tags = str(request.query_params.get("match_tags") or "")
     preview_tags = parse_tags(raw_tags)
@@ -206,14 +206,9 @@ def _match_preview(
 
 
 @router.post("/settings/alert-groups")
-async def create_alert_group(request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return _redirect_err(csrf_err)
-
+async def create_alert_group(
+    request: Request, _auth: str = Depends(_FORM),
+) -> RedirectResponse:
     values, err = _parse_form(await request.form())
     if err:
         return _redirect_err(err)
@@ -240,14 +235,9 @@ async def create_alert_group(request: Request) -> RedirectResponse:
 
 
 @router.post("/settings/alert-groups/{group_id}")
-async def update_alert_group(group_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return _redirect_err(csrf_err)
-
+async def update_alert_group(
+    group_id: IdParam, request: Request, _auth: str = Depends(_FORM),
+) -> RedirectResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
     if repo.get(group_id) is None:
@@ -283,14 +273,9 @@ async def update_alert_group(group_id: IdParam, request: Request) -> RedirectRes
 
 
 @router.post("/settings/alert-groups/{group_id}/delete")
-async def delete_alert_group(group_id: IdParam, request: Request) -> RedirectResponse:
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return _redirect_err(csrf_err)
-
+async def delete_alert_group(
+    group_id: IdParam, request: Request, _auth: str = Depends(_FORM),
+) -> RedirectResponse:
     db = _db_path(request)
     with get_write_lock():
         deleted = SqliteAlertGroupRepository(db).delete(group_id)

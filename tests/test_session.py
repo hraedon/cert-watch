@@ -24,8 +24,8 @@ from cert_watch.database import (
     init_schema,
     kv_set,
 )
-from cert_watch.middleware import set_csrf_secret
 from cert_watch.security import SecurityContext
+from cert_watch.security.csrf import set_csrf_secret
 
 
 @pytest.fixture
