@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.database.dashboard_helpers import (
     _SORT_COLUMNS_GROUPED,
     _URGENCY_ORDER,
@@ -56,9 +56,9 @@ def list_dashboard_grouped_page(
     init_schema(db_path)
 
     _URGENCY_SQL = {
-        "expired": "WHEN julianday(c.not_after) - julianday('now') < 0 THEN 0",
-        "critical": "WHEN julianday(c.not_after) - julianday('now') < 7 THEN 1",
-        "warning": "WHEN julianday(c.not_after) - julianday('now') < 30 THEN 2",
+        "expired": "WHEN julianday(c.not_after) - julianday(?) < 0 THEN 0",
+        "critical": "WHEN julianday(c.not_after) - julianday(?) < 7 THEN 1",
+        "warning": "WHEN julianday(c.not_after) - julianday(?) < 30 THEN 2",
         "healthy": "ELSE 3",
     }
     _URGENCY_ORDER_SQL = ("expired", "critical", "warning", "healthy")
@@ -83,7 +83,7 @@ def list_dashboard_grouped_page(
                 c.fingerprint_sha256,
                 COUNT(DISTINCT c.hostname || ':' || c.port) AS host_count,
                 MIN(c.not_after) AS earliest_expiry,
-                MIN(julianday(c.not_after) - julianday('now')) AS min_days_remaining,
+                MIN(julianday(c.not_after) - julianday(?)) AS min_days_remaining,
                 CASE
                     {_URGENCY_SQL['expired']}
                     {_URGENCY_SQL['critical']}
@@ -97,7 +97,11 @@ def list_dashboard_grouped_page(
               AND c.fingerprint_sha256 IS NOT NULL
               AND c.fingerprint_sha256 != ''
         """
-        params: list[Any] = []
+        # Every placeholder so far is the reference instant in the SELECT list.
+        # No ``now`` parameter: the Python half of this path (row urgency in
+        # _build_dashboard_rows) reads the wall clock itself, so an injected
+        # instant here would only half-apply.
+        params: list[Any] = [_sql_now()] * grouped_sql.count("?")
 
         if like:
             grouped_sql += (

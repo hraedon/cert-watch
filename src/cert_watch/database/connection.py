@@ -185,6 +185,18 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat()
 
 
+def _sql_now(now: datetime | None = None) -> str:
+    """Return the reference instant to bind into SQL date arithmetic.
+
+    SQL must never read SQLite's own ``'now'``: it follows the process wall
+    clock, so injected clocks and frozen test time silently stop applying to
+    whatever the query derives (urgency buckets, day counts, ordering). The
+    value uses the same ``_iso`` format as stored timestamps, so
+    ``julianday(?)`` parses it exactly as it parses ``not_after``.
+    """
+    return _iso(now if now is not None else datetime.now(UTC))
+
+
 def _parse_iso(s: str) -> datetime:
     dt = datetime.fromisoformat(s)
     if dt.tzinfo is None:

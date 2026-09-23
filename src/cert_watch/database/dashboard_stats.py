@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.database.dashboard_helpers import (
     _add_effective_tag_filter,
     _escape_like,
@@ -56,25 +57,28 @@ def dashboard_expiry_stats(
     q: str | None = None,
     source: str | None = None,
     scope_tags: list[str] | tuple[str, ...] | None = None,
+    now: datetime | None = None,
 ) -> dict[str, int]:
     """Expiry-only counts for Home; Browse uses chain-aware urgency counts."""
     include_scanned = source in (None, "scanned")
     include_uploaded = source != "scanned"
     like = f"%{_escape_like(q.lower())}%" if q else None
     buckets = """
-        SUM(CASE WHEN julianday(c.not_after) < julianday('now')
+        SUM(CASE WHEN julianday(c.not_after) < julianday(?)
             THEN 1 ELSE 0 END) AS expired,
-        SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
-            AND CAST(julianday(c.not_after) - julianday('now') AS INTEGER) < 7
+        SUM(CASE WHEN julianday(c.not_after) >= julianday(?)
+            AND CAST(julianday(c.not_after) - julianday(?) AS INTEGER) < 7
             THEN 1 ELSE 0 END) AS critical,
-        SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
-            AND CAST(julianday(c.not_after) - julianday('now') AS INTEGER) >= 7
-            AND CAST(julianday(c.not_after) - julianday('now') AS INTEGER) < 30
+        SUM(CASE WHEN julianday(c.not_after) >= julianday(?)
+            AND CAST(julianday(c.not_after) - julianday(?) AS INTEGER) >= 7
+            AND CAST(julianday(c.not_after) - julianday(?) AS INTEGER) < 30
             THEN 1 ELSE 0 END) AS warning,
-        SUM(CASE WHEN julianday(c.not_after) >= julianday('now')
-            AND CAST(julianday(c.not_after) - julianday('now') AS INTEGER) >= 30
+        SUM(CASE WHEN julianday(c.not_after) >= julianday(?)
+            AND CAST(julianday(c.not_after) - julianday(?) AS INTEGER) >= 30
             THEN 1 ELSE 0 END) AS healthy
     """
+    # The bucket fragment precedes every WHERE placeholder in each SELECT.
+    bucket_params: list[Any] = [_sql_now(now)] * buckets.count("?")
     selects: list[str] = []
     params: list[Any] = []
     if include_scanned:
@@ -82,7 +86,7 @@ def dashboard_expiry_stats(
             FROM certificates c
             JOIN hosts h ON h.hostname = c.hostname AND h.port = c.port
             WHERE c.is_leaf = 1 AND c.source = 'scanned'"""
-        sql_params: list[Any] = []
+        sql_params: list[Any] = list(bucket_params)
         if like:
             sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
@@ -100,7 +104,7 @@ def dashboard_expiry_stats(
     if include_uploaded:
         sql = f"""SELECT {buckets} FROM certificates c
             WHERE c.is_leaf = 1 AND c.source != 'scanned'"""
-        sql_params = []
+        sql_params = list(bucket_params)
         if like:
             sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"

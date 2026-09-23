@@ -14,7 +14,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.auth import SESSION_COOKIE, validate_session
 from cert_watch.auth.request_context import _is_auth_enabled, authenticate_api_key
-from cert_watch.database.connection import _connect
+from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.security import _request_security
 
@@ -146,7 +146,8 @@ def readyz(request: Request) -> JSONResponse:
             ).fetchone()
             expired_row = conn.execute(
                 "SELECT COUNT(*) FROM certificates WHERE is_leaf = 1 "
-                "AND julianday(not_after) <= julianday('now')"
+                "AND julianday(not_after) <= julianday(?)",
+                (_sql_now(),),
             ).fetchone()
         checks["certificates"] = str(total_row[0] if total_row else 0)
         checks["expired"] = str(expired_row[0] if expired_row else 0)
