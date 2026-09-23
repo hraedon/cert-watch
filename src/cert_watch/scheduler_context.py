@@ -111,25 +111,29 @@ class SchedulerContext:
         }
         deferred_operations: list[DeferredPostCommit] = []
 
-        result = run_scan_now(
-            scan_fn=lambda host, port: scan_host(
-                host, port, verify=s.tls_verify, timeout=s.scan_timeout,
-                retries=s.scan_retries, allow_private=s.allow_private,
-                allowed_subnets=s.allowed_subnets,
-                dns_servers=s.dns_servers,
-                max_output_bytes=s.scan_max_output_bytes,
-                hsts_timeout=s.hsts_timeout,
-                starttls_mode=starttls_by_host.get((host, port), ""),
-            ),
-            alert_fn=lambda: {"sent": 0, "failed": 0},
-            db_path=s.db_path,
-            host_provider=lambda: hosts,
-            store_fn=lambda result: self._store_with_lock(result, config, deferred_operations),
-            settings=s,
-        )
         from cert_watch.scan import _execute_deferred_post_commit
-        for deferred in deferred_operations:
-            _execute_deferred_post_commit(deferred)
+        try:
+            result = run_scan_now(
+                scan_fn=lambda host, port: scan_host(
+                    host, port, verify=s.tls_verify, timeout=s.scan_timeout,
+                    retries=s.scan_retries, allow_private=s.allow_private,
+                    allowed_subnets=s.allowed_subnets,
+                    dns_servers=s.dns_servers,
+                    max_output_bytes=s.scan_max_output_bytes,
+                    hsts_timeout=s.hsts_timeout,
+                    starttls_mode=starttls_by_host.get((host, port), ""),
+                ),
+                alert_fn=lambda: {"sent": 0, "failed": 0},
+                db_path=s.db_path,
+                host_provider=lambda: hosts,
+                store_fn=lambda result: self._store_with_lock(
+                    result, config, deferred_operations
+                ),
+                settings=s,
+            )
+        finally:
+            for deferred in deferred_operations:
+                _execute_deferred_post_commit(deferred)
         return result
 
     def _store_with_lock(

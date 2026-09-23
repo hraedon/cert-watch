@@ -261,3 +261,16 @@ def test_orphan_notice_pool_submit_fallback_inline(db: Path):
         send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     conn.send_message.assert_called_once()
+
+
+def test_orphan_notice_task_exception_is_logged(db: Path, caplog):
+    from cert_watch.digest import _flush_digest_pool
+
+    with patch(
+        "cert_watch.digest.send_orphan_notice",
+        side_effect=RuntimeError("orphan lookup failed"),
+    ):
+        assert send_renewal_digest(db, _cfg(), None, days=7) is True
+        _flush_digest_pool()
+
+    assert "orphan notice delivery task failed" in caplog.text

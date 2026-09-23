@@ -382,6 +382,39 @@ class TestSigning:
         assert not ok
         assert "mismatch" in msg
 
+    @pytest.mark.parametrize(
+        ("section", "field", "value"),
+        [
+            ("compliance_metrics", "pct", 99.9),
+            ("compliance_metrics", "display", "everything passes"),
+            ("remediation_buckets", "count", 999),
+        ],
+    )
+    def test_tampered_presentation_values_fail(self, section, field, value):
+        report = ComplianceReport(
+            generated_at="2026-01-01T00:00:00+00:00",
+            compliance_metrics=[ComplianceMetric("test", 1, 2)],
+            remediation_buckets=[RemediationBucket("bucket", [])],
+        )
+        sign_report(report, "key")
+        data = report_to_dict(report)
+        data[section][0][field] = value
+
+        ok, _ = verify_report_signature(data, "key")
+
+        assert not ok
+
+    def test_malformed_report_fails_cleanly(self):
+        report = ComplianceReport(
+            generated_at="2026-01-01T00:00:00+00:00",
+            compliance_metrics=[ComplianceMetric("test", 1, 2)],
+        )
+        sign_report(report, "key")
+        data = report_to_dict(report)
+        del data["compliance_metrics"][0]["label"]
+
+        assert verify_report_signature(data, "key") == (False, "malformed report")
+
     def test_wrong_key_fails(self):
         report = ComplianceReport(
             generated_at="2026-01-01T00:00:00+00:00",

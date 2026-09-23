@@ -44,6 +44,23 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Saved settings no longer disable environment-configured renewal webhooks.**
+  KV overrides now replace only their declared fields instead of rebuilding and
+  silently dropping newer `Settings` fields.
+- **Manual alert flushes no longer block or race scheduled delivery.** The
+  blocking send runs in a worker thread and skips with a clear busy message
+  while a scheduler cycle owns delivery.
+- **Digest delivery remains retryable.** Short-lived certificates retain their
+  final lifetime-relative threshold in digest mode, and background webhook or
+  orphan-notice exceptions are logged and release the weekly in-flight guard
+  (#60, #61).
+- **Compliance report verification covers derived presentation fields.** Changes
+  to metric percentages/displays or remediation counts now fail verification;
+  malformed reports fail cleanly instead of raising `KeyError` (#66).
+- **Scheduler failures stay isolated and shutdown stays bounded.** Scan-history
+  write errors, malformed timestamps, per-host renewal analysis, and deferred
+  post-commit work no longer abort unrelated work; queued pool tasks are
+  cancelled during shutdown (#67, #68).
 - **A genuine renewal now resolves the PagerDuty incident the trigger actually
   opened.** The dedup key was derived from the certificate row id, but an
   unchanged rescan rewrites that row (#57) and carries the alert to the new

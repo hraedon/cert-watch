@@ -331,6 +331,32 @@ class TestSendRenewalDigest:
             _flush_digest_pool()
         callback.assert_called_once_with(False)
 
+    def test_webhook_task_exception_reports_completion_failure(
+        self, empty_db, caplog
+    ):
+        from cert_watch.alerts import WebhookConfig
+
+        db = empty_db
+        _add_host(db, "host-a.example.com")
+        _emit_renewal(db, "host-a.example.com")
+        callback = MagicMock()
+        with patch(
+            "cert_watch.database.digest_deliveries.claim_digest_delivery",
+            side_effect=RuntimeError("claim store unavailable"),
+        ):
+            result = send_renewal_digest(
+                db,
+                None,
+                WebhookConfig(url="http://localhost:9999/hook"),
+                days=7,
+                delivery_completion_callback=callback,
+            )
+            assert result is None
+            _flush_digest_pool()
+
+        callback.assert_called_once_with(False)
+        assert "renewal digest webhook delivery task failed" in caplog.text
+
     def test_shutdown_waits_for_delivery_completion_callback(self, empty_db):
         from cert_watch.alerts import WebhookConfig
 
