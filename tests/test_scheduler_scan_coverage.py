@@ -349,6 +349,31 @@ def test_stop_scheduler_cancels_queued_webhook_work(tmp_path):
     assert runtime._webhook_pool is None
 
 
+def test_stop_scheduler_cancels_queued_webhook_future(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime._webhook_pool = ThreadPoolExecutor(max_workers=1)
+    entered = threading.Event()
+    release = threading.Event()
+    queued_ran = threading.Event()
+
+    def blocker():
+        entered.set()
+        release.wait(1)
+
+    assert runtime._submit_renewal_webhook(blocker)
+    assert entered.wait(1)
+    assert runtime._submit_renewal_webhook(queued_ran.set)
+    queued = next(future for future in runtime._webhook_futures if not future.running())
+
+    runtime.stop(timeout=0.03)
+
+    release.set()
+    assert queued.cancelled()
+    assert not queued_ran.is_set()
+
+
 def test_restart_after_bounded_stop_hands_off_to_one_new_loop(tmp_path):
     settings = Settings(
         db_path=tmp_path / "test.sqlite3",

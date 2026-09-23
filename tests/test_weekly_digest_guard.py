@@ -6,6 +6,8 @@ import threading
 from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from cert_watch.alerting.digest.engine import DigestRunResult
 from cert_watch.scheduler import Scheduler
 from cert_watch.scheduler_context import SchedulerContext
@@ -70,6 +72,46 @@ def test_weekly_digest_aggregates_failures_and_busy_claims(monkeypatch, tmp_path
         "sent": 0,
         "failed": 4,
         "deferred": 6,
+    }
+
+
+@pytest.mark.parametrize("failing_kind", ["renewal", "orphan"])
+def test_weekly_digest_exception_is_reported_and_retried(
+    failing_kind, monkeypatch, tmp_path, caplog
+):
+    """Regression for #61: one digest exception must not wedge the period."""
+    context = _context(tmp_path / "digest.sqlite3")
+    attempts = {"renewal": 0, "orphan": 0}
+    delivered = set()
+
+    def run(config, kind, cadence_days, *, deadline, stop_event):
+        del config, cadence_days, deadline, stop_event
+        attempts[kind.name] += 1
+        if kind.name == failing_kind and attempts[kind.name] == 1:
+            raise RuntimeError(f"{kind.name} digest failed")
+        if kind.name in delivered:
+            return DigestRunResult(skipped=1)
+        delivered.add(kind.name)
+        return DigestRunResult(sent=1)
+
+    monkeypatch.setattr(context, "_run_digest", run)
+    context._digest_deadline = 400.0
+
+    assert context.maybe_run_weekly_digest() == {
+        "sent": 0,
+        "failed": 1,
+        "deferred": 0,
+    }
+    assert context._digest_deadline is None
+    assert "weekly digest failed" in caplog.text
+
+    retried = context.maybe_run_weekly_digest()
+
+    assert attempts[failing_kind] == 2
+    assert retried == {
+        "sent": 2 if failing_kind == "renewal" else 1,
+        "failed": 0,
+        "deferred": 0,
     }
 
 
