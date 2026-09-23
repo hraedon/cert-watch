@@ -6,7 +6,10 @@ Imports the standard library only.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from cert_watch.database import Alert
 
 LEAF_THRESHOLDS = (14, 7, 3, 1)
 
@@ -18,6 +21,138 @@ URGENT_THRESHOLD_DAYS = 3
 SHORT_CERT_LIFETIME_DAYS = 90
 SHORT_LIFETIME_LEAF_PCT = (50, 25, 10)
 SHORT_LIFETIME_CHAIN_PCT = (50, 25, 10)
+
+
+FAILURE_LABELS = {
+    "blocked": "Blocked by the destination policy before sending",
+    "dns": "The SMTP destination could not be resolved",
+    "tls": "TLS negotiation or certificate validation failed",
+    "authentication": "The SMTP server rejected authentication",
+    "no_recipients": "No valid email recipients were available",
+    "recipients_refused": "The SMTP server refused recipients",
+    "smtp_rejected": "The SMTP server rejected the request",
+    "http_rejected": "The webhook returned an unsuccessful HTTP status",
+    "timeout": "The transport timed out",
+    "invalid_channel": "The webhook channel configuration was invalid",
+    "transport": "The transport failed; sensitive diagnostic text is not retained",
+    "unknown": "The transport reported failure without further safe details",
+}
+
+SendOutcome = Literal["accepted", "partial", "failed", "blocked"]
+
+
+@dataclass(frozen=True)
+class SendResult:
+    """Sanitized result of one outbound transport attempt."""
+
+    outcome: SendOutcome
+    reason: str = ""
+    reached_transport: bool = True
+    accepted: tuple[str, ...] = ()
+    refused: tuple[str, ...] = ()
+    http_status: int | None = None
+    operator_message: str = ""
+
+    def __post_init__(self) -> None:
+        if self.outcome not in {"accepted", "partial", "failed", "blocked"}:
+            raise ValueError(f"unknown delivery outcome: {self.outcome!r}")
+        if self.reason and self.reason not in FAILURE_LABELS:
+            raise ValueError(f"unknown delivery failure reason: {self.reason!r}")
+
+    @property
+    def delivered(self) -> bool:
+        return self.outcome in ("accepted", "partial")
+
+    def __bool__(self) -> bool:
+        """Preserve boolean call sites while shims remain during plan 058."""
+        return self.delivered
+
+
+@dataclass(frozen=True)
+class OutboundMessage:
+    """Transport-ready content, detached from the mutable database Alert row."""
+
+    subject: str
+    body: str
+    severity: str
+    cert_id: str = ""
+    cert_subject: str = ""
+    hostname: str = ""
+    threshold_days: int | None = None
+    status: str = "pending"
+    trigger_cert_id: str | None = None
+    recipients: tuple[str, ...] = ()
+    global_recipients: tuple[str, ...] = ()
+    queued_recipients: tuple[str, ...] = ()
+
+    @classmethod
+    def from_alert(
+        cls,
+        alert: Alert,
+        *,
+        recipients: tuple[str, ...] = (),
+        global_recipients: tuple[str, ...] = (),
+    ) -> OutboundMessage:
+        queued = tuple(alert.extra_recipients)
+        return cls(
+            subject=f"[cert-watch] {alert.alert_type}: {alert.message[:60]}",
+            body=alert.message,
+            severity=alert.alert_type,
+            cert_id=alert.cert_id,
+            cert_subject=alert.subject,
+            hostname=alert.hostname,
+            threshold_days=alert.threshold_days,
+            status=alert.status,
+            trigger_cert_id=alert.trigger_cert_id,
+            recipients=recipients,
+            global_recipients=global_recipients,
+            queued_recipients=(
+                tuple(address for address in recipients if address in queued)
+                if recipients
+                else queued
+            ),
+        )
+
+    @classmethod
+    def from_digest(
+        cls,
+        *,
+        subject: str,
+        body: str,
+        severity: str,
+        idempotency_key: str,
+        recipients: tuple[str, ...] = (),
+    ) -> OutboundMessage:
+        return cls(
+            subject=subject,
+            body=body,
+            severity=severity,
+            cert_id=idempotency_key,
+            cert_subject=subject,
+            recipients=recipients,
+        )
+
+
+_LEGACY_WEBHOOK_CHANNELS = {
+    "generic",
+    "slack",
+    "discord",
+    "teams",
+    "pagerduty",
+    "alertmanager",
+}
+
+
+def normalize_channel(channel: str) -> str:
+    """Return the unified display name for an append-only ledger channel."""
+    if channel in _LEGACY_WEBHOOK_CHANNELS:
+        return f"webhook:{channel}"
+    if channel == "webhook":
+        # Before unified channel names, this was the fallback for Alertmanager
+        # and unrecognized kinds. Generic webhooks were stored as ``generic``,
+        # so guessing generic here would rewrite the historical meaning.
+        return "webhook:unspecified"
+    return channel
 
 
 @dataclass

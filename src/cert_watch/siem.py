@@ -29,41 +29,42 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import SysLogHandler
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from cert_watch.config import Settings
 
 logger = logging.getLogger("cert_watch.siem")
 
 
 def _instance_id() -> str:
-    return os.environ.get("CERT_WATCH_INSTANCE_ID") or socket.gethostname()
+    return _get_exporter().instance_id
 
 
 class SiemExporter:
     """Builds the configured sinks once from the environment and fans events out."""
 
-    def __init__(self) -> None:
-        from cert_watch.config import read_secret
+    def __init__(self, settings: Settings | None = None) -> None:
+        if settings is None:
+            from cert_watch.config import Settings
 
-        self.syslog_host = os.environ.get("CERT_WATCH_SYSLOG_HOST", "").strip()
-        try:
-            self.syslog_port = int(os.environ.get("CERT_WATCH_SYSLOG_PORT", "514") or "514")
-        except ValueError:
-            self.syslog_port = 514
-        self.syslog_proto = os.environ.get("CERT_WATCH_SYSLOG_PROTO", "udp").lower()
+            settings = Settings.from_env()
 
-        self.hec_url = os.environ.get("CERT_WATCH_HEC_URL", "").strip()
-        self.hec_token = read_secret("CERT_WATCH_HEC_TOKEN") or ""
-        self.hec_index = os.environ.get("CERT_WATCH_HEC_INDEX", "").strip()
-        self.hec_sourcetype = os.environ.get("CERT_WATCH_HEC_SOURCETYPE", "cert_watch").strip()
-
-        self.eventlog_requested = os.environ.get("CERT_WATCH_EVENTLOG", "") == "1"
-        self.eventlog_source = os.environ.get("CERT_WATCH_EVENTLOG_SOURCE", "cert-watch")
+        self.instance_id = settings.instance_id
+        self.syslog_host = settings.syslog_host
+        self.syslog_port = settings.syslog_port
+        self.syslog_proto = settings.syslog_proto
+        self.hec_url = settings.hec_url
+        self.hec_token = settings.hec_token
+        self.hec_index = settings.hec_index
+        self.hec_sourcetype = settings.hec_sourcetype
+        self.eventlog_requested = settings.eventlog_requested
+        self.eventlog_source = settings.eventlog_source
 
         self._syslog: logging.Logger | None = None
         self._pool: ThreadPoolExecutor | None = None
@@ -220,6 +221,15 @@ def reset_exporter() -> None:
         if _exporter is not None:
             _exporter.close()
         _exporter = None
+
+
+def configure_exporter(settings: Any) -> None:
+    """Replace the existing exporter with one built from process Settings."""
+    global _exporter
+    with _exporter_lock:
+        if _exporter is not None:
+            _exporter.close()
+        _exporter = SiemExporter(settings)
 
 
 def siem_enabled() -> bool:

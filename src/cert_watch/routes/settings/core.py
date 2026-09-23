@@ -9,8 +9,8 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 
-from cert_watch.config import Settings
-from cert_watch.middleware import require_admin_form
+from cert_watch.auth.guards import MutationGuard, admin_settings_form
+from cert_watch.config import Settings, invalidate_settings, resolve_and_publish_settings
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes.settings.config import _SENSITIVE_KEYS, _get_encryption_key
 
@@ -28,14 +28,26 @@ def _sanitize_test_error(msg: str) -> str:
     return _IP_ADDR_RE.sub("<redacted>", msg)
 
 
+def settings_tab_form(tab: str) -> MutationGuard:
+    """The guard for a POST from the Settings *tab* page (see
+    :func:`~cert_watch.auth.guards.admin_settings_form`)."""
+    return admin_settings_form(f"/settings?tab={tab}")
+
+
 def _rebuild_settings(request: Request, db_path: Path) -> None:
     """Rebuild Settings from env + kv_store and update app.state."""
     enc_key = _get_encryption_key(request)
-    s = Settings.from_env_with_kv(db_path, encryption_key=enc_key)
-    context = getattr(request.app.state, "scheduler_context", None)
-    if context is not None:
-        context.update_settings(s)
-    request.app.state.settings = s
+    # Every persisted settings save advances the generation.  A rebuild that
+    # started before this save will then be refused when it tries to publish.
+    invalidate_settings(db_path)
+
+    def apply(s: Settings) -> None:
+        context = getattr(request.app.state, "scheduler_context", None)
+        if context is not None:
+            context.update_settings(s, publish=False)
+        request.app.state.settings = s
+
+    resolve_and_publish_settings(db_path, encryption_key=enc_key, apply=apply)
 
 
 async def _save_config_section(
@@ -51,19 +63,11 @@ async def _save_config_section(
     *encrypt*  – when True, sensitive keys (members of ``_SENSITIVE_KEYS``)
                    that are non-blank are stored encrypted (BC-082).
     *rebuild*  – when True, ``_rebuild_settings`` is called after saving.
+
+    Performs no authorization: the calling route declares
+    ``Depends(settings_tab_form(tab_name))``.
     """
-    admin_err = require_admin_form(request)
-    if admin_err:
-        return admin_err
-
     from cert_watch.database import get_write_lock, kv_set, kv_set_secret
-    from cert_watch.middleware import check_csrf
-
-    csrf_err = await check_csrf(request)
-    if csrf_err:
-        return RedirectResponse(
-            url=f"/settings?tab={tab_name}&error={csrf_err}", status_code=303
-        )
 
     db = _db_path(request)
     form = await request.form()

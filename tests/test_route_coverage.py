@@ -755,9 +755,9 @@ def test_caa_check_with_error(monkeypatch, reload_app):
 
 def test_metrics_unauthorized(reload_app, monkeypatch):
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.auth.request_context as reqctx_mod
 
-    monkeypatch.setattr(mw, "_METRICS_TOKEN", "secret-token")
+    monkeypatch.setattr(reqctx_mod, "_METRICS_TOKEN", "secret-token")
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics")
     assert r.status_code == 401
@@ -766,9 +766,9 @@ def test_metrics_unauthorized(reload_app, monkeypatch):
 
 def test_metrics_authorized(reload_app, monkeypatch):
     app_mod = reload_app()
-    import cert_watch.middleware as mw
+    import cert_watch.auth.request_context as reqctx_mod
 
-    monkeypatch.setattr(mw, "_METRICS_TOKEN", "secret-token")
+    monkeypatch.setattr(reqctx_mod, "_METRICS_TOKEN", "secret-token")
     with TestClient(app_mod.app) as client:
         r = client.get("/metrics", headers={"Authorization": "Bearer secret-token"})
     assert r.status_code == 200

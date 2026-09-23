@@ -10,9 +10,9 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.auth.guards import require_auth
 from cert_watch.compliance import build_compliance_report, report_to_csv_rows, report_to_dict
 from cert_watch.database import list_dashboard_page
-from cert_watch.middleware import require_auth
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _csv_safe, _db_path
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth

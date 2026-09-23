@@ -8,11 +8,18 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import SqliteHostRepository, get_write_lock
-from cert_watch.middleware import require_admin_write, require_auth, require_write
-from cert_watch.routes._deps import IdParam, _db_path
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
-from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links
+from cert_watch.routes._deps import IdParam, _db_path, acting_auth
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
+from cert_watch.routes.api._shared import (
+    JsonBodyError,
+    _normalize_pagination,
+    _pagination_links,
+    json_body,
+    tags_from_json_body,
+)
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
     HostOwnershipUpdate,
@@ -22,7 +29,6 @@ from cert_watch.services.host_ownership import (
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
     update_host_notes,
     update_host_tags,
 )
@@ -96,37 +102,36 @@ def api_list_hosts(
 
 @router.patch("/api/hosts/{host_id}/owner")
 async def api_update_host_owner(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     """Update owner/contact and renewal status for a host."""
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
+    raw = await request.body()
 
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
-
-    if not isinstance(body, dict):
-        return JSONResponse(content={"error": "JSON body must be an object"}, status_code=400)
+    def parse() -> HostOwnershipUpdate:
+        body = json_body(raw)
+        return HostOwnershipUpdate(
+            owner_name=body.get("owner_name"),
+            owner_email=body.get("owner_email"),
+            owner_slack=body.get("owner_slack"),
+            renewal_status=body.get("renewal_status"),
+            renewal_method=body.get("renewal_method"),
+            runbook_url=body.get("runbook_url"),
+        )
 
     try:
         updated = update_host_ownership(
             db,
             host_id,
-            HostOwnershipUpdate(
-                owner_name=body.get("owner_name"),
-                owner_email=body.get("owner_email"),
-                owner_slack=body.get("owner_slack"),
-                renewal_status=body.get("renewal_status"),
-                renewal_method=body.get("renewal_method"),
-                runbook_url=body.get("runbook_url"),
-            ),
+            parse,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except JsonBodyError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
     except HostOwnershipValidationError as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=400)
     except HostNotFoundError:
@@ -147,28 +152,22 @@ async def api_update_host_owner(
 
 @router.patch("/api/hosts/{host_id}/notes")
 async def api_update_host_notes(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
-    if not isinstance(body, dict):
-        return JSONResponse(content={"error": "JSON body must be an object"}, status_code=400)
-    notes = body.get("notes", "")
+    raw = await request.body()
     try:
         updated_notes = update_host_notes(
             db,
             host_id,
-            notes,
+            lambda: json_body(raw).get("notes", ""),
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
-    except ResourceMetadataValidationError as exc:
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except (JsonBodyError, ResourceMetadataValidationError) as exc:
         return JSONResponse(content={"error": str(exc)}, status_code=400)
     except ResourceMetadataNotFoundError:
         return JSONResponse(content={"error": "not found"}, status_code=404)
@@ -177,41 +176,23 @@ async def api_update_host_notes(
 
 @router.put("/api/hosts/{host_id}/tags")
 async def api_set_host_tags(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
-    denied = scope_write_denied(request, db, host_id=host_id)
-    if denied:
-        return JSONResponse(status_code=403, content={"error": denied})
-    try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
-    from cert_watch.routes.api._shared import _tags_from_body
-
-    tags = _tags_from_body(body)
-    if tags is None:
-        return JSONResponse(
-            content={"error": "tags must be a string or list of strings"}, status_code=400
-        )
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return JSONResponse(content={"error": str(exc)}, status_code=400)
-
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return JSONResponse(status_code=403, content={"error": new_tags_denied})
+    raw = await request.body()
     try:
         result = update_host_tags(
             db,
             host_id,
-            normalized,
+            lambda: tags_from_json_body(raw),
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return JSONResponse(status_code=403, content={"error": str(exc)})
+    except (JsonBodyError, ResourceMetadataValidationError) as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
     except ResourceMetadataNotFoundError:
         return JSONResponse(content={"error": "not found"}, status_code=404)
     return JSONResponse(content={"id": host_id, "tags": list(result.tags)})
@@ -236,7 +217,7 @@ def api_get_host_issuers(
 
 @router.put("/api/hosts/{host_id}/issuers")
 async def api_set_host_issuers(
-    host_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    host_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     """Update the expected-issuer CN allowlist for a host (WI-007).
 
@@ -278,13 +259,13 @@ async def api_set_host_issuers(
         if host is None:
             return JSONResponse(content={"error": "host not found"}, status_code=404)
         repo.set_expected_issuers(host_id, issuers_csv)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="host.set_expected_issuers",
-            target_type="host",
-            target_id=host_id,
-            detail={"expected_issuers": issuers_list},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="host.set_expected_issuers",
+        target_type="host",
+        target_id=host_id,
+        detail={"expected_issuers": issuers_list},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"id": host_id, "expected_issuers": issuers_list})

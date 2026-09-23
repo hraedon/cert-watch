@@ -9,13 +9,13 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.alerting.transports.webhook import send_webhook
+from cert_watch.auth.guards import require_auth, write_guard
 from cert_watch.database import (
     Alert,
     list_calendar,
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes._scoped import scope_tags_from_auth
 
@@ -25,7 +25,7 @@ router = APIRouter()
 
 
 @router.post("/api/webhook/test")
-async def api_webhook_test(request: Request, _auth: str = Depends(require_write)) -> JSONResponse:
+async def api_webhook_test(request: Request, _auth: str = Depends(write_guard)) -> JSONResponse:
     """Send a test payload to the configured webhook URL."""
     settings = _get_settings(request)
     # Configuration validation resolves the destination host, and delivery is
@@ -44,13 +44,13 @@ async def api_webhook_test(request: Request, _auth: str = Depends(require_write)
         message="[cert-watch] Webhook test — verify your webhook configuration.",
         threshold_days=0,
     )
-    success = await asyncio.to_thread(send_webhook, test_alert, webhook_cfg)
-    if success:
+    result = await asyncio.to_thread(send_webhook, test_alert, webhook_cfg)
+    if result:
         return JSONResponse(content={"status": "ok", "message": "webhook test delivered"})
     return JSONResponse(
         content={
             "status": "error",
-            "message": test_alert.error_message or "webhook delivery failed",
+            "message": result.operator_message or "webhook delivery failed",
         },
         status_code=502,
     )

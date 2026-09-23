@@ -610,9 +610,6 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
     from cert_watch.routes.dashboard import flush_alert_queue
     from cert_watch.scheduler import _cycle_lock
 
-    async def allow_write(_request):
-        return None
-
     async def run_in_worker(fn, *args):
         result = []
         worker = threading.Thread(target=lambda: result.append(fn(*args)))
@@ -621,7 +618,6 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
         return result[0]
 
     process = Mock(return_value={"sent": 0, "failed": 0, "deferred": 0})
-    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
     monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
     monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
     monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
@@ -666,10 +662,6 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
 
     thread_ids = {}
 
-    async def allow_write(_request):
-        thread_ids["event_loop"] = threading.get_ident()
-        return None
-
     def process_pending(*_args, **_kwargs):
         thread_ids["delivery"] = threading.get_ident()
         return {"sent": 0, "failed": 0, "deferred": 0}
@@ -681,7 +673,6 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         worker.join()
         return result[0]
 
-    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
     monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
     monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
     monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
@@ -701,7 +692,11 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         }
     )
 
-    response = asyncio.run(flush_alert_queue(request))
+    async def call_on_event_loop():
+        thread_ids["event_loop"] = threading.get_ident()
+        return await flush_alert_queue(request)
+
+    response = asyncio.run(call_on_event_loop())
 
     assert response.status_code == 303
     assert thread_ids["delivery"] != thread_ids["event_loop"]
@@ -915,6 +910,44 @@ def test_env_still_overrides_kv_store(monkeypatch, tmp_path):
     s = app.state.settings
     assert s.auth_provider == "oauth", "env should override kv_store"
     assert s.ldap_server == "ldap://env.example.com", "env should override kv_store"
+
+
+def test_blank_local_admin_hash_env_preserves_stored_admin(monkeypatch, tmp_path):
+    """A blank Compose placeholder must never trigger break-glass replacement."""
+    from cert_watch.app import create_app
+    from cert_watch.auth import LocalAdminProvider, _scrypt_hash
+    from cert_watch.database import derive_encryption_key, init_schema
+    from cert_watch.database.kv_store import kv_get, kv_set, kv_set_secret
+
+    data_dir = tmp_path / "bc159-blank-local-admin"
+    data_dir.mkdir()
+    db_path = data_dir / "cert-watch.sqlite3"
+    auth_secret = "a" * 64
+    encryption_key = derive_encryption_key(auth_secret)
+    init_schema(db_path)
+    original_hash = _scrypt_hash("original-password")
+    kv_set(db_path, "local_admin_user", "breakglass")
+    kv_set_secret(db_path, "local_admin_password_hash", original_hash, encryption_key)
+    kv_set(db_path, "setup_complete", "1")
+
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
+    monkeypatch.setenv("CERT_WATCH_HOST", "0.0.0.0")
+    monkeypatch.setenv("CERT_WATCH_AUTH_SECRET", auth_secret)
+    monkeypatch.setenv("CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH", "")
+
+    app = create_app()
+    with TestClient(app) as client:
+        assert client.get("/login").status_code == 200
+
+    assert isinstance(app.state.auth_provider, LocalAdminProvider)
+    assert app.state.settings.local_admin_user == "breakglass"
+    assert app.state.settings.local_admin_password_hash == original_hash
+    assert kv_get(db_path, "local_admin_user") == "breakglass"
+    assert (
+        kv_get(db_path, "local_admin_password_hash", encryption_key=encryption_key)
+        == original_hash
+    )
+    assert not (data_dir / "initial-admin-password").exists()
 
 
 def test_no_kv_store_falls_back_to_env_only(monkeypatch, tmp_path):

@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
 from cert_watch.routes.settings.config import _ALERT_KEYS
-from cert_watch.routes.settings.core import _save_config_section
+from cert_watch.routes.settings.core import _save_config_section, settings_tab_form
 
 router = APIRouter()
 
 
 @router.post("/settings/alerts")
-async def save_alert_config(request: Request) -> RedirectResponse:
+async def save_alert_config(
+    request: Request, _auth: str = Depends(settings_tab_form("alerts")),
+) -> RedirectResponse:
     # encrypt=True so webhook_headers (a SENSITIVE_SETTING_KEY) is stored
     # encrypted at rest via kv_set_secret. Other alert keys are non-sensitive
     # and pass through kv_set unchanged regardless of this flag.

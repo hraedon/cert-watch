@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import admin_write_guard, require_admin, require_auth
 from cert_watch.database import (
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
@@ -16,7 +17,6 @@ from cert_watch.database import (
     get_write_lock,
     list_alerts_with_subject,
 )
-from cert_watch.middleware import require_admin, require_admin_write, require_auth
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
@@ -69,7 +69,7 @@ def api_list_alert_groups(request: Request, _auth: str = Depends(require_admin))
 
 @router.post("/api/alert-groups")
 async def api_create_alert_group(
-    request: Request, _auth: str = Depends(require_admin_write)
+    request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     try:
@@ -129,16 +129,16 @@ async def api_create_alert_group(
             name, recipients_raw, match_tags_raw, webhook_url,
             threshold_days=threshold_days, digest_cadence_days=digest_cadence_days,
         )
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.create",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
-                    "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.create",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"name": name, "recipients": recipients_raw, "match_tags": match_tags_raw,
+                "threshold_days": threshold_days, "digest_cadence_days": digest_cadence_days},
+        source_ip=resolve_source_ip(request),
+    )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g), status_code=201)
 
@@ -157,7 +157,7 @@ def api_get_alert_group(
 
 @router.patch("/api/alert-groups/{group_id}")
 async def api_update_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -238,22 +238,22 @@ async def api_update_alert_group(
             threshold_days=threshold_days,
             digest_cadence_days=digest_cadence_days,
         )
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.update",
-            target_type="alert_group",
-            target_id=group_id,
-            detail=dict(body),
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.update",
+        target_type="alert_group",
+        target_id=group_id,
+        detail=dict(body),
+        source_ip=resolve_source_ip(request),
+    )
     g = repo.get(group_id)
     return JSONResponse(content=_alert_group_json(g))
 
 
 @router.delete("/api/alert-groups/{group_id}")
 async def api_delete_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     repo = SqliteAlertGroupRepository(db)
@@ -263,21 +263,21 @@ async def api_delete_alert_group(
             return JSONResponse(content={"error": "not found"}, status_code=404)
 
         repo.delete(group_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.delete",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"name": g.name},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.delete",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"name": g.name},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "deleted"})
 
 
 @router.post("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_assign_cert_to_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -289,21 +289,21 @@ async def api_assign_cert_to_group(
             return JSONResponse(content={"error": "certificate not found"}, status_code=404)
 
         group_repo.assign_cert(group_id, cert_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.assign_cert",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"cert_id": cert_id},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.assign_cert",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"cert_id": cert_id},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "assigned", "group_id": group_id, "cert_id": cert_id})
 
 
 @router.delete("/api/alert-groups/{group_id}/certs/{cert_id}")
 async def api_unassign_cert_from_group(
-    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(require_admin_write)
+    group_id: IdParam, cert_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     group_repo = SqliteAlertGroupRepository(db)
@@ -312,15 +312,15 @@ async def api_unassign_cert_from_group(
             return JSONResponse(content={"error": "group not found"}, status_code=404)
 
         group_repo.unassign_cert(group_id, cert_id)
-        record_audit(
-            db,
-            actor=resolve_actor(request),
-            action="alert_group.unassign_cert",
-            target_type="alert_group",
-            target_id=group_id,
-            detail={"cert_id": cert_id},
-            source_ip=resolve_source_ip(request),
-        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert_group.unassign_cert",
+        target_type="alert_group",
+        target_id=group_id,
+        detail={"cert_id": cert_id},
+        source_ip=resolve_source_ip(request),
+    )
     return JSONResponse(content={"status": "unassigned", "group_id": group_id, "cert_id": cert_id})
 
 

@@ -7,6 +7,7 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from cert_watch.certificate_model import Certificate
@@ -446,6 +447,20 @@ def _deserialize_policy_set(raw: str) -> PolicySet:
 
 
 def load_policy_set(db_path: str) -> PolicySet:
+    from cert_watch.config import current_settings
+
+    stored = current_settings(Path(db_path)).policy_config
+    if stored is None:
+        return default_policy_set()
+    try:
+        return _deserialize_policy_set(json.dumps(stored))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        logger.warning("Malformed policy data in kv_store, falling back to defaults")
+        return default_policy_set()
+
+
+def load_policy_set_from_store(db_path: str) -> PolicySet:
+    """Load policy directly from kv_store for locked read-modify-write paths."""
     stored = kv_get(db_path, _POLICY_KV_KEY)
     if stored is None:
         return default_policy_set()
@@ -457,8 +472,11 @@ def load_policy_set(db_path: str) -> PolicySet:
 
 
 def save_policy_set(db_path: str, ruleset: PolicySet) -> None:
+    from cert_watch.config import invalidate_settings
+
     with _policy_lock:
         kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+        invalidate_settings(db_path)
 
 
 def save_policy_set_locked(db_path: str, ruleset: PolicySet) -> None:
@@ -469,6 +487,9 @@ def save_policy_set_locked(db_path: str, ruleset: PolicySet) -> None:
     The lock is already held by the caller via :func:`acquire_policy_lock`.
     """
     kv_set(db_path, _POLICY_KV_KEY, _serialize_policy_set(ruleset))
+    from cert_watch.config import invalidate_settings
+
+    invalidate_settings(db_path)
 
 
 class acquire_policy_lock:

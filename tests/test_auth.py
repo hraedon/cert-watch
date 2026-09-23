@@ -142,6 +142,24 @@ def test_validate_session_env_ttl_overrides_module_constant(monkeypatch):
     assert validate_session(token) == "ttl-env-wins"
 
 
+def test_validate_session_caches_env_settings_resolution(monkeypatch):
+    monkeypatch.setenv("CERT_WATCH_SESSION_TTL", "99998")
+    original = Settings.from_env.__func__
+    calls = 0
+
+    def counted(cls):
+        nonlocal calls
+        calls += 1
+        return original(cls)
+
+    monkeypatch.setattr(Settings, "from_env", classmethod(counted))
+    token = create_session("ttl-cached")
+
+    assert validate_session(token) == "ttl-cached"
+    assert validate_session(token) == "ttl-cached"
+    assert calls == 1
+
+
 def test_validate_session_no_ttl_no_env_uses_module_constant(monkeypatch):
     monkeypatch.delenv("CERT_WATCH_SESSION_TTL", raising=False)
     token = create_session("ttl-module")
@@ -638,7 +656,8 @@ def test_read_secret_missing_file(tmp_path):
     os.environ.pop("TEST_SECRET_MISS", None)
     os.environ["TEST_SECRET_MISS_FILE"] = str(tmp_path / "nonexistent")
     try:
-        assert read_secret("TEST_SECRET_MISS") is None
+        with pytest.raises(ValueError, match="TEST_SECRET_MISS_FILE"):
+            read_secret("TEST_SECRET_MISS")
     finally:
         os.environ.pop("TEST_SECRET_MISS_FILE", None)
 
@@ -2777,7 +2796,7 @@ class TestPasswordLengthCap:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        monkeypatch.setattr("cert_watch.security.csrf._COOKIE_SECURE", False)
         app_mod = reload_app(
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
@@ -2795,7 +2814,7 @@ class TestPasswordLengthCap:
         from cert_watch.auth.local_admin import _scrypt_hash
 
         h = _scrypt_hash("right-pw", n=2**4, r=1, p=1)
-        monkeypatch.setattr("cert_watch.middleware._COOKIE_SECURE", False)
+        monkeypatch.setattr("cert_watch.security.csrf._COOKIE_SECURE", False)
         app_mod = reload_app(
             CERT_WATCH_LOCAL_ADMIN_USER="admin",
             CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH=h,
@@ -2804,7 +2823,7 @@ class TestPasswordLengthCap:
             from starlette.requests import Request as StRequest
 
             from cert_watch.auth import SESSION_COOKIE, create_session
-            from cert_watch.middleware import _request_security
+            from cert_watch.security import _request_security
 
             scope = {
                 "type": "http", "method": "GET", "path": "/",

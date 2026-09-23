@@ -1,4 +1,15 @@
-"""Application services for host notes and resource tags."""
+"""Application services for host notes and resource tags.
+
+Each service takes the acting :class:`~cert_watch.auth.rbac.AuthContext`
+(``auth``; ``None`` for auth-disabled / system callers) and enforces tag scope
+itself, inside the write lock, before it validates or persists anything:
+target scope first, then input validation, then (for tags) that every new tag
+is within scope. Route adapters only translate the exceptions.
+
+An input may be passed as a zero-argument callable (a :data:`Deferred`), which
+runs after the target-scope check: a JSON adapter hands over its body parser,
+so a caller outside the target's scope is refused before its body is judged.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +17,10 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from cert_watch.audit import export_audit, record_audit
+from cert_watch.auth.scope import ensure_new_tags_in_scope, ensure_write_scope
 from cert_watch.database.connection import _connect, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
@@ -37,7 +50,16 @@ class ResourceMetadataNotFoundError(LookupError):
     """The host or certificate being updated does not exist."""
 
 
-def _run_transaction(
+# A value, or a zero-argument callable producing it (raising
+# ResourceMetadataValidationError for bad input) that runs after the scope check.
+type Deferred[T] = T | Callable[[], T]
+
+
+def _value[T](value: Deferred[T]) -> T:
+    return value() if callable(value) else value
+
+
+def _transact(
     db_path: str | Path,
     *,
     persist: Callable[[sqlite3.Connection], bool],
@@ -47,55 +69,61 @@ def _run_transaction(
     detail: dict[str, object],
     actor: str,
     source_ip: str | None,
-) -> None:
-    with get_write_lock():
-        conn = _connect(db_path)
-        try:
-            if not persist(conn):
-                raise ResourceMetadataNotFoundError(f"{target_type} not found")
-            audit_event = record_audit(
-                db_path,
-                actor=actor,
-                action=action,
-                target_type=target_type,
-                target_id=target_id,
-                detail=detail,
-                source_ip=source_ip,
-                conn=conn,
-            )
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-    export_audit(audit_event)
+) -> dict[str, Any] | None:
+    """Persist + audit in one transaction. The caller holds the write lock and
+    calls :func:`export_audit` on the returned event once it is released."""
+    conn = _connect(db_path)
+    try:
+        if not persist(conn):
+            raise ResourceMetadataNotFoundError(f"{target_type} not found")
+        audit_event = record_audit(
+            db_path,
+            actor=actor,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            detail=detail,
+            source_ip=source_ip,
+            conn=conn,
+        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    return audit_event
 
 
 def update_host_notes(
     db_path: str | Path,
     host_id: str,
-    notes: str,
+    notes: Deferred[Any],
     *,
+    auth: Any,
     actor: str,
     source_ip: str | None,
 ) -> str:
-    if not isinstance(notes, str):
-        raise ResourceMetadataValidationError("notes must be a string")
-    if len(notes) > MAX_NOTES_LENGTH:
-        raise ResourceMetadataValidationError("notes too long (max 10000)")
-    _run_transaction(
-        db_path,
-        persist=lambda conn: persist_host_notes(conn, host_id, notes),
-        action="host.update_notes",
-        target_type="host",
-        target_id=host_id,
-        detail={"notes_length": len(notes)},
-        actor=actor,
-        source_ip=source_ip,
-    )
-    return notes
+    with get_write_lock():
+        ensure_write_scope(auth, db_path, host_id=host_id)
+        value = _value(notes)
+        if not isinstance(value, str):
+            raise ResourceMetadataValidationError("notes must be a string")
+        if len(value) > MAX_NOTES_LENGTH:
+            raise ResourceMetadataValidationError("notes too long (max 10000)")
+        event = _transact(
+            db_path,
+            persist=lambda conn: persist_host_notes(conn, host_id, value),
+            action="host.update_notes",
+            target_type="host",
+            target_id=host_id,
+            detail={"notes_length": len(value)},
+            actor=actor,
+            source_ip=source_ip,
+        )
+    export_audit(event)
+    return value
 
 
-def normalize_tags(tags: str) -> str:
+def normalize_tags(tags: Any) -> str:
     if not isinstance(tags, str):
         raise ResourceMetadataValidationError("tags must be a string")
     normalized = format_tags(parse_tags(tags))
@@ -107,44 +135,54 @@ def normalize_tags(tags: str) -> str:
 def update_host_tags(
     db_path: str | Path,
     host_id: str,
-    tags: str,
+    tags: Deferred[Any],
     *,
+    auth: Any,
     actor: str,
     source_ip: str | None,
 ) -> TagUpdateResult:
-    normalized = normalize_tags(tags)
-    _run_transaction(
-        db_path,
-        persist=lambda conn: persist_host_tags(conn, host_id, normalized),
-        action="host.update_tags",
-        target_type="host",
-        target_id=host_id,
-        detail={"tags": normalized},
-        actor=actor,
-        source_ip=source_ip,
-    )
+    with get_write_lock():
+        ensure_write_scope(auth, db_path, host_id=host_id)
+        normalized = normalize_tags(_value(tags))
+        ensure_new_tags_in_scope(auth, normalized)
+        event = _transact(
+            db_path,
+            persist=lambda conn: persist_host_tags(conn, host_id, normalized),
+            action="host.update_tags",
+            target_type="host",
+            target_id=host_id,
+            detail={"tags": normalized},
+            actor=actor,
+            source_ip=source_ip,
+        )
+    export_audit(event)
     return TagUpdateResult(host_id, normalized, tuple(parse_tags(normalized)))
 
 
 def update_certificate_tags(
     db_path: str | Path,
     cert_id: str,
-    tags: str,
+    tags: Deferred[Any],
     *,
+    auth: Any,
     actor: str,
     source_ip: str | None,
 ) -> TagUpdateResult:
-    normalized = normalize_tags(tags)
-    _run_transaction(
-        db_path,
-        persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
-        action="cert.update_tags",
-        target_type="certificate",
-        target_id=cert_id,
-        detail={"tags": normalized},
-        actor=actor,
-        source_ip=source_ip,
-    )
+    with get_write_lock():
+        ensure_write_scope(auth, db_path, cert_id=cert_id)
+        normalized = normalize_tags(_value(tags))
+        ensure_new_tags_in_scope(auth, normalized)
+        event = _transact(
+            db_path,
+            persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
+            action="cert.update_tags",
+            target_type="certificate",
+            target_id=cert_id,
+            detail={"tags": normalized},
+            actor=actor,
+            source_ip=source_ip,
+        )
+    export_audit(event)
     effective = SqliteCertificateRepository(db_path).effective_tags(cert_id)
     return TagUpdateResult(
         cert_id,

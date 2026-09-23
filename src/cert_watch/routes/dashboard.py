@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import get_auth_context, write_form_guard, write_guard
 from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
@@ -29,17 +30,11 @@ from cert_watch.database import (
     pivot_urgency_stats,
 )
 from cert_watch.database.connection import _connect
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
-    get_auth_context,
-    get_csrf_context,
-    require_write,
-    require_write_form,
-)
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
+from cert_watch.security.csrf import get_csrf_context
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -297,7 +292,7 @@ def dashboard(
 async def mark_alert_read(
     request: Request,
     alert_id: IdParam,
-    _auth: str = Depends(require_write),
+    _auth: str = Depends(write_guard),
 ) -> dict[str, Any] | JSONResponse:
     """Mark an alert as read."""
     db = _db_path(request)
@@ -321,12 +316,10 @@ async def mark_alert_read(
 
 
 @router.post("/alerts/flush")
-async def flush_alert_queue(request: Request) -> RedirectResponse:
+async def flush_alert_queue(
+    request: Request, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     """Flush the pending alert queue: trigger immediate send via process_pending()."""
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
-
     if not check_rate_limit(f"flush_alerts:{_extract_client_ip(request)}", 3, 300):
         return RedirectResponse(
             url="/alerts?error=rate+limited%3A+too+many+flush+requests",
@@ -390,12 +383,10 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
 
 
 @router.post("/alerts/mark-all-read")
-async def mark_all_alerts_read(request: Request) -> RedirectResponse:
+async def mark_all_alerts_read(
+    request: Request, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     """Mark all unread alerts as read."""
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
-
     if not check_rate_limit(f"mark_all_read:{_extract_client_ip(request)}", 10, 300):
         return RedirectResponse(
             url="/alerts?error=rate+limited%3A+too+many+mark-all-read+requests",

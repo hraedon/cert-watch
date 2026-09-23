@@ -6,8 +6,10 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
+from cert_watch.alerting.model import SendResult
 from cert_watch.auth import AuthResult
 
 
@@ -104,3 +106,36 @@ def test_webhook_test_delivery_is_offloaded(reload_app, monkeypatch):
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert fake_send_webhook in submitted
+
+
+@pytest.mark.parametrize(
+    "operator_message",
+    [
+        "webhook URL blocked by SSRF policy: blocked address",
+        "<urlopen error name resolution failed>",
+        "HTTP Error 400: Bad Request",
+        "HTTP Error 503: Service Unavailable",
+        "webhook timed out",
+        "<urlopen error [Errno 111] connection refused>",
+    ],
+)
+def test_webhook_test_returns_transport_diagnostic(
+    reload_app, monkeypatch, operator_message,
+):
+    from cert_watch.routes.api import insights
+
+    monkeypatch.setattr("cert_watch.http_client.validate_webhook_url", lambda *a, **k: None)
+    monkeypatch.setattr(
+        insights,
+        "send_webhook",
+        lambda *_a, **_k: SendResult(
+            "failed", "transport", operator_message=operator_message
+        ),
+    )
+    app_mod = reload_app(ALERT_WEBHOOK_URL="https://hooks.example.com/cert-watch")
+
+    with TestClient(app_mod.app) as client:
+        response = client.post("/api/webhook/test")
+
+    assert response.status_code == 502
+    assert response.json() == {"status": "error", "message": operator_message}

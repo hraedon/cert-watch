@@ -10,13 +10,14 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from cert_watch.auth.guards import admin_write_guard, require_auth
 from cert_watch.database import SqliteAlertRepository
-from cert_watch.middleware import require_admin_write, require_auth
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,
     acquire_policy_lock,
     load_policy_set,
+    load_policy_set_from_store,
     save_policy_set_locked,
 )
 from cert_watch.routes._deps import _csv_safe, _db_path
@@ -51,7 +52,7 @@ def api_get_policy(
 
 @router.put("/api/policy")
 async def api_put_policy(
-    request: Request, _auth: str = Depends(require_admin_write)
+    request: Request, _auth: str = Depends(admin_write_guard)
 ) -> JSONResponse:
     try:
         body = await request.json()
@@ -129,7 +130,7 @@ async def api_put_policy(
     # Merge incoming rules into the current policy under the write lock (WI-017).
     # This prevents two concurrent PUTs from losing one writer's changes.
     with acquire_policy_lock():
-        current = load_policy_set(str(db))
+        current = load_policy_set_from_store(str(db))
         current_by_id = {r.rule_id: r for r in current.rules}
         for r in ruleset.rules:
             current_by_id[r.rule_id] = r

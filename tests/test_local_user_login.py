@@ -34,10 +34,10 @@ def _seed_local_admin(tmp_path):
 
 
 def _no_secure_cookies(monkeypatch):
-    import cert_watch.middleware as mw
     import cert_watch.routes.auth as auth_routes
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    monkeypatch.setattr(csrf_mod, "_COOKIE_SECURE", False)
     monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
 
 
@@ -107,6 +107,7 @@ def test_settings_build_auth_provider_passes_db_path(tmp_path, monkeypatch):
     _seed_local_admin(tmp_path)
     from cert_watch.config import Settings
 
-    s = Settings.from_env()
+    base = Settings.from_env()
+    s = Settings.from_env_with_kv(base.db_path)
     provider = s.build_auth_provider()
     assert getattr(provider, "db_path", None) == str(s.db_path)

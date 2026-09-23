@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -279,6 +279,61 @@ class TestEmitEvent:
             results.append(emit_event(e, db, config=c))
         assert all(r is not None for r in results)
 
+    def test_delivery_uses_published_settings_without_resolution_or_write_lock(
+        self, db, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        from cert_watch.config import Settings, publish_settings
+        from cert_watch.events import _write_event_log
+
+        published = Settings(
+            db_path=db,
+            data_dir=db.parent,
+            allow_private=False,
+            allowed_subnets=("10.20.0.0/16",),
+        )
+        publish_settings(published)
+
+        def unexpected_resolution(cls, *args, **kwargs):
+            raise AssertionError("event delivery re-resolved Settings")
+
+        def unexpected_write_lock(*args, **kwargs):
+            raise AssertionError("event delivery took the global write lock")
+
+        monkeypatch.setattr(
+            Settings, "from_env_with_kv", classmethod(unexpected_resolution)
+        )
+        monkeypatch.setattr(
+            "cert_watch.database.get_write_lock", unexpected_write_lock
+        )
+        event = Event(
+            event_type="cert_added",
+            timestamp=datetime.now(UTC),
+            payload={"hostname": "example.test", "cert_id": "cert-1"},
+            source="scan",
+        )
+        row_id = _write_event_log(db, event, "pending")
+        assert row_id is not None
+
+        with patch(
+            "cert_watch.alerting.transports.webhook.WebhookTransport"
+        ) as transport_cls:
+            transport_cls.return_value.send.return_value = SimpleNamespace(
+                delivered=True, operator_message=None
+            )
+            _deliver_webhook(
+                event,
+                EventStreamConfig(webhook_url="https://example.test/hook"),
+                db,
+                row_id,
+            )
+
+        webhook_config = transport_cls.call_args.args[0]
+        assert webhook_config.allow_private is False
+        assert webhook_config.allowed_subnets == ("10.20.0.0/16",)
+        assert get_events(db)[0]["delivery_status"] == "delivered"
+
 
 class TestGetEvents:
     def test_filter_by_event_type(self, db):
@@ -541,6 +596,55 @@ class TestDeliverWebhookErrorHandling:
             ).fetchone()
         assert row["delivery_status"] == "failed"
         assert "boom" in (row["error_message"] or "")
+
+    def test_empty_retry_diagnostic_keeps_last_nonempty_message(self, db, monkeypatch):
+        from cert_watch.alerting.model import SendResult
+        from cert_watch.alerting.transports.webhook import WebhookTransport
+        from cert_watch.database.connection import _connect
+
+        row_id = emit_event(
+            Event(
+                event_type="cert_added",
+                timestamp=datetime.now(UTC),
+                payload={"cert_id": "1"},
+                source="scan",
+            ),
+            db,
+            config=EventStreamConfig(webhook_url="https://example.com/hook"),
+            _defer_webhook=True,
+        )
+        assert row_id is not None
+        monkeypatch.setattr(
+            WebhookTransport,
+            "send",
+            Mock(side_effect=[
+                SendResult(
+                    "failed",
+                    "transport",
+                    operator_message="first useful diagnostic",
+                ),
+                SendResult("failed", "http_rejected", http_status=200),
+                SendResult("failed", "http_rejected", http_status=200),
+            ]),
+        )
+
+        _deliver_webhook(
+            Event(
+                event_type="cert_added",
+                timestamp=datetime.now(UTC),
+                payload={"cert_id": "1"},
+                source="scan",
+            ),
+            EventStreamConfig(webhook_url="https://example.com/hook"),
+            db,
+            row_id,
+        )
+
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT error_message FROM event_log WHERE id = ?", (row_id,)
+            ).fetchone()
+        assert row["error_message"] == "first useful diagnostic"
 
 
 # ── Startup purge error handling ────────────────────────────────────────────

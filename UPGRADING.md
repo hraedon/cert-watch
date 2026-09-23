@@ -50,12 +50,54 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Review saved configuration before upgrading.** Configuration resolution is
+  now uniform across startup, the Settings UI, and background work. This changes
+  several previously inconsistent cases:
+  - Environment values now beat saved GUI values for `SMTP_PORT`,
+    `LDAP_CONNECT_TIMEOUT`, and `ALERT_DIGEST_ONLY`. If both are configured, the
+    environment value will be active after upgrade.
+  - GUI saves for `oauth_scope`, `ldap_user_filter`, and `webhook_kind` were
+    persisted but silently ignored; they now take effect. **Review those saved
+    values before upgrading**, especially on an environment-configured LDAP,
+    OAuth, or webhook deployment.
+  - Blank or whitespace-only environment values for GUI-backed settings are
+    treated as unset, so Compose placeholders such as `SMTP_PASSWORD: ""` no
+    longer hide the saved value or lock its UI control. An empty `_FILE` variable
+    is also unset. A non-empty `<NAME>_FILE` setting is explicit configuration:
+    startup now fails closed if the file is missing, unreadable, a directory, or
+    empty, rather than continuing with an empty secret or a saved fallback.
+  - Out-of-range integers in `kv_store` now fall back to the field default;
+    persisted booleans accept `true` and `True` as true in addition to `1`.
+- **Windows/IIS open forms fail once after upgrade when
+  `CERT_WATCH_CSRF_SECRET_FILE` is configured.** IIS already writes this setting,
+  but older releases ignored it and derived the CSRF key from the auth secret.
+  The file is now honoured, so existing CSRF cookies and any forms already open
+  in a browser were signed with the old key. Reload the page and submit again;
+  sessions and API keys are unaffected.
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions
   minted by earlier releases are rejected: they cannot say whether they
   belong to a local account, the break-glass admin or a directory user.
   Expect every user, including the break-glass admin, to land on the sign-in
   page on first visit after the upgrade. API keys are unaffected.
+- **`CERT_WATCH_ADMINS` now restricts admin when no role map is configured.**
+  It was documented as the list of users allowed to reach Settings, but with
+  no role map (neither `CERT_WATCH_ROLE_MAP` nor a Settings → Roles mapping)
+  every directory user was treated as admin, so the list restricted nothing
+  -- and a user outside `CERT_WATCH_WRITE_USERS` could create an API key,
+  including a write-scoped one, and write with it. Now, for directory users
+  with no role map: when `CERT_WATCH_ADMINS` is set, only its members get
+  Settings, API-key management, trust anchors, alert groups and the other
+  admin actions (they are refused with `admin required`); when
+  `CERT_WATCH_WRITE_USERS` is set, only its members (and listed admins) can
+  write, as before. Admin implies write: when only `CERT_WATCH_WRITE_USERS`
+  is set, admin also requires membership in it, so a user who cannot write
+  data can never administer or create API keys. With neither list set,
+  every signed-in user is still full access. The break-glass admin, local accounts and role-map
+  deployments are unaffected. **If you set `CERT_WATCH_ADMINS` and your
+  administrators are not all in it, add them before upgrading** (or move to
+  a role map). API keys minted by now-unlisted users keep working until
+  revoked; review Settings → API keys after upgrading.
 - **Local accounts are authorized by their own role; the Settings → Roles IdP
   mapping now takes effect.** Review both before upgrading.
   - Accounts created in Settings → Users can now sign in (#59; before, every

@@ -13,7 +13,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
-from cert_watch.middleware import require_auth
+from cert_watch.auth.guards import require_auth
 
 router = APIRouter()
 

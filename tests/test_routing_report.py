@@ -258,7 +258,7 @@ def test_diagnostic_does_not_load_settings_migrate_evaluate_or_connect(estate: E
     for module, name in [
         (config.Settings, "from_env"), (database, "init_schema"), (schema, "init_schema"),
         (migrations, "run_pending_migrations"), (expiry_rules, "evaluate_all_certs"),
-        (dispatch, "send_alert"), (dispatch, "send_webhook"),
+        (dispatch.SmtpTransport, "send"), (dispatch.WebhookTransport, "send"),
         (expiry_digest, "send_webhook"), (renewal_digest, "send_webhook"),
         (socket, "create_connection"), (socket.socket, "connect"),
     ]:
