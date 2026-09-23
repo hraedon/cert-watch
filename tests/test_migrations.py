@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import multiprocessing
 import sqlite3
+import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -32,9 +35,33 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()}
 
 
+def _run_concurrent_migration(
+    db_path: str,
+    start: Any,
+    results: Any,
+) -> None:
+    """Spawn-safe worker that widens the pre-migration backup race window."""
+    import cert_watch.migrations.registry  # noqa: F401
+    from cert_watch.database.connection import close_connections
+    from cert_watch.migrations import runner
+
+    original_backup = runner._backup
+
+    def delayed_backup(*args: Any, **kwargs: Any) -> Path:
+        time.sleep(0.5)
+        return original_backup(*args, **kwargs)
+
+    runner._backup = delayed_backup
+    start.wait(timeout=10)
+    try:
+        results.put(runner.run_pending_migrations(db_path, backup=True))
+    finally:
+        close_connections()
+
+
 # v0.6.x baseline DDL — the tables and columns that existed before numbered
-# migrations were introduced. Newer tables/columns are added by ensure_base()
-# (catch-up) and the migration runner during the upgrade under test.
+# migrations were introduced. Newer tables/columns are added only by the
+# migration runner during the upgrade under test.
 _V06X_BASELINE_DDL = """
 CREATE TABLE IF NOT EXISTS certificates (
     id TEXT PRIMARY KEY,
@@ -306,6 +333,53 @@ def test_run_pending_nothing_pending(db_path: Path) -> None:
     assert applied == []
 
 
+def test_concurrent_processes_serialize_migration_startup(tmp_path: Path) -> None:
+    """Two app processes wait their turn and only one applies each migration."""
+    db = tmp_path / "concurrent.sqlite3"
+    init_schema(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("DELETE FROM schema_version WHERE id = '0035'")
+        conn.commit()
+    for old_backup in tmp_path.glob("concurrent-pre-migration-*.sqlite3"):
+        old_backup.unlink()
+
+    ctx = multiprocessing.get_context("spawn")
+    start = ctx.Barrier(2)
+    results = ctx.Queue()
+    processes = [
+        ctx.Process(
+            target=_run_concurrent_migration,
+            args=(str(db), start, results),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=20)
+    try:
+        assert [process.exitcode for process in processes] == [0, 0]
+    finally:
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=5)
+
+    assert sorted([results.get(timeout=2), results.get(timeout=2)]) == [[], ["0035"]]
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM schema_version WHERE id = '0035'"
+        ).fetchone() == (1,)
+
+    backups = list(tmp_path.glob("concurrent-pre-migration-*.sqlite3"))
+    assert len(backups) == 1
+    with sqlite3.connect(str(backups[0])) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM schema_version WHERE id = '0035'"
+        ).fetchone() == (0,)
+
+
 # ---------- AC-3: Pre-migration backup ----------
 
 def test_ct_issuer_first_seen_dropped(db_path: Path) -> None:
@@ -368,6 +442,23 @@ def test_backup_created_before_migration(tmp_path: Path) -> None:
     with sqlite3.connect(str(backup_path)) as conn:
         count = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()[0]
         assert count == 1
+
+
+def test_automatic_backup_names_are_unique(tmp_path: Path) -> None:
+    from cert_watch.migrations.runner import _backup
+
+    db = tmp_path / "unique.sqlite3"
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("CREATE TABLE probe (value TEXT NOT NULL)")
+        conn.execute("INSERT INTO probe VALUES ('preserved')")
+        conn.commit()
+
+    backups = [_backup(db), _backup(db)]
+    assert backups[0] != backups[1]
+    for backup in backups:
+        with sqlite3.connect(str(backup)) as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone() == ("ok",)
+            assert conn.execute("SELECT value FROM probe").fetchone() == ("preserved",)
 
 
 # ---------- AC-4: cert-watch backup round-trip ----------
@@ -629,10 +720,12 @@ def test_backup_cli_subcommand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 def test_migration_0016_adds_chain_status_column(tmp_path):
     from cert_watch.database.schema import ensure_base
+    from cert_watch.migrations.m0016_chain_status import upgrade
 
     db = tmp_path / "test.db"
     ensure_base(db)
     with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "chain_status" in cols
 
@@ -642,10 +735,12 @@ def test_migration_0016_adds_chain_status_column(tmp_path):
 
 def test_migration_0017_adds_caa_columns(tmp_path):
     from cert_watch.database.schema import ensure_base
+    from cert_watch.migrations.m0017_caa_per_scan import upgrade
 
     db = tmp_path / "test.db"
     ensure_base(db)
     with sqlite3.connect(str(db)) as conn:
+        upgrade(conn)
         cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_posture)").fetchall()}
     assert "caa_present" in cols
     assert "caa_records" in cols
@@ -655,10 +750,10 @@ def test_migration_0017_adds_caa_columns(tmp_path):
 
 
 def _mk_pre0031_db(db: Path, *, include_orphan: bool = True) -> None:
-    """Create a DB at the pre-0031 shape: ensure_base + re-add the column the
-    migration is responsible for dropping."""
-    ensure_base(db)
+    """Create a current DB with the pre-0031 notes column restored."""
+    init_schema(db)
     with sqlite3.connect(str(db)) as conn:
+        conn.execute("DROP TABLE schema_version")
         conn.execute(
             "ALTER TABLE certificates ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
         )
@@ -744,6 +839,7 @@ def test_migration_0031_warns_on_orphan_notes(
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
     from cert_watch.certificate_model import Certificate
     from cert_watch.database.repo import SqliteCertificateRepository
+    from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "test.db"
     _mk_pre0031_db(db)
@@ -751,7 +847,7 @@ def test_migration_0031_warns_on_orphan_notes(
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
     with caplog.at_level(logging.WARNING, logger="cert_watch.migrations.0031"):
-        init_schema(db)
+        run_pending_migrations(db, backup=False)
 
     with sqlite3.connect(str(db)) as conn:
         certs_cols = _table_columns(conn, "certificates")
@@ -836,7 +932,7 @@ def _mk_pre0033_db(db: Path) -> None:
     the 0033 column (0034 is stamped so only 0033 stays pending)."""
     ensure_base(db)
     _stamp_feature_branch_migrations(
-        db, (*tuple(f"{number:04d}" for number in range(1, 33)), "0034")
+        db, (*tuple(f"{number:04d}" for number in range(1, 33)), "0034", "0035")
     )
 
 
@@ -930,7 +1026,9 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
 def _mk_pre0034_db(db: Path) -> None:
     """A database whose ledger says 0001–0033 but whose alerts lack the column."""
     ensure_base(db)
-    _stamp_feature_branch_migrations(db, tuple(f"{number:04d}" for number in range(1, 34)))
+    _stamp_feature_branch_migrations(
+        db, (*tuple(f"{number:04d}" for number in range(1, 34)), "0035")
+    )
 
 
 def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -> None:
@@ -975,6 +1073,25 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
     assert run_pending_migrations(db, backup=False) == ["0034"]
 
 
+def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
+    from cert_watch.migrations.m0035_schema_reconciliation import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("ALTER TABLE scan_posture ADD COLUMN tls_verified INTEGER")
+        conn.executemany(
+            "INSERT INTO scan_posture "
+            "(id, cert_id, grade, findings, scanned_at, verify_requested, tls_verified) "
+            "VALUES (?, 'cert', 'A', '[]', '2026-09-22', ?, ?)",
+            (("legacy", None, 1), ("current", 0, 1)),
+        )
+        upgrade(conn)
+        assert "tls_verified" not in _table_columns(conn, "scan_posture")
+        assert conn.execute(
+            "SELECT id, verify_requested FROM scan_posture ORDER BY id"
+        ).fetchall() == [("current", 0), ("legacy", 1)]
+
+
 def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) -> None:
     """Old UI ids 0029/0030 must not suppress the canonical digest table.
 
@@ -987,18 +1104,19 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "old-ui-feature.sqlite3"
-    ensure_base(db)
+    init_schema(db)
     with sqlite3.connect(str(db)) as conn:
         # Reproduce the UI branch's resulting schema: role tiers exist and the
         # notes column is already gone, but the digest ledger did not exist.
         add_role_tiers(conn)
         conn.execute("DROP TABLE digest_deliveries")
+        conn.execute("DROP TABLE schema_version")
         conn.commit()
     _stamp_feature_branch_migrations(
         db, tuple(f"{number:04d}" for number in range(1, 31))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033", "0034"]
+    assert run_pending_migrations(db, backup=False) == ["0031", "0032", "0033", "0034", "0035"]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {
@@ -1022,12 +1140,17 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "old-review-feature.sqlite3"
-    ensure_base(db)
+    init_schema(db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("DROP TABLE schema_version")
+        conn.commit()
     _stamp_feature_branch_migrations(
         db, tuple(f"{number:04d}" for number in range(1, 30))
     )
 
-    assert run_pending_migrations(db, backup=False) == ["0030", "0031", "0032", "0033", "0034"]
+    assert run_pending_migrations(db, backup=False) == [
+        "0030", "0031", "0032", "0033", "0034", "0035"
+    ]
 
     with sqlite3.connect(str(db)) as conn:
         tables = {

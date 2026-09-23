@@ -34,6 +34,10 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Changed
+- **Schema creation now has one source of truth.** Fresh databases and upgrades
+  both traverse the numbered migration chain, each migration commits its schema
+  work and version row atomically, and migration 0035 reconciles objects that
+  older startup code created outside that chain.
 - **Audit action names for tag edits are unified.** The HTML and JSON paths now
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or

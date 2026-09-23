@@ -30,4 +30,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_cert_history_fp"
         " ON cert_history(fingerprint_sha256)"
     )
-    conn.commit()

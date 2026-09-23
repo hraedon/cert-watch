@@ -14,4 +14,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
     if "read" not in cols:
         conn.execute("ALTER TABLE alerts ADD COLUMN read INTEGER NOT NULL DEFAULT 0")
-    conn.commit()

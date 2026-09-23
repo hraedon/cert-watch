@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-DELIVERY_EVENTS_DDL = """
-CREATE TABLE IF NOT EXISTS alert_delivery_events (
+DELIVERY_EVENTS_STATEMENTS = (
+    """CREATE TABLE IF NOT EXISTS alert_delivery_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     attempt_id TEXT NOT NULL,
     alert_id TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
@@ -18,14 +18,15 @@ CREATE TABLE IF NOT EXISTS alert_delivery_events (
     channel TEXT NOT NULL,
     details TEXT NOT NULL,
     UNIQUE (attempt_id, event_kind)
-);
-CREATE INDEX IF NOT EXISTS idx_alert_delivery_events_alert
-    ON alert_delivery_events(alert_id, id DESC);
-CREATE TRIGGER IF NOT EXISTS alert_delivery_events_no_update
-BEFORE UPDATE ON alert_delivery_events BEGIN
-    SELECT RAISE(ABORT, 'delivery observations cannot be edited');
-END;
-"""
+)""",
+    "CREATE INDEX IF NOT EXISTS idx_alert_delivery_events_alert "
+    "ON alert_delivery_events(alert_id, id DESC)",
+    """CREATE TRIGGER IF NOT EXISTS alert_delivery_events_no_update
+    BEFORE UPDATE ON alert_delivery_events BEGIN
+        SELECT RAISE(ABORT, 'delivery observations cannot be edited');
+    END""",
+)
+DELIVERY_EVENTS_DDL = ";\n".join(DELIVERY_EVENTS_STATEMENTS) + ";"
 
 
 def begin_attempt(db_path: str | Path, alert_id: str, channel: str, details: dict[str, Any]) -> str:

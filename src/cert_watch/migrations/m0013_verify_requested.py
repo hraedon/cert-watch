@@ -18,4 +18,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE scan_posture RENAME COLUMN tls_verified TO verify_requested"
         )
-    conn.commit()

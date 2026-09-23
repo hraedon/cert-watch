@@ -99,6 +99,9 @@ from cert_watch.migrations.m0034_alert_trigger_cert_id import (
 from cert_watch.migrations.m0034_alert_trigger_cert_id import (
     upgrade as alert_trigger_cert_id_upgrade,
 )
+from cert_watch.migrations.m0035_schema_reconciliation import (
+    upgrade as schema_reconciliation_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -209,4 +212,9 @@ runner.register(
 runner.register(
     alert_trigger_cert_id_id, alert_trigger_cert_id_description,
     alert_trigger_cert_id_upgrade,
+)
+runner.register(
+    "0035",
+    "reconcile schema objects formerly supplied by ensure_base",
+    schema_reconciliation_upgrade,
 )

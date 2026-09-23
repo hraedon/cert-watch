@@ -43,4 +43,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_users_role_id ON users(role_id)"
     )
-    conn.commit()

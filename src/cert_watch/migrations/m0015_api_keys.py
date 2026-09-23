@@ -25,4 +25,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         )
         """
     )
-    conn.commit()

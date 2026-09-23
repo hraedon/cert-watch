@@ -13,4 +13,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "updated_at TEXT NOT NULL"
         ")"
     )
-    conn.commit()

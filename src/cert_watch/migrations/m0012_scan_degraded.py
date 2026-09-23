@@ -16,4 +16,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE scan_posture ADD COLUMN chain_incomplete INTEGER"
         )
-    conn.commit()

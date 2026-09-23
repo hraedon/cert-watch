@@ -36,6 +36,15 @@ def upgrade(conn: sqlite3.Connection) -> None:
     ensure_digest_delivery_ledger(conn)
     ensure_role_tag_tiers(conn)
 
+    # ``hosts.notes`` was historically supplied by ensure_base() rather than
+    # a numbered migration. Add it here before reading it so genuine 0001
+    # databases with certificate notes can follow the migration chain.
+    host_cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)")}
+    if "notes" not in host_cols:
+        conn.execute(
+            "ALTER TABLE hosts ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+        )
+
     cols = {r[1] for r in conn.execute("PRAGMA table_info(certificates)").fetchall()}
     if "notes" not in cols:
         return  # fresh database: nothing to merge or drop
@@ -82,4 +91,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
 
     if not orphans:
         conn.execute("ALTER TABLE certificates DROP COLUMN notes")
-    conn.commit()

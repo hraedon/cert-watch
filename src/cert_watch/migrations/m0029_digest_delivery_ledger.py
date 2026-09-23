@@ -6,7 +6,7 @@ import sqlite3
 
 
 def upgrade(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+    statements = (
         """
         CREATE TABLE IF NOT EXISTS digest_deliveries (
             digest_key TEXT NOT NULL,
@@ -20,11 +20,12 @@ def upgrade(conn: sqlite3.Connection) -> None:
             updated_at TEXT NOT NULL,
             sent_at TEXT,
             PRIMARY KEY (digest_key, channel, target)
-        );
-        CREATE UNIQUE INDEX IF NOT EXISTS ux_digest_deliveries_idempotency
-            ON digest_deliveries(idempotency_key);
-        CREATE INDEX IF NOT EXISTS idx_digest_deliveries_lease
-            ON digest_deliveries(status, lease_expires_at);
-        """
+        )
+        """,
+        "CREATE UNIQUE INDEX IF NOT EXISTS ux_digest_deliveries_idempotency "
+        "ON digest_deliveries(idempotency_key)",
+        "CREATE INDEX IF NOT EXISTS idx_digest_deliveries_lease "
+        "ON digest_deliveries(status, lease_expires_at)",
     )
-    conn.commit()
+    for statement in statements:
+        conn.execute(statement)

@@ -13,4 +13,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE alert_groups ADD COLUMN digest_cadence_days INTEGER NOT NULL DEFAULT 7"
         )
-    conn.commit()
