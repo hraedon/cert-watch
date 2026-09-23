@@ -73,7 +73,9 @@ def _app(provider: AuthProvider | None = None):
     from cert_watch.app import create_app
     from cert_watch.config import Settings
 
-    return create_app(auth_provider=provider, settings=Settings.from_env())
+    base = Settings.from_env()
+    settings = Settings.from_env_with_kv(base.db_path)
+    return create_app(auth_provider=provider, settings=settings)
 
 
 def _login(client, login_csrf, username, password="password123"):

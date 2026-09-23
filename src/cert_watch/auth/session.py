@@ -16,7 +16,6 @@ import hashlib
 import hmac
 import json
 import logging
-import os
 import secrets
 import time
 from dataclasses import dataclass
@@ -364,8 +363,12 @@ def validate_session(
     if session_ttl is not None:
         ttl = session_ttl
     else:
-        env_ttl = int(os.environ.get("CERT_WATCH_SESSION_TTL", "0"))
-        ttl = env_ttl or getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
+        from cert_watch.config import Settings, setting_env_is_set
+
+        if setting_env_is_set("session_ttl"):
+            ttl = Settings.from_env().session_ttl
+        else:
+            ttl = getattr(_auth_pkg, "SESSION_TTL", SESSION_TTL)
     if (time.time() - info.timestamp) > ttl:
         return None
 

@@ -98,9 +98,9 @@ def _resolve_encryption_key(db_path: str | Path) -> str | None:
     matching the alert path's behavior when the signing key is lost). ``db_path``
     lives under ``data_dir``, so its parent holds ``.auth_secret``.
     """
-    from cert_watch.config.helpers import read_secret
+    from cert_watch.config import Settings
 
-    signing_key = read_secret("CERT_WATCH_AUTH_SECRET")
+    signing_key: str | None = Settings.from_env().auth_secret or None
     if not signing_key:
         secret_file = Path(db_path).parent / ".auth_secret"
         try:
@@ -117,16 +117,21 @@ def _resolve_encryption_key(db_path: str | Path) -> str | None:
 def load_event_config(
     db_path: str | Path, *, encryption_key: str | None = None
 ) -> EventStreamConfig:
-    from cert_watch.database.kv_store import kv_get
+    from cert_watch.config import Settings
 
-    raw = kv_get(db_path, _KV_KEY)
-    cfg = EventStreamConfig.from_json(raw) if raw is not None else EventStreamConfig()
-    # PagerDuty routing key: prefer the dedicated enc:v1: secret (WI-065); fall
-    # back to the legacy plaintext field read by from_json for old blobs.
     if encryption_key is None:
         encryption_key = _resolve_encryption_key(db_path)
-    secret = kv_get(db_path, _KV_ROUTING_KEY, encryption_key)
-    if secret and not (encryption_key is None and secret.startswith("enc:v1:")):
+    settings = Settings.from_env_with_kv(Path(db_path), encryption_key)
+    raw = settings.event_stream_config
+    cfg = (
+        EventStreamConfig.from_json(json.dumps(raw))
+        if raw is not None
+        else EventStreamConfig()
+    )
+    # PagerDuty routing key: prefer the dedicated enc:v1: secret (WI-065); fall
+    # back to the legacy plaintext field read by from_json for old blobs.
+    secret = settings.event_stream_pagerduty_routing_key
+    if secret and not (encryption_key is None and secret.startswith("enc:v")):
         cfg.pagerduty_routing_key = secret
     return cfg
 
@@ -240,18 +245,10 @@ def _resolve_ssrf_policy(db_path: str | Path) -> tuple[bool, tuple[str, ...]]:
     setup wizard. Resolved live at delivery time (not snapshotted into the
     event-stream config) so a policy change takes effect without re-saving it.
     """
-    import os
+    from cert_watch.config import Settings
 
-    from cert_watch.database.kv_store import kv_get
-
-    allow_private = os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1"
-    env_subnets = os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "")
-    if env_subnets.strip():
-        subnets = tuple(s.strip() for s in env_subnets.split(",") if s.strip())
-    else:
-        raw = kv_get(db_path, "allowed_subnets") or ""
-        subnets = tuple(s.strip() for s in raw.split(",") if s.strip())
-    return allow_private, subnets
+    settings = Settings.from_env_with_kv(Path(db_path))
+    return settings.allow_private, settings.allowed_subnets
 
 
 def _deliver_webhook(

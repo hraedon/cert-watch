@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 
 
 def test_representative_env_and_kv_settings_golden(monkeypatch, tmp_path):
@@ -144,4 +145,5 @@ def test_representative_env_and_kv_settings_golden(monkeypatch, tmp_path):
         jwks_cache_ttl=43200,
         renewal_webhook_url="https://renew.example.test/hook",
         renewal_webhook_headers={"X-Renewal": "token"},
+        instance_id=socket.gethostname(),
     )

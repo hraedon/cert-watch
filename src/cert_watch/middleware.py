@@ -8,7 +8,6 @@ import hmac
 import ipaddress
 import json
 import logging
-import os
 import secrets
 import sqlite3
 import threading
@@ -46,13 +45,11 @@ def _is_auth_enabled(request: Request) -> bool:
     return auth is not None and not isinstance(auth, NoAuthProvider)
 
 
-_COOKIE_SECURE = os.environ.get("CERT_WATCH_COOKIE_SECURE", "1") == "1"
+_COOKIE_SECURE = True  # Direct-call/test fallback; request paths use Settings.
 
 # ---------- CSRF protection (double-submit cookie) ----------
 
-_csrf_secret_val = os.environ.get("CERT_WATCH_CSRF_SECRET") or None
-if not _csrf_secret_val:
-    _csrf_secret_val = secrets.token_hex(32)
+_csrf_secret_val = secrets.token_hex(32)
 _CSRF_SECRET = _csrf_secret_val
 _CSRF_TOKEN_TTL = 3600 * 2  # 2 hours
 _SID_COOKIE_TTL = 3600 * 8  # 8 hours — matches session cookie TTL
@@ -166,10 +163,30 @@ def _clear_rate_caches() -> None:
     for cache in _rate_caches:
         cache.clear()
 
-_TRUST_PROXY = os.environ.get("CERT_WATCH_TRUST_PROXY", "") == "1"
-_TRUSTED_PROXIES = frozenset(
-    p.strip() for p in os.environ.get("CERT_WATCH_TRUSTED_PROXIES", "").split(",") if p.strip()
-)
+_TRUST_PROXY = False  # Direct-call/test fallbacks; request paths use Settings.
+_TRUSTED_PROXIES: frozenset[str] = frozenset()
+
+
+def _request_settings_snapshot(request: Request | None) -> Any:
+    if request is None:
+        return None
+    app = request.scope.get("app")
+    return getattr(getattr(app, "state", None), "settings", None)
+
+
+def _proxy_settings(request: Request) -> tuple[bool, frozenset[str]]:
+    settings = _request_settings_snapshot(request)
+    configured_trust = getattr(settings, "trust_proxy", False)
+    configured_proxies = getattr(settings, "trusted_proxies", ())
+    trust_proxy = _TRUST_PROXY or (
+        configured_trust if isinstance(configured_trust, bool) else False
+    )
+    trusted_proxies = _TRUSTED_PROXIES or (
+        frozenset(configured_proxies)
+        if isinstance(configured_proxies, (tuple, list, set, frozenset))
+        else frozenset()
+    )
+    return trust_proxy, trusted_proxies
 
 
 def _extract_client_ip(request: Request) -> str:
@@ -191,29 +208,30 @@ def _extract_client_ip(request: Request) -> str:
     well-formed IP address to prevent garbage injection.
     """
     peer = request.client.host if request.client else "unknown"
-    if not _TRUST_PROXY:
+    trust_proxy, trusted_proxies = _proxy_settings(request)
+    if not trust_proxy:
         return peer
 
     # A configured allowlist describes which immediate TCP peers may supply
     # forwarding headers. Without this check, merely setting TRUSTED_PROXIES
     # caused headers from every peer to be trusted (WI-144).
-    if _TRUSTED_PROXIES and peer not in _TRUSTED_PROXIES:
+    if trusted_proxies and peer not in trusted_proxies:
         return peer
 
     xff = request.headers.get("x-forwarded-for", "")
     if xff:
         parts = [p.strip() for p in xff.split(",")]
-        if _TRUSTED_PROXIES:
+        if trusted_proxies:
             for part in reversed(parts):
                 try:
                     ipaddress.ip_address(part)
                 except ValueError:
                     return peer
-                if part not in _TRUSTED_PROXIES:
+                if part not in trusted_proxies:
                     return part
         elif len(parts) > 1:
             return parts[-1]
-    if _TRUSTED_PROXIES:
+    if trusted_proxies:
         real_ip = request.headers.get("x-real-ip", "")
         if real_ip:
             try:
@@ -525,10 +543,26 @@ _PUBLIC_PATHS = frozenset({
     "/setup", "/favicon.ico",
 })
 
-_METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None
+_METRICS_TOKEN: str | None = None  # Direct-call/test fallback.
 
 
-def is_public_path(path: str) -> bool:
+def _metrics_token(request: Request | None = None) -> str:
+    if _METRICS_TOKEN is not None:
+        return _METRICS_TOKEN
+    settings = _request_settings_snapshot(request)
+    value = getattr(settings, "metrics_token", "")
+    return value if isinstance(value, str) else ""
+
+
+def _cookie_secure(request: Request | None = None) -> bool:
+    if not _COOKIE_SECURE:
+        return False
+    settings = _request_settings_snapshot(request)
+    value = getattr(settings, "cookie_secure", True)
+    return value if isinstance(value, bool) else _COOKIE_SECURE
+
+
+def is_public_path(path: str, request: Request | None = None) -> bool:
     # NOTE: /api/* is intentionally NOT public. The data API (cert/host
     # inventory, CSV export, posture) requires auth when AUTH_PROVIDER is set;
     # unauthenticated API requests get a 401 (see auth_middleware). Only
@@ -540,7 +574,7 @@ def is_public_path(path: str) -> bool:
         # /metrics is public only when gated by a bearer token
         # (CERT_WATCH_METRICS_TOKEN). Without a token, it requires a
         # session to prevent fleet metadata disclosure.
-        return _METRICS_TOKEN is not None
+        return bool(_metrics_token(request))
     return bool(path.startswith("/static/"))
 
 
@@ -549,12 +583,13 @@ def check_metrics_token(request: Request) -> bool:
 
     Returns True if the request is authorized (or no token is configured).
     """
-    if not _METRICS_TOKEN:
+    metrics_token = _metrics_token(request)
+    if not metrics_token:
         return True
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
         token = auth_header[7:]
-        return hmac.compare_digest(token, _METRICS_TOKEN)
+        return hmac.compare_digest(token, metrics_token)
     return False
 
 
@@ -599,7 +634,8 @@ async def csrf_session_middleware(
         # Keeping it HttpOnly denies an XSS one more primitive at zero cost.
         response.set_cookie(
             "cw_sid", sid, httponly=True, samesite="strict", max_age=_SID_COOKIE_TTL,
-            secure=_COOKIE_SECURE, path="/",
+            secure=_cookie_secure(request),
+            path="/",
         )
         return response
     return await call_next(request)
@@ -618,7 +654,7 @@ async def setup_redirect_middleware(
     if not needs_setup:
         return await call_next(request)
     path = request.url.path
-    if is_public_path(path) or path.startswith("/setup") or path.startswith("/api/"):
+    if is_public_path(path, request) or path.startswith("/setup") or path.startswith("/api/"):
         return await call_next(request)
     return RedirectResponse(url="/setup", status_code=303)
 
@@ -678,7 +714,7 @@ async def auth_middleware(
         return await call_next(request)
 
     path = request.url.path
-    if is_public_path(path):
+    if is_public_path(path, request):
         return await call_next(request)
 
     token = request.cookies.get(SESSION_COOKIE, "")
@@ -727,7 +763,7 @@ async def auth_middleware(
     return RedirectResponse(url="/login", status_code=303)
 
 
-def _build_csp(nonce: str) -> str:
+def _build_csp(nonce: str, report_uri: str = "") -> str:
     """Build the Content-Security-Policy header for a request.
 
     ``script-src`` uses a per-request nonce — inline ``on*=`` event-handler
@@ -751,7 +787,6 @@ def _build_csp(nonce: str) -> str:
         "form-action 'self'; "
         "frame-ancestors 'none'"
     )
-    report_uri = os.environ.get("CERT_WATCH_CSP_REPORT_URI", "")
     if report_uri:
         parsed = urlparse(report_uri)
         if parsed.scheme in ("http", "https") and parsed.netloc:
@@ -784,9 +819,15 @@ class CSPNonceMiddleware:
         await self.app(scope, receive, send)
 
 
-def _apply_security_headers(response: Response, nonce: str) -> None:
+def _apply_security_headers(
+    response: Response,
+    nonce: str,
+    *,
+    report_uri: str = "",
+    cookie_secure: bool = _COOKIE_SECURE,
+) -> None:
     """Apply security headers to a response (shared by normal + error paths)."""
-    response.headers["Content-Security-Policy"] = _build_csp(nonce)
+    response.headers["Content-Security-Policy"] = _build_csp(nonce, report_uri)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
@@ -794,7 +835,7 @@ def _apply_security_headers(response: Response, nonce: str) -> None:
         "geolocation=(), microphone=(), camera=(), payment=(), usb=()"
     )
     response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
-    if _COOKIE_SECURE:
+    if cookie_secure:
         response.headers["Strict-Transport-Security"] = (
             "max-age=31536000; includeSubDomains"
         )
@@ -824,7 +865,13 @@ async def security_headers_middleware(
             content={"detail": "Internal Server Error"},
             status_code=500,
         )
-    _apply_security_headers(response, nonce)
+    settings = getattr(request.app.state, "settings", None)
+    _apply_security_headers(
+        response,
+        nonce,
+        report_uri=getattr(settings, "csp_report_uri", ""),
+        cookie_secure=_cookie_secure(request),
+    )
     return response
 
 

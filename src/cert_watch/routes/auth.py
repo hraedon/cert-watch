@@ -37,6 +37,14 @@ router = APIRouter()
 templates = get_templates()
 
 
+def _cookie_secure(request: Request) -> bool:
+    if not _COOKIE_SECURE:
+        return False
+    settings = getattr(request.app.state, "settings", None)
+    value = getattr(settings, "cookie_secure", _COOKIE_SECURE)
+    return value if isinstance(value, bool) else _COOKIE_SECURE
+
+
 @router.get("/login", response_class=HTMLResponse, response_model=None)
 def login_page(request: Request, error: str | None = None) -> HTMLResponse | RedirectResponse:
     auth = getattr(request.app.state, "auth_provider", None)
@@ -167,7 +175,7 @@ async def login_submit(
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
         max_age=settings.session_ttl,
-        secure=_COOKIE_SECURE, path="/",
+        secure=_cookie_secure(request), path="/",
     )
     logger.info(
         "user logged in: %s (%s)",
@@ -219,7 +227,7 @@ def oauth_start(request: Request) -> RedirectResponse:
             # cookie; Lax still withholds it from cross-site subrequests/POSTs.
             samesite="lax",
             max_age=600,
-            secure=_COOKIE_SECURE,
+            secure=_cookie_secure(request),
             path="/",
         )
     return response
@@ -240,7 +248,7 @@ def oauth_callback(
             url=f"/login?error={quote(error)}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     if not code:
@@ -248,7 +256,7 @@ def oauth_callback(
             url="/login?error=no+authorization+code", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     signed_state = request.cookies.get("cw_oauth_state", "")
@@ -264,7 +272,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     cookie_raw, _nonce, _verifier = verify_result
@@ -273,7 +281,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     base = _get_base_url(request)
@@ -289,7 +297,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     # Authorization gate: check group/role membership
@@ -302,7 +310,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
         )
         return response
     # BC-081: embed current session version in the token
@@ -332,10 +340,10 @@ def oauth_callback(
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
         max_age=settings.session_ttl,
-        secure=_COOKIE_SECURE, path="/",
+        secure=_cookie_secure(request), path="/",
     )
     response.delete_cookie(
-        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
+        "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response
@@ -364,6 +372,6 @@ async def logout(request: Request) -> RedirectResponse:
                 bump_session_version(settings.db_path, username)
     response = RedirectResponse(url="/login", status_code=303)
     response.delete_cookie(
-        SESSION_COOKIE, httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+        SESSION_COOKIE, httponly=True, samesite="strict", secure=_cookie_secure(request),
     )
     return response

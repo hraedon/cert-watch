@@ -7,10 +7,11 @@ import logging
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database.kv_store import kv_get, kv_set
+from cert_watch.database.kv_store import kv_set
 from cert_watch.posture import GRADE_WORST_ORDER, Finding
 
 logger = logging.getLogger("cert_watch.policy")
@@ -446,11 +447,13 @@ def _deserialize_policy_set(raw: str) -> PolicySet:
 
 
 def load_policy_set(db_path: str) -> PolicySet:
-    stored = kv_get(db_path, _POLICY_KV_KEY)
+    from cert_watch.config import Settings
+
+    stored = Settings.from_env_with_kv(Path(db_path)).policy_config
     if stored is None:
         return default_policy_set()
     try:
-        return _deserialize_policy_set(stored)
+        return _deserialize_policy_set(json.dumps(stored))
     except (json.JSONDecodeError, KeyError, TypeError, ValueError):
         logger.warning("Malformed policy data in kv_store, falling back to defaults")
         return default_policy_set()

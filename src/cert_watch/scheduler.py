@@ -688,19 +688,18 @@ def _send_renewal_webhook_if_configured(
         )
         base_url = getattr(settings, "base_url", "")
     else:
-        import os
+        import json
 
+        from cert_watch.config import Settings
+
+        fallback_settings = Settings.from_env()
         config = load_renewal_webhook_config(
-            env_url=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_URL", ""),
-            env_headers=os.environ.get("CERT_WATCH_RENEWAL_WEBHOOK_HEADERS", ""),
-            allow_private=os.environ.get("CERT_WATCH_ALLOW_PRIVATE_IPS", "1") == "1",
-            allowed_subnets=tuple(
-                s.strip()
-                for s in os.environ.get("CERT_WATCH_ALLOWED_SUBNETS", "").split(",")
-                if s.strip()
-            ),
+            env_url=fallback_settings.renewal_webhook_url,
+            env_headers=json.dumps(fallback_settings.renewal_webhook_headers or {}),
+            allow_private=fallback_settings.allow_private,
+            allowed_subnets=fallback_settings.allowed_subnets,
         )
-        base_url = os.environ.get("CERT_WATCH_BASE_URL", "")
+        base_url = fallback_settings.base_url
     if config is None:
         return
     payload = build_renewal_payload(signal, db_path, port=port, base_url=base_url)

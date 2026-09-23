@@ -34,6 +34,10 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Changed
+- **Configuration now has one source of truth.** A declarative field table drives
+  defaults, env/kv precedence, parsing, bounds, and sensitivity; runtime
+  consumers use the resolved `Settings` snapshot instead of re-reading env or
+  `kv_store` independently.
 - **Schema creation now has one source of truth.** Fresh databases and upgrades
   both traverse the numbered migration chain, each migration commits its schema
   work and version row atomically, and migration 0035 reconciles objects that

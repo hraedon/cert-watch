@@ -23,7 +23,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import os
 import secrets
 import uuid
 from dataclasses import dataclass
@@ -77,8 +76,10 @@ def _get_pepper() -> bytes:
     Standalone repository users retain the historical environment/default
     behaviour. Production request paths inject a SecurityContext instead.
     """
-    value = os.environ.get("CERT_WATCH_AUTH_SECRET")
-    return value.encode() if value is not None else _LEGACY_DEFAULT_PEPPER
+    from cert_watch.config import Settings, setting_env_is_set
+
+    value = Settings.from_env().auth_secret
+    return value.encode() if setting_env_is_set("auth_secret") else _LEGACY_DEFAULT_PEPPER
 
 
 def hash_token(raw_token: str, *, pepper: bytes | None = None) -> str:

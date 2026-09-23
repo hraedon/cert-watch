@@ -179,7 +179,9 @@ def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
     # Resolve the bind host: --host wins, then CERT_WATCH_HOST, then 0.0.0.0.
-    host = args.host or os.environ.get("CERT_WATCH_HOST", "0.0.0.0")
+    from cert_watch.config import Settings
+
+    host = args.host or Settings.from_env().bind_host
     # Normalize the env var to the resolved host so the app lifespan's BC-083
     # secure-by-default check (cert_watch.app, which reads CERT_WATCH_HOST) sees
     # the address we actually bind — closes the IIS HttpPlatformHandler gap

@@ -2,57 +2,68 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 from fastapi import Request
 
-from cert_watch.config import SENSITIVE_SETTING_KEYS
+from cert_watch.config import (
+    FIELD_SPECS,
+    SENSITIVE_SETTING_KEYS,
+    Settings,
+    setting_env_is_set,
+    ui_field_map,
+)
 
 # ---------- Per-section config keys and their env var names ----------
 
-_AUTH_KEYS = {
-    "auth_provider": "AUTH_PROVIDER",
-    "ldap_server": "LDAP_SERVER",
-    "ldap_base_dn": "LDAP_BASE_DN",
-    "ldap_bind_dn": "LDAP_BIND_DN",
-    "ldap_bind_password": "LDAP_BIND_PASSWORD",
-    "ldap_user_filter": "LDAP_USER_FILTER",
-    "ldap_start_tls": "LDAP_START_TLS",
-    "ldap_ca_cert": "LDAP_CA_CERT",
-    "ldap_required_groups": "LDAP_REQUIRED_GROUPS",
-    "ldap_connect_timeout": "LDAP_CONNECT_TIMEOUT",
-    "oauth_client_id": "OAUTH_CLIENT_ID",
-    "oauth_client_secret": "OAUTH_CLIENT_SECRET",
-    "oauth_issuer_url": "OAUTH_ISSUER_URL",
-    "oauth_scope": "OAUTH_SCOPE",
-    "oauth_authorization_endpoint": "OAUTH_AUTHORIZATION_ENDPOINT",
-    "oauth_token_endpoint": "OAUTH_TOKEN_ENDPOINT",
-    "oauth_userinfo_endpoint": "OAUTH_USERINFO_ENDPOINT",
-}
+_AUTH_KEYS = ui_field_map(
+    (
+        "auth_provider",
+        "ldap_server",
+        "ldap_base_dn",
+        "ldap_bind_dn",
+        "ldap_bind_password",
+        "ldap_user_filter",
+        "ldap_start_tls",
+        "ldap_ca_cert",
+        "ldap_required_groups",
+        "ldap_connect_timeout",
+        "oauth_client_id",
+        "oauth_client_secret",
+        "oauth_issuer_url",
+        "oauth_scope",
+        "oauth_authorization_endpoint",
+        "oauth_token_endpoint",
+        "oauth_userinfo_endpoint",
+    )
+)
 
-_SMTP_KEYS = {
-    "smtp_host": "SMTP_HOST",
-    "smtp_port": "SMTP_PORT",
-    "smtp_user": "SMTP_USER",
-    "smtp_password": "SMTP_PASSWORD",
-    "alert_from": "ALERT_FROM",
-    "alert_recipients": "ALERT_RECIPIENTS",
-}
+_SMTP_KEYS = ui_field_map(
+    (
+        "smtp_host",
+        "smtp_port",
+        "smtp_user",
+        "smtp_password",
+        "alert_from",
+        "alert_recipients",
+    )
+)
 
-_ALERT_KEYS = {
-    "webhook_url": "ALERT_WEBHOOK_URL",
-    "webhook_headers": "ALERT_WEBHOOK_HEADERS",
-    "webhook_template": "ALERT_WEBHOOK_TEMPLATE",
-    "webhook_kind": "ALERT_WEBHOOK_KIND",
-    "alert_digest_only": "ALERT_DIGEST_ONLY",
-    "drift_alerts": "CERT_WATCH_DRIFT_ALERTS",
-    "renewal_window_days": "CERT_WATCH_RENEWAL_WINDOW_DAYS",
-    "alert_retention_days": "CERT_WATCH_ALERT_RETENTION_DAYS",
-    "sched_hour": "CERT_WATCH_SCHED_HOUR",
-    "sched_min": "CERT_WATCH_SCHED_MIN",
-    "check_revocation": "CERT_WATCH_CHECK_REVOCATION",
-}
+_ALERT_KEYS = ui_field_map(
+    (
+        "webhook_url",
+        "webhook_headers",
+        "webhook_template",
+        "webhook_kind",
+        "alert_digest_only",
+        "drift_alerts",
+        "renewal_window_days",
+        "alert_retention_days",
+        "sched_hour",
+        "sched_min",
+        "check_revocation",
+    )
+)
 
 # Single source of truth lives in config (SENSITIVE_SETTING_KEYS) so the
 # encrypt-side (this module) and the decrypt-side (config.from_env_with_kv)
@@ -72,12 +83,9 @@ def _get_encryption_key(request: Request) -> str | None:
 
 def _env_overrides(keys: dict[str, str], db_path: Path) -> dict[str, bool]:
     """Return {kv_key: True} for keys where the env var is set (takes precedence)."""
-    overrides: dict[str, bool] = {}
-    for kv_key, env_name in keys.items():
-        env_val = os.environ.get(env_name)
-        if env_val is not None and env_val.strip():
-            overrides[kv_key] = True
-    return overrides
+    del db_path  # retained for backward-compatible call sites
+    by_kv = {spec.kv_key: name for name, spec in FIELD_SPECS.items() if spec.kv_key}
+    return {kv_key: True for kv_key in keys if setting_env_is_set(by_kv[kv_key])}
 
 
 def _effective_config(
@@ -90,27 +98,31 @@ def _effective_config(
     When *encryption_key* is set, sensitive values stored in encrypted form
     (``enc:v1:`` prefix) are transparently decrypted (BC-082).
     """
-    from cert_watch.config import read_secret
-    from cert_watch.database import fernet_decrypt, kv_all
+    import json
 
+    from cert_watch.database import kv_all
+
+    settings = Settings.from_env_with_kv(db_path, encryption_key)
     kv = kv_all(db_path)
+    by_kv = {spec.kv_key: name for name, spec in FIELD_SPECS.items() if spec.kv_key}
     result: dict[str, str] = {}
-    for kv_key, env_name in keys.items():
-        env_val = os.environ.get(env_name)
-        if env_val is not None and env_val.strip():
-            result[kv_key] = env_val
-        elif kv.get(kv_key):
-            val = kv[kv_key]
-            if encryption_key and kv_key in _SENSITIVE_KEYS:
-                val = fernet_decrypt(val, encryption_key) or ""
-            result[kv_key] = val
-        else:
+    for kv_key in keys:
+        field_name = by_kv[kv_key]
+        if not setting_env_is_set(field_name) and not kv.get(kv_key):
             result[kv_key] = ""
-    # Handle _FILE secrets
-    for kv_key in _SENSITIVE_KEYS:
-        if kv_key in keys:
-            env_name = keys[kv_key]
-            secret = read_secret(env_name)
-            if secret:
-                result[kv_key] = secret
+            continue
+        value = getattr(settings, field_name)
+        spec = FIELD_SPECS[field_name]
+        if value is None:
+            rendered = ""
+        elif isinstance(value, bool):
+            rendered = "1" if value else "0"
+        elif isinstance(value, tuple):
+            separator = ";" if spec.normalize == "group-dns" else ","
+            rendered = separator.join(value)
+        elif isinstance(value, dict):
+            rendered = json.dumps(value)
+        else:
+            rendered = str(value)
+        result[kv_key] = rendered
     return result
