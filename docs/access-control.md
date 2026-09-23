@@ -68,8 +68,9 @@ permissive tier among them applies. A user who matches nothing is a viewer.
 Once a mapping has been saved in Settings, cert-watch remembers that role
 mapping is in use. Removing every mapping afterwards leaves directory users as
 viewers; it doesn't return them to full access. The same applies if the
-stored mapping becomes unreadable. If you really do want to go back to the
-unmapped behaviour, see [UPGRADING.md](../UPGRADING.md#returning-to-unmapped-access).
+stored mapping becomes unreadable. Going back to the unmapped behaviour is
+deliberately awkward. With cert-watch stopped, delete the `ldap_role_map` and
+`ldap_role_map_configured` rows from the `kv_store` table.
 
 Group membership is read when a user signs in and carried in their session.
 So a change that depends on groups, whether in the directory or a new group
@@ -119,9 +120,15 @@ administrator under **Settings → API keys**. A key has one of three scopes:
 its hash is stored. Send it as `Authorization: Bearer cwk_…`.
 
 API keys are not tag-scoped: a `read` key can read the whole estate. Create
-keys for systems, not people, and revoke them from the same page when they are
-no longer needed. A key keeps working after the person who created it loses
-administrator access, so review keys when access changes.
+keys for systems, not people, and revoke them when they are no longer needed.
+Creating, listing and revoking keys needs an administrator's browser session,
+so an API key can't mint more keys, not even an `admin` key. A key keeps
+working after the person who created it loses administrator access, so review
+keys when access changes.
+
+`/metrics` is separate from all of this. It accepts its own bearer token
+(`CERT_WATCH_METRICS_TOKEN`) or an administrator's browser session, and
+nothing else.
 
 ## Sessions
 
