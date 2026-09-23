@@ -101,6 +101,120 @@ def test_windows_smoke_exercises_optional_eventlog_sink() -> None:
     assert "ReplacementStrings" in smoke[eventlog:start]
 
 
+def test_published_image_is_signed_and_attested() -> None:
+    """Provenance for the artefact a trust-hygiene tool asks its own users to trust.
+
+    Three parts, and each is useless without the others: the push must attach
+    an SBOM and provenance, the signature must cover the *digest* (a tag can be
+    repointed at an unsigned image), and the signing step must run on the push
+    output rather than on tags computed earlier in the job.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_workflow("release.yml"))
+    job = workflow["jobs"]["build-and-bump"]
+    steps = job["steps"]
+
+    assert job["permissions"].get("id-token") == "write", (
+        "keyless cosign signing needs an OIDC token"
+    )
+
+    push = next(s for s in steps if s.get("id") == "push")
+    assert push["with"]["push"] is True
+    assert push["with"]["sbom"] is True
+    assert push["with"]["provenance"] == "mode=max"
+
+    # The scan build loads into the docker daemon, which cannot carry
+    # attestations; leaving them on would fail the build outright.
+    scan = next(s for s in steps if s.get("with", {}).get("load") is True)
+    assert scan["with"]["provenance"] is False
+    assert scan["with"]["sbom"] is False
+
+    sign = next(s for s in steps if "cosign sign" in (s.get("run") or ""))
+    assert "steps.push.outputs.digest" in sign["env"]["DIGEST"]
+    assert "${IMAGE}@${DIGEST}" in sign["run"], "sign the digest, not a tag"
+    assert steps.index(sign) > steps.index(push)
+
+
+def test_the_signature_is_verified_before_the_deployment_pointer_moves() -> None:
+    """Signing without verifying only proves the workflow reached the sign step.
+
+    The bump is what puts an image in front of users, so the gate belongs
+    between the two: the digest must verify against this workflow's exact
+    keyless identity at a release ref, and the attestations must describe this
+    commit, before anything repoints the cluster. An identity regex loose
+    enough to match any ref would accept a signature minted by a run of this
+    file on an attacker's branch.
+    """
+    import yaml
+
+    workflow = yaml.safe_load(_workflow("release.yml"))
+    steps = workflow["jobs"]["build-and-bump"]["steps"]
+
+    verify = next(s for s in steps if "cosign verify" in (s.get("run") or ""))
+    sign = next(s for s in steps if "cosign sign" in (s.get("run") or ""))
+    bump = next(s for s in steps if "bump_deploy_image" in (s.get("run") or ""))
+    assert steps.index(sign) < steps.index(verify) < steps.index(bump)
+
+    assert "steps.push.outputs.digest" in verify["env"]["DIGEST"]
+    assert "${IMAGE}@${DIGEST}" in verify["run"], "verify the digest, not a tag"
+    assert (
+        verify["env"]["IDENTITY"]
+        == "https://github.com/${{ github.repository }}"
+        "/.github/workflows/release.yml@${{ github.ref }}"
+    )
+    assert "--certificate-identity \"${IDENTITY}\"" in verify["run"]
+    assert (
+        "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in verify["run"]
+    )
+    assert "verify_release_attestations.py" in verify["run"]
+    assert "--commit \"${GITHUB_SHA}\"" in verify["run"]
+
+    assert "--digest \"${{ steps.push.outputs.digest }}\"" in bump["run"], (
+        "the deployment pointer must pin the verified digest, not only the tag"
+    )
+
+    # The identity is only anchored because the workflow cannot run from an
+    # arbitrary ref in the first place.
+    triggers = workflow[True]["push"]
+    assert triggers["branches"] == ["main"]
+    assert triggers["tags"] == ["v*"]
+
+    installer = next(s for s in steps if "cosign-installer" in (s.get("uses") or ""))
+    assert installer["with"]["cosign-release"].startswith("v"), (
+        "pin the cosign binary, not just the action that downloads it"
+    )
+
+
+def test_dependabot_watches_what_the_monthly_lock_refresh_cannot() -> None:
+    """Actions and base images are digest-pinned, so nothing else ages them.
+
+    `dependency-update.yml` re-resolves `uv.lock` monthly, which covers Python
+    only. The pins this repository adds for supply-chain reasons — action SHAs,
+    base-image digests — are inert by design and stay on a stale, eventually
+    unsupported version unless something proposes the bump.
+    """
+    import yaml
+
+    config = yaml.safe_load((Path(__file__).parents[1] / ".github" / "dependabot.yml").read_text())
+    ecosystems = {entry["package-ecosystem"] for entry in config["updates"]}
+
+    assert {"github-actions", "docker"} <= ecosystems
+
+    # Bumps to the actions that build, scan and sign the published image are
+    # separated from the grouped bump of everything else: main takes direct
+    # pushes, so a release-pipeline pin should not arrive inside a PR whose
+    # interesting content is a linter bump.
+    actions = next(e for e in config["updates"] if e["package-ecosystem"] == "github-actions")
+    pipeline = set(actions["groups"]["release-pipeline"]["patterns"])
+    assert {"docker/*", "sigstore/*", "aquasecurity/*"} == pipeline
+    assert pipeline <= set(actions["groups"]["actions"]["exclude-patterns"])
+    assert "pip" not in ecosystems, (
+        "uv.lock is the source of truth and Dependabot cannot round-trip it; "
+        "dependency-update.yml owns Python"
+    )
+
+
 def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     """Exercise the actual workflow shell without building or publishing an image.
 
