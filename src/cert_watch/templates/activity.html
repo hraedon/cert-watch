@@ -113,7 +113,7 @@
             {% set outcome = delivery_outcomes.get(a.id) %}
             {% set undelivered = a.id in undelivered_alert_ids|default([]) %}
             {% if a.status == 'failed' %}
-              {{ ui.status(label='Delivery failed — operator retry required', tone='t-crit') }}
+              {{ ui.status(label='Attempt failed — operator retry required', tone='t-crit') }}
               <span class="cw-sub">cert-watch gave up after its bounded delivery attempts.</span>
             {% elif a.status == 'sending' %}
               {{ ui.status(label='Sending', tone='t-muted') }}
