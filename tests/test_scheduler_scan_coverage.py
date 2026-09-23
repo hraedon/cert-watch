@@ -7,6 +7,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 # ---------- _seconds_until ----------
 
 
@@ -197,6 +199,28 @@ def test_stop_scheduler_when_not_started():
     stop_scheduler()  # should not raise
 
 
+def test_stop_scheduler_cancels_queued_pool_tasks(monkeypatch):
+    from unittest.mock import Mock, call
+
+    import cert_watch.scheduler as scheduler
+
+    renewal_pool = Mock()
+    digest_pool = Mock()
+    monkeypatch.setattr(
+        scheduler, "_detach_renewal_webhook_pool", lambda: renewal_pool
+    )
+    monkeypatch.setattr(
+        "cert_watch.digest._detach_digest_pool", lambda: digest_pool
+    )
+    monkeypatch.setattr(scheduler, "_scheduler_thread", None)
+
+    scheduler.stop_scheduler()
+
+    expected = call(wait=True, cancel_futures=True)
+    assert renewal_pool.shutdown.call_args == expected
+    assert digest_pool.shutdown.call_args == expected
+
+
 # ---------- run_scan_now ----------
 
 
@@ -273,6 +297,45 @@ def test_run_scan_now_with_exception(tmp_path):
     )
     assert result["scanned"] == 0
     assert result["failures"] == 1
+
+
+@pytest.mark.parametrize("failure_kind", ["exception", "scan_error"])
+def test_run_scan_now_history_write_failure_does_not_stop_hosts(
+    tmp_path, monkeypatch, failure_kind
+):
+    import sqlite3
+
+    from cert_watch.database import init_schema
+    from cert_watch.scan import ScanError
+    from cert_watch.scheduler import run_scan_now
+
+    db = tmp_path / "test.sqlite3"
+    init_schema(db)
+    hosts = [("one.example.com", 443), ("two.example.com", 443)]
+    attempted = []
+
+    def scan_fn(hostname, port):
+        attempted.append((hostname, port))
+        if failure_kind == "exception":
+            raise RuntimeError("scan failed")
+        return ScanError(hostname=hostname, port=port, error_message="scan failed")
+
+    monkeypatch.setattr(
+        "cert_watch.scheduler.record_scan_history",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(sqlite3.OperationalError("locked")),
+    )
+    try:
+        result = run_scan_now(
+            scan_fn,
+            lambda: {"sent": 0, "failed": 0},
+            db_path=db,
+            host_provider=lambda: hosts,
+        )
+    except sqlite3.Error:
+        result = None
+
+    assert result == {"scanned": 0, "alerts_sent": 0, "failures": 2}
+    assert attempted == hosts
 
 
 def test_run_scan_now_with_store_fn(tmp_path):

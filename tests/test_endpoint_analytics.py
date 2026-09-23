@@ -84,6 +84,32 @@ def test_overdue_deduplication_keeps_ports(tmp_path, monkeypatch):
     assert {p["port"] for p in payloads} == {443, 636}
 
 
+def test_overdue_sweep_continues_after_one_host_fails(tmp_path, monkeypatch):
+    from cert_watch.events import get_events
+    from cert_watch.renewal_analytics import RenewalOverdueSignal
+    from cert_watch.scheduler import _check_renewal_overdue
+
+    db = tmp_path / "estate.sqlite3"
+    init_schema(db)
+
+    def detect(_db, hostname, port):
+        if hostname == "broken.example.test":
+            raise RuntimeError("broken history")
+        return RenewalOverdueSignal(hostname, "healthy-fp", 2, 20, 18, "high")
+
+    monkeypatch.setattr("cert_watch.renewal_analytics.detect_renewal_overdue", detect)
+    monkeypatch.setattr(
+        "cert_watch.scheduler._send_renewal_webhook_if_configured", lambda *a, **k: None,
+    )
+
+    _check_renewal_overdue(
+        db, [("broken.example.test", 443), ("healthy.example.test", 443)]
+    )
+
+    events = get_events(db, event_type="renewal_overdue")
+    assert len(events) == 1
+
+
 def _history_row(
     conn, hostname: str, port: int | None, fingerprint: str,
     first_seen: datetime, not_after: datetime,

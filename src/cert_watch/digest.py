@@ -66,12 +66,41 @@ def _detach_digest_pool() -> concurrent.futures.ThreadPoolExecutor | None:
     return pool
 
 
-def _submit_digest_task(fn: Callable[..., Any], *args: Any) -> bool:
+def _handle_digest_task_completion(
+    future: concurrent.futures.Future[Any],
+    *,
+    task_name: str,
+    failure_callback: Callable[[bool], None] | None,
+) -> None:
+    try:
+        future.result()
+    except Exception:
+        logger.exception("%s task failed", task_name)
+        if failure_callback is not None:
+            try:
+                failure_callback(False)
+            except Exception:
+                logger.exception("digest delivery completion callback failed")
+
+
+def _submit_digest_task(
+    fn: Callable[..., Any],
+    *args: Any,
+    task_name: str = "digest",
+    failure_callback: Callable[[bool], None] | None = None,
+) -> bool:
     """Submit only while the pool is accepting work; never revive it implicitly."""
     with _digest_pool_lock:
         if _digest_pool is None:
             return False
-        _digest_pool.submit(fn, *args)
+        future = _digest_pool.submit(fn, *args)
+        future.add_done_callback(
+            lambda completed: _handle_digest_task_completion(
+                completed,
+                task_name=task_name,
+                failure_callback=failure_callback,
+            )
+        )
     return True
 
 
@@ -435,7 +464,12 @@ def send_renewal_digest(
     # Offloaded to the thread pool so SMTP latency does not block the scheduler
     # thread (same bug class as WI-134 webhook path).
     try:
-        orphan_submitted = _submit_digest_task(send_orphan_notice, db_path, alert_config)
+        orphan_submitted = _submit_digest_task(
+            send_orphan_notice,
+            db_path,
+            alert_config,
+            task_name="orphan notice delivery",
+        )
     except Exception:
         logger.warning(
             "orphan notice pool submit failed; delivering inline",
@@ -627,7 +661,11 @@ def send_renewal_digest(
             return delivered
 
         try:
-            submitted = _submit_digest_task(_deliver_all_digest_webhooks)
+            submitted = _submit_digest_task(
+                _deliver_all_digest_webhooks,
+                task_name="renewal digest webhook delivery",
+                failure_callback=delivery_completion_callback,
+            )
         except Exception:
             logger.warning(
                 "digest webhook pool submit failed; delivering inline",

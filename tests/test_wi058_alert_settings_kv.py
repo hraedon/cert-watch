@@ -8,9 +8,12 @@ var wins when set.
 """
 from __future__ import annotations
 
+from dataclasses import fields, replace
+
 import pytest
 
 from cert_watch.config import Settings
+from cert_watch.config.kv_loader import _merge_kv_settings
 from cert_watch.database import init_schema, kv_set
 
 # (kv_key, env_name, kv_value, expected_attr, expected_from_kv, env_value,
@@ -113,3 +116,46 @@ def test_unset_keys_keep_dataclass_defaults(db, monkeypatch):
     assert s.sched_hour == 6
     assert s.sched_min == 0
     assert s.webhook_headers is None
+
+
+def test_unrelated_kv_rows_preserve_every_base_setting(db, tmp_path):
+    """A kv merge must never drop fields that it does not explicitly override."""
+    defaults = Settings(db_path=db, data_dir=tmp_path)
+    values = {}
+    for index, setting in enumerate(fields(Settings), start=1):
+        current = getattr(defaults, setting.name)
+        if setting.name == "db_path":
+            value = tmp_path / "base.sqlite3"
+        elif setting.name == "data_dir":
+            value = tmp_path / "base-data"
+        elif setting.name in {"webhook_headers", "renewal_webhook_headers"}:
+            value = {"X-Base": setting.name}
+        elif setting.name == "role_map":
+            value = {"base": {"role": "admin"}}
+        elif current is None:
+            value = f"base-{setting.name}"
+        elif isinstance(current, bool):
+            value = not current
+        elif isinstance(current, int):
+            value = current + 1
+        elif isinstance(current, float):
+            value = current + 0.5
+        elif isinstance(current, str):
+            value = f"base-{setting.name}"
+        elif isinstance(current, tuple):
+            value = (f"base-{setting.name}-{index}",)
+        else:  # pragma: no cover - makes a newly added field fail loudly
+            raise AssertionError(f"add a non-default test value for {setting.name}")
+        assert value != current
+        values[setting.name] = value
+
+    base = replace(defaults, **values)
+    kv_set(db, "unrelated_setting", "present")
+
+    merged = _merge_kv_settings(base, db)
+
+    assert {
+        setting.name: getattr(merged, setting.name) for setting in fields(Settings)
+    } == {
+        setting.name: getattr(base, setting.name) for setting in fields(Settings)
+    }
