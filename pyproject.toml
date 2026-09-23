@@ -87,6 +87,11 @@ select = [
 # and user-facing strings; they are not used as identifier lookalikes.
 allowed-confusables = ["–", "×", "∪", "›"]
 
+[tool.ruff.lint.per-file-ignores]
+# Operator-facing prose, one setting per line; wrapping it would only make the
+# table harder to scan. It is rendered into docs/configuration.md.
+"src/cert_watch/config/field_docs.py" = ["E501"]
+
 [tool.ruff.lint.mccabe]
 # Structural ratchet: lower this as the current worst function is simplified.
 max-complexity = 43
