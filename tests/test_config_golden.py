@@ -319,3 +319,11 @@ def test_upgrade_config_semantics_golden(monkeypatch, tmp_path):
     assert settings.webhook_kind == "teams"
     assert settings.renewal_window_days == 30
     assert settings.check_revocation is True
+
+
+def test_nonblank_boolean_env_keeps_legacy_whitespace_parsing(monkeypatch):
+    from cert_watch.config import Settings
+
+    monkeypatch.setenv("ALERT_DIGEST_ONLY", " 1 ")
+
+    assert Settings.from_env().alert_digest_only is True

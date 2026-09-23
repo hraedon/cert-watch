@@ -60,7 +60,10 @@ def _parse(field_name: str, raw: str, spec: FieldSpec, *, source: str) -> Any:
     elif parser == "bool":
         # Environment booleans historically accept only "1"; persisted UI
         # values additionally accept legacy "true" rows.
-        value = raw == "1" or (source == "kv" and raw.lower() == "true")
+        normalized = raw.strip()
+        value = normalized == "1" or (
+            source == "kv" and normalized.lower() == "true"
+        )
     elif parser == "int":
         try:
             value = int(raw)
