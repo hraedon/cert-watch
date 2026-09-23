@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import SESSION_COOKIE
@@ -257,3 +258,36 @@ def test_only_listed_auth_paths_are_public():
     assert is_public_path("/auth/login")
     assert is_public_path("/auth/callback")
     assert not is_public_path("/auth/anything-else")
+
+
+@pytest.mark.parametrize("provider_name", ["oauth", "entra"])
+def test_oauth_start_is_public_with_production_provider(
+    reload_app, monkeypatch, provider_name
+):
+    """#58 via the production construction path, not an injected fake.
+
+    ``AUTH_PROVIDER=oauth|entra`` resolves through ``Settings`` and
+    ``build_auth_provider``; explicit endpoints skip OIDC discovery, so no
+    network is touched. The unauthenticated start must reach the IdP, not
+    bounce to /login, and the state cookie must be SameSite=Lax.
+    """
+    app_mod = reload_app(
+        AUTH_PROVIDER=provider_name,
+        OAUTH_CLIENT_ID="cw-test",
+        OAUTH_ISSUER_URL="https://idp.example",
+        OAUTH_AUTHORIZATION_ENDPOINT="https://idp.example/authorize",
+        OAUTH_TOKEN_ENDPOINT="https://idp.example/token",
+        CERT_WATCH_BASE_URL="https://cert-watch.example",
+    )
+    with TestClient(app_mod.app, base_url="https://cert-watch.example") as client:
+        assert client.app.state.auth_provider.provider_name != "none"
+        r = client.get("/auth/login", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"].startswith("https://idp.example/authorize?")
+    state_cookies = [
+        c for c in r.headers.get_list("set-cookie") if c.startswith(f"{STATE_COOKIE}=")
+    ]
+    assert len(state_cookies) == 1
+    attrs = [a.strip().lower() for a in state_cookies[0].split(";")]
+    assert "samesite=lax" in attrs
+    assert "httponly" in attrs
