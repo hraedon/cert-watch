@@ -19,14 +19,22 @@ def _default(spec: FieldSpec) -> Any:
 
 
 def setting_env_source(field_name: str, env: Mapping[str, str] | None = None) -> str | None:
-    """Return the explicitly-set env source (including ``_FILE``), if any."""
+    """Return the effective env source (including ``_FILE``), if any.
+
+    GUI-backed settings preserve the historical rule that an empty or
+    whitespace-only environment value is unset, so deployment placeholders
+    such as ``SMTP_PASSWORD: ""`` do not mask a saved value.  An empty
+    ``_FILE`` path is always unset.
+    """
     environ = os.environ if env is None else env
     spec = FIELD_SPECS[field_name]
     for name in spec.env_names:
         if name in environ:
-            return name
-        if spec.sensitive and f"{name}_FILE" in environ:
-            return f"{name}_FILE"
+            if spec.kv_key is None or environ[name].strip():
+                return name
+        file_name = f"{name}_FILE"
+        if spec.sensitive and environ.get(file_name, "").strip():
+            return file_name
     return None
 
 

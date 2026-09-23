@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import socket
 
+import pytest
+
 
 def test_representative_env_and_kv_settings_golden(monkeypatch, tmp_path):
     """A representative mixed-source configuration keeps its exact shape."""
@@ -147,3 +149,53 @@ def test_representative_env_and_kv_settings_golden(monkeypatch, tmp_path):
         renewal_webhook_headers={"X-Renewal": "token"},
         instance_id=socket.gethostname(),
     )
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_env_is_unset_for_every_kv_backed_setting(monkeypatch, tmp_path, blank):
+    """Blank deployment placeholders must not hide values saved in the GUI."""
+    from cert_watch.config import FIELD_SPECS, Settings
+    from cert_watch.database import init_schema
+    from cert_watch.database.kv_store import kv_set_multi
+
+    data_dir = tmp_path / "blank-env"
+    db_path = data_dir / "cert-watch.sqlite3"
+    monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
+    init_schema(db_path)
+
+    raw_by_parser = {
+        "str": "saved-value",
+        "secret-file": "saved-secret",
+        "int": "7",
+        "bool": "1",
+        "float": "2.5",
+        "csv": "saved-a;saved-b",
+        "json": '{"saved": "value"}',
+    }
+    covered = {
+        field_name: spec
+        for field_name, spec in FIELD_SPECS.items()
+        if spec.kv_key is not None and spec.env_names
+    }
+    kv_set_multi(
+        db_path,
+        {spec.kv_key: raw_by_parser[spec.parser] for spec in covered.values()},
+    )
+    expected = Settings.from_env_with_kv(db_path)
+
+    for spec in covered.values():
+        for env_name in spec.env_names:
+            monkeypatch.setenv(env_name, blank)
+
+    actual = Settings.from_env_with_kv(db_path)
+
+    for field_name in covered:
+        assert getattr(actual, field_name) == getattr(expected, field_name), field_name
+
+
+def test_blank_env_does_not_lock_settings_ui_field(monkeypatch, tmp_path):
+    from cert_watch.routes.settings.config import _SMTP_KEYS, _env_overrides
+
+    monkeypatch.setenv("SMTP_PASSWORD", "  ")
+
+    assert "smtp_password" not in _env_overrides(_SMTP_KEYS, tmp_path / "unused.db")
