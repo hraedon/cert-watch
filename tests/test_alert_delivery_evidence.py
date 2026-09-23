@@ -124,7 +124,7 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
                             headers={"Authorization": "webhook-token"})
     assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
     attempts = list_attempts(db, [alert.id])[alert.id]
-    assert [item["channel"] for item in attempts] == ["generic", "smtp"]
+    assert [item["channel"] for item in attempts] == ["webhook:generic", "smtp"]
     assert attempts[0]["result"]["http_status"] == 204
     assert attempts[1]["result"]["reason"] == "authentication"
     raw = json.dumps(attempts)
@@ -399,7 +399,9 @@ def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp
 
     assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
     connection.send_message.assert_not_called()          # SMTP was refused, not attempted
-    assert [item["channel"] for item in list_attempts(db, [alert.id])[alert.id]] == ["generic"]
+    assert [item["channel"] for item in list_attempts(db, [alert.id])[alert.id]] == [
+        "webhook:generic"
+    ]
     assert repo.list_for_cert(alert.cert_id)[0].status == "sent"
 
 

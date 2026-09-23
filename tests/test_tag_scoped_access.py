@@ -529,14 +529,16 @@ class TestScopedFlushFullContract:
 
         _seed_two_teams(db)
 
-        sent_ids: list[str] = []
+        sent_cert_ids: list[str] = []
 
-        def _fake_send(alert, config):
-            sent_ids.append(alert.id)
-            return True
+        from cert_watch.alerting.model import SendResult
+
+        def _fake_send(_transport, msg):
+            sent_cert_ids.append(msg.cert_id)
+            return SendResult("accepted")
 
         # Stub delivery at the transport boundary; process_pending itself is real.
-        monkeypatch.setattr(alerts_mod, "send_alert", _fake_send)
+        monkeypatch.setattr(alerts_mod.SmtpTransport, "send", _fake_send)
 
         repo = ScopedAlertRepository(db, ("team-a",))
         config = alerts_mod.AlertConfig(
@@ -545,7 +547,7 @@ class TestScopedFlushFullContract:
         )
         result = alerts_mod.process_pending(repo, config=config, webhook_config=None)
 
-        assert sent_ids == ["alert-a"]
+        assert sent_cert_ids == ["cert-a"]
         assert result == {"sent": 1, "failed": 0, "deferred": 0}
         # mark_sent went through the wrapper → only the in-scope alert flipped.
         with _connect(db) as conn:

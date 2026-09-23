@@ -260,9 +260,8 @@ def _deliver_webhook(
     db_path: str | Path,
     row_id: int,
 ) -> None:
-    from cert_watch.alerting.model import WebhookConfig
-    from cert_watch.alerting.transports.webhook import send_webhook
-    from cert_watch.database import Alert
+    from cert_watch.alerting.model import OutboundMessage, WebhookConfig
+    from cert_watch.alerting.transports.webhook import WebhookTransport
 
     payload = event.payload
     friendly_msg = (
@@ -296,12 +295,12 @@ def _deliver_webhook(
             f" — {payload.get('message', '')}"
         )
 
-    alert = Alert(
+    msg = OutboundMessage(
+        subject=f"[cert-watch] {event.event_type}: {friendly_msg[:60]}",
+        body=friendly_msg,
+        severity=event.event_type,
         cert_id=payload.get("cert_id", ""),
-        alert_type=event.event_type,
         status="event",
-        message=friendly_msg,
-        threshold_days=None,
     )
     try:
         allow_private, allowed_subnets = _resolve_ssrf_policy(db_path)
@@ -312,13 +311,15 @@ def _deliver_webhook(
             allow_private=allow_private,
             allowed_subnets=allowed_subnets,
         )
+        transport = WebhookTransport(wc)
         success = False
         last_error = ""
         for _ in backoff_range(2, 1.0, strategy="exponential"):
-            if send_webhook(alert, wc):
+            result = transport.send(msg)
+            if result.delivered:
                 success = True
                 break
-            last_error = alert.error_message or "unknown"
+            last_error = result.operator_message or "unknown"
         new_status = "delivered" if success else "failed"
         err = None if success else last_error
     except Exception as exc:  # noqa: BLE001 — external webhook failures become delivery status

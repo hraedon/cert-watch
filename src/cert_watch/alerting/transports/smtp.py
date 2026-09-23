@@ -6,12 +6,13 @@ import contextlib
 import logging
 import smtplib
 import ssl
+from collections.abc import Callable
 from email.message import EmailMessage
+from email.utils import getaddresses
+from typing import Any
 
-from cert_watch.alerting.evidence import observe_exception, observe_failure, observe_smtp
-from cert_watch.alerting.model import AlertConfig
+from cert_watch.alerting.model import AlertConfig, OutboundMessage, SendResult
 from cert_watch.alerting.transports.base import _redact_secret
-from cert_watch.database import Alert
 from cert_watch.email_validation import is_safe_email_address
 from cert_watch.http_client import resolve_smtp_host, validate_smtp_host
 
@@ -44,9 +45,9 @@ def _check_smtp_ssrf(config: AlertConfig) -> str | None:
 
     Contract: the returned string is NOT safe for user-visible output. It can
     contain the resolved IP. Callers must discard it and use a fixed, IP-free
-    message for anything persisted or shown to the user (e.g.
-    ``alert.error_message``); the hostname (admin-configured, not secret) may be
-    logged separately. Do not forward this return value into error_message.
+    message for anything persisted or shown to the user; the hostname
+    (admin-configured, not secret) may be logged separately. Do not forward
+    this return value into ``SendResult.operator_message``.
     """
     return validate_smtp_host(
         config.smtp_host,
@@ -105,9 +106,9 @@ def connect_smtp_transport(
     return smtp
 
 
-def _smtp_recipients(alert: Alert, config: AlertConfig) -> list[str]:
+def _smtp_recipients(msg: OutboundMessage, config: AlertConfig) -> list[str]:
     all_recipients = [r for r in config.recipients if _validate_email(r)]
-    for r in alert.extra_recipients:
+    for r in msg.queued_recipients:
         if r not in all_recipients and _validate_email(r):
             all_recipients.append(r)
         elif r not in config.recipients and not _validate_email(r):
@@ -115,40 +116,102 @@ def _smtp_recipients(alert: Alert, config: AlertConfig) -> list[str]:
     return all_recipients
 
 
-def send_alert(alert: Alert, config: AlertConfig | None) -> bool:
-    """Send via SMTP. See AC-03/AC-06."""
+def _exception_result(
+    exc: Exception,
+    config: AlertConfig,
+    *,
+    accepted: tuple[str, ...] = (),
+    refused: tuple[str, ...] = (),
+) -> SendResult:
+    if isinstance(exc, smtplib.SMTPAuthenticationError):
+        reason = "authentication"
+    elif isinstance(exc, ssl.SSLError):
+        reason = "tls"
+    elif isinstance(exc, smtplib.SMTPRecipientsRefused):
+        reason = "recipients_refused"
+    elif isinstance(exc, smtplib.SMTPResponseException):
+        reason = "smtp_rejected"
+    elif isinstance(exc, TimeoutError):
+        reason = "timeout"
+    else:
+        reason = "transport"
+    return SendResult(
+        outcome="failed",
+        reason=reason,
+        reached_transport=True,
+        accepted=accepted,
+        refused=refused,
+        operator_message=_sanitize_smtp_error(str(exc), config),
+    )
+
+
+class SmtpTransport:
+    channel = "smtp"
+    destination_id = "smtp"
+
+    def __init__(self, config: AlertConfig) -> None:
+        self.config = config
+
+    def send(self, msg: OutboundMessage) -> SendResult:
+        return send_alert(msg, self.config)
+
+
+def send_alert(msg: OutboundMessage | Any, config: AlertConfig | None) -> SendResult:
+    """Send via SMTP and return a complete, sanitized result."""
+    if not isinstance(msg, OutboundMessage):
+        # Compatibility for deprecated direct callers while plan 058's shims
+        # remain. SmtpTransport itself accepts OutboundMessage only.
+        msg = OutboundMessage.from_alert(msg)
     if config is None:
-        return False
-    msg = EmailMessage()
-    msg["Subject"] = f"[cert-watch] {alert.alert_type}: {alert.message[:60]}"
-    msg["From"] = config.from_addr
-    all_recipients = _smtp_recipients(alert, config)
+        return SendResult(
+            "failed", "unknown", reached_transport=False,
+            operator_message="SMTP is not configured",
+        )
+    email = EmailMessage()
+    email["Subject"] = msg.subject
+    email["From"] = config.from_addr
+    all_recipients = list(msg.recipients) or _smtp_recipients(msg, config)
     if not all_recipients:
-        logger.warning("no valid recipients for alert %s", alert.id)
-        observe_failure("no_recipients")
-        return False
-    msg["To"] = ", ".join(all_recipients)
-    msg.set_content(alert.message)
-    conn = _open_smtp_connection(config, alert=alert)
+        logger.warning("no valid recipients for outbound message")
+        return SendResult("failed", "no_recipients", reached_transport=False)
+    email["To"] = ", ".join(all_recipients)
+    email.set_content(msg.body)
+    envelope = tuple(address for _, address in getaddresses(all_recipients))
+    open_failure: list[SendResult] = []
+    conn = _open_smtp_connection(config, on_failure=open_failure.append)
     if conn is None:
-        return False
+        if open_failure:
+            return open_failure[0]
+        return SendResult("failed", "unknown", reached_transport=False)
     try:
-        refused = conn.send_message(msg)
-        observe_smtp(all_recipients, refused if isinstance(refused, dict) else {})
-        return True
+        raw_refused = conn.send_message(email)
+        refused_map = raw_refused if isinstance(raw_refused, dict) else {}
+        accepted_addresses = tuple(address for address in envelope if address not in refused_map)
+        refused_addresses = tuple(address for address in envelope if address in refused_map)
+        if refused_addresses:
+            return SendResult(
+                "partial",
+                "recipients_refused",
+                accepted=accepted_addresses,
+                refused=refused_addresses,
+            )
+        return SendResult("accepted", accepted=envelope)
     except Exception as exc:  # noqa: BLE001 — AC-06: never raise; SMTP is an external service with unpredictable failure modes
-        alert.error_message = _sanitize_smtp_error(str(exc), config)
+        refused: tuple[str, ...] = ()
+        accepted: tuple[str, ...] = ()
         if isinstance(exc, smtplib.SMTPRecipientsRefused):
-            observe_smtp(all_recipients, exc.recipients)
-        observe_exception(exc)
-        return False
+            refused = tuple(address for address in envelope if address in exc.recipients)
+            accepted = tuple(address for address in envelope if address not in exc.recipients)
+        return _exception_result(exc, config, accepted=accepted, refused=refused)
     finally:
         with contextlib.suppress(Exception):
             conn.quit()
 
 
 def _open_smtp_connection(
-    config: AlertConfig, *, alert: Alert | None = None
+    config: AlertConfig,
+    *,
+    on_failure: Callable[[SendResult], None] | None = None,
 ) -> smtplib.SMTP | smtplib.SMTP_SSL | None:
     # Resolve and validate exactly once, then connect to that same address.
     # Resolving once for validation and again for transport leaves a DNS-
@@ -160,16 +223,20 @@ def _open_smtp_connection(
         allowed_subnets=config.allowed_subnets,
     )
     if ssrf_err is not None:
-        observe_failure("blocked")
         logger.warning("smtp host %s blocked by SSRF policy", config.smtp_host)
-        if alert is not None:
-            alert.error_message = "smtp host blocked by SSRF policy"
+        if on_failure is not None:
+            on_failure(SendResult(
+                "blocked", "blocked", reached_transport=False,
+                operator_message="smtp host blocked by SSRF policy",
+            ))
         return None
     if pinned_ip is None:
-        observe_failure("dns")
         logger.warning("smtp host %s could not be resolved", config.smtp_host)
-        if alert is not None:
-            alert.error_message = "SMTP host could not be resolved"
+        if on_failure is not None:
+            on_failure(SendResult(
+                "failed", "dns", reached_transport=False,
+                operator_message="SMTP host could not be resolved",
+            ))
         return None
     # Connect to the pinned IP but retain the original hostname for TLS SNI and
     # certificate verification.
@@ -182,16 +249,18 @@ def _open_smtp_connection(
             timeout=15,
         )
         if not negotiate_starttls(s, config.smtp_port, bool(config.smtp_user)):
-            observe_failure("tls")
             logger.warning(
                 "SMTP send aborted: STARTTLS not supported by %s:%s",
                 config.smtp_host, config.smtp_port,
             )
-            if alert is not None:
-                alert.error_message = (
-                    "STARTTLS not supported by SMTP server; "
-                    "refusing to send credentials in cleartext"
-                )
+            if on_failure is not None:
+                on_failure(SendResult(
+                    "failed", "tls",
+                    operator_message=(
+                        "STARTTLS not supported by SMTP server; "
+                        "refusing to send credentials in cleartext"
+                    ),
+                ))
             with contextlib.suppress(Exception):
                 s.quit()
             return None
@@ -200,10 +269,9 @@ def _open_smtp_connection(
         return s
     except Exception as exc:  # noqa: BLE001 — SMTP is an external service with unpredictable failure modes
         sanitized = _sanitize_smtp_error(str(exc), config)
-        observe_exception(exc)
         logger.warning("SMTP connect failed: %s", sanitized)
-        if alert is not None:
-            alert.error_message = sanitized
+        if on_failure is not None:
+            on_failure(_exception_result(exc, config))
         if s is not None:
             with contextlib.suppress(Exception):
                 s.quit()

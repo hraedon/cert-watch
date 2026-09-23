@@ -6,7 +6,6 @@ import logging
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import partial
 from pathlib import Path
 from time import monotonic
 
@@ -17,10 +16,11 @@ from cert_watch.alerting.model import (
     ALERT_RETRY_DELAY,
     EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
     AlertConfig,
+    OutboundMessage,
     WebhookConfig,
 )
-from cert_watch.alerting.transports.smtp import _smtp_recipients, send_alert
-from cert_watch.alerting.transports.webhook import send_webhook
+from cert_watch.alerting.transports.smtp import SmtpTransport, _smtp_recipients
+from cert_watch.alerting.transports.webhook import WebhookTransport
 from cert_watch.database import Alert, AlertRepository
 from cert_watch.retry import backoff_range
 
@@ -61,12 +61,20 @@ def _attempt_once(
     alert = item.alert
     item.reached_transport = False
     if config is not None:
+        smtp_transport = SmtpTransport(config)
+        base_msg = OutboundMessage.from_alert(alert)
+        recipients = tuple(_smtp_recipients(base_msg, config))
+        global_recipients = tuple(address for address in recipients if address in config.recipients)
+        smtp_msg = OutboundMessage.from_alert(
+            alert,
+            recipients=recipients,
+            global_recipients=global_recipients,
+        )
         try:
-            item.delivered = attempt_delivery(
-                evidence_db, alert, "smtp", partial(send_alert, alert, config),
-                recipients=_smtp_recipients(alert, config),
-                global_recipients=config.recipients,
-            )
+            result = attempt_delivery(evidence_db, alert.id, smtp_transport, smtp_msg)
+            item.delivered = result.delivered
+            if not item.delivered:
+                item.last_error = result.operator_message or "unknown"
             item.reached_transport = True
             item.attempts_made += 1
         except DeliveryEvidenceUnavailable:
@@ -75,22 +83,19 @@ def _attempt_once(
             # so the webhook fallback below may well succeed.
             item.delivered = False
     if not item.delivered and webhook_config is not None:
-        kind = webhook_config.kind
-        channel = (
-            kind if kind in {"generic", "slack", "discord", "teams", "pagerduty"}
-            else "webhook"
-        )
+        webhook_transport = WebhookTransport(webhook_config)
+        webhook_msg = OutboundMessage.from_alert(alert)
         try:
-            item.delivered = attempt_delivery(
-                evidence_db, alert, channel, partial(send_webhook, alert, webhook_config),
-            )
+            result = attempt_delivery(evidence_db, alert.id, webhook_transport, webhook_msg)
+            item.delivered = result.delivered
+            if not item.delivered:
+                item.last_error = result.operator_message or "unknown"
             item.reached_transport = True
             item.attempts_made += 1
         except DeliveryEvidenceUnavailable:
             item.delivered = False
     if item.delivered:
         return
-    item.last_error = alert.error_message or "unknown"
     item.evidence_unavailable = not item.reached_transport
 
 

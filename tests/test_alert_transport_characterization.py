@@ -69,22 +69,22 @@ _CASES = {
         "smtp", "failed", "transport", "connection refused"
     ),
     "webhook_ssrf_block": _Expected(
-        "generic", "failed", "blocked", "webhook URL blocked by SSRF policy"
+        "webhook:generic", "failed", "blocked", "webhook URL blocked by SSRF policy"
     ),
     "webhook_dns_failure": _Expected(
-        "generic", "failed", "transport", "name resolution failed"
+        "webhook:generic", "failed", "transport", "name resolution failed"
     ),
     "webhook_http_4xx": _Expected(
-        "generic", "failed", "http_rejected", "HTTP Error 400", http_status=400
+        "webhook:generic", "failed", "http_rejected", "HTTP Error 400", http_status=400
     ),
     "webhook_http_5xx": _Expected(
-        "generic", "failed", "http_rejected", "HTTP Error 503", http_status=503
+        "webhook:generic", "failed", "http_rejected", "HTTP Error 503", http_status=503
     ),
     "webhook_timeout": _Expected(
-        "generic", "failed", "timeout", "webhook timed out"
+        "webhook:generic", "failed", "timeout", "webhook timed out"
     ),
     "webhook_connection_refused": _Expected(
-        "generic", "failed", "transport", "connection refused"
+        "webhook:generic", "failed", "transport", "connection refused"
     ),
 }
 

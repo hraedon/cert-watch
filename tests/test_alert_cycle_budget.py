@@ -117,13 +117,15 @@ def test_every_alert_is_tried_once_before_any_is_tried_twice(tmp_path, monkeypat
     _failing_smtp(monkeypatch)
     monkeypatch.setattr("cert_watch.retry.time.sleep", lambda _s: None)
     order: list[str] = []
-    real = __import__("cert_watch.alerting.dispatch", fromlist=["send_alert"]).send_alert
+    from cert_watch.alerting.transports.smtp import SmtpTransport
 
-    def recording(alert, config):
-        order.append(alert.cert_id)
-        return real(alert, config)
+    real = SmtpTransport.send
 
-    monkeypatch.setattr("cert_watch.alerting.dispatch.send_alert", recording)
+    def recording(transport, msg):
+        order.append(msg.cert_id)
+        return real(transport, msg)
+
+    monkeypatch.setattr(SmtpTransport, "send", recording)
 
     process_pending(repo, _config())
 

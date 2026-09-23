@@ -14,8 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
-    from cert_watch.alerting.model import WebhookConfig
-    from cert_watch.database import Alert
+    from cert_watch.alerting.model import OutboundMessage, WebhookConfig
 
 
 @dataclass(frozen=True)
@@ -29,7 +28,7 @@ class AlertRequest:
 class AlertAdapter(Protocol):
     kind: str
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest: ...
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest: ...
 
 def _status_color(alert_type: str) -> int:
     if alert_type == "expired":
@@ -94,25 +93,32 @@ def _alertname(alert_type: str) -> str:
 class GenericAdapter:
     kind = "generic"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         if config.template:
             payload = config.template
-            for key in ("alert_type", "cert_id", "message", "threshold_days", "status"):
-                value = str(getattr(alert, key, ""))
+            values = {
+                "alert_type": msg.severity,
+                "cert_id": msg.cert_id,
+                "message": msg.body,
+                "threshold_days": msg.threshold_days,
+                "status": msg.status,
+            }
+            for key in values:
+                value = str(values[key])
                 payload = payload.replace("{{" + key + "}}", value)
             content_type = "text/plain"
             if payload.lstrip().startswith("{"):
                 content_type = "application/json"
         else:
             payload_dict: dict[str, Any] = {
-                "alert_type": alert.alert_type,
-                "cert_id": alert.cert_id,
-                "message": alert.message,
-                "threshold_days": alert.threshold_days,
-                "status": alert.status,
+                "alert_type": msg.severity,
+                "cert_id": msg.cert_id,
+                "message": msg.body,
+                "threshold_days": msg.threshold_days,
+                "status": msg.status,
             }
-            if alert.extra_recipients:
-                payload_dict["extra_recipients"] = alert.extra_recipients
+            if msg.queued_recipients:
+                payload_dict["extra_recipients"] = list(msg.queued_recipients)
             payload = json.dumps(payload_dict)
             content_type = "application/json"
         # Adapter Content-Type is security-critical: custom headers must not be
@@ -128,19 +134,19 @@ class GenericAdapter:
 class DiscordAdapter:
     kind = "discord"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
-        color = _status_color(alert.alert_type)
-        threshold_str = f"{alert.threshold_days}d" if alert.threshold_days is not None else "—"
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
+        color = _status_color(msg.severity)
+        threshold_str = f"{msg.threshold_days}d" if msg.threshold_days is not None else "—"
         fields = [
-            {"name": "Alert Type", "value": alert.alert_type, "inline": True},
+            {"name": "Alert Type", "value": msg.severity, "inline": True},
             {"name": "Threshold", "value": threshold_str, "inline": True},
-            {"name": "Status", "value": alert.status, "inline": True},
+            {"name": "Status", "value": msg.status, "inline": True},
         ]
-        if alert.cert_id:
-            fields.append({"name": "Cert ID", "value": str(alert.cert_id), "inline": False})
+        if msg.cert_id:
+            fields.append({"name": "Cert ID", "value": str(msg.cert_id), "inline": False})
         embed = {
-            "title": f"cert-watch: {alert.alert_type.replace('_', ' ').title()}",
-            "description": alert.message,
+            "title": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
+            "description": msg.body,
             "color": color,
             "fields": fields,
         }
@@ -156,16 +162,16 @@ class DiscordAdapter:
 class TeamsAdapter:
     kind = "teams"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
-        urgency = _status_urgency(alert.alert_type)
-        threshold_str = f"{alert.threshold_days}d" if alert.threshold_days is not None else "—"
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
+        urgency = _status_urgency(msg.severity)
+        threshold_str = f"{msg.threshold_days}d" if msg.threshold_days is not None else "—"
         facts = [
-            {"title": "Alert Type", "value": alert.alert_type},
+            {"title": "Alert Type", "value": msg.severity},
             {"title": "Threshold", "value": threshold_str},
-            {"title": "Status", "value": alert.status},
+            {"title": "Status", "value": msg.status},
         ]
-        if alert.cert_id:
-            facts.append({"title": "Cert ID", "value": str(alert.cert_id)})
+        if msg.cert_id:
+            facts.append({"title": "Cert ID", "value": str(msg.cert_id)})
         card = {
             "type": "message",
             "attachments": [
@@ -177,7 +183,7 @@ class TeamsAdapter:
                         "body": [
                             {
                                 "type": "TextBlock",
-                                "text": f"cert-watch: {alert.alert_type.replace('_', ' ').title()}",
+                                "text": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
                                 "weight": "Bolder",
                                 "size": "Medium",
                                 "color": urgency,
@@ -188,7 +194,7 @@ class TeamsAdapter:
                             },
                             {
                                 "type": "TextBlock",
-                                "text": alert.message,
+                                "text": msg.body,
                                 "wrap": True,
                             },
                         ],
@@ -211,14 +217,14 @@ _PAGERDUTY_EVENTS_URL = "https://events.pagerduty.com/v2/enqueue"
 class PagerDutyAdapter:
     kind = "pagerduty"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
-        severity = _pd_severity(alert.alert_type, alert.threshold_days)
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
+        severity = _pd_severity(msg.severity, msg.threshold_days)
         dedup_key = _pd_dedup_key(
-            alert.trigger_cert_id or alert.cert_id,
-            alert.alert_type,
-            alert.threshold_days,
+            msg.trigger_cert_id or msg.cert_id,
+            msg.severity,
+            msg.threshold_days,
         )
-        summary = alert.message
+        summary = msg.body
         if len(summary) > 1024:
             summary = summary[:1021] + "..."
         payload_dict = {
@@ -229,7 +235,7 @@ class PagerDutyAdapter:
                 "summary": summary,
                 "source": "cert-watch",
                 "severity": severity,
-                "component": str(alert.cert_id),
+                "component": str(msg.cert_id),
                 "class": "cert-expiry",
             },
         }
@@ -290,19 +296,19 @@ def _slack_color(alert_type: str) -> str:
 class SlackAdapter:
     kind = "slack"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
-        color = _slack_color(alert.alert_type)
-        threshold_str = f"{alert.threshold_days}d" if alert.threshold_days is not None else "—"
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
+        color = _slack_color(msg.severity)
+        threshold_str = f"{msg.threshold_days}d" if msg.threshold_days is not None else "—"
         fields = [
             {"title": "Expires", "value": threshold_str, "short": True},
-            {"title": "Urgency", "value": alert.alert_type, "short": True},
+            {"title": "Urgency", "value": msg.severity, "short": True},
         ]
-        if alert.cert_id:
-            fields.append({"title": "Cert ID", "value": str(alert.cert_id), "short": False})
+        if msg.cert_id:
+            fields.append({"title": "Cert ID", "value": str(msg.cert_id), "short": False})
         attachment = {
             "color": color,
-            "title": f"cert-watch: {alert.alert_type.replace('_', ' ').title()}",
-            "text": alert.message,
+            "title": f"cert-watch: {msg.severity.replace('_', ' ').title()}",
+            "text": msg.body,
             "fields": fields,
             "footer": "cert-watch",
         }
@@ -314,19 +320,19 @@ class SlackAdapter:
 class AlertmanagerAdapter:
     kind = "alertmanager"
 
-    def build(self, alert: Alert, config: WebhookConfig) -> AlertRequest:
+    def build(self, msg: OutboundMessage, config: WebhookConfig) -> AlertRequest:
         now = datetime.now(UTC).isoformat()
         alert_entry = {
             "status": "firing",
             "labels": {
-                "alertname": _alertname(alert.alert_type),
-                "host": alert.hostname or str(alert.cert_id),
-                "cert_subject": alert.subject or str(alert.cert_id),
-                "urgency": alert.alert_type,
+                "alertname": _alertname(msg.severity),
+                "host": msg.hostname or str(msg.cert_id),
+                "cert_subject": msg.cert_subject or str(msg.cert_id),
+                "urgency": msg.severity,
             },
             "annotations": {
-                "summary": alert.message,
-                "expires": str(alert.threshold_days) if alert.threshold_days is not None else "",
+                "summary": msg.body,
+                "expires": str(msg.threshold_days) if msg.threshold_days is not None else "",
             },
             "startsAt": now,
             "generatorURL": config.url,

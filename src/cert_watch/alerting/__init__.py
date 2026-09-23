@@ -10,6 +10,20 @@ submodules.
 
 from __future__ import annotations
 
-from cert_watch.alerting.model import AlertConfig, WebhookConfig
+from cert_watch.alerting.model import (
+    AlertConfig,
+    OutboundMessage,
+    SendResult,
+    WebhookConfig,
+    normalize_channel,
+)
+from cert_watch.alerting.transports.base import Transport
 
-__all__ = ["AlertConfig", "WebhookConfig"]
+__all__ = [
+    "AlertConfig",
+    "OutboundMessage",
+    "SendResult",
+    "Transport",
+    "WebhookConfig",
+    "normalize_channel",
+]

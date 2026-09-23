@@ -21,6 +21,30 @@ from cryptography.hazmat.primitives.serialization import (
 from cryptography.x509.oid import NameOID
 
 
+class FakeTransport:
+    """Deterministic transport for dispatcher/evidence contract tests."""
+
+    def __init__(self, *results, channel: str = "webhook:generic") -> None:
+        from cert_watch.alerting.model import SendResult
+
+        self.channel = channel
+        self.destination_id = "fake-destination"
+        self.results = list(results) or [SendResult("accepted")]
+        self.messages = []
+
+    def send(self, msg):
+        self.messages.append(msg)
+        if len(self.results) > 1:
+            return self.results.pop(0)
+        return self.results[0]
+
+
+@pytest.fixture
+def fake_transport():
+    """Factory fixture returning a protocol-compatible recording transport."""
+    return FakeTransport
+
+
 @pytest.fixture(autouse=True)
 def _resolve_synthetic_smtp_hosts(monkeypatch):
     """Give the suite's reserved SMTP hostnames a stable public address."""

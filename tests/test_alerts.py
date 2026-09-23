@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cert_watch.alerting.model import OutboundMessage
 from cert_watch.alerts import (
     AlertConfig,
     WebhookConfig,
@@ -15,6 +16,10 @@ from cert_watch.alerts import (
 )
 from cert_watch.certificate_model import Certificate, parse_certificate
 from cert_watch.database import Alert, SqliteAlertRepository
+
+
+def _outbound(alert: Alert) -> OutboundMessage:
+    return OutboundMessage.from_alert(alert)
 
 
 @pytest.fixture
@@ -81,8 +86,8 @@ def test_send_alert_smtp_success(monkeypatch):
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
-        ok = send_alert(alert, config)
-    assert ok is True
+        result = send_alert(_outbound(alert), config)
+    assert result.delivered
     smtp_mock.send_message.assert_called_once()
 
 
@@ -99,14 +104,14 @@ def test_send_alert_smtp_failure_returns_false():
         "cert_watch.alerting.transports.smtp.smtplib.SMTP",
         side_effect=ConnectionRefusedError("nope"),
     ):
-        ok = send_alert(alert, config)
-    assert ok is False
-    assert alert.error_message and "nope" in alert.error_message
+        result = send_alert(_outbound(alert), config)
+    assert not result.delivered
+    assert "nope" in result.operator_message
 
 
 def test_send_alert_none_config_returns_false():
     alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
-    assert send_alert(alert, None) is False
+    assert not send_alert(_outbound(alert), None).delivered
 
 
 def test_send_alert_port25_no_starttls_no_creds_sends():
@@ -127,8 +132,8 @@ def test_send_alert_port25_no_starttls_no_creds_sends():
     smtp_mock.__exit__ = MagicMock(return_value=False)
     smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
-        ok = send_alert(alert, config)
-    assert ok is True
+        result = send_alert(_outbound(alert), config)
+    assert result.delivered
     smtp_mock.login.assert_not_called()
     smtp_mock.send_message.assert_called_once()
 
@@ -151,11 +156,11 @@ def test_send_alert_no_starttls_with_creds_refuses():
     smtp_mock.__exit__ = MagicMock(return_value=False)
     smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
-        ok = send_alert(alert, config)
-    assert ok is False
+        result = send_alert(_outbound(alert), config)
+    assert not result.delivered
     smtp_mock.login.assert_not_called()
     smtp_mock.send_message.assert_not_called()
-    assert alert.error_message and "cleartext" in alert.error_message
+    assert "cleartext" in result.operator_message
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +179,10 @@ def test_send_alert_ssrf_loopback_blocked():
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
-        ok = send_alert(alert, config)
-    assert ok is False
+        result = send_alert(_outbound(alert), config)
+    assert not result.delivered
     mock_smtp.assert_not_called()
-    assert alert.error_message and "SSRF" in alert.error_message
+    assert "SSRF" in result.operator_message
 
 
 def test_send_alert_ssrf_metadata_blocked():
@@ -191,8 +196,8 @@ def test_send_alert_ssrf_metadata_blocked():
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
-        ok = send_alert(alert, config)
-    assert ok is False
+        result = send_alert(_outbound(alert), config)
+    assert not result.delivered
     mock_smtp.assert_not_called()
 
 
@@ -223,8 +228,8 @@ def test_send_alert_ssrf_private_allowed(monkeypatch):
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
-        ok = send_alert(alert, config)
-    assert ok is True
+        result = send_alert(_outbound(alert), config)
+    assert result.delivered
     smtp_mock.send_message.assert_called_once()
 
 
@@ -252,10 +257,10 @@ def test_send_alert_ssrf_private_blocked_when_disallowed(monkeypatch):
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
-        ok = send_alert(alert, config)
-    assert ok is False
+        result = send_alert(_outbound(alert), config)
+    assert not result.delivered
     mock_smtp.assert_not_called()
-    assert alert.error_message and "SSRF" in alert.error_message
+    assert "SSRF" in result.operator_message
 
 
 def test_send_alert_ssrf_loopback_blocked_no_ip_in_error():
@@ -269,9 +274,9 @@ def test_send_alert_ssrf_loopback_blocked_no_ip_in_error():
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP"):
-        send_alert(alert, config)
-    assert alert.error_message is not None
-    assert "127.0.0.1" not in alert.error_message
+        result = send_alert(_outbound(alert), config)
+    assert result.operator_message
+    assert "127.0.0.1" not in result.operator_message
 
 
 def test_process_pending_ssrf_blocked_does_not_crash(alert_repo, expiring_cert):
@@ -366,7 +371,7 @@ def test_open_smtp_connection_rejects_invalid_relay_certificate():
         from_addr="a@b",
         recipients=["c@d"],
     )
-    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    failures = []
     with (
         patch(
             "cert_watch.alerting.transports.smtp.resolve_smtp_host",
@@ -377,11 +382,10 @@ def test_open_smtp_connection_rejects_invalid_relay_certificate():
             side_effect=ssl.SSLCertVerificationError("certificate verify failed"),
         ),
     ):
-        result = _open_smtp_connection(config, alert=alert)
+        result = _open_smtp_connection(config, on_failure=failures.append)
 
     assert result is None
-    assert alert.error_message is not None
-    assert "certificate verify failed" in alert.error_message
+    assert "certificate verify failed" in failures[0].operator_message
 
 
 def test_open_smtp_connection_uses_single_validated_resolution():
@@ -425,15 +429,15 @@ def test_open_smtp_connection_resolution_failure_does_not_retry_by_hostname():
         from_addr="a@b",
         recipients=["c@d"],
     )
-    alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
+    failures = []
     with (
         patch("cert_watch.alerting.transports.smtp.resolve_smtp_host", return_value=(None, None)),
         patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as smtp,
     ):
-        result = _open_smtp_connection(config, alert=alert)
+        result = _open_smtp_connection(config, on_failure=failures.append)
     assert result is None
     smtp.assert_not_called()
-    assert alert.error_message == "SMTP host could not be resolved"
+    assert failures[0].operator_message == "SMTP host could not be resolved"
 
 
 def test_check_smtp_ssrf_blocks_metadata_address():
@@ -624,8 +628,8 @@ def test_send_webhook_success():
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        ok = send_webhook(alert, config)
-    assert ok is True
+        result = send_webhook(_outbound(alert), config)
+    assert result.delivered
     mock_urlopen.assert_called_once()
 
 
@@ -636,14 +640,14 @@ def test_send_webhook_failure():
         "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
         side_effect=Exception("connection refused"),
     ):
-        ok = send_webhook(alert, config)
-    assert ok is False
-    assert "connection refused" in (alert.error_message or "")
+        result = send_webhook(_outbound(alert), config)
+    assert not result.delivered
+    assert "connection refused" in result.operator_message
 
 
 def test_send_webhook_none_config():
     alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
-    assert send_webhook(alert, None) is False
+    assert not send_webhook(_outbound(alert), None).delivered
 
 
 def test_send_webhook_template():
@@ -664,8 +668,8 @@ def test_send_webhook_template():
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        ok = send_webhook(alert, config)
-    assert ok is True
+        result = send_webhook(_outbound(alert), config)
+    assert result.delivered
     call_kwargs = mock_urlopen.call_args
     body = call_kwargs.kwargs.get("data") or call_kwargs[1].get("data", b"")
     if isinstance(body, bytes):
@@ -693,8 +697,8 @@ def test_send_webhook_template_non_json():
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
         mock_urlopen.return_value = mock_resp
-        ok = send_webhook(alert, config)
-    assert ok is True
+        result = send_webhook(_outbound(alert), config)
+    assert result.delivered
     call_kwargs = mock_urlopen.call_args
     headers = call_kwargs.kwargs.get("headers") or call_kwargs[1].get("headers", {})
     assert headers.get("Content-Type") == "text/plain"
@@ -764,9 +768,9 @@ def test_send_webhook_ssrf_blocked():
         "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
         side_effect=SSRFBlockedError("blocked IP: 127.0.0.1"),
     ):
-        ok = send_webhook(alert, config)
-    assert ok is False
-    assert "SSRF" in (alert.error_message or "") or "blocked" in (alert.error_message or "")
+        result = send_webhook(_outbound(alert), config)
+    assert not result.delivered
+    assert "SSRF" in result.operator_message or "blocked" in result.operator_message
 
 
 def test_delete_certificate_cascades_alerts(tmp_path, expiring_soon_leaf):

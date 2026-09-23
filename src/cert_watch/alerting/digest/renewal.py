@@ -18,6 +18,7 @@ from cert_watch.alerting.model import (
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
     AlertConfig,
+    OutboundMessage,
     WebhookConfig,
 )
 from cert_watch.alerting.transports.smtp import _validate_email
@@ -268,8 +269,6 @@ def send_renewal_digest(
     returns None for an asynchronous submission and invokes the callback with
     the final success/failure result after all webhook deliveries complete.
     """
-    from cert_watch.database import Alert
-
     if alert_config is None and webhook_config is None:
         return False
 
@@ -441,21 +440,18 @@ def send_renewal_digest(
             if not claim.acquired:
                 return False
             body = _build_digest_message(od)
-            alert = Alert(
-                cert_id=claim.idempotency_key,
-                alert_type="renewal_digest",
-                status="pending",
-                message=body,
-                threshold_days=None,
-                hostname="",
+            msg = OutboundMessage.from_digest(
                 subject=f"Renewal Digest ({days}d)",
+                body=body,
+                severity="renewal_digest",
+                idempotency_key=claim.idempotency_key,
             )
             for _ in backoff_range(
                 ALERT_MAX_RETRIES - 1, ALERT_RETRY_DELAY, strategy="linear"
             ):
                 if not renew_digest_delivery(db_path, claim):
                     return False
-                if send_webhook(alert, webhook_config):
+                if send_webhook(msg, webhook_config):
                     complete_digest_delivery(db_path, claim, succeeded=True)
                     return True
             logger.warning(
