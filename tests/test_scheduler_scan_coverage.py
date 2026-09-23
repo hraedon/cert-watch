@@ -186,6 +186,84 @@ def test_scheduler_scan_fn_exception_does_not_block_alerts(tmp_path):
     assert ran == ["alert"]
 
 
+def test_scheduler_scan_system_exit_isolated_and_next_cycle_runs(
+    tmp_path, monkeypatch,
+):
+    import cert_watch.scheduler as scheduler_module
+
+    settings = Settings(
+        db_path=tmp_path / "test.sqlite3",
+        data_dir=tmp_path,
+        sched_hour=6,
+    )
+    init_schema(settings.db_path)
+    context = SchedulerContext(settings, None, None)
+    second_cycle = threading.Event()
+    release_second_cycle = threading.Event()
+    scans = 0
+    alerts = []
+
+    class Clock:
+        current = datetime(2026, 9, 23, 5, 59, tzinfo=UTC)
+
+        def now(self):
+            return self.current
+
+        def monotonic(self):
+            return self.current.timestamp()
+
+        def wait(self, _event, timeout):
+            self.current += timedelta(seconds=timeout)
+            return False
+
+    def scan():
+        nonlocal scans
+        scans += 1
+        if scans == 1:
+            raise SystemExit("scan library called sys.exit")
+        second_cycle.set()
+        release_second_cycle.wait(1)
+        return {}
+
+    context.scan_all = scan
+    context.run_alerts = lambda: alerts.append("alert") or {}
+    context.maybe_run_weekly_digest = lambda: {}
+    context.maintenance = lambda: None
+    monkeypatch.setattr(
+        scheduler_module, "_seconds_until_next_scan", lambda *args, **kwargs: 0,
+    )
+    runtime = Scheduler(context, clock=Clock())
+
+    runtime.start()
+    try:
+        assert second_cycle.wait(1), "SystemExit killed the scheduler before cycle two"
+        assert alerts == ["alert"]
+        assert runtime.is_running
+        assert runtime.loop_failure_count == 0
+        assert runtime.last_loop_error is None
+    finally:
+        release_second_cycle.set()
+        assert runtime.stop(timeout=1)
+
+
+def test_scheduler_scan_system_exit_propagates_during_shutdown(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    stopped = threading.Event()
+
+    def scan():
+        stopped.set()
+        raise SystemExit("shutdown")
+
+    with pytest.raises(SystemExit, match="shutdown"):
+        runtime.run_cycle(
+            scan_fn=scan,
+            alert_fn=lambda: {},
+            digest_fn=lambda: {},
+            maintenance_fn=lambda: None,
+            stop_event=stopped,
+        )
+
+
 def test_scheduler_alert_fn_exception_is_swallowed(tmp_path):
     runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
@@ -370,7 +448,51 @@ def test_malformed_last_scan_timestamp_is_not_exported(tmp_path, caplog):
     assert "latest scan timestamp is malformed" in caplog.text
 
 
+def test_last_scan_timestamp_is_cached_after_recorded_scan(tmp_path, monkeypatch):
+    db = tmp_path / "test.sqlite3"
+    scanned_at = datetime(2026, 9, 23, 12, 34, tzinfo=UTC)
+
+    class Clock:
+        def now(self):
+            return scanned_at
+
+        def monotonic(self):
+            return scanned_at.timestamp()
+
+        def wait(self, event, timeout):
+            return event.wait(timeout)
+
+    init_schema(db)
+    settings = Settings(db_path=db, data_dir=tmp_path)
+    runtime = Scheduler(SchedulerContext(settings, None, None), clock=Clock())
+    runtime.run_scan_now(
+        scan_fn=lambda hostname, port: object(),
+        alert_fn=lambda: {},
+        db_path=db,
+        host_provider=lambda: [("cached.example.com", 443)],
+        store_fn=lambda result: "leaf-id",
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_load_last_scan_timestamp",
+        lambda: pytest.fail("cached property queried the database"),
+    )
+
+    assert runtime.last_scan_timestamp == scanned_at.timestamp()
+    assert runtime.last_scan_timestamp == scanned_at.timestamp()
+
+
 # ---------- run_scan_now ----------
+
+
+def test_internal_run_scan_requires_renewal_check():
+    from inspect import Parameter, signature
+
+    from cert_watch.scheduler import _run_scan_now
+
+    renewal_check = signature(_run_scan_now).parameters["renewal_check"]
+    assert renewal_check.kind is Parameter.KEYWORD_ONLY
+    assert renewal_check.default is Parameter.empty
 
 
 def test_run_scan_now_basic(tmp_path):

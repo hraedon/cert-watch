@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import sqlite3
+import sys
 import threading
 import time
 import uuid
@@ -242,7 +243,7 @@ class Scheduler:
         self._last_scan_lock = threading.Lock()
         self._last_scan_timestamp: float | None = None
         self._bind_context()
-        self._refresh_last_scan_timestamp()
+        self._load_last_scan_timestamp()
 
     def _bind_context(self) -> None:
         self.context.bind_runtime(
@@ -273,10 +274,6 @@ class Scheduler:
 
     @property
     def last_scan_timestamp(self) -> float | None:
-        # Explicit/manual scans do not run through this object. Refresh on read
-        # so the metric preserves its historical "latest recorded scan"
-        # meaning while still taking scheduler state through the app instance.
-        self._refresh_last_scan_timestamp()
         with self._last_scan_lock:
             return self._last_scan_timestamp
 
@@ -456,43 +453,51 @@ class Scheduler:
         maintenance_fn = maintenance_fn or self.context.maintenance
         digest_fn = digest_fn or self.context.maybe_run_weekly_digest
         stopped = stop_event or self._stop_event
-        try:
-            scan_fn()
-            logger.info("scheduled scan completed")
-        except Exception:
-            logger.exception("scheduler scan_fn failed")
-        finally:
-            self._refresh_last_scan_timestamp()
+        self._run_phase(
+            "scan_fn", scan_fn, stopped, completed_message="scheduled scan completed",
+        )
         if stopped.is_set():
             return
         if ct_fn is not None:
-            try:
-                ct_fn()
-                logger.info("scheduled CT check completed")
-            except Exception:
-                logger.exception("scheduler ct_fn failed")
+            self._run_phase(
+                "ct_fn", ct_fn, stopped, completed_message="scheduled CT check completed",
+            )
         if stopped.is_set():
             return
-        try:
-            alert_fn()
-            logger.info("scheduled alerts completed")
-        except Exception:
-            logger.exception("scheduler alert_fn failed")
+        self._run_phase(
+            "alert_fn", alert_fn, stopped,
+            completed_message="scheduled alerts completed",
+        )
         if stopped.is_set():
             return
         if digest_fn is not None:
-            try:
-                digest_fn()
-                logger.info("scheduled digest completed")
-            except Exception:
-                logger.exception("scheduler digest_fn failed")
+            self._run_phase(
+                "digest_fn", digest_fn, stopped,
+                completed_message="scheduled digest completed",
+            )
         if stopped.is_set():
             return
         if maintenance_fn is not None:
-            try:
-                maintenance_fn()
-            except Exception:
-                logger.exception("scheduler maintenance_fn failed")
+            self._run_phase("maintenance_fn", maintenance_fn, stopped)
+
+    @staticmethod
+    def _run_phase(
+        name: str,
+        fn: Callable[[], Any],
+        stopped: threading.Event,
+        *,
+        completed_message: str | None = None,
+    ) -> None:
+        """Isolate phase failures unless the process is genuinely stopping."""
+        try:
+            fn()
+        except BaseException:
+            if stopped.is_set() or sys.is_finalizing():
+                raise
+            logger.exception("scheduler %s failed", name)
+        else:
+            if completed_message is not None:
+                logger.info(completed_message)
 
     def try_run_alert_delivery(
         self, delivery_fn: Callable[[], dict[str, int]],
@@ -507,6 +512,7 @@ class Scheduler:
     def run_scan_now(self, *args: Any, **kwargs: Any) -> dict[str, int]:
         kwargs["now"] = self.clock.now
         kwargs["renewal_check"] = self._check_renewal_overdue
+        kwargs["scan_recorded"] = self._record_last_scan_timestamp
         return _run_scan_now(*args, **kwargs)
 
     def _check_renewal_overdue(
@@ -585,7 +591,17 @@ class Scheduler:
         _, pending = concurrent.futures.wait(futures, timeout=timeout)
         return not pending
 
-    def _refresh_last_scan_timestamp(self) -> None:
+    def _record_last_scan_timestamp(self, scanned_at: datetime) -> None:
+        timestamp = scanned_at.timestamp()
+        with self._last_scan_lock:
+            if (
+                self._last_scan_timestamp is None
+                or timestamp > self._last_scan_timestamp
+            ):
+                self._last_scan_timestamp = timestamp
+
+    def _load_last_scan_timestamp(self) -> None:
+        """Initialize the cache from persisted history once at startup."""
         try:
             from cert_watch.database import _connect
             from cert_watch.database.connection import _parse_iso
@@ -635,7 +651,8 @@ def _run_scan_now(
     store_fn: Callable[[object], str] | None = None,
     settings: Any = None,
     now: Callable[[], datetime] = _utc_now,
-    renewal_check: Callable[..., None] | None = None,
+    renewal_check: Callable[..., None],
+    scan_recorded: Callable[[datetime], None] | None = None,
 ) -> dict[str, int]:
     """
     Execute one scan + alert cycle. See AC-02/AC-03/AC-05/AC-06.
@@ -653,6 +670,14 @@ def _run_scan_now(
     scanned = 0
     failures = 0
 
+    def _record(entry: ScanHistory) -> str:
+        if db_path is None:
+            raise ValueError("db_path is required to record scan history")
+        entry_id = record_scan_history(db_path, entry)
+        if scan_recorded is not None:
+            scan_recorded(entry.scanned_at)
+        return entry_id
+
     for hostname, port in hosts:
         try:
             result = scan_fn(hostname, port)
@@ -661,8 +686,7 @@ def _run_scan_now(
             failures += 1
             if db_path is not None:
                 try:
-                    record_scan_history(
-                        db_path,
+                    _record(
                         ScanHistory(
                             hostname=hostname, port=port, status="failure",
                             scanned_at=now(),
@@ -681,8 +705,7 @@ def _run_scan_now(
             failures += 1
             if db_path is not None:
                 try:
-                    record_scan_history(
-                        db_path,
+                    _record(
                         ScanHistory(
                             hostname=hostname, port=port, status="failure",
                             scanned_at=now(),
@@ -728,8 +751,7 @@ def _run_scan_now(
                 logger.exception("store_fn failed for %s:%s", hostname, port)
                 if db_path is not None:
                     try:
-                        record_scan_history(
-                            db_path,
+                        _record(
                             ScanHistory(
                                 hostname=hostname,
                                 port=port,
@@ -758,8 +780,7 @@ def _run_scan_now(
                 )
                 if db_path is not None:
                     try:
-                        record_scan_history(
-                            db_path,
+                        _record(
                             ScanHistory(
                                 hostname=hostname,
                                 port=port,
@@ -775,8 +796,7 @@ def _run_scan_now(
                         )
                 continue
         if db_path is not None:
-            record_scan_history(
-                db_path,
+            _record(
                 ScanHistory(
                     hostname=hostname,
                     port=port,
@@ -785,8 +805,7 @@ def _run_scan_now(
                 ),
             )
 
-    if renewal_check is not None:
-        renewal_check(db_path, hosts, settings=settings)
+    renewal_check(db_path, hosts, settings=settings)
 
     alert_counts = alert_fn() or {"sent": 0, "failed": 0}
     return {
