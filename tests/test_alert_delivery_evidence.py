@@ -794,6 +794,29 @@ def test_delivery_and_status_changes_clear_the_deferral_clock(monkeypatch, tmp_p
     assert repo.list_pending()[0].deferred_since is None
 
 
+def test_scoped_deferral_does_not_count_a_stolen_lease(monkeypatch, tmp_path):
+    from cert_watch.alerting.model import WebhookConfig
+    from cert_watch.database import ScopedAlertRepository
+    from cert_watch.database.connection import _connect
+
+    db, _repo, alert = _pending(tmp_path)
+
+    def steal_then_fail(*_args, **_kwargs):
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE alerts SET lease_owner = 'thief' WHERE id = ?", (alert.id,)
+            )
+            conn.commit()
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", steal_then_fail)
+    result = process_pending(
+        ScopedAlertRepository(db, ()), None,
+        WebhookConfig(url="https://example.invalid/hook"),
+    )
+    assert result == {"sent": 0, "failed": 0, "deferred": 0}
+
+
 def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_path, reload_app):
     """A deferral has no attempt row, so only its age distinguishes it.
 

@@ -48,13 +48,13 @@ def upgrade(conn: sqlite3.Connection) -> None:
                )"""
         )
 
-    # Before this lifecycle existed, threshold evaluation revived failed
-    # expiry notifications on every pass. Preserve that released behaviour
-    # exactly once on upgrade. New terminal failures carry failure_reason and
-    # remain terminal; non-expiry alert types were never auto-requeued.
+    # Mark pre-lifecycle expiry failures without making them deliverable yet.
+    # Threshold evaluation may revive one only if its certificate is still the
+    # live leaf and its threshold is still the most urgent crossed threshold.
+    # Rows that no longer describe a current condition remain visible as failed.
     conn.execute(
         """UPDATE alerts
-           SET status = 'pending', attempt_count = 0, next_attempt_at = NULL
+           SET failure_reason = 'legacy_failed'
            WHERE status = 'failed'
              AND alert_type IN ('expiry_warning', 'expired')
              AND failure_reason IS NULL"""

@@ -268,6 +268,47 @@ class AlertStore:
             conn.commit()
         return cursor.rowcount == 1
 
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        """Queue one pre-lifecycle expiry failure if its leaf is still current."""
+        with _connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """UPDATE alerts SET status = 'pending', attempt_count = 0,
+                       next_attempt_at = NULL, lease_owner = NULL,
+                       lease_expires_at = NULL, failure_reason = NULL,
+                       error_message = NULL, deferred_since = NULL, sent_at = NULL
+                   WHERE id = ? AND status = 'failed'
+                     AND failure_reason = 'legacy_failed'
+                     AND alert_type IN ('expiry_warning', 'expired')
+                     AND EXISTS (
+                         SELECT 1 FROM certificates AS current
+                         LEFT JOIN hosts AS host
+                           ON host.hostname = current.hostname
+                          AND host.port = current.port
+                         WHERE current.id = alerts.cert_id
+                           AND current.is_leaf = 1
+                           AND COALESCE(host.renewal_status, 'pending') != 'renewed'
+                           AND NOT EXISTS (
+                               SELECT 1 FROM certificates AS successor
+                               WHERE successor.replaces_cert_id = current.id
+                           )
+                     )""",
+                (alert_id,),
+            )
+            conn.commit()
+        return cursor.rowcount == 1
+
+    def wake_configuration_deferrals(self, error_message: str) -> int:
+        """Make no-channel deferrals eligible after a channel is configured."""
+        with _connect(self.db_path) as conn:
+            cursor = conn.execute(
+                """UPDATE alerts SET next_attempt_at = NULL
+                   WHERE status = 'pending' AND attempt_count = 0
+                     AND next_attempt_at IS NOT NULL AND error_message = ?""",
+                (error_message,),
+            )
+            conn.commit()
+        return cursor.rowcount
+
     def reset_pending_compat(self, alert_id: str) -> None:
         """Legacy repository reset; production operator retry is failed-only."""
         with _connect(self.db_path) as conn:
@@ -309,12 +350,13 @@ class AlertStore:
 
     def note_pending_deferral(
         self, alert_id: str, when: datetime, *, restart: bool = False
-    ) -> None:
+    ) -> bool:
         assignment = "?" if restart else "COALESCE(deferred_since, ?)"
         with _connect(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 f"UPDATE alerts SET deferred_since = {assignment} "
                 "WHERE id = ? AND status = 'pending'",
                 (_iso(when), alert_id),
             )
             conn.commit()
+        return cursor.rowcount == 1

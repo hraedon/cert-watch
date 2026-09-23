@@ -267,6 +267,35 @@ def test_cycle_budget_backs_off_attempted_rows_and_preserves_diagnostics(
     assert stored["second"].error_message == "waiting for first attempt"
 
 
+def test_stored_error_attempt_suffix_is_replaced_each_cycle(tmp_path: Path) -> None:
+    db = tmp_path / "stable-error.sqlite3"
+    init_schema(db)
+    _alert(db)
+    current = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+    class ErrorThenStoredFallback(CountingTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        def send(self, message):
+            self.calls += 1
+            return SendResult(
+                "failed", "transport",
+                operator_message="relay timed out" if self.calls <= 3 else "",
+            )
+
+    transport = ErrorThenStoredFallback()
+
+    for delay in (timedelta(0), timedelta(hours=1)):
+        current = datetime(2026, 9, 22, 10, 0, tzinfo=UTC) + delay
+        Dispatcher(
+            db, transports=[transport], clock=lambda current=current: current
+        ).process_pending()
+
+    stored = SqliteAlertRepository(db).list_for_cert("cert-1")[0]
+    assert stored.error_message == "relay timed out (after 3 attempts)"
+
+
 def test_operator_flush_records_evidence_without_spending_give_up_budget(
     tmp_path: Path,
 ) -> None:
@@ -410,7 +439,7 @@ def test_migration_0036_upgrades_rows_and_backfills_last_attempt(tmp_path: Path)
             row["message"]: row
             for row in conn.execute(
                 "SELECT message, status, attempt_count, next_attempt_at, "
-                "last_attempt_at FROM alerts"
+                "last_attempt_at, failure_reason FROM alerts"
             )
         }
         indexes = {
@@ -418,10 +447,95 @@ def test_migration_0036_upgrades_rows_and_backfills_last_attempt(tmp_path: Path)
         }
     assert set(rows) == {name for name, _, _ in cases}
     assert all(row["attempt_count"] == 0 for row in rows.values())
-    assert rows["failed-expiry"]["status"] == "pending"
-    assert rows["failed-expired"]["status"] == "pending"
+    assert rows["failed-expiry"]["status"] == "failed"
+    assert rows["failed-expired"]["status"] == "failed"
+    assert rows["failed-expiry"]["failure_reason"] == "legacy_failed"
+    assert rows["failed-expired"]["failure_reason"] == "legacy_failed"
     assert rows["failed-drift"]["status"] == "failed"
-    assert rows["failed-expiry"]["next_attempt_at"] is None
+    assert rows["failed-drift"]["failure_reason"] is None
     assert rows["sent-expiry"]["last_attempt_at"] == "2026-09-20T10:00:00+00:00"
     assert rows["pending-expiry"]["last_attempt_at"] is None
     assert "idx_alerts_dispatch" in indexes
+
+
+def test_legacy_failed_expiry_rows_revive_only_for_live_current_threshold(
+    tmp_path: Path,
+) -> None:
+    from cert_watch.alerting.rules.expiry import evaluate_all_certs
+    from cert_watch.certificate_model import Certificate
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from tests._helpers import seed_certificate
+
+    db = tmp_path / "legacy-revival.sqlite3"
+    init_schema(db)
+    repo = SqliteAlertRepository(db)
+    now = datetime.now(UTC)
+
+    def cert(cert_id: str, days: int) -> Certificate:
+        return Certificate(
+            subject=f"CN={cert_id}", issuer="CN=CA",
+            not_before=now - timedelta(days=360),
+            not_after=now + timedelta(days=days, hours=12),
+            san_dns_names=[], fingerprint_sha256=cert_id * 4,
+            raw_der=b"", is_leaf=True,
+        )
+
+    hosts = SqliteHostRepository(db)
+    for hostname in ("live.test", "renewed.test", "superseded.test", "stage.test"):
+        hosts.add(hostname, 443)
+    seed_certificate(db, cert("live", 5), cert_id="live", hostname="live.test", port=443)
+    seed_certificate(
+        db, cert("renewed", 5), cert_id="renewed", hostname="renewed.test", port=443,
+    )
+    seed_certificate(
+        db, cert("old", 5), cert_id="old", hostname="superseded.test", port=443,
+    )
+    seed_certificate(
+        db, cert("successor", 100), cert_id="successor",
+        hostname="superseded.test", port=443, replaces_cert_id="old",
+    )
+    seed_certificate(db, cert("stage", 5), cert_id="stage", hostname="stage.test", port=443)
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE hosts SET renewal_status = 'renewed' WHERE hostname = 'renewed.test'"
+        )
+        conn.commit()
+
+    alert_ids: dict[str, str] = {}
+    for cert_id, threshold in (
+        ("live", 7), ("renewed", 7), ("old", 7), ("stage", 14),
+        ("deleted", 7), ("very-old", 7),
+    ):
+        alert_ids[cert_id] = repo.create(Alert(
+            cert_id=cert_id, alert_type="expiry_warning", status="failed",
+            message=cert_id, threshold_days=threshold,
+            created_at=now - timedelta(days=359 if cert_id == "very-old" else 2),
+        ))
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE alerts SET failure_reason = 'legacy_failed', attempt_count = 9, "
+            "next_attempt_at = ? WHERE status = 'failed'",
+            ((now + timedelta(hours=1)).isoformat(),),
+        )
+        conn.commit()
+
+    created = evaluate_all_certs(db, repo)
+    assert [(alert.cert_id, alert.threshold_days) for alert in created] == [
+        ("live", 7), ("stage", 7),
+    ]
+
+    rows = {alert.cert_id: alert for alert in repo.list_all() if alert.id in alert_ids.values()}
+    assert rows["live"].status == "pending"
+    assert rows["live"].attempt_count == 0
+    assert rows["live"].next_attempt_at is None
+    assert rows["live"].failure_reason is None
+    for cert_id in ("renewed", "old", "stage", "deleted", "very-old"):
+        assert rows[cert_id].status == "failed"
+        assert rows[cert_id].failure_reason == "legacy_failed"
+
+    transport = CountingTransport()
+    assert Dispatcher(db, transports=[transport]).process_pending()["sent"] == 2
+    evaluate_all_certs(db, repo)
+    Dispatcher(db, transports=[transport]).process_pending()
+    assert transport.counts["live"] == 1

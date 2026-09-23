@@ -78,7 +78,7 @@ spec:
               alive (IIS: application preload; systemd/k8s: service health).
 
         - alert: CertWatchAlertDeliveryFailed
-          expr: cert_watch_alerts{status="failed"} > 0
+          expr: cert_watch_alerts_failed_recent > 0
           for: 5m
           labels:
             severity: warning

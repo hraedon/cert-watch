@@ -51,6 +51,7 @@ async def _save_config_section(
     *,
     encrypt: bool = False,
     rebuild: bool = True,
+    wake_alerts: bool = False,
 ) -> RedirectResponse:
     """Shared logic for saving a settings tab to kv_store.
 
@@ -83,5 +84,17 @@ async def _save_config_section(
 
     if rebuild:
         _rebuild_settings(request, db)
+    if wake_alerts:
+        from cert_watch.alerting.model import (
+            NO_DELIVERY_CHANNEL_MESSAGE,
+            delivery_is_configured,
+        )
+        from cert_watch.database import AlertStore
+
+        if delivery_is_configured(request.app.state.settings):
+            with get_write_lock():
+                AlertStore(db).wake_configuration_deferrals(
+                    NO_DELIVERY_CHANNEL_MESSAGE
+                )
 
     return RedirectResponse(url=f"/settings?tab={tab_name}&saved=1", status_code=303)

@@ -266,7 +266,9 @@ class AlertRepository(ABC):
     @abstractmethod
     def reset_to_pending(self, alert_id: str) -> None: ...
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
         """Record that delivery was deferred at *when* (see migration 0033).
 
         The first deferral stamps ``deferred_since``; later ones leave it alone,
@@ -275,7 +277,11 @@ class AlertRepository(ABC):
         unwritable again: the outage is younger than the old stamp. Repositories
         that do not persist alerts may keep this default no-op.
         """
-        return None
+        return False
+
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        """Atomically revive an upgrade-marked expiry row when supported."""
+        return False
 
 
 class SqliteAlertRepository(AlertRepository):
@@ -483,13 +489,20 @@ class SqliteAlertRepository(AlertRepository):
 
         AlertStore(self.db_path).reset_pending_compat(alert_id)
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        from cert_watch.database.alert_store import AlertStore
+
+        return AlertStore(self.db_path).revive_legacy_expiry(alert_id)
+
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
         from cert_watch.database.alert_store import AlertStore
 
         store = AlertStore(self.db_path)
         owner = getattr(self, "_dispatch_lease_owner", None)
         if owner:
-            store.complete_pending(
+            return store.complete_pending(
                 alert_id,
                 lease_owner=owner,
                 attempts=getattr(self, "_dispatch_attempts", 0),
@@ -499,7 +512,7 @@ class SqliteAlertRepository(AlertRepository):
                 preserve_deferral=not restart,
             )
         else:
-            store.note_pending_deferral(alert_id, when, restart=restart)
+            return store.note_pending_deferral(alert_id, when, restart=restart)
 
     @staticmethod
     def _row_to_alert(row: sqlite3.Row) -> Alert:
@@ -588,9 +601,14 @@ class ScopedAlertRepository(AlertRepository):
     def reset_to_pending(self, alert_id: str) -> None:
         self._repo.reset_to_pending(alert_id)
 
-    def note_deferral(self, alert_id: str, when: datetime, *, restart: bool = False) -> None:
+    def revive_legacy_expiry(self, alert_id: str) -> bool:
+        return self._repo.revive_legacy_expiry(alert_id)
+
+    def note_deferral(
+        self, alert_id: str, when: datetime, *, restart: bool = False
+    ) -> bool:
         with self._forward_dispatch_context():
-            self._repo.note_deferral(alert_id, when, restart=restart)
+            return self._repo.note_deferral(alert_id, when, restart=restart)
 
     @contextlib.contextmanager
     def _forward_dispatch_context(self) -> Iterator[None]:

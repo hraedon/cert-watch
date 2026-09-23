@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
@@ -20,6 +21,7 @@ from cert_watch.alerting.model import (
     ALERT_RETRY_DELAY,
     ALERT_RETRY_ROUND_DELAYS,
     EVIDENCE_DEFERRAL_GIVE_UP_HOURS,
+    NO_DELIVERY_CHANNEL_MESSAGE,
     AlertConfig,
     OutboundMessage,
     WebhookConfig,
@@ -31,6 +33,8 @@ from cert_watch.database import Alert, AlertRepository, AlertStore
 from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
+
+_ATTEMPT_SUFFIX_RE = re.compile(r"(?: \(after \d+ attempts?\))+$")
 
 
 def _utc(value: datetime) -> datetime:
@@ -112,7 +116,7 @@ def _attempt_once(
 
     if not configured:
         item.configuration_missing = True
-        item.last_error = "No SMTP or webhook delivery channel is configured"
+        item.last_error = NO_DELIVERY_CHANNEL_MESSAGE
         item.last_reason = "unknown"
         return
 
@@ -349,6 +353,7 @@ class Dispatcher:
             attempts_to_persist = self._attempts_to_persist(item)
             new_attempt_count = alert.attempt_count + attempts_to_persist
             error = item.last_error or alert.error_message or "unknown"
+            error = _ATTEMPT_SUFFIX_RE.sub("", error)
             reason = item.last_reason or "unknown"
             if new_attempt_count >= ALERT_MAX_ATTEMPTS:
                 failure_message = (
@@ -446,8 +451,9 @@ class Dispatcher:
                 self._prepare_repo_settlement(
                     attempts=self._attempts_to_persist(item), now=now
                 )
-                self.settlement_repo.note_deferral(alert.id, now, restart=restart)
-                completed = True
+                completed = self.settlement_repo.note_deferral(
+                    alert.id, now, restart=restart
+                )
             else:
                 completed = self.store.complete_pending(
                     alert.id,

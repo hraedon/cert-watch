@@ -93,10 +93,21 @@ All notable changes to cert-watch are documented in this file.
   reports overdue pending alerts and stale `sending` leases without failing
   Kubernetes readiness. `/api/health` dates terminal give-ups from their last
   attempt, Activity labels them as requiring operator retry, and `/metrics`
-  exports `cert_watch_alerts{status=...}` with an example failed-delivery rule.
+  exports `cert_watch_alerts{status=...}` plus the self-clearing
+  `cert_watch_alerts_failed_recent` 24-hour gauge used by the example
+  failed-delivery rule.
 - **Legacy failed expiry alerts remain deliverable after migration 0036.** The
-  migration requeues only pre-lifecycle `expiry_warning` and `expired` rows;
-  other legacy alert types and lifecycle-aware failures remain terminal.
+  migration marks pre-lifecycle `expiry_warning` and `expired` rows but leaves
+  them failed. On the next threshold evaluation, only a row for a certificate
+  that still exists as the current, unsuperseded leaf, is not marked renewed,
+  and represents the most urgent currently crossed threshold is revived once.
+  Deleted, renewed, superseded and obsolete-threshold rows stay failed and
+  remain available for an operator-initiated **Retry failed**.
+- **Delivery recovery no longer waits on stale no-channel backoff.** Saving a
+  valid SMTP or webhook channel clears the scheduled delay on pending rows
+  deferred solely because no channel existed. Repeated failures keep one
+  attempt-count suffix, and a scoped worker no longer reports a deferral after
+  another worker steals the row's lease.
 - **Pre-transport policy failures now obey bounded give-up.** SSRF blocks and
   invalid webhook channel results consume delivery rounds and eventually
   become operator-visible failures. An estate with no SMTP or webhook instead

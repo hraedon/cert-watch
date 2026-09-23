@@ -67,12 +67,20 @@ restore the pre-migration backup.
   lease is reported by health/readiness checks without making the Kubernetes
   readiness probe fail.
 
-  Migration 0036 requeues legacy failed `expiry_warning` and `expired` rows
-  that have no lifecycle failure reason, preserving the previous release's
-  automatic revival behaviour for those existing rows. Other legacy failed
-  alert types remain failed. SSRF-blocked and invalid-channel delivery rounds
-  count toward the same bounded give-up policy; having no delivery channel
-  configured does not consume attempts and remains pending with backoff. If a
+  Migration 0036 labels legacy failed `expiry_warning` and `expired` rows that
+  have no lifecycle failure reason as `legacy_failed`, but leaves them failed.
+  On the next threshold evaluation, cert-watch revives such a row at most once
+  only when its certificate still exists as the current, unsuperseded leaf,
+  its host is not marked renewed, and the row is the most urgent threshold
+  currently crossed for that certificate and alert type. Revival resets its
+  attempt count and clears its failure reason. Deleted-certificate rows,
+  renewed or superseded certificates, obsolete threshold stages, and other
+  legacy alert types stay failed and visible; use **Retry failed** if an
+  operator deliberately wants to send one. SSRF-blocked and invalid-channel
+  delivery rounds count toward the same bounded give-up policy; having no
+  delivery channel configured does not consume attempts and remains pending
+  with backoff. Saving a valid SMTP or webhook channel makes those no-channel
+  deferrals immediately eligible for the next cycle. If a
   delivery cycle exhausts its wall-clock budget, rows already attempted keep
   their last diagnostic and back off; rows not reached remain immediately
   eligible for the next worker. Operator-initiated **Flush queue** attempts are

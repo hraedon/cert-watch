@@ -83,8 +83,8 @@ def evaluate_thresholds(
 
     # Collect existing alerts scoped to the current alert_type so that
     # renewal_stalled / policy_violation rows don't interfere with expiry
-    # thresholds. Failed alerts remain in the dedup set: ``failed`` now means
-    # the give-up policy was reached and only an operator may retry the row.
+    # thresholds. Lifecycle failures stay terminal. Migration-marked legacy
+    # failures may be revived once, below, if this is still the current stage.
     current_type = "expired" if days < 0 else "expiry_warning"
     cert_alerts = alert_repo.list_for_cert(cid)
     existing_for_type: set[int] = {
@@ -92,6 +92,14 @@ def evaluate_thresholds(
         for a in cert_alerts
         if a.threshold_days is not None
         and a.alert_type == current_type
+    }
+    legacy_failed_for_type: dict[int, Alert] = {
+        a.threshold_days: a
+        for a in cert_alerts
+        if a.threshold_days is not None
+        and a.alert_type == current_type
+        and a.status == "failed"
+        and a.failure_reason == "legacy_failed"
     }
 
     # Find the most urgent (smallest) threshold the cert has now crossed.
@@ -105,6 +113,14 @@ def evaluate_thresholds(
 
     # Each (alert_type, threshold) fires exactly once.
     if most_urgent in existing_for_type:
+        failed_alert = legacy_failed_for_type.get(most_urgent)
+        if failed_alert and alert_repo.revive_legacy_expiry(failed_alert.id):
+            failed_alert.status = "pending"
+            failed_alert.attempt_count = 0
+            failed_alert.next_attempt_at = None
+            failed_alert.failure_reason = None
+            failed_alert.error_message = None
+            return [failed_alert]
         return []
 
     # Don't go backwards: if a more urgent threshold was already alerted
@@ -157,7 +173,9 @@ def evaluate_all_certs(
         leaves = conn.execute(
             "SELECT id, subject, issuer, not_before, not_after, "
             "san_dns_names, fingerprint_sha256, hostname, port "
-            "FROM certificates WHERE is_leaf = 1"
+            "FROM certificates AS current WHERE is_leaf = 1 "
+            "AND NOT EXISTS (SELECT 1 FROM certificates AS successor "
+            "WHERE successor.replaces_cert_id = current.id)"
         ).fetchall()
 
     # Batch-resolve group recipients and threshold overrides in a single pass
