@@ -649,7 +649,7 @@ src/cert_watch/
   security/            CSRF, rate limiting, CSP nonce + security headers, SecurityContext
   auth/                Authentication + authorization (session, LDAP, OAuth, local admin,
                        request context, route guards, tag scope)
-  alerts.py            Email + webhook alerting
+  alerting/            Email + webhook alerting (rules, routing, transports, digests)
   certificate_model.py X.509 certificate parsing
   cert_chain.py        Chain extraction and validation
   config/              Environment and persisted-GUI settings

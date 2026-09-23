@@ -332,7 +332,7 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
-        from cert_watch.digest import start_digest_pool
+        from cert_watch.alerting.digest.pool import start_digest_pool
 
         _start_renewal_webhook_pool()
         start_digest_pool()
@@ -403,7 +403,7 @@ def stop_scheduler() -> None:
     # cycle checks the stop event between stages, and neither pool is recreated
     # until the next explicit start_scheduler() call.
     renewal_pool = _detach_renewal_webhook_pool()
-    from cert_watch.digest import _detach_digest_pool
+    from cert_watch.alerting.digest.pool import _detach_digest_pool
     digest_pool = _detach_digest_pool()
     if renewal_pool is not None:
         renewal_pool.shutdown(wait=True, cancel_futures=True)

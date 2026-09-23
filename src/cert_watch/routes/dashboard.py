@@ -341,7 +341,7 @@ async def flush_alert_queue(
 
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
-    from cert_watch.alerts import process_pending
+    from cert_watch.alerting.dispatch import process_pending
     from cert_watch.scheduler import try_run_alert_delivery
 
     result = await run_in_threadpool(

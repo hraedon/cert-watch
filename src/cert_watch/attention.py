@@ -74,7 +74,7 @@ def build_attention_queue(
     expiry with automated renewal sorts after the same item with manual or
     unknown renewal.
     """
-    from cert_watch.alerts import renewal_window_candidates
+    from cert_watch.alerting.rules.renewal import renewal_window_candidates
     from cert_watch.database import list_dashboard_grouped_page
 
     entries, _total = list_dashboard_grouped_page(db_path, per_page=100_000, scope_tags=scope_tags)

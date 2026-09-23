@@ -80,7 +80,9 @@ def _hanging_relay(seconds):
 def _failing_smtp(monkeypatch):
     connection = Mock()
     connection.send_message.side_effect = smtplib.SMTPException("relay refused")
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
+    )
     return connection
 
 
@@ -115,13 +117,13 @@ def test_every_alert_is_tried_once_before_any_is_tried_twice(tmp_path, monkeypat
     _failing_smtp(monkeypatch)
     monkeypatch.setattr("cert_watch.retry.time.sleep", lambda _s: None)
     order: list[str] = []
-    real = __import__("cert_watch.alerts", fromlist=["send_alert"]).send_alert
+    real = __import__("cert_watch.alerting.dispatch", fromlist=["send_alert"]).send_alert
 
     def recording(alert, config):
         order.append(alert.cert_id)
         return real(alert, config)
 
-    monkeypatch.setattr("cert_watch.alerts.send_alert", recording)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.send_alert", recording)
 
     process_pending(repo, _config())
 
@@ -157,7 +159,9 @@ def test_a_spent_budget_leaves_alerts_pending_rather_than_failed(tmp_path, monke
 
     slow_and_failing = _hanging_relay(0.05)
 
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", slow_and_failing)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", slow_and_failing
+    )
 
     result = process_pending(repo, _config(), budget_seconds=0.06)
 
@@ -172,12 +176,16 @@ def test_a_deferred_alert_goes_out_on_the_next_cycle(tmp_path, monkeypatch):
 
     slow_and_failing = _hanging_relay(0.05)
 
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", slow_and_failing)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", slow_and_failing
+    )
     assert process_pending(repo, _config(), budget_seconds=0.01)["deferred"] == 2
 
     connection = Mock()
     connection.send_message.return_value = {}
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
+    )
 
     assert process_pending(repo, _config()) == {"sent": 2, "failed": 0, "deferred": 0}
     assert connection.send_message.call_count == 2
@@ -188,7 +196,9 @@ def test_a_healthy_queue_never_sleeps_and_never_defers(tmp_path, monkeypatch):
     _, repo = _queue(tmp_path, 25)
     connection = Mock()
     connection.send_message.return_value = {}
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
+    )
     slept: list[float] = []
     monkeypatch.setattr("cert_watch.retry.time.sleep", slept.append)
 

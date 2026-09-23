@@ -8,9 +8,10 @@ import logging
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
-from cert_watch.alerts import Alert, send_webhook
+from cert_watch.alerting.transports.webhook import send_webhook
 from cert_watch.auth.guards import require_auth, write_guard
 from cert_watch.database import (
+    Alert,
     list_calendar,
     list_grade_trends,
     list_tls_version_trends,

@@ -51,7 +51,9 @@ def test_process_records_actual_smtp_attempt(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = Mock()
     connection.send_message.return_value = {}
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
+    )
 
     assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
     with _connect(db) as conn:
@@ -85,7 +87,9 @@ def _smtp(monkeypatch, *, refused=None, error=None):
     connection = Mock()
     connection.send_message.return_value = refused or {}
     connection.send_message.side_effect = error
-    monkeypatch.setattr("cert_watch.alerts._open_smtp_connection", lambda *a, **kw: connection)
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.smtp._open_smtp_connection", lambda *a, **kw: connection
+    )
     return connection
 
 
@@ -113,7 +117,9 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
     response = Mock(status=204)
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr("cert_watch.alerts.ssrf_safe_urlopen", Mock(return_value=response))
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen", Mock(return_value=response)
+    )
     webhook = WebhookConfig(url="https://hooks.example.invalid/secret/path?token=private",
                             headers={"Authorization": "webhook-token"})
     assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
@@ -154,7 +160,7 @@ def test_start_persistence_failure_refuses_send(monkeypatch, tmp_path):
     """
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", Mock(
         side_effect=sqlite3.OperationalError("synthetic-password"),
     ))
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
@@ -172,7 +178,7 @@ def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     broken = Mock(side_effect=sqlite3.OperationalError("database is locked"))
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", broken)
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", broken)
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     connection.send_message.assert_not_called()
 
@@ -197,7 +203,7 @@ def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
 def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
-    monkeypatch.setattr("cert_watch.alert_delivery.complete_attempt", Mock(
+    monkeypatch.setattr("cert_watch.alerting.evidence.complete_attempt", Mock(
         side_effect=sqlite3.OperationalError("sensitive database error"),
     ))
     assert process_pending(repo, _config()) == {"sent": 1, "failed": 0, "deferred": 0}
@@ -310,7 +316,7 @@ def test_main_row_surfaces_partial_and_unknown_acceptance(
     _, repo, _ = _pending(tmp_path)
     _smtp(monkeypatch, refused={"queued@example.invalid": (550, b"refused")})
     if completion_missing:
-        monkeypatch.setattr("cert_watch.alert_delivery.complete_attempt", Mock(
+        monkeypatch.setattr("cert_watch.alerting.evidence.complete_attempt", Mock(
             side_effect=sqlite3.OperationalError("interrupted"),
         ))
     process_pending(repo, _config())
@@ -377,7 +383,9 @@ def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp
     response = Mock(status=204)
     response.__enter__ = Mock(return_value=response)
     response.__exit__ = Mock(return_value=False)
-    monkeypatch.setattr("cert_watch.alerts.ssrf_safe_urlopen", Mock(return_value=response))
+    monkeypatch.setattr(
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen", Mock(return_value=response)
+    )
 
     real_begin = begin_attempt
 
@@ -386,7 +394,7 @@ def test_smtp_evidence_failure_still_tries_the_webhook_fallback(monkeypatch, tmp
             raise sqlite3.OperationalError("database is locked")
         return real_begin(db_path, alert_id, channel, details)
 
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", only_smtp_is_unwritable)
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", only_smtp_is_unwritable)
     webhook = WebhookConfig(url="https://hooks.example.invalid/path")
 
     assert process_pending(repo, _config(), webhook) == {"sent": 1, "failed": 0, "deferred": 0}
@@ -417,7 +425,7 @@ def test_evidence_outage_mid_retry_does_not_consume_the_alert(monkeypatch, tmp_p
             raise sqlite3.OperationalError("database is locked")
         return real_begin(db_path, alert_id, channel, details)
 
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt",
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt",
                         unwritable_after_the_first_attempt)
 
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
@@ -448,7 +456,7 @@ def test_total_deferral_stops_instead_of_sleeping_the_whole_retry_budget(monkeyp
     _db, repo, _alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     refusals = Mock(side_effect=sqlite3.OperationalError("database is locked"))
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", refusals)
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", refusals)
 
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     connection.send_message.assert_not_called()
@@ -465,7 +473,8 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
     monkeypatch.setattr(
-        "cert_watch.alerts.ssrf_safe_urlopen", Mock(side_effect=OSError("webhook unreachable")),
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
+        Mock(side_effect=OSError("webhook unreachable")),
     )
     webhook = WebhookConfig(url="https://hooks.example.invalid/path")
 
@@ -504,7 +513,7 @@ def _stamp_deferred_since(db, alert_id, *, hours_ago):
 
 
 def _unwritable_evidence_store(monkeypatch):
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt", Mock(
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", Mock(
         side_effect=sqlite3.OperationalError("database is locked"),
     ))
 
@@ -637,7 +646,7 @@ def test_an_attempt_recorded_this_cycle_restarts_the_deferral_clock(monkeypatch,
             raise sqlite3.OperationalError("database is locked")
         return real_begin(db_path, alert_id, channel, details)
 
-    monkeypatch.setattr("cert_watch.alert_delivery.begin_attempt",
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt",
                         unwritable_after_the_first_attempt)
 
     assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}

@@ -210,7 +210,7 @@ def test_stop_scheduler_cancels_queued_pool_tasks(monkeypatch):
         scheduler, "_detach_renewal_webhook_pool", lambda: renewal_pool
     )
     monkeypatch.setattr(
-        "cert_watch.digest._detach_digest_pool", lambda: digest_pool
+        "cert_watch.alerting.digest.pool._detach_digest_pool", lambda: digest_pool
     )
     monkeypatch.setattr(scheduler, "_scheduler_thread", None)
 

@@ -65,6 +65,12 @@ All notable changes to cert-watch are documented in this file.
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
   SIEM filters on the old names need updating.
+- **Alerting code moved into the `cert_watch.alerting` package** (plan 058,
+  step 1; internal, no behaviour change). Rules, routing, transports, delivery
+  evidence, the delivery cycle and digests each have their own module. The old
+  module paths `cert_watch.alerts`, `cert_watch.alert_delivery`,
+  `cert_watch.alert_adapters` and `cert_watch.digest` are deprecated re-export
+  shims and will be removed in a later release; logger names are unchanged.
 
 ### Fixed
 - **Alerts page flash messages.** `/alerts` now shows `?warning=` and `?error=`

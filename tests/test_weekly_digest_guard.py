@@ -220,14 +220,14 @@ def test_expiry_digest_guard_persists_only_after_success(monkeypatch, tmp_path):
         renewal_window_days=30,
     )
     monkeypatch.setattr(scheduler_context._dt, "datetime", _FrozenDateTime)
-    monkeypatch.setattr("cert_watch.alerts.evaluate_all_certs", MagicMock())
-    monkeypatch.setattr("cert_watch.alerts.evaluate_renewal_window", MagicMock())
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", MagicMock())
+    monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock())
     monkeypatch.setattr(
-        "cert_watch.alerts.process_pending",
+        "cert_watch.alerting.dispatch.process_pending",
         MagicMock(side_effect=lambda *args, **kwargs: {"sent": 0, "failed": 0}),
     )
     delivery = MagicMock(side_effect=[False, True])
-    monkeypatch.setattr("cert_watch.alerts.send_expiry_digest", delivery)
+    monkeypatch.setattr("cert_watch.alerting.digest.expiry.send_expiry_digest", delivery)
     context = SchedulerContext(settings=settings, alert_cfg=None, webhook_cfg=None)
 
     assert context.run_alerts() == {"sent": 0, "failed": 1}
@@ -248,14 +248,14 @@ def test_expiry_digest_success_survives_restart(monkeypatch, tmp_path):
         renewal_window_days=30,
     )
     monkeypatch.setattr(scheduler_context._dt, "datetime", _FrozenDateTime)
-    monkeypatch.setattr("cert_watch.alerts.evaluate_all_certs", MagicMock())
-    monkeypatch.setattr("cert_watch.alerts.evaluate_renewal_window", MagicMock())
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", MagicMock())
+    monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", MagicMock())
     monkeypatch.setattr(
-        "cert_watch.alerts.process_pending",
+        "cert_watch.alerting.dispatch.process_pending",
         MagicMock(side_effect=lambda *args, **kwargs: {"sent": 0, "failed": 0}),
     )
     delivery = MagicMock(return_value=True)
-    monkeypatch.setattr("cert_watch.alerts.send_expiry_digest", delivery)
+    monkeypatch.setattr("cert_watch.alerting.digest.expiry.send_expiry_digest", delivery)
 
     SchedulerContext(settings=settings, alert_cfg=None, webhook_cfg=None).run_alerts()
     SchedulerContext(settings=settings, alert_cfg=None, webhook_cfg=None).run_alerts()

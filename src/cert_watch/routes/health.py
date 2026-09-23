@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from cert_watch.alerts import UNDELIVERED_AFTER_HOURS, delivery_is_configured
+from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.auth import SESSION_COOKIE, validate_session
 from cert_watch.auth.guards import require_auth
 from cert_watch.auth.request_context import _is_auth_enabled, authenticate_api_key

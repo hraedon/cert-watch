@@ -499,7 +499,7 @@ class TestFlushAlertQueueRoute:
             seen.extend(a.id for a in alert_repo.list_pending())
             return {"sent": len(seen), "failed": 0}
 
-        monkeypatch.setattr("cert_watch.alerts.process_pending", _fake_process)
+        monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", _fake_process)
         app, groups = _make_scoped_app(db, tmp_path, scope_tag=scope_tag)
         with _scoped_client(app, groups) as client:
             r = client.post("/alerts/flush", follow_redirects=False)
@@ -524,7 +524,7 @@ class TestScopedFlushFullContract:
     def test_real_process_pending_sends_and_marks_only_in_scope(
         self, db: Path, monkeypatch
     ):
-        from cert_watch import alerts as alerts_mod
+        from cert_watch.alerting import dispatch as alerts_mod
         from cert_watch.database import ScopedAlertRepository
 
         _seed_two_teams(db)
