@@ -12,9 +12,13 @@ spec:
     - Egress
   ingress:
     - from:
+        # The Ingress for this service sets ingressClassName: traefik-external,
+        # and that controller runs in the namespace of the same name. Naming
+        # this namespace here instead denied every request (a 502 from Traefik
+        # with a healthy pod behind it) from 2026-06-05 until 2026-09-23.
         - namespaceSelector:
             matchLabels:
-              kubernetes.io/metadata.name: cert-watch-demo
+              kubernetes.io/metadata.name: traefik-external
           podSelector:
             matchLabels:
               app.kubernetes.io/name: traefik
