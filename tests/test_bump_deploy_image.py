@@ -96,9 +96,16 @@ def _commit_on(repo: Path, message: str) -> str:
     return _git("rev-parse", "--short", "HEAD", cwd=repo)
 
 
-def _run(repo: Path, *, image_tag: str, kustomize: str, attempts: int = 5):
+def _digest(seed: str = "a") -> str:
+    """A syntactically valid sha256 digest for the fake estate."""
+    return f"sha256:{seed * 64}"
+
+
+def _run(repo: Path, *, image_tag: str, kustomize: str, attempts: int = 5,
+         digest: str | None = None):
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--image-tag", image_tag, "--image", IMAGE,
+        [sys.executable, str(SCRIPT), "--image-tag", image_tag,
+         "--digest", digest or _digest(), "--image", IMAGE,
          "--repo", str(repo), "--kustomize", kustomize, "--attempts", str(attempts)],
         capture_output=True, text=True,
     )
@@ -110,6 +117,62 @@ def _published_tag(estate) -> str:
         cwd=estate["origin"], capture_output=True, text=True, check=True,
     ).stdout
     return next(ln for ln in show.splitlines() if "newTag:" in ln).split(":")[1].strip()
+
+
+def _published_kustomization(estate) -> str:
+    return subprocess.run(
+        ["git", "show", f"main:{KUSTOMIZATION_DIRS[0]}/kustomization.yaml"],
+        cwd=estate["origin"], capture_output=True, text=True, check=True,
+    ).stdout
+
+
+def test_bump_pins_the_verified_digest_alongside_the_tag(estate):
+    """The deploy pointer is digest-pinned: kustomize renders the digest over
+    the tag, so the cluster pulls exactly the image the release job verified."""
+    run_a = estate["clone"]("run-a")
+    sha = _commit_on(run_a, "feature-a")
+    _git("push", "-q", "origin", "main", cwd=run_a)
+
+    digest = _digest("b")
+    result = _run(run_a, image_tag=sha, kustomize=estate["kustomize"], digest=digest)
+
+    assert result.returncode == 0, result.stderr
+    published = _published_kustomization(estate)
+    assert f"newTag: {sha}" in published
+    assert f"digest: {digest}" in published
+
+
+def test_digest_replaces_an_existing_pin(estate):
+    for directory in KUSTOMIZATION_DIRS:
+        k = estate["seed"] / directory / "kustomization.yaml"
+        k.write_text(k.read_text().replace(
+            "newTag: seed\n", f"newTag: seed\n  digest: {_digest('0')}\n",
+        ))
+    _git("add", "-A", cwd=estate["seed"])
+    _git("commit", "-qm", "pre-pin digest", cwd=estate["seed"])
+    _git("push", "-q", "origin", "main", cwd=estate["seed"])
+
+    run_a = estate["clone"]("run-a2")
+    sha = _commit_on(run_a, "feature-a2")
+    _git("push", "-q", "origin", "main", cwd=run_a)
+
+    result = _run(run_a, image_tag=sha, kustomize=estate["kustomize"], digest=_digest("c"))
+
+    assert result.returncode == 0, result.stderr
+    published = _published_kustomization(estate)
+    assert f"digest: {_digest('c')}" in published
+    assert _digest("0") not in published
+
+
+def test_a_malformed_digest_fails_before_touching_the_repo(estate):
+    run_a = estate["clone"]("run-a3")
+    sha = _commit_on(run_a, "feature-a3")
+    _git("push", "-q", "origin", "main", cwd=run_a)
+
+    result = _run(run_a, image_tag=sha, kustomize=estate["kustomize"], digest="not-a-digest")
+
+    assert result.returncode != 0
+    assert "digest" in result.stderr
 
 
 def test_bump_lands_when_nothing_else_is_racing(estate):

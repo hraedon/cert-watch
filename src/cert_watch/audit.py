@@ -28,7 +28,7 @@ def record_audit(
     detail: dict[str, Any] | None = None,
     source_ip: str | None = None,
     conn: sqlite3.Connection | None = None,
-) -> None:
+) -> dict[str, Any] | None:
     """Insert one audit row. Best-effort; logs WARNING on failure but never raises
     when *conn* is None. When *conn* is provided, re-raises so the caller can
     roll back the transaction — the audit entry is part of the caller's
@@ -38,12 +38,18 @@ def record_audit(
     caller manages the transaction (WI-129). This allows the audit entry to
     be part of the same transaction as the mutation it records, so a crash
     between the mutation and the audit write rolls back both.
+
+    SIEM export is network I/O, so it never runs inside the caller's
+    transaction: with *conn*, the SIEM event is returned instead of sent, and
+    the caller passes it to :func:`export_audit` after it commits and releases
+    the write lock. Without *conn*, the row is committed here and the event is
+    exported immediately; the return value is then ``None``.
     """
+    ts = datetime.now(UTC).isoformat()
     try:
         actor = actor[:256] if actor else actor
         target_id = target_id[:256] if target_id else target_id
         row_id = uuid.uuid4().hex
-        ts = datetime.now(UTC).isoformat()
         detail_json = json.dumps(detail, default=str) if detail else None
         if conn is not None:
             conn.execute(
@@ -70,25 +76,36 @@ def record_audit(
             exc_info=True,
         )
 
-    # SIEM export (Plan 028) — after the DB row is the source of truth; fail-open
-    # and a no-op when no sink is configured, so the audit path is unchanged.
+    event = {
+        "event_type": "cert_watch.audit",
+        "ts": ts,
+        "actor": actor,
+        "action": action,
+        "target_type": target_type,
+        "target_id": target_id,
+        "detail": detail,
+        "source_ip": source_ip,
+    }
+    if conn is not None:
+        return event
+    export_audit(event)
+    return None
+
+
+def export_audit(event: dict[str, Any] | None) -> None:
+    """Send one committed audit event to the SIEM sinks (Plan 028).
+
+    Fail-open and a no-op when no sink is configured. Call outside the write
+    lock, after the audit row is committed (or its best-effort write has been
+    attempted): a sink can block.
+    """
+    if not event:
+        return
     try:
         from cert_watch.siem import export_audit_event, siem_enabled
 
         if siem_enabled():
-            export_audit_event(
-                {
-                    "event_type": "cert_watch.audit",
-                    "ts": ts,
-                    "actor": actor,
-                    "action": action,
-                    "target_type": target_type,
-                    "target_id": target_id,
-                    "detail": detail,
-                    "source_ip": source_ip,
-                    "instance": _siem_instance(),
-                }
-            )
+            export_audit_event({**event, "instance": _siem_instance()})
     except Exception:
         logger.warning("siem audit export failed", exc_info=True)
 

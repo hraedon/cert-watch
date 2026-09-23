@@ -447,7 +447,10 @@ jobs:
 
           $source = 'cert-watch-deploy-smoke'
           $marker = 'eventlog-' + $env:GITHUB_RUN_ID + '-' + $env:GITHUB_RUN_ATTEMPT
-          $started = Get-Date
+          # TimeGenerated has whole-second resolution and -After is strict, so a
+          # record written in the same second as $started would be filtered out.
+          # The per-run marker keeps the match unique; backdate the window.
+          $started = (Get-Date).AddSeconds(-5)
           $env:CERT_WATCH_EVENTLOG = '1'
           $env:CERT_WATCH_EVENTLOG_SOURCE = $source
           $env:CERT_WATCH_SMOKE_MARKER = $marker

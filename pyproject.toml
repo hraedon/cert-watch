@@ -94,7 +94,7 @@ max-complexity = 43
 # Structural ratchets measured from the existing tree. They block regression
 # without requiring unrelated large functions to be refactored in this change.
 max-branches = 44
-max-statements = 156
+max-statements = 117
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

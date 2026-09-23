@@ -104,3 +104,70 @@ def test_audit_failure_rolls_back_metadata_update(
     assert stored is not None
     assert stored.notes == "before"
     assert list_audit(db, target_id=host_id) == []
+
+
+def test_siem_export_runs_after_commit_and_outside_the_write_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A SIEM sink can block, so it must never run under the global write lock,
+    and the event it carries must describe a row that is already committed."""
+    import sqlite3
+    import threading
+
+    from cert_watch import siem
+    from cert_watch.database.connection import get_write_lock
+    from cert_watch.services.host_ownership import (
+        HostOwnershipUpdate,
+        update_host_ownership,
+    )
+
+    db = tmp_path / "cert-watch.sqlite3"
+    init_schema(db)
+    host_id = SqliteHostRepository(db).add("siem.example.test")
+    observed: list[tuple[str, bool, int]] = []
+
+    def export(event: dict[str, object]) -> None:
+        acquired: list[bool] = []
+
+        def other_writer() -> None:
+            lock = get_write_lock()
+            got = lock.acquire(timeout=0.5)
+            acquired.append(got)
+            if got:
+                lock.release()
+
+        worker = threading.Thread(target=other_writer)
+        worker.start()
+        worker.join()
+        with sqlite3.connect(db) as other:
+            committed = other.execute(
+                "SELECT COUNT(*) FROM audit_log WHERE action = ?", (event["action"],)
+            ).fetchone()[0]
+        observed.append((str(event["action"]), acquired[0], committed))
+
+    monkeypatch.setattr(siem, "siem_enabled", lambda: True)
+    monkeypatch.setattr(siem, "export_audit_event", export)
+
+    update_host_notes(db, host_id, "n", actor="op", source_ip=None)
+    update_host_tags(db, host_id, "prod", actor="op", source_ip=None)
+    update_host_ownership(
+        db, host_id, HostOwnershipUpdate(owner_name="Ops"), actor="op", source_ip=None
+    )
+
+    assert [action for action, _, _ in observed] == [
+        "host.update_notes", "host.update_tags", "owner.update",
+    ]
+    assert all(lock_free for _, lock_free, _ in observed)
+    assert all(committed == 1 for _, _, committed in observed)
+
+
+def test_record_audit_without_conn_never_raises_on_bad_input(tmp_path: Path) -> None:
+    from cert_watch.audit import record_audit
+
+    record_audit(
+        tmp_path / "missing.sqlite3",
+        actor=object(),  # type: ignore[arg-type]
+        action="probe.bad_input",
+        target_type="host",
+        target_id="x",
+    )
