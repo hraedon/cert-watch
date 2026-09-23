@@ -50,6 +50,34 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Alert dedupe and routing are persisted (migration 0037).** Alert identity
+  now uses the certificate fingerprint rather than the replaceable inventory
+  row id. Expiry thresholds never fire twice for the same
+  fingerprint/type/threshold. A renewal-stalled notice fires once per
+  fingerprint; the weekly renewal digest is its reminder channel. A policy
+  violation fires once while present, closes on a clean scan, and may fire
+  again if the same rule reappears. Policy and drift alerts now include matching
+  alert groups, the host owner, and role members, so those recipients may begin
+  receiving notifications they were previously omitted from.
+
+  The resolved route is saved as versioned JSON when the alert is queued and
+  `extra_recipients` is retained as a compatibility copy for this release.
+  Editing group membership or ownership does not redirect an already queued
+  alert; global SMTP recipients, webhook URLs, and transport credentials still
+  resolve at send time so an outage configuration fix applies immediately.
+  Existing queued rows are backfilled from `extra_recipients`; group names are
+  unavailable for those historical snapshots.
+
+  Renewal-overdue's 24-hour suppression now lives in `rule_firings` rather than
+  reparsing `event_log` JSON on every scheduler cycle. Migration 0037 imports
+  existing overdue events, including the port-less 1.x compatibility identity.
+  Stale pending alerts closed by certificate replacement or deletion are now
+  retained as `cancelled` with `closed_at` instead of being deleted. A row in
+  `sending` under a live lease is left untouched. Cancelled rows use the normal
+  delivered-alert retention window, while pending/failed rows that never
+  reached anyone retain the existing longer outage-evidence window. Sent
+  PagerDuty/Alertmanager incidents resolve when their condition is closed;
+  unchanged rescans still do not resolve them (#62).
 - **Alert delivery has a persisted retry lifecycle (migration 0036).** Alerts
   are atomically claimed as `sending` under a lease. A failed round is returned
   to `pending` with a 1-hour, 4-hour, then 12-hour backoff instead of becoming

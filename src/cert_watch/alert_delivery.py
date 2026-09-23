@@ -12,7 +12,6 @@ from cert_watch.alerting.evidence import (
     FAILURE_LABELS,
     REFUSED_NO_EVIDENCE,
     DeliveryEvidenceUnavailable,
-    _matching_groups,
     attempt_delivery,
 )
 from cert_watch.database.delivery_evidence import (
@@ -24,7 +23,6 @@ __all__ = [
     "FAILURE_LABELS",
     "REFUSED_NO_EVIDENCE",
     "DeliveryEvidenceUnavailable",
-    "_matching_groups",
     "attempt_delivery",
     "begin_attempt",
     "complete_attempt",

@@ -36,7 +36,7 @@ def renewal_window_candidates(
             ).fetchall()
         }
         leaves = conn.execute(
-            "SELECT id, subject, hostname, port, not_after "
+            "SELECT id, subject, hostname, port, not_after, fingerprint_sha256 "
             "FROM certificates WHERE is_leaf = 1"
         ).fetchall()
 
@@ -63,34 +63,52 @@ def evaluate_renewal_window(
     db_path: str | Path,
     alert_repo: AlertRepository,
     window_days: int = 30,
+    *,
+    closed_sent: list[Alert] | None = None,
 ) -> list[Alert]:
-    """Create notifications for the current renewal-window conditions.
+    """Create one notification per fingerprint while its condition persists."""
+    from cert_watch.alerting.routing import resolve_routing
+    from cert_watch.database import AlertStore, _connect
 
-    At most one pending ``renewal_stalled`` alert is created per certificate;
-    notification status remains separate from the underlying condition.
-    """
+    candidates = renewal_window_candidates(db_path, window_days)
+    routing_map = resolve_routing(
+        db_path, tuple(leaf["id"] for leaf in candidates)
+    )
+    active_keys = {f"renewal:{leaf['fingerprint_sha256']}" for leaf in candidates}
+    store = AlertStore(db_path)
+    with _connect(db_path) as conn:
+        open_keys = {
+            row["dedupe_key"]
+            for row in conn.execute(
+                """SELECT dedupe_key FROM alerts
+                   WHERE alert_type = 'renewal_stalled' AND closed_at IS NULL
+                     AND dedupe_key IS NOT NULL"""
+            ).fetchall()
+        }
+    closed = store.close_keys(open_keys - active_keys)
+    if closed_sent is not None:
+        closed_sent.extend(closed)
+
     created: list[Alert] = []
-    for leaf in renewal_window_candidates(db_path, window_days):
+    for leaf in candidates:
         cid = leaf["id"]
-        existing = alert_repo.list_for_cert(cid)
-        if any(
-            a.alert_type == "renewal_stalled" and a.status == "pending"
-            for a in existing
-        ):
-            continue  # already flagged this window
         owner = leaf["owner"]
+        routing = routing_map[cid]
         alert = Alert(
             cert_id=cid,
             alert_type="renewal_stalled",
             status="pending",
             message=_format_renewal_message(leaf, leaf["days_remaining"], window_days, owner),
             threshold_days=window_days,
-            extra_recipients=(
-                [owner["owner_email"]] if owner.get("owner_email") else []
-            ),
+            extra_recipients=list(routing["recipients"]),
             hostname=leaf["hostname"] or "",
             subject=leaf["subject"] or "",
+            dedupe_key=f"renewal:{leaf['fingerprint_sha256']}",
+            routing=routing,
         )
-        alert.id = alert_repo.create(alert)
+        alert_id = alert_repo.enqueue(alert, lifetime=True)
+        if alert_id is None:
+            continue
+        alert.id = alert_id
         created.append(alert)
     return created

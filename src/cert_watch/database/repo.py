@@ -50,6 +50,9 @@ class Alert:
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
     failure_reason: str | None = None
+    dedupe_key: str | None = None
+    closed_at: datetime | None = None
+    routing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -251,6 +254,10 @@ class AlertRepository(ABC):
     @abstractmethod
     def create(self, alert: Alert) -> str: ...
 
+    def enqueue(self, alert: Alert, *, lifetime: bool = False) -> str | None:
+        """Queue through the persisted lifecycle when the adapter supports it."""
+        return self.create(alert)
+
     @abstractmethod
     def list_pending(self) -> list[Alert]: ...
 
@@ -309,6 +316,9 @@ class SqliteAlertRepository(AlertRepository):
             alert.hostname,
             alert.subject,
             alert.trigger_cert_id or alert.cert_id,
+            alert.dedupe_key,
+            _iso(alert.closed_at) if alert.closed_at else None,
+            json.dumps(alert.routing, separators=(",", ":"), sort_keys=True),
         )
         if conn is None:
             with _connect(self.db_path) as conn:
@@ -317,8 +327,8 @@ class SqliteAlertRepository(AlertRepository):
                     INSERT INTO alerts
                     (id, cert_id, alert_type, status, message, threshold_days,
                      extra_recipients, created_at, sent_at, error_message,
-                     hostname, subject, trigger_cert_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     params,
                 )
@@ -329,12 +339,23 @@ class SqliteAlertRepository(AlertRepository):
                 INSERT INTO alerts
                 (id, cert_id, alert_type, status, message, threshold_days,
                  extra_recipients, created_at, sent_at, error_message,
-                 hostname, subject, trigger_cert_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 hostname, subject, trigger_cert_id, dedupe_key, closed_at, routing)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 params,
             )
         return alert_id
+
+    def enqueue(
+        self,
+        alert: Alert,
+        *,
+        lifetime: bool = False,
+        conn: sqlite3.Connection | None = None,
+    ) -> str | None:
+        from cert_watch.database.alert_store import AlertStore
+
+        return AlertStore(self.db_path).enqueue(alert, conn=conn, lifetime=lifetime)
 
     def list_pending(self) -> list[Alert]:
         with _connect(self.db_path) as conn:
@@ -522,6 +543,13 @@ class SqliteAlertRepository(AlertRepository):
             extra_recipients = json.loads(extra) if extra else []
         except (json.JSONDecodeError, TypeError):
             extra_recipients = []
+        raw_routing = row_dict.get("routing")
+        try:
+            routing = json.loads(raw_routing) if raw_routing else {}
+        except (json.JSONDecodeError, TypeError):
+            routing = {}
+        if not isinstance(routing, dict):
+            routing = {}
         deferred_since: datetime | None = None
         deferred_raw = row_dict.get("deferred_since")
         if deferred_raw:
@@ -557,6 +585,9 @@ class SqliteAlertRepository(AlertRepository):
             lease_owner=row_dict.get("lease_owner"),
             lease_expires_at=optional_datetime("lease_expires_at"),
             failure_reason=row_dict.get("failure_reason"),
+            dedupe_key=row_dict.get("dedupe_key"),
+            closed_at=optional_datetime("closed_at"),
+            routing=routing,
         )
 
 
