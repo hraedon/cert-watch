@@ -131,6 +131,7 @@ settings that can also be saved from the web interface.
 | `LDAP_CA_CERT` (also `_FILE`) | — | yes | CA certificate (PEM, or a path to one) for verifying the directory's TLS certificate. |
 | `LDAP_REQUIRED_GROUPS` | — | yes | Comma-separated group DNs; users outside all of them can't sign in. Nested membership counts. |
 | `LDAP_CONNECT_TIMEOUT` | `5` | yes | Seconds to wait for each directory server. Range 1–300. |
+| `CERT_WATCH_LDAP_ALLOW_INSECURE` | `0` |  | `1` permits a simple bind over plain `ldap://` without StartTLS, sending directory passwords in cleartext. Off by default; a migration escape hatch only. |
 | `LDAP_GROUP_FILTER` | — | yes | Filter for the group membership check, with `{group}` as the group DN. The default uses Active Directory's nested-membership rule; use `member={group}` for other directories. |
 
 ### Sign-in: OAuth / OIDC

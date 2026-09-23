@@ -81,6 +81,7 @@ FIELD_DOCS: dict[str, tuple[str, str]] = {
     "ldap_ca_cert": ("Sign-in: LDAP / Active Directory", "CA certificate (PEM, or a path to one) for verifying the directory's TLS certificate."),
     "ldap_required_groups": ("Sign-in: LDAP / Active Directory", "Comma-separated group DNs; users outside all of them can't sign in. Nested membership counts."),
     "ldap_connect_timeout": ("Sign-in: LDAP / Active Directory", "Seconds to wait for each directory server."),
+    "ldap_allow_insecure": ("Sign-in: LDAP / Active Directory", "`1` permits a simple bind over plain `ldap://` without StartTLS, sending directory passwords in cleartext. Off by default; a migration escape hatch only."),
     "ldap_group_filter": ("Sign-in: LDAP / Active Directory", "Filter for the group membership check, with `{group}` as the group DN. The default uses Active Directory's nested-membership rule; use `member={group}` for other directories."),
 
     "oauth_client_id": ("Sign-in: OAuth / OIDC", "Client ID of the application registered with your identity provider."),
