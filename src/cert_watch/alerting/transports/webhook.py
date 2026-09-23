@@ -32,8 +32,24 @@ def _sanitize_webhook_error(msg: str, config: WebhookConfig | None) -> str:
     if config and config.headers:
         for val in config.headers.values():
             if len(val) >= 4:
-                msg = msg.replace(val, "***")
+                for form in _escaped_forms(val):
+                    msg = msg.replace(form, "***")
     return msg
+
+
+def _escaped_forms(value: str) -> tuple[str, ...]:
+    """*value* as it can appear in an exception message.
+
+    urllib quotes an invalid header value as ``repr(value.encode())``, so a
+    value containing CR/LF or non-ASCII shows up escaped rather than raw and a
+    plain substring match would miss it.
+    """
+    forms = {value, repr(value)[1:-1]}
+    try:
+        forms.add(repr(value.encode("latin-1"))[2:-1])
+    except UnicodeEncodeError:
+        forms.add(repr(value.encode("utf-8"))[2:-1])
+    return tuple(sorted(forms, key=len, reverse=True))
 
 
 _WEBHOOK_KINDS = {"generic", "slack", "discord", "teams", "pagerduty", "alertmanager"}

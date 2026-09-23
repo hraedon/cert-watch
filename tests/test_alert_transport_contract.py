@@ -338,3 +338,18 @@ def test_attempt_delivery_ledger_details_match_pre_refactor_golden(
         "refused": ["queued@example.invalid"],
         "http_status": None,
     }
+
+
+def test_sanitizer_redacts_escaped_header_values() -> None:
+    """urllib reports an invalid header value in repr-escaped form; the secret
+    must be redacted in that form too, not only verbatim."""
+    from cert_watch.alerting.model import WebhookConfig
+    from cert_watch.alerting.transports.webhook import _sanitize_webhook_error
+
+    secret = "secret-token\r\nX-Injected: 1"
+    config = WebhookConfig(url="https://hooks.example.test/x", headers={"Authorization": secret})
+    message = f"Invalid header value {secret.encode()!r}"
+
+    sanitized = _sanitize_webhook_error(message, config)
+
+    assert "secret-token" not in sanitized
