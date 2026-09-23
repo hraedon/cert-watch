@@ -23,10 +23,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
+import os
 import secrets
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 
 from cert_watch.database.connection import _connect
@@ -70,16 +72,27 @@ class ApiKeyAuth:
     scope: str
 
 
+@lru_cache(maxsize=16)
+def _pepper_from_env_source(source: str, raw_source: str) -> bytes:
+    """Resolve each stable auth-secret env source once per process."""
+    del source, raw_source  # cache key; Settings owns parsing and validation
+    from cert_watch.config import Settings
+
+    return Settings.from_env().auth_secret.encode()
+
+
 def _get_pepper() -> bytes:
     """Return the pre-SecurityContext pepper for compatibility/test use.
 
     Standalone repository users retain the historical environment/default
     behaviour. Production request paths inject a SecurityContext instead.
     """
-    from cert_watch.config import Settings, setting_env_is_set
+    from cert_watch.config import setting_env_source
 
-    value = Settings.from_env().auth_secret
-    return value.encode() if setting_env_is_set("auth_secret") else _LEGACY_DEFAULT_PEPPER
+    source = setting_env_source("auth_secret")
+    if source is None:
+        return _LEGACY_DEFAULT_PEPPER
+    return _pepper_from_env_source(source, os.environ[source])
 
 
 def hash_token(raw_token: str, *, pepper: bytes | None = None) -> str:
