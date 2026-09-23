@@ -5,9 +5,27 @@ Plan 024 Slice 4 — scheduled-job failure handling, next-run math, scan error p
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
+
+from cert_watch.config import Settings
+from cert_watch.database import init_schema
+from cert_watch.scheduler import Scheduler
+from cert_watch.scheduler_context import SchedulerContext
+
+
+def _scheduler(db) -> Scheduler:
+    init_schema(db)
+    settings = Settings(db_path=db, data_dir=db.parent)
+    return Scheduler(SchedulerContext(settings, None, None))
+
+
+def run_scan_now(scan_fn, alert_fn, **kwargs):
+    """Exercise immediate scans through a Scheduler instance."""
+    return _scheduler(kwargs["db_path"]).run_scan_now(scan_fn, alert_fn, **kwargs)
 
 # ---------- _seconds_until ----------
 
@@ -74,28 +92,22 @@ def test_record_scan_history_custom_id(tmp_path):
 # ---------- start/stop scheduler ----------
 
 
-def test_start_scheduler_starts_thread():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
+def test_scheduler_starts_thread(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime.start()
 
-    stop_scheduler()  # ensure clean state
-    start_scheduler(lambda: {}, lambda: {}, hour=23, minute=59)
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    assert t.is_alive()
-    stop_scheduler()
+    assert runtime.is_running
+    assert runtime.stop()
 
 
-def test_start_scheduler_idempotent():
-    from cert_watch.scheduler import start_scheduler, stop_scheduler
+def test_scheduler_start_is_idempotent(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime.start()
+    first_thread = runtime._thread
+    runtime.start()
 
-    stop_scheduler()
-    start_scheduler(lambda: {}, lambda: {}, hour=23, minute=59)
-    start_scheduler(lambda: {}, lambda: {}, hour=23, minute=59)  # no-op
-    from cert_watch.scheduler import _scheduler_thread as t
-
-    assert t is not None
-    stop_scheduler()
+    assert runtime._thread is first_thread
+    assert runtime.stop()
 
 
 # The exception tests below drive the cycle directly via `_run_cycle` rather than
@@ -111,42 +123,48 @@ def _boom(msg):
     return _f
 
 
-def test_scheduler_scan_fn_exception_does_not_block_alerts():
-    from cert_watch.scheduler import _run_cycle
-
+def test_scheduler_scan_fn_exception_does_not_block_alerts(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
     # scan_fn raises; alert_fn must still run and the cycle must not propagate.
-    _run_cycle(_boom("scan failed"), lambda: ran.append("alert") or {})
+    runtime.run_cycle(
+        scan_fn=_boom("scan failed"),
+        alert_fn=lambda: ran.append("alert") or {},
+        digest_fn=lambda: {},
+        maintenance_fn=lambda: None,
+    )
     assert ran == ["alert"]
 
 
-def test_scheduler_alert_fn_exception_is_swallowed():
-    from cert_watch.scheduler import _run_cycle
-
+def test_scheduler_alert_fn_exception_is_swallowed(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
     # alert_fn raises after scan ran; the cycle must complete without raising.
-    _run_cycle(lambda: ran.append("scan") or {}, _boom("alert failed"))
+    runtime.run_cycle(
+        scan_fn=lambda: ran.append("scan") or {},
+        alert_fn=_boom("alert failed"),
+        digest_fn=lambda: {},
+        maintenance_fn=lambda: None,
+    )
     assert ran == ["scan"]
 
 
-def test_scheduler_runs_all_stages_in_order():
-    from cert_watch.scheduler import _run_cycle
-
+def test_scheduler_runs_all_stages_in_order(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
-    _run_cycle(
-        lambda: ran.append("scan") or {},
-        lambda: ran.append("alert") or {},
+    runtime.run_cycle(
+        scan_fn=lambda: ran.append("scan") or {},
+        alert_fn=lambda: ran.append("alert") or {},
         ct_fn=lambda: ran.append("ct") or {},
         maintenance_fn=lambda: ran.append("maint"),
     )
     assert ran == ["scan", "ct", "alert", "maint"]
 
 
-def test_scheduler_stop_during_scan_skips_remaining_stages():
+def test_scheduler_stop_during_scan_skips_remaining_stages(tmp_path):
     import threading
 
-    from cert_watch.scheduler import _run_cycle
-
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     stopped = threading.Event()
     ran = []
 
@@ -155,9 +173,9 @@ def test_scheduler_stop_during_scan_skips_remaining_stages():
         stopped.set()
         return {}
 
-    _run_cycle(
-        scan,
-        lambda: ran.append("alert") or {},
+    runtime.run_cycle(
+        scan_fn=scan,
+        alert_fn=lambda: ran.append("alert") or {},
         ct_fn=lambda: ran.append("ct") or {},
         digest_fn=lambda: ran.append("digest") or {},
         maintenance_fn=lambda: ran.append("maintenance"),
@@ -166,54 +184,140 @@ def test_scheduler_stop_during_scan_skips_remaining_stages():
     assert ran == ["scan"]
 
 
-def test_scheduler_ct_fn_exception_does_not_block_alerts():
-    from cert_watch.scheduler import _run_cycle
-
+def test_scheduler_ct_fn_exception_does_not_block_alerts(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
     # ct_fn raises between scan and alert; alert + maintenance must still run.
-    _run_cycle(
-        lambda: ran.append("scan") or {},
-        lambda: ran.append("alert") or {},
+    runtime.run_cycle(
+        scan_fn=lambda: ran.append("scan") or {},
+        alert_fn=lambda: ran.append("alert") or {},
         ct_fn=_boom("ct failed"),
         maintenance_fn=lambda: ran.append("maint"),
     )
     assert ran == ["scan", "alert", "maint"]
 
 
-def test_scheduler_maintenance_fn_exception_is_swallowed():
-    from cert_watch.scheduler import _run_cycle
-
+def test_scheduler_maintenance_fn_exception_is_swallowed(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
     # maintenance_fn is the last stage; its failure must not escape the cycle.
-    _run_cycle(
-        lambda: ran.append("scan") or {},
-        lambda: ran.append("alert") or {},
+    runtime.run_cycle(
+        scan_fn=lambda: ran.append("scan") or {},
+        alert_fn=lambda: ran.append("alert") or {},
+        digest_fn=lambda: {},
         maintenance_fn=_boom("maint failed"),
     )
     assert ran == ["scan", "alert"]
 
 
-def test_stop_scheduler_when_not_started():
-    from cert_watch.scheduler import stop_scheduler
-
-    stop_scheduler()  # should not raise
+def test_stop_scheduler_when_not_started(tmp_path):
+    assert _scheduler(tmp_path / "test.sqlite3").stop()
 
 
-def test_stop_scheduler_drains_remaining_renewal_webhook_pool(monkeypatch):
-    from unittest.mock import Mock, call
+def test_stop_scheduler_cancels_queued_webhook_work(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime.start()
+    assert runtime.stop()
+    assert runtime._webhook_pool is None
 
-    import cert_watch.scheduler as scheduler
 
-    renewal_pool = Mock()
-    monkeypatch.setattr(
-        scheduler, "_detach_renewal_webhook_pool", lambda: renewal_pool
+def test_restart_after_bounded_stop_hands_off_to_one_new_loop(tmp_path):
+    settings = Settings(
+        db_path=tmp_path / "test.sqlite3",
+        data_dir=tmp_path,
+        sched_hour=6,
     )
-    monkeypatch.setattr(scheduler, "_scheduler_thread", None)
+    init_schema(settings.db_path)
+    context = SchedulerContext(settings, None, None)
+    entered = threading.Event()
+    release = threading.Event()
 
-    scheduler.stop_scheduler()
+    class Clock:
+        current = datetime(2026, 9, 23, 5, 59, tzinfo=UTC)
+        waits = 0
 
-    expected = call(wait=True, cancel_futures=True)
-    assert renewal_pool.shutdown.call_args == expected
+        def now(self):
+            return self.current
+
+        def monotonic(self):
+            return self.current.timestamp()
+
+        def wait(self, event, timeout):
+            self.waits += 1
+            if self.waits == 1:
+                self.current += timedelta(seconds=timeout)
+                return False
+            return event.wait(1)
+
+    def scan():
+        entered.set()
+        release.wait(1)
+        return {}
+
+    context.scan_all = scan
+    context.run_alerts = lambda: {}
+    context.maybe_run_weekly_digest = lambda: {}
+    context.maintenance = lambda: None
+    runtime = Scheduler(context, clock=Clock(), shutdown_timeout=0.01)
+    runtime.start()
+    assert entered.wait(1)
+    old_thread = runtime._thread
+
+    assert not runtime.stop()
+    runtime.start()
+    release.set()
+
+    deadline = time.monotonic() + 1
+    while time.monotonic() < deadline:
+        if runtime._thread is not old_thread and runtime.is_running:
+            break
+        time.sleep(0.005)
+    if old_thread is not None:
+        old_thread.join(0.2)
+    assert old_thread is not None and not old_thread.is_alive()
+    assert runtime._thread is not old_thread
+    assert runtime.is_running
+    assert runtime.stop(timeout=1)
+
+
+def test_stop_is_bounded_when_webhook_is_hung(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime.start()
+    entered = threading.Event()
+    release = threading.Event()
+
+    def hung_webhook():
+        entered.set()
+        release.wait(1)
+
+    assert runtime._submit_renewal_webhook(hung_webhook)
+    assert entered.wait(1)
+    started = time.monotonic()
+
+    runtime.stop(timeout=0.03)
+
+    elapsed = time.monotonic() - started
+    release.set()
+    assert elapsed < 0.2
+
+
+def test_malformed_last_scan_timestamp_is_not_exported(tmp_path, caplog):
+    from cert_watch.database import _connect
+
+    db = tmp_path / "test.sqlite3"
+    init_schema(db)
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO scan_history "
+            "(id, hostname, port, status, scanned_at) VALUES (?, ?, ?, ?, ?)",
+            ("bad-time", "bad.example.test", 443, "failure", "not-a-timestamp"),
+        )
+        conn.commit()
+
+    runtime = _scheduler(db)
+
+    assert runtime.last_scan_timestamp is None
+    assert "latest scan timestamp is malformed" in caplog.text
 
 
 # ---------- run_scan_now ----------
@@ -221,7 +325,6 @@ def test_stop_scheduler_drains_remaining_renewal_webhook_pool(monkeypatch):
 
 def test_run_scan_now_basic(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -252,7 +355,6 @@ def test_run_scan_now_basic(tmp_path):
 
 def test_run_scan_now_with_scan_error(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -275,7 +377,6 @@ def test_run_scan_now_with_scan_error(tmp_path):
 
 def test_run_scan_now_with_exception(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -302,7 +403,6 @@ def test_run_scan_now_history_write_failure_does_not_stop_hosts(
 
     from cert_watch.database import init_schema
     from cert_watch.scan import ScanError
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -335,7 +435,6 @@ def test_run_scan_now_history_write_failure_does_not_stop_hosts(
 
 def test_run_scan_now_with_store_fn(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -369,7 +468,6 @@ def test_run_scan_now_with_store_fn(tmp_path):
 
 def test_run_scan_now_store_fn_exception(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -404,7 +502,6 @@ def test_run_scan_now_store_fn_exception(tmp_path):
 
 def test_run_scan_now_store_fn_exception_records_failure_status(tmp_path):
     from cert_watch.database import _connect, init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -449,7 +546,6 @@ def test_run_scan_now_store_fn_returns_none_records_failure(tmp_path):
     contract violation that silently returns "" by recording failure too.
     """
     from cert_watch.database import _connect, init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -491,7 +587,6 @@ def test_run_scan_now_store_fn_returns_none_records_failure(tmp_path):
 
 def test_run_scan_now_alert_counts(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -508,7 +603,6 @@ def test_run_scan_now_alert_counts(tmp_path):
 
 def test_run_scan_now_no_hosts(tmp_path):
     from cert_watch.database import init_schema
-    from cert_watch.scheduler import run_scan_now
 
     db = tmp_path / "test.sqlite3"
     init_schema(db)
@@ -640,62 +734,55 @@ def test_scan_error_reason_variants():
 # ---------- cycle overlap protection (WI-022) ----------
 
 
-def test_cycle_lock_prevents_concurrent_acquire():
-    from cert_watch.scheduler import _cycle_lock
-
-    assert _cycle_lock.acquire(blocking=False)
-    assert not _cycle_lock.acquire(blocking=False)
-    _cycle_lock.release()
-
-
-def test_cycle_lock_available_after_release():
-    from cert_watch.scheduler import _cycle_lock
-
-    _cycle_lock.acquire(blocking=False)
-    _cycle_lock.release()
-    assert _cycle_lock.acquire(blocking=False)
-    _cycle_lock.release()
+def test_cycle_lock_prevents_concurrent_delivery(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    entered = runtime._cycle_lock.acquire(blocking=False)
+    try:
+        assert entered
+        assert runtime.try_run_alert_delivery(lambda: {"sent": 1}) is None
+    finally:
+        runtime._cycle_lock.release()
 
 
-def test_stop_scheduler_does_not_release_external_lock():
-    from cert_watch.scheduler import _cycle_lock, stop_scheduler
-
-    _cycle_lock.acquire(blocking=False)
-    assert _cycle_lock.locked()
-
-    stop_scheduler()
-
-    assert _cycle_lock.locked()
-    _cycle_lock.release()
+def test_cycle_lock_available_after_delivery(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    assert runtime.try_run_alert_delivery(lambda: {"sent": 1}) == {"sent": 1}
+    assert runtime.try_run_alert_delivery(lambda: {"sent": 2}) == {"sent": 2}
 
 
-def test_loop_skips_cycle_when_lock_held():
-    from cert_watch.scheduler import _cycle_lock, _run_cycle
+def test_stop_scheduler_does_not_release_active_cycle_lock(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime._cycle_lock.acquire(blocking=False)
+    assert runtime._cycle_lock.locked()
 
-    _cycle_lock.acquire(blocking=False)
+    runtime.stop()
 
+    assert runtime._cycle_lock.locked()
+    runtime._cycle_lock.release()
+
+
+def test_manual_delivery_skips_when_cycle_lock_held(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
+    runtime._cycle_lock.acquire(blocking=False)
     ran = []
-    if _cycle_lock.acquire(blocking=False):
-        try:
-            _run_cycle(lambda: ran.append("scan") or {}, lambda: ran.append("alert") or {})
-        finally:
-            _cycle_lock.release()
-    else:
-        ran.append("skipped")
-
-    assert ran == ["skipped"]
-    _cycle_lock.release()
+    try:
+        assert runtime.try_run_alert_delivery(
+            lambda: ran.append("delivery") or {"sent": 1}
+        ) is None
+    finally:
+        runtime._cycle_lock.release()
+    assert ran == []
 
 
-def test_loop_runs_cycle_when_lock_free():
-    from cert_watch.scheduler import _cycle_lock, _run_cycle
-
+def test_run_cycle_runs_when_lock_free(tmp_path):
+    runtime = _scheduler(tmp_path / "test.sqlite3")
     ran = []
-    if _cycle_lock.acquire(blocking=False):
-        try:
-            _run_cycle(lambda: ran.append("scan") or {}, lambda: ran.append("alert") or {})
-        finally:
-            _cycle_lock.release()
+    runtime.run_cycle(
+        scan_fn=lambda: ran.append("scan") or {},
+        alert_fn=lambda: ran.append("alert") or {},
+        digest_fn=lambda: {},
+        maintenance_fn=lambda: None,
+    )
 
     assert ran == ["scan", "alert"]
-    assert not _cycle_lock.locked()
+    assert not runtime._cycle_lock.locked()

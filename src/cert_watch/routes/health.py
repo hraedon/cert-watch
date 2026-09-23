@@ -125,8 +125,8 @@ def readyz(request: Request) -> JSONResponse:
                 checks["db_write"] = "error"
                 ok = False
     # Scheduler
-    from cert_watch.scheduler import _scheduler_thread
-    if _scheduler_thread is not None and _scheduler_thread.is_alive():
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if scheduler is not None and scheduler.is_running:
         checks["scheduler"] = "running"
     else:
         checks["scheduler"] = "not running"
@@ -205,10 +205,8 @@ def build_api_health_response(request: Request) -> JSONResponse:
     alert_query_ok = True
 
     # Scheduler
-    from cert_watch.scheduler import _scheduler_thread
-    checks["scheduler_running"] = (
-        _scheduler_thread is not None and _scheduler_thread.is_alive()
-    )
+    scheduler = getattr(request.app.state, "scheduler", None)
+    checks["scheduler_running"] = bool(scheduler and scheduler.is_running)
 
     # Last scan
     try:

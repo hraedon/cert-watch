@@ -172,6 +172,12 @@ All notable changes to cert-watch are documented in this file.
   append-only historical rows are not rewritten.
 
 ### Fixed
+- **Scheduler restarts and shutdown are now deterministic.** Each application
+  owns its scheduler thread, synchronization state, clock, and renewal-webhook
+  executor. Restarting after a bounded stop hands off to exactly one new loop
+  after the old cycle reaches a safe point, instead of returning early on the
+  still-alive old thread and later leaving no scheduler running. Shutdown also
+  cancels queued webhook work and cannot wait indefinitely on a hung delivery.
 - **Alert delivery outages no longer evict the serving pod.** `/readyz`
   reports overdue pending alerts and stale `sending` leases without failing
   Kubernetes readiness. `/api/health` dates terminal give-ups from their last

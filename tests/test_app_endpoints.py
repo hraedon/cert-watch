@@ -253,46 +253,23 @@ def test_dashboard_lists_tracked_hosts(tmp_path, reload_app):
 
 
 def test_lifespan_starts_scheduler(tmp_path, monkeypatch, reload_app):
-    """Assert start_scheduler is invoked on app startup."""
-    import cert_watch.app as app_module
-
+    """The lifespan owns one running Scheduler and stops it on exit."""
     app_mod = reload_app()
-    calls = {"start": 0, "stop": 0}
-
-    def fake_start(**kwargs):
-        calls["start"] += 1
-        calls["start_kwargs"] = kwargs
-
-    def fake_stop():
-        calls["stop"] += 1
-
-    monkeypatch.setattr(app_module, "start_scheduler", fake_start)
-    monkeypatch.setattr(app_module, "stop_scheduler", fake_stop)
-
     with TestClient(app_mod.app) as client:
         client.get("/healthz")
-    assert calls["start"] == 1
-    assert calls["stop"] == 1
-    # default hour/minute from env (unset) should be 6/0
-    assert calls["start_kwargs"]["hour"] == 6
-    assert calls["start_kwargs"]["minute"] == 0
+        runtime = app_mod.app.state.scheduler
+        assert runtime.is_running
+        assert runtime.context.schedule_time() == (6, 0)
+    assert not runtime.is_running
 
 
 def test_lifespan_respects_sched_env(tmp_path, monkeypatch, reload_app):
     monkeypatch.setenv("CERT_WATCH_SCHED_HOUR", "3")
     monkeypatch.setenv("CERT_WATCH_SCHED_MIN", "15")
-    import cert_watch.app as app_module
-
     app_mod = reload_app()
-    captured = {}
-
-    monkeypatch.setattr(app_module, "start_scheduler", lambda **kw: captured.update(kw))
-    monkeypatch.setattr(app_module, "stop_scheduler", lambda: None)
-
     with TestClient(app_mod.app) as client:
         client.get("/healthz")
-    assert captured["hour"] == 3
-    assert captured["minute"] == 15
+        assert app_mod.app.state.scheduler.context.schedule_time() == (3, 15)
 
 
 def test_common_ports_checkbox_scans_multiple(tmp_path, monkeypatch, reload_app, self_signed_leaf):
@@ -690,8 +667,6 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
     from starlette.requests import Request
 
     from cert_watch.routes.dashboard import flush_alert_queue
-    from cert_watch.scheduler import _cycle_lock
-
     async def run_in_worker(fn, *args):
         result = []
         worker = threading.Thread(target=lambda: result.append(fn(*args)))
@@ -716,14 +691,17 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
             "path": "/alerts/flush",
             "headers": [],
             "client": ("127.0.0.1", 12345),
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    scheduler=SimpleNamespace(
+                        try_run_alert_delivery=lambda _delivery_fn: None
+                    )
+                )
+            ),
         }
     )
 
-    assert _cycle_lock.acquire(blocking=False)
-    try:
-        response = asyncio.run(flush_alert_queue(request))
-    finally:
-        _cycle_lock.release()
+    response = asyncio.run(flush_alert_queue(request))
 
     assert response.status_code == 303
     assert "delivery already in progress" in unquote_plus(response.headers["location"])
@@ -773,6 +751,13 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
             "path": "/alerts/flush",
             "headers": [],
             "client": ("127.0.0.1", 12345),
+            "app": SimpleNamespace(
+                state=SimpleNamespace(
+                    scheduler=SimpleNamespace(
+                        try_run_alert_delivery=lambda delivery_fn: delivery_fn()
+                    )
+                )
+            ),
         }
     )
 

@@ -54,7 +54,9 @@ def test_save_endpoint_settings_preserves_other_fields_and_wakes_scheduler(
     before = repo.get(host_id)
     app = reload_app().app
     wakeups = []
-    monkeypatch.setattr("cert_watch.scheduler.wake_scheduler", lambda: wakeups.append(True))
+    monkeypatch.setattr(
+        "cert_watch.scheduler.wake_scheduler", lambda _scheduler: wakeups.append(True)
+    )
     with TestClient(app) as client:
         wakeups.clear()
         response = client.post(f"/hosts/{host_id}/settings", data=_form(), follow_redirects=False)

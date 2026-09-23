@@ -12,12 +12,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from cert_watch.renewal_analytics import RenewalOverdueSignal
+    from cert_watch.scheduler_context import SchedulerContext
 
 logger = logging.getLogger("cert_watch.scheduler")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -58,8 +63,8 @@ def _next_daily_time(hour: int, minute: int, now: datetime) -> datetime:
     return target
 
 
-def _seconds_until(hour: int, minute: int) -> float:
-    now = datetime.now(UTC)
+def _seconds_until(hour: int, minute: int, *, now: datetime | None = None) -> float:
+    now = now or datetime.now(UTC)
     return (_next_daily_time(hour, minute, now) - now).total_seconds()
 
 
@@ -162,17 +167,24 @@ def _host_scan_deadlines(
 
 def get_hosts_due_for_scan(
     db_path: str | Path, *, hour: int = 6, minute: int = 0,
+    now: datetime | None = None,
 ) -> list[tuple[str, int]]:
     """Return only hosts due under the shared daily/interval/retry policy."""
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     return [
         (host, port) for host, port, deadline, _ in _host_scan_deadlines(db_path, hour, minute, now)
         if deadline <= now
     ]
 
 
-def _seconds_until_next_scan(db_path: str | Path, hour: int, minute: int) -> float:
-    now = datetime.now(UTC)
+def _seconds_until_next_scan(
+    db_path: str | Path,
+    hour: int,
+    minute: int,
+    *,
+    now: datetime | None = None,
+) -> float:
+    now = now or datetime.now(UTC)
     deadlines = _host_scan_deadlines(db_path, hour, minute, now)
     # Never-attempted hosts remain eligible in any cycle, but retain the initial
     # hourly retry wakeup rather than triggering unsolicited scans at startup.
@@ -180,238 +192,383 @@ def _seconds_until_next_scan(db_path: str | Path, hour: int, minute: int) -> flo
                 for _, _, deadline, unattempted in deadlines), default=float("inf"))
 
 
-_scheduler_thread: threading.Thread | None = None
-_scheduler_stop = threading.Event()
-_scheduler_wake = threading.Event()
-_scheduler_lock = threading.Lock()
-_cycle_lock = threading.Lock()
+class Clock(Protocol):
+    """Time source used by the scheduler loop and digest budget."""
+
+    def now(self) -> datetime: ...
+
+    def monotonic(self) -> float: ...
+
+    def wait(self, event: threading.Event, timeout: float) -> bool: ...
 
 
-def scheduler_stop_event() -> threading.Event:
-    """Return the scheduler lifecycle signal for stop-aware cycle work."""
-    return _scheduler_stop
+class SystemClock:
+    def now(self) -> datetime:
+        return datetime.now(UTC)
+
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def wait(self, event: threading.Event, timeout: float) -> bool:
+        return event.wait(timeout)
 
 
-def try_run_alert_delivery(
-    delivery_fn: Callable[[], dict[str, int]],
-) -> dict[str, int] | None:
-    """Run alert delivery only when no scheduler cycle is in progress."""
-    if not _cycle_lock.acquire(blocking=False):
-        return None
-    try:
-        return delivery_fn()
-    finally:
-        _cycle_lock.release()
+class Scheduler:
+    """Own the scheduling loop, synchronization, jobs, and webhook executor."""
 
+    def __init__(
+        self,
+        context: SchedulerContext,
+        *,
+        clock: Clock | None = None,
+        shutdown_timeout: float = 30.0,
+    ) -> None:
+        self.context = context
+        self.clock = clock or SystemClock()
+        self.shutdown_timeout = shutdown_timeout
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._wake_event = threading.Event()
+        self._lifecycle_lock = threading.Lock()
+        self._cycle_lock = threading.Lock()
+        self._desired_running = False
+        self._webhook_pool: concurrent.futures.ThreadPoolExecutor | None = None
+        self._webhook_lock = threading.Lock()
+        self._webhook_futures: set[concurrent.futures.Future[None]] = set()
+        self._last_scan_lock = threading.Lock()
+        self._last_scan_timestamp: float | None = None
+        self._bind_context()
+        self._refresh_last_scan_timestamp()
 
-def wake_scheduler() -> None:
-    """Interrupt the timer so it rereads effective settings and host cadence."""
-    _scheduler_wake.set()
+    def _bind_context(self) -> None:
+        self.context.bind_runtime(
+            stop_event=self._stop_event,
+            wake=self.wake,
+            scan_runner=self.run_scan_now,
+            clock=self.clock,
+        )
 
-_renewal_webhook_pool: concurrent.futures.ThreadPoolExecutor | None = (
-    concurrent.futures.ThreadPoolExecutor(
-        max_workers=2, thread_name_prefix="renewal-webhook",
-    )
-)
-_renewal_webhook_pool_lock = threading.Lock()
+    @property
+    def is_running(self) -> bool:
+        with self._lifecycle_lock:
+            return self._thread is not None and self._thread.is_alive()
 
+    @property
+    def last_scan_timestamp(self) -> float | None:
+        # Explicit/manual scans do not run through this object. Refresh on read
+        # so the metric preserves its historical "latest recorded scan"
+        # meaning while still taking scheduler state through the app instance.
+        self._refresh_last_scan_timestamp()
+        with self._last_scan_lock:
+            return self._last_scan_timestamp
 
-def _flush_renewal_webhook_pool() -> None:
-    """Drain pending tasks and explicitly reset the pool (test helper)."""
-    global _renewal_webhook_pool
-    with _renewal_webhook_pool_lock:
-        pool = _renewal_webhook_pool
-        _renewal_webhook_pool = None
-    if pool is not None:
-        pool.shutdown(wait=True)
-    _start_renewal_webhook_pool()
+    @property
+    def stop_event(self) -> threading.Event:
+        return self._stop_event
 
+    def start(self) -> None:
+        """Start exactly one loop; repeated calls are idempotent.
 
-def _start_renewal_webhook_pool() -> None:
-    global _renewal_webhook_pool
-    with _renewal_webhook_pool_lock:
-        if _renewal_webhook_pool is None:
-            _renewal_webhook_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=2, thread_name_prefix="renewal-webhook",
+        If a bounded stop returned while a phase was still unwinding, this marks
+        a restart request. The exiting generation starts its successor instead
+        of clearing its stop event or allowing two loops to overlap.
+        """
+        with self._lifecycle_lock:
+            self._desired_running = True
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._start_locked()
+
+    def _start_locked(self) -> None:
+        self._stop_event = threading.Event()
+        self._wake_event.clear()
+        self._ensure_webhook_pool()
+        self._bind_context()
+        thread = threading.Thread(
+            target=self._run_loop,
+            args=(self._stop_event,),
+            daemon=True,
+            name="cert-watch-sched",
+        )
+        self._thread = thread
+        thread.start()
+
+    def stop(self, timeout: float | None = None) -> bool:
+        """Signal shutdown and wait no longer than one shared deadline.
+
+        Queued webhook work is cancelled. A running network call is allowed to
+        finish independently after the deadline; it cannot hold app shutdown.
+        Returns whether the scheduler loop stopped within the deadline.
+        """
+        budget = self.shutdown_timeout if timeout is None else max(0.0, timeout)
+        deadline = self.clock.monotonic() + budget
+        with self._lifecycle_lock:
+            self._desired_running = False
+            thread = self._thread
+            self._stop_event.set()
+            self._wake_event.set()
+        pool, futures = self._detach_webhook_pool()
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+        if futures:
+            concurrent.futures.wait(
+                futures,
+                timeout=max(0.0, deadline - self.clock.monotonic()),
             )
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=max(0.0, deadline - self.clock.monotonic()))
+        return thread is None or not thread.is_alive()
 
+    def wake(self) -> None:
+        """Interrupt the timer so it rereads settings and host cadence."""
+        self._wake_event.set()
 
-def _shutdown_renewal_webhook_pool() -> None:
-    pool = _detach_renewal_webhook_pool()
-    if pool is not None:
-        pool.shutdown(wait=True)
-
-
-def _detach_renewal_webhook_pool() -> concurrent.futures.ThreadPoolExecutor | None:
-    """Close the submission gate immediately and return the pool to drain."""
-    global _renewal_webhook_pool
-    with _renewal_webhook_pool_lock:
-        pool = _renewal_webhook_pool
-        _renewal_webhook_pool = None
-    return pool
-
-
-def _submit_renewal_webhook(fn: Callable[[], None]) -> bool:
-    with _renewal_webhook_pool_lock:
-        if _renewal_webhook_pool is None:
-            return False
-        _renewal_webhook_pool.submit(fn)
-    return True
-
-
-def _run_cycle(
-    scan_fn: Callable[[], dict[str, Any]],
-    alert_fn: Callable[[], dict[str, Any]],
-    *,
-    ct_fn: Callable[[], dict[str, Any]] | None = None,
-    maintenance_fn: Callable[[], None] | None = None,
-    digest_fn: Callable[[], dict[str, Any]] | None = None,
-    stop_event: threading.Event | None = None,
-) -> None:
-    """Run one scan → CT → alert → digest → maintenance cycle.
-
-    Each stage is isolated: a failure in any one is logged and swallowed so the
-    remaining stages still run and the scheduler thread survives to the next day.
-    Module-level (not a closure) so the failure-isolation behaviour is directly
-    testable without waiting for the daily timer to fire.
-    """
-    try:
-        scan_fn()
-        logger.info("scheduled scan completed")
-    except Exception:  # Failure isolation: one stage must not stop the others.
-        logger.exception("scheduler scan_fn failed")
-    if stop_event is not None and stop_event.is_set():
-        return
-    if ct_fn is not None:
+    def _run_loop(self, stop_event: threading.Event) -> None:
+        next_cycle_allowed = 0.0
+        daily_deadline: datetime | None = None
+        daily_schedule: tuple[int, int] | None = None
         try:
-            ct_fn()
-            logger.info("scheduled CT check completed")
-        except Exception:  # Failure isolation between scheduler stages.
-            logger.exception("scheduler ct_fn failed")
-    if stop_event is not None and stop_event.is_set():
-        return
-    try:
-        alert_fn()
-        logger.info("scheduled alerts completed")
-    except Exception:  # Failure isolation between scheduler stages.
-        logger.exception("scheduler alert_fn failed")
-    if stop_event is not None and stop_event.is_set():
-        return
-    if digest_fn is not None:
-        try:
-            digest_fn()
-            logger.info("scheduled digest completed")
-        except Exception:  # Failure isolation between scheduler stages.
-            logger.exception("scheduler digest_fn failed")
-    if stop_event is not None and stop_event.is_set():
-        return
-    if maintenance_fn is not None:
-        try:
-            maintenance_fn()
-        except Exception:  # Failure isolation between scheduler stages.
-            logger.exception("scheduler maintenance_fn failed")
-
-
-def start_scheduler(
-    scan_fn: Callable[[], dict[str, Any]],
-    alert_fn: Callable[[], dict[str, Any]],
-    *,
-    ct_fn: Callable[[], dict[str, Any]] | None = None,
-    maintenance_fn: Callable[[], None] | None = None,
-    digest_fn: Callable[[], dict[str, Any]] | None = None,
-    hour: int = 6,
-    minute: int = 0,
-    db_path: str | Path | None = None,
-    schedule_provider: Callable[[], tuple[int, int]] | None = None,
-) -> None:
-    """Run the daily cycle and additional cycles when individual hosts are due.
-
-    ``maintenance_fn`` (optional) runs at the end of each daily cycle for
-    housekeeping such as audit-log retention; failures are logged, never raised.
-
-    Settings saves wake the timer; each job captures its own complete config.
-    An hourly recheck discovers inventory changes even without a settings save.
-    """
-    global _scheduler_thread
-    with _scheduler_lock:
-        if _scheduler_thread is not None and _scheduler_thread.is_alive():
-            return
-
-        _start_renewal_webhook_pool()
-
-        def _loop() -> None:
-            next_cycle_allowed = 0.0
-            daily_deadline: datetime | None = None
-            daily_schedule: tuple[int, int] | None = None
-            while not _scheduler_stop.is_set():
-                # Clear before reading settings so an update during calculation
-                # remains signalled and cannot leave the old timer asleep.
-                _scheduler_wake.clear()
-                if _scheduler_stop.is_set():
+            while not stop_event.is_set():
+                self._wake_event.clear()
+                if stop_event.is_set():
                     return
-                current_hour, current_minute = (
-                    schedule_provider() if schedule_provider else (hour, minute)
-                )
-                now = datetime.now(UTC)
+                current_hour, current_minute = self.context.schedule_time()
+                now = self.clock.now()
                 if daily_deadline is None or daily_schedule != (current_hour, current_minute):
                     daily_deadline = _next_daily_time(current_hour, current_minute, now)
                     daily_schedule = (current_hour, current_minute)
                 cycle_wait = max(0.0, (daily_deadline - now).total_seconds())
-                if db_path is not None:
-                    try:
-                        cycle_wait = min(cycle_wait, _seconds_until_next_scan(
-                            db_path, current_hour, current_minute,
-                        ))
-                    except Exception:
-                        logger.exception("could not calculate host scan cadence")
-                # An unexpected scan/storage failure must not create a hot loop
-                # when no attempt could be recorded. Normal retries remain hourly.
-                cycle_wait = max(cycle_wait, next_cycle_allowed - time.monotonic())
+                try:
+                    cycle_wait = min(
+                        cycle_wait,
+                        _seconds_until_next_scan(
+                            self.context.settings.db_path,
+                            current_hour,
+                            current_minute,
+                            now=now,
+                        ),
+                    )
+                except Exception:
+                    logger.exception("could not calculate host scan cadence")
+                cycle_wait = max(cycle_wait, next_cycle_allowed - self.clock.monotonic())
                 wait = min(cycle_wait, FAST_RETRY_INTERVAL)
-                if _scheduler_wake.wait(timeout=wait):
+                if self.clock.wait(self._wake_event, wait):
                     continue
-                if _scheduler_stop.is_set():
+                if stop_event.is_set():
                     return
-                # A delayed hourly recheck can cross the daily deadline. Keep
-                # that absolute target until after the wait; recomputing it
-                # first would silently move an elapsed run to tomorrow.
-                if cycle_wait > FAST_RETRY_INTERVAL and datetime.now(UTC) < daily_deadline:
+                if cycle_wait > FAST_RETRY_INTERVAL and self.clock.now() < daily_deadline:
                     continue
-                if not _cycle_lock.acquire(blocking=False):
+                if not self._cycle_lock.acquire(blocking=False):
                     logger.warning("skipping scheduled cycle; previous cycle still running")
-                    next_cycle_allowed = time.monotonic() + 60
+                    next_cycle_allowed = self.clock.monotonic() + 60
                     continue
                 try:
-                    _run_cycle(
-                        scan_fn, alert_fn, ct_fn=ct_fn, maintenance_fn=maintenance_fn,
-                        digest_fn=digest_fn, stop_event=_scheduler_stop,
-                    )
+                    self.run_cycle(stop_event=stop_event)
                 finally:
-                    _cycle_lock.release()
-                    next_cycle_allowed = time.monotonic() + 60
-                    now = datetime.now(UTC)
+                    self._cycle_lock.release()
+                    next_cycle_allowed = self.clock.monotonic() + 60
+                    now = self.clock.now()
                     if daily_deadline <= now:
                         daily_deadline = _next_daily_time(current_hour, current_minute, now)
+        finally:
+            with self._lifecycle_lock:
+                if self._thread is threading.current_thread():
+                    self._thread = None
+                if self._desired_running:
+                    self._start_locked()
 
-        _scheduler_stop.clear()
-        _scheduler_thread = threading.Thread(target=_loop, daemon=True, name="cert-watch-sched")
-        _scheduler_thread.start()
+    def run_cycle(
+        self,
+        *,
+        scan_fn: Callable[[], dict[str, Any]] | None = None,
+        alert_fn: Callable[[], dict[str, Any]] | None = None,
+        ct_fn: Callable[[], dict[str, Any]] | None = None,
+        maintenance_fn: Callable[[], None] | None = None,
+        digest_fn: Callable[[], dict[str, Any]] | None = None,
+        stop_event: threading.Event | None = None,
+    ) -> None:
+        """Run one isolated scan → CT → alert → digest → maintenance cycle."""
+        scan_fn = scan_fn or self.context.scan_all
+        alert_fn = alert_fn or self.context.run_alerts
+        maintenance_fn = maintenance_fn or self.context.maintenance
+        digest_fn = digest_fn or self.context.maybe_run_weekly_digest
+        stopped = stop_event or self._stop_event
+        try:
+            scan_fn()
+            logger.info("scheduled scan completed")
+        except Exception:
+            logger.exception("scheduler scan_fn failed")
+        finally:
+            self._refresh_last_scan_timestamp()
+        if stopped.is_set():
+            return
+        if ct_fn is not None:
+            try:
+                ct_fn()
+                logger.info("scheduled CT check completed")
+            except Exception:
+                logger.exception("scheduler ct_fn failed")
+        if stopped.is_set():
+            return
+        try:
+            alert_fn()
+            logger.info("scheduled alerts completed")
+        except Exception:
+            logger.exception("scheduler alert_fn failed")
+        if stopped.is_set():
+            return
+        if digest_fn is not None:
+            try:
+                digest_fn()
+                logger.info("scheduled digest completed")
+            except Exception:
+                logger.exception("scheduler digest_fn failed")
+        if stopped.is_set():
+            return
+        if maintenance_fn is not None:
+            try:
+                maintenance_fn()
+            except Exception:
+                logger.exception("scheduler maintenance_fn failed")
+
+    def try_run_alert_delivery(
+        self, delivery_fn: Callable[[], dict[str, int]],
+    ) -> dict[str, int] | None:
+        if not self._cycle_lock.acquire(blocking=False):
+            return None
+        try:
+            return delivery_fn()
+        finally:
+            self._cycle_lock.release()
+
+    def run_scan_now(self, *args: Any, **kwargs: Any) -> dict[str, int]:
+        db_path = kwargs.get("db_path")
+        if kwargs.get("host_provider") is None and db_path is not None:
+            settings = self.context.settings
+            kwargs["host_provider"] = lambda: get_hosts_due_for_scan(
+                db_path,
+                hour=settings.sched_hour,
+                minute=settings.sched_min,
+                now=self.clock.now(),
+            )
+        kwargs["now"] = self.clock.now
+        kwargs["renewal_check"] = self._check_renewal_overdue
+        return _run_scan_now(*args, **kwargs)
+
+    def _check_renewal_overdue(
+        self,
+        db_path: str | Path | None,
+        hosts: list[tuple[str, int]],
+        *,
+        settings: Any = None,
+    ) -> None:
+        _check_renewal_overdue(
+            db_path,
+            hosts,
+            settings=settings,
+            now=self.clock.now,
+            send_webhook=self._send_renewal_webhook_if_configured,
+        )
+
+    def _send_renewal_webhook_if_configured(
+        self,
+        signal: RenewalOverdueSignal,
+        hostname: str,
+        port: int,
+        db_path: str | Path,
+        *,
+        settings: Any = None,
+    ) -> None:
+        _send_renewal_webhook_if_configured(
+            signal,
+            hostname,
+            port,
+            db_path,
+            settings=settings,
+            submit=self._submit_renewal_webhook,
+        )
+
+    def _ensure_webhook_pool(self) -> None:
+        with self._webhook_lock:
+            if self._webhook_pool is None:
+                self._webhook_pool = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2,
+                    thread_name_prefix="renewal-webhook",
+                )
+
+    def _detach_webhook_pool(
+        self,
+    ) -> tuple[
+        concurrent.futures.ThreadPoolExecutor | None,
+        set[concurrent.futures.Future[None]],
+    ]:
+        with self._webhook_lock:
+            pool = self._webhook_pool
+            futures = set(self._webhook_futures)
+            self._webhook_pool = None
+            self._webhook_futures.clear()
+        return pool, futures
+
+    def _submit_renewal_webhook(self, fn: Callable[[], None]) -> bool:
+        with self._webhook_lock:
+            if self._webhook_pool is None:
+                return False
+            future = self._webhook_pool.submit(fn)
+            self._webhook_futures.add(future)
+        future.add_done_callback(self._webhook_done)
+        return True
+
+    def _webhook_done(self, future: concurrent.futures.Future[None]) -> None:
+        with self._webhook_lock:
+            self._webhook_futures.discard(future)
+
+    def wait_for_webhooks(self, timeout: float = 5.0) -> bool:
+        """Wait for submitted webhook work without tearing down the executor."""
+        with self._webhook_lock:
+            futures = set(self._webhook_futures)
+        if not futures:
+            return True
+        _, pending = concurrent.futures.wait(futures, timeout=timeout)
+        return not pending
+
+    def _refresh_last_scan_timestamp(self) -> None:
+        try:
+            from cert_watch.database import _connect
+            from cert_watch.database.connection import _parse_iso
+
+            with _connect(self.context.settings.db_path) as conn:
+                row = conn.execute("SELECT MAX(scanned_at) FROM scan_history").fetchone()
+            value = row[0] if row else None
+            timestamp = _parse_iso(value).timestamp() if value else None
+        except (OSError, sqlite3.Error):
+            logger.debug("could not refresh scheduler last-scan timestamp", exc_info=True)
+            return
+        except (TypeError, ValueError):
+            logger.warning("latest scan timestamp is malformed", exc_info=True)
+            timestamp = None
+        with self._last_scan_lock:
+            self._last_scan_timestamp = timestamp
 
 
-def stop_scheduler() -> None:
-    _scheduler_stop.set()
-    _scheduler_wake.set()
-    # Close submission gates before waiting for a potentially long scan. The
-    # cycle checks the stop event between stages, and the remaining renewal
-    # webhook pool is not recreated until the next explicit start_scheduler().
-    renewal_pool = _detach_renewal_webhook_pool()
-    if renewal_pool is not None:
-        renewal_pool.shutdown(wait=True, cancel_futures=True)
-    if _scheduler_thread is not None:
-        _scheduler_thread.join(timeout=30)
+def wake_scheduler(scheduler: Scheduler) -> None:
+    """Compatibility seam for callers that receive an app-owned scheduler."""
+    scheduler.wake()
 
 
-def run_scan_now(
+def try_run_alert_delivery(
+    scheduler: Scheduler,
+    delivery_fn: Callable[[], dict[str, int]],
+) -> dict[str, int] | None:
+    """Run manual delivery through the app-owned scheduler's cycle lock."""
+    return scheduler.try_run_alert_delivery(delivery_fn)
+
+
+def run_scan_now(scheduler: Scheduler, *args: Any, **kwargs: Any) -> dict[str, int]:
+    """Run an immediate scan through the app-owned scheduler instance."""
+    return scheduler.run_scan_now(*args, **kwargs)
+
+
+def _run_scan_now(
     scan_fn: Callable[[str, int], object],
     alert_fn: Callable[[], dict[str, int]],
     *,
@@ -420,6 +577,8 @@ def run_scan_now(
     host_provider: Callable[[], list[tuple[str, int]]] | None = None,
     store_fn: Callable[[object], str] | None = None,
     settings: Any = None,
+    now: Callable[[], datetime] = _utc_now,
+    renewal_check: Callable[..., None] | None = None,
 ) -> dict[str, int]:
     """
     Execute one scan + alert cycle. See AC-02/AC-03/AC-05/AC-06.
@@ -449,6 +608,7 @@ def run_scan_now(
                         db_path,
                         ScanHistory(
                             hostname=hostname, port=port, status="failure",
+                            scanned_at=now(),
                             error_message=str(exc),
                         ),
                     )
@@ -468,6 +628,7 @@ def run_scan_now(
                         db_path,
                         ScanHistory(
                             hostname=hostname, port=port, status="failure",
+                            scanned_at=now(),
                             error_message=getattr(result, "error_message", "unknown"),
                         ),
                     )
@@ -482,7 +643,7 @@ def run_scan_now(
                     emit_event(
                         Event(
                             event_type="scan_failed",
-                            timestamp=datetime.now(UTC),
+                            timestamp=now(),
                             payload={
                                 "hostname": hostname,
                                 "port": port,
@@ -516,6 +677,7 @@ def run_scan_now(
                                 hostname=hostname,
                                 port=port,
                                 status="failure",
+                                scanned_at=now(),
                                 error_message=str(exc),
                             ),
                         )
@@ -545,6 +707,7 @@ def run_scan_now(
                                 hostname=hostname,
                                 port=port,
                                 status="failure",
+                                scanned_at=now(),
                                 error_message="store returned empty leaf id",
                             ),
                         )
@@ -557,10 +720,16 @@ def run_scan_now(
         if db_path is not None:
             record_scan_history(
                 db_path,
-                ScanHistory(hostname=hostname, port=port, status="success"),
+                ScanHistory(
+                    hostname=hostname,
+                    port=port,
+                    status="success",
+                    scanned_at=now(),
+                ),
             )
 
-    _check_renewal_overdue(db_path, hosts, settings=settings)
+    if renewal_check is not None:
+        renewal_check(db_path, hosts, settings=settings)
 
     alert_counts = alert_fn() or {"sent": 0, "failed": 0}
     return {
@@ -575,6 +744,8 @@ def _check_renewal_overdue(
     hosts: list[tuple[str, int]],
     *,
     settings: Any = None,
+    now: Callable[[], datetime] = _utc_now,
+    send_webhook: Callable[..., None] | None = None,
 ) -> None:
     if db_path is None:
         return
@@ -594,10 +765,10 @@ def _check_renewal_overdue(
                 if signal is not None:
                     key = f"overdue:{signal.hostname}:{port}:{signal.cert_fingerprint}"
                     legacy_key = f"overdue:{signal.hostname}:*:{signal.cert_fingerprint}"
-                    now = datetime.now(UTC)
+                    current = now()
                     if not store.rule_firing_due(
                         key,
-                        now=now,
+                        now=current,
                         interval_seconds=24 * 60 * 60,
                         suppression_keys=(legacy_key,),
                     ):
@@ -605,7 +776,7 @@ def _check_renewal_overdue(
                     event_id = emit_event(
                         Event(
                             event_type="renewal_overdue",
-                            timestamp=now,
+                            timestamp=current,
                             payload={
                                 "hostname": signal.hostname,
                                 "port": port,
@@ -623,14 +794,15 @@ def _check_renewal_overdue(
                         continue
                     store.claim_rule_firing(
                         key,
-                        now=now,
+                        now=current,
                         interval_seconds=24 * 60 * 60,
                         suppression_keys=(legacy_key,),
                     )
                     try:
-                        _send_renewal_webhook_if_configured(
-                            signal, hostname, port, db_path, settings=settings,
-                        )
+                        if send_webhook is not None:
+                            send_webhook(
+                                signal, hostname, port, db_path, settings=settings,
+                            )
                     except Exception:
                         logger.exception(
                             "renewal webhook failed for %s:%s — continuing sweep",
@@ -652,6 +824,7 @@ def _send_renewal_webhook_if_configured(
     db_path: str | Path,
     *,
     settings: Any = None,
+    submit: Callable[[Callable[[], None]], bool],
 ) -> None:
     from cert_watch.renewal_webhook import (
         build_renewal_payload,
@@ -693,7 +866,7 @@ def _send_renewal_webhook_if_configured(
         )
 
     try:
-        submitted = _submit_renewal_webhook(_deliver_with_retry)
+        submitted = submit(_deliver_with_retry)
     except Exception:
         logger.warning(
             "renewal webhook pool submit failed for %s",
