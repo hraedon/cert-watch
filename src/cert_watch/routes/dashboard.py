@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
-from typing import Any
-from urllib.parse import quote, urlencode
+from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -20,20 +19,18 @@ from cert_watch.database import (
     ScopedAlertRepository,
     SqliteAlertRepository,
     dashboard_urgency_stats,
-    distinct_tags,
-    get_posture_grades_for_certs,
     list_calendar,
-    list_dashboard_grouped_page,
     list_dashboard_page,
-    list_fleet_pivot,
-    pivot_urgency_stats,
 )
+from cert_watch.presenters.browse import present_browse
+from cert_watch.presenters.home import present_home
 from cert_watch.routes._deps import _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth
 from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.alert_state import mark_all_alerts_read as mark_all_alerts_read_service
+from cert_watch.services.browse_page import load_browse_page
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 
@@ -72,28 +69,17 @@ def home(
     stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
     _, tracked_total = list_dashboard_page(db, per_page=1, scope_tags=scope_tags)
 
-    # Next-12-weeks horizon with storm markers (same bucket query as the
-    # calendar view on /browse).
-    horizon = list_calendar(db, bucket="week", scope_tags=scope_tags)
-    _now = datetime.now(UTC)
-    _week_start = _now - timedelta(days=_now.weekday())
-    current_week_start = _week_start.strftime("%Y-%m-%d")
-    next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
-    horizon_end = (_week_start + timedelta(weeks=12)).strftime("%Y-%m-%d")
-    horizon = [
-        b for b in horizon if current_week_start <= b["bucket_start"] < horizon_end
-    ]
-    storms = 0
-    for b in horizon:
-        bs = b["bucket_start"]
-        if bs <= current_week_start:
-            b["tone"] = "t-crit"
-        elif bs <= next_week_start:
-            b["tone"] = "t-warn"
-        else:
-            b["tone"] = ""
-        if b.get("count", 0) >= 3:
-            storms += 1
+    view = present_home(
+        queue=items,
+        stats=stats,
+        tracked_total=tracked_total,
+        scan_coverage=summarize_scan_evidence(scan_evidence),
+        calendar=list_calendar(db, bucket="week", scope_tags=scope_tags),
+        now=datetime.now(UTC),
+        error=error,
+        warning=warning,
+        saved=saved,
+    )
 
     csrf_ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)
@@ -101,17 +87,8 @@ def home(
         request=request,
         name="home.html",
         context={
-            "queue": items,
-            "stats": stats,
-            "tracked_total": tracked_total,
-            "scan_coverage": summarize_scan_evidence(scan_evidence),
-            "horizon": horizon,
-            "current_week_start": current_week_start,
-            "horizon_storms": storms,
+            **view.template_context(),
             "version": __version__, "commit": __commit__,
-            "error": error,
-            "warning": warning,
-            "saved": saved,
             **auth_ctx,
             "active_page": "home",
             **csrf_ctx,
@@ -134,155 +111,36 @@ def dashboard(
     view: str = "",
 ) -> HTMLResponse:
     db = _db_path(request)
-
-    # Tag-scoped access control: scoped users see only objects whose effective
-    # tags include one of their scope tags. Admins with an empty scope see all.
     auth_ctx = getattr(request.state, "auth_context", None)
     scope_tags = scope_tags_from_auth(auth_ctx)
-
-    # Aggregated views cover the whole permitted population, not the table's
-    # search/status/source selection. Do not display filters they do not use.
-    if view in ("issuer", "owner", "renewal_method", "calendar"):
-        q = urgency = source = None
-    grouped = int(bool(grouped))
-    browse_state = {
-        "q": q, "urgency": urgency, "source": source,
-        "sort_by": sort_by, "sort_order": sort_order, "grouped": grouped,
-    }
-
-    def browse_url(**changes: Any) -> str:
-        """Build inventory links from only the supported table controls."""
-        params = {**browse_state}
-        params.update({key: value for key, value in changes.items() if key in browse_state})
-        return "/browse?" + urlencode({
-            key: value for key, value in params.items() if value is not None and value != ""
-        })
-
-    # Pivot views use SQL-level aggregation (BC-048)
-    pivot_groups = None
-    pivot_stats = None
-    if view in ("issuer", "owner", "renewal_method"):
-        pivot_groups = list_fleet_pivot(db, view, scope_tags=scope_tags)
-
-    # Calendar view: weekly expiry buckets (absorbed from the old /insights)
-    calendar_data = None
-    current_week_start = ""
-    calendar_storms = 0
-    if view == "calendar":
-        calendar_data = list_calendar(db, bucket="week", scope_tags=scope_tags)
-        _now = datetime.now(UTC)
-        _week_start = _now - timedelta(days=_now.weekday())
-        current_week_start = _week_start.strftime("%Y-%m-%d")
-        next_week_start = (_week_start + timedelta(days=7)).strftime("%Y-%m-%d")
-        for b in calendar_data:
-            bs = b.get("bucket_start", "")
-            if bs <= current_week_start:
-                b["tone"] = "t-crit"
-            elif bs <= next_week_start:
-                b["tone"] = "t-warn"
-            else:
-                b["tone"] = ""
-            if b.get("count", 0) >= 3:
-                calendar_storms += 1
-
-    per_page = 25
-    page_entries: list[dict[str, Any]] = []
-    if calendar_data is not None:
-        total = sum(b.get("count", 0) for b in calendar_data)
-        total_pages = 1
-        # Same stats source as the inventory table, so the strip doesn't
-        # change numbers when the user switches to the calendar view.
-        pivot_stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
-    elif pivot_groups is not None:
-        # Pivot view: compute stats from SQL (no full inventory load)
-        total = sum(g["count"] for g in pivot_groups)
-        total_pages = 1
-        # Urgency distribution via targeted SQL (julianday-safe and tag-scoped to
-        # match the grouped rows above; see pivot_urgency_stats for the rationale).
-        # Pending hosts (no cert = gray) are not counted in urgency buckets.
-        pivot_stats = pivot_urgency_stats(db, scope_tags=scope_tags)
-    elif grouped:
-        # Grouped path: grouping by leaf fingerprint with worst urgency +
-        # host count, filtered/sorted — SQL-level pagination (BC-073).
-        page_entries, total = list_dashboard_grouped_page(
-            db, q=q, urgency=urgency, source=source,
-            sort_by=sort_by, sort_order=sort_order,
-            page=page, per_page=per_page,
-            scope_tags=scope_tags,
-        )
-        total_pages = max((total + per_page - 1) // per_page, 1)
-        page = max(1, min(page, total_pages))
-    else:
-        # Fast path: no grouping, no pivot — SQL-level pagination (BC-073).
-        page_entries, total = list_dashboard_page(
-            db, q=q, urgency=urgency, source=source,
-            sort_by=sort_by, sort_order=sort_order,
-            page=page, per_page=per_page,
-            scope_tags=scope_tags,
-        )
-        total_pages = max((total + per_page - 1) // per_page, 1)
-        page = max(1, min(page, total_pages))
-
-    if pivot_stats is None:
-        pivot_stats = dashboard_urgency_stats(
-            db, q=q, source=source, scope_tags=scope_tags
-        )
-
-    if pivot_groups is not None:
-        tracked_total = total
-    else:
-        # Summary counts describe the selected search/source population even
-        # when an urgency filter narrows the paginated rows. Count endpoints
-        # and files, including hosts awaiting their first certificate.
-        _, tracked_total = list_dashboard_page(
-            db, q=q, source=source, per_page=1, scope_tags=scope_tags,
-        )
-
-    csrf_ctx = get_csrf_context(request)
-    auth_ctx = get_auth_context(request)
-
-    is_global_view = pivot_groups is not None or calendar_data is not None
-    display_entries = [] if is_global_view else page_entries
-    cert_ids = [e["id"] for e in display_entries if e.get("id")]
-    posture_grades = get_posture_grades_for_certs(db, cert_ids) if cert_ids else {}
     settings = _get_settings(request)
-    scan_evidence = load_scan_evidence(
-        db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
-    ) if display_entries else {}
+    data = load_browse_page(
+        db,
+        q=q,
+        urgency=urgency,
+        source=source,
+        sort_by=sort_by,
+        sort_order=sort_order,
+        page=page,
+        grouped=grouped,
+        view=view,
+        scope_tags=scope_tags,
+        sched_hour=settings.sched_hour,
+        sched_min=settings.sched_min,
+    )
+    presented = present_browse(data, now=datetime.now(UTC))
 
     return templates.TemplateResponse(
         request=request,
         name="dashboard.html",
         context={
-            "entries": display_entries,
-            "all_tags": distinct_tags(db, scope_tags=scope_tags),
-            "pivot_groups": pivot_groups,
-            "pivot_stats": pivot_stats,
-            "pivot_view": view if is_global_view else "",
-            "calendar_data": calendar_data,
-            "current_week_start": current_week_start,
-            "calendar_storms": calendar_storms,
+            **presented.template_context(),
             "version": __version__, "commit": __commit__,
             "error": error,
             "warning": warning,
-            **auth_ctx,
+            **get_auth_context(request),
             "active_page": "browse",
-            "filter_q": q or "",
-            "filter_urgency": urgency or "",
-            "filter_source": source or "",
-            "sort_by": sort_by,
-            "sort_order": sort_order,
-            "page": page,
-            "total_pages": total_pages,
-            "total_entries": total,
-            "tracked_total": tracked_total,
-            "browse_url": browse_url,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
-            "grouped": grouped,
-            "posture_grades": posture_grades,
-            "scan_evidence": scan_evidence,
-            **csrf_ctx,
+            **get_csrf_context(request),
         },
     )
 

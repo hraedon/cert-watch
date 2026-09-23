@@ -12,6 +12,8 @@ from __future__ import annotations
 import os
 import re
 from collections.abc import Iterator
+from datetime import UTC, datetime
+from difflib import unified_diff
 from pathlib import Path
 
 import pytest
@@ -52,9 +54,9 @@ _PAGES = {
 }
 
 
-def _seed_characterization_estate(data_dir: Path) -> tuple[str, str]:
+def _seed_characterization_estate(data_dir: Path, *, now: datetime) -> tuple[str, str]:
     """Seed the shared demo estate plus scanned and pending-host variants."""
-    seed_demo_certs(data_dir)
+    seed_demo_certs(data_dir, now=now)
     db = data_dir / "cert-watch.sqlite3"
     hosts = SqliteHostRepository(db)
     hosts.add(
@@ -95,6 +97,7 @@ def _seed_characterization_estate(data_dir: Path) -> tuple[str, str]:
             hostname="mail.demo.test",
             port=443,
             status="success",
+            scanned_at=now,
         ),
     )
     record_scan_history(
@@ -104,6 +107,7 @@ def _seed_characterization_estate(data_dir: Path) -> tuple[str, str]:
             port=8443,
             status="failure",
             error_message="TLS handshake failed",
+            scanned_at=now,
         ),
     )
     return str(scanned["id"]), pending_host_id
@@ -113,8 +117,7 @@ def _dynamic_replacements(db: Path) -> list[tuple[str, str]]:
     replacements: list[tuple[str, str]] = []
     with _connect(db) as conn:
         certs = conn.execute(
-            "SELECT id, subject, fingerprint_sha256, raw_der "
-            "FROM certificates ORDER BY subject, id"
+            "SELECT id, subject, fingerprint_sha256, raw_der FROM certificates ORDER BY subject, id"
         ).fetchall()
         hosts = conn.execute("SELECT id, hostname FROM hosts ORDER BY hostname, id").fetchall()
 
@@ -160,22 +163,22 @@ def characterized_pages(tmp_path: Path, reload_app) -> Iterator[dict[str, str]]:
     # v1 compatibility module defines date subclasses lazily and cannot be
     # imported while freezegun's date metaclass is active on Python 3.13.
     app_mod = reload_app()
-    with freeze_time(_FROZEN_NOW):
-        cert_id, pending_host_id = _seed_characterization_estate(tmp_path)
-        replacements = _dynamic_replacements(tmp_path / "cert-watch.sqlite3")
-        with TestClient(app_mod.app) as client:
-            pages = {
-                **_PAGES,
-                "certificate_detail": f"/certificates/{cert_id}",
-                "pending_host_detail": f"/certificates/{pending_host_id}",
-            }
-            rendered: dict[str, str] = {}
-            for name, path in pages.items():
-                response = client.get(path)
-                assert response.status_code == 200, (name, path, response.status_code)
-                assert response.headers["content-type"].startswith("text/html")
-                rendered[name] = _normalize_html(response.text, replacements)
-            yield rendered
+    frozen_now = datetime(2026, 9, 22, 12, 0, tzinfo=UTC)
+    cert_id, pending_host_id = _seed_characterization_estate(tmp_path, now=frozen_now)
+    replacements = _dynamic_replacements(tmp_path / "cert-watch.sqlite3")
+    with freeze_time(_FROZEN_NOW, ignore=["cryptography"]), TestClient(app_mod.app) as client:
+        pages = {
+            **_PAGES,
+            "certificate_detail": f"/certificates/{cert_id}",
+            "pending_host_detail": f"/certificates/{pending_host_id}",
+        }
+        rendered: dict[str, str] = {}
+        for name, path in pages.items():
+            response = client.get(path)
+            assert response.status_code == 200, (name, path, response.status_code)
+            assert response.headers["content-type"].startswith("text/html")
+            rendered[name] = _normalize_html(response.text, replacements)
+        yield rendered
 
 
 def test_all_page_html_matches_characterization_goldens(
@@ -193,4 +196,12 @@ def test_all_page_html_matches_characterization_goldens(
         golden = _GOLDEN_DIR / f"{name}.html"
         if update:
             golden.write_text(actual, encoding="utf-8")
-        assert golden.read_text(encoding="utf-8") == actual
+        expected = golden.read_text(encoding="utf-8")
+        assert expected == actual, "".join(
+            unified_diff(
+                expected.splitlines(keepends=True),
+                actual.splitlines(keepends=True),
+                fromfile=f"golden/{name}.html",
+                tofile=f"rendered/{name}.html",
+            )
+        )

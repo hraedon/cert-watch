@@ -45,18 +45,19 @@
         {% endif %}
       </div>
       <div class="cw-chiprow cw-metarow">
-        {% if not cert or cert.source == 'scanned' %}
-          <span class="cw-chip">{{ icons.svg_icon('server', 12, 1.6) }}{{ 'Scanned' if cert else 'Monitored' }}</span>
-        {% elif cert.source == 'uploaded' %}
-          <span class="cw-chip">{{ icons.svg_icon('file', 12, 1.6) }}Uploaded</span>
+        {% if source_label %}
+          <span class="cw-chip">{{ icons.svg_icon(source_icon, 12, 1.6) }}{{ source_label }}</span>
+        {% elif false %}
+          {# Source classification is supplied by the presenter. #}
         {% else %}
-          <span class="cw-chip">{{ icons.svg_icon('globe', 12, 1.6) }}Public CT</span>
+          {# Source classification is supplied by the presenter. #}
         {% endif %}
         <span class="mono cw-muted">
-          {% if cert and cert.source == 'scanned' and hostname %}scanned from {{ hostname }}:{{ port }}
-          {% elif cert and cert.source == 'uploaded' %}uploaded file
-          {% elif not cert %}
-            {% if scan_status == 'failure' %}last scan failed{% elif scan_at %}last scanned {{ scan_at[:16] | replace('T', ' ') }}{% else %}no scan recorded{% endif %}
+          {% if cert %}{{ source_meta }}
+          {% elif source_meta %}
+            {{ source_meta }}
+          {% elif false %}
+            {# Source metadata is supplied by the presenter. #}
           {% endif %}
         </span>
       </div>
@@ -112,13 +113,13 @@
             <span class="mono {{ _vtone }} cw-hero-num">{% if days_remaining < 0 %}Expired{% else %}{{ days_remaining }}{% endif %}</span>
             {% if days_remaining >= 0 %}<span class="cw-muted">days</span>{% endif %}
           </div>
-          {% set total_validity = (cert.not_after - cert.not_before).days if cert.not_after and cert.not_before else 90 %}
-          {% set elapsed = (now - cert.not_before).days if cert.not_before else 0 %}
-          {% set pct = [(elapsed / total_validity * 100) | int, 100] | min if total_validity > 0 else 50 %}
-          <svg class="cw-bar thick {{ _vtone }}" role="img" aria-label="{{ pct }}% of validity elapsed" preserveAspectRatio="none">
+          {# Validity arithmetic lives in the detail presenter. #}
+          {# The percentage is capped there to preserve the existing meter. #}
+          {% set pct = validity_percent %}
+          <svg class="cw-bar thick {{ _vtone }}" role="img" aria-label="{{ validity_percent }}% of validity elapsed" preserveAspectRatio="none">
             <rect class="track" width="100%" height="100%"/>
-            <rect class="fill" width="{{ pct }}%" height="100%"/>
-            <rect class="mark" x="{{ pct }}%" width="2" height="100%"/>
+            <rect class="fill" width="{{ validity_percent }}%" height="100%"/>
+            <rect class="mark" x="{{ validity_percent }}%" width="2" height="100%"/>
           </svg>
           <div class="cw-validity-ends mono">
             <span class="cw-muted">{{ cert.not_before.strftime('%Y-%m-%d') if cert.not_before else '—' }} · issued</span>
@@ -210,15 +211,15 @@
                 <span class="cw-chip t-neutral">{{ renewal_method_indicator }}</span>
               {% endif %}
             {% endcall %}
-            {% call detail_field('Scan cadence') %}{% if host_info.scan_interval_hours and host_info.scan_interval_hours > 0 %}Every {{ host_info.scan_interval_hours }} hours{% else %}Daily schedule{% endif %}{% endcall %}
-            {% call detail_field('Alert threshold') %}{% if host_info.threshold_days is not none %}{{ host_info.threshold_days }} days{% else %}Automatic thresholds{% endif %}{% endcall %}
+            {% call detail_field('Scan cadence') %}{{ host_info.scan_cadence_label }}{% endcall %}
+            {% call detail_field('Alert threshold') %}{{ host_info.threshold_label }}{% endcall %}
             {% call detail_field('Renewal report', 'wide') %}
-              {{ {'pending': 'No completion reported', 'in_progress': 'In progress — operator reported', 'renewed': 'Complete — operator reported'}.get(host_info.renewal_status, host_info.renewal_status) }}
+              {{ host_info.renewal_status_label }}
               <div class="cw-hint">Operator report, not proof of renewal.</div>
             {% endcall %}
             {% if host_info.runbook_url %}
             {% call detail_field('Runbook', 'wide') %}
-              {% if host_info.runbook_url.startswith(('http://', 'https://')) %}
+              {% if host_info.runbook_is_link %}
                 <a href="{{ host_info.runbook_url }}" target="_blank" rel="noopener" class="cw-link">{{ host_info.runbook_url }}</a>
               {% else %}{{ host_info.runbook_url }}{% endif %}
             {% endcall %}
@@ -226,7 +227,7 @@
             {% if cert %}
             {% call detail_field('Chain status', 'wide') %}
               <a href="#chain-guidance" class="cw-link">{{ chain_guidance.title }}</a>
-              {% if posture and posture.get('chain_incomplete') %}
+              {% if posture and posture.chain_incomplete %}
                 <span class="cw-chip t-warn" title="Scan ran with degraded certificate extraction. Consider upgrading to Python 3.13 or ensuring openssl is available.">{{ icons.svg_icon('alert', 11, 1.8) }}Degraded scan</span>
               {% endif %}
             {% endcall %}
@@ -234,16 +235,16 @@
           </dl>
         </div>
         <div class="cw-panel-body" id="endpoint-settings">
-          {% if request.query_params.get('endpoint_saved') %}<p class="cw-hint" role="status" data-testid="endpoint-settings-saved">Endpoint settings saved.</p>{% endif %}
-          {% if request.query_params.get('endpoint_error') %}<p class="cw-hint t-crit" role="alert" data-testid="endpoint-settings-error">{{ request.query_params.get('endpoint_error') }}</p>{% endif %}
+          {% if endpoint_saved %}<p class="cw-hint" role="status" data-testid="endpoint-settings-saved">Endpoint settings saved.</p>{% endif %}
+          {% if endpoint_error %}<p class="cw-hint t-crit" role="alert" data-testid="endpoint-settings-error">{{ endpoint_error }}</p>{% endif %}
           {% if host_info.settings_writable and host_id %}
-          <details class="cw-editor" {% if request.query_params.get('endpoint_error') %}open{% endif %}>
+          <details class="cw-editor" {% if endpoint_error %}open{% endif %}>
             <summary class="cw-btn ghost sm" data-testid="endpoint-settings-edit">{{ icons.svg_icon('edit', 13) }}<span class="when-closed">Edit endpoint settings</span><span class="when-open">Cancel editing</span></summary>
             <div class="cw-editor-body">
               <form method="post" action="/hosts/{{ host_id }}/settings" class="cw-form">
                 <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
                 <div class="cw-form-grid">
-                  {% set legacy_interval = host_info.scan_interval_hours is not none and (host_info.scan_interval_hours < 1 or host_info.scan_interval_hours > 8760) %}
+                  {% set legacy_interval = host_info.legacy_interval %}
                   <div class="cw-field">
                     <label class="cw-label" for="endpoint-scan-interval">Scan interval (hours)</label>
                     <input id="endpoint-scan-interval" type="number" name="scan_interval_hours" class="cw-input" step="1" {% if not legacy_interval %}min="1" max="8760"{% endif %} value="{{ host_info.scan_interval_hours if host_info.scan_interval_hours is not none else '' }}" placeholder="Daily schedule" aria-describedby="endpoint-scan-help">
@@ -315,18 +316,18 @@
         <div class="cw-panel-body">
           {% if posture.scanned_at %}<p class="cw-hint">Last evaluated {{ posture.scanned_at[:19] | replace("T", " ") }}</p>{% endif %}
           {% if chain_posture_changed %}
-          <p class="cw-note t-warn" data-testid="chain-posture-changed">{% if posture.get('chain_status') %}Chain validation has changed since the last scan.{% else %}Chain validation was not recorded with this scan.{% endif %}
+          <p class="cw-note t-warn" data-testid="chain-posture-changed">{% if chain_posture_recorded %}Chain validation has changed since the last scan.{% else %}Chain validation was not recorded with this scan.{% endif %}
             This grade describes that scan; <a href="#chain-guidance" class="cw-link">see current chain validation</a>
             and scan again to refresh the posture.</p>
           {% endif %}
           <div class="cw-findings">
-            {% for f in posture.findings if not (chain_posture_changed and f.check == 'chain_completeness') %}
+            {% for f in posture.findings %}
               <div class="cw-finding">
                 {% if f.status == 'pass' %}<span class="t-ok">{{ icons.svg_icon('check', 13) }}</span>
                 {% elif f.status == 'warn' %}<span class="t-warn">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
                 {% elif f.status == 'fail' %}<span class="t-crit">{{ icons.svg_icon('alert', 13, 1.7) }}</span>
                 {% else %}<span class="cw-muted">—</span>{% endif %}
-                <span class="{{ 'cw-muted' if f.status == 'info' }}{{ ' fail' if f.status == 'fail' }}">{{ chain_guidance.title if f.check == 'chain_completeness' and not posture.get('chain_incomplete') else f.message }}</span>
+                <span class="{{ 'cw-muted' if f.status == 'info' }}{{ ' fail' if f.status == 'fail' }}">{{ f.display_message }}</span>
               </div>
             {% endfor %}
           </div>
@@ -390,9 +391,9 @@
             <div class="cw-tl-node {{ 't-accent' if rh.is_current else 't-neutral' }}">
               <span class="cw-tl-dot"></span><span class="cw-tl-line"></span>
               <div class="cw-chiprow">
-                <span class="mono">{{ rh.not_before[:10] if rh.not_before else '—' }}</span>
+                <span class="mono">{{ rh.not_before_date }}</span>
                 {% if rh.is_current %}<span class="cw-chip t-ok">current</span>{% endif %}
-                <a href="/certificates/{{ rh.id }}" class="cw-chip">{{ rh.fingerprint_sha256[:8] if rh.fingerprint_sha256 else '—' }}…</a>
+                <a href="/certificates/{{ rh.id }}" class="cw-chip">{{ rh.fingerprint_short }}…</a>
               </div>
             </div>
             {% endfor %}
@@ -458,11 +459,11 @@
           {% endif %}
         </div>
         <div class="cw-panel-body">
-          {% set _shown_tags = effective_tags if cert else (host_info.tags.split(',') | map('trim') | select | list if host_info and host_info.tags else []) %}
+          {% set _shown_tags = shown_tags %}
           {% if _shown_tags %}
           <div class="cw-chiprow">
             {% for t in _shown_tags %}
-              <span class="cw-chip{% if cert and t not in cert_tags %} t-muted{% endif %}">{{ t }}{% if cert and t not in cert_tags %} <span class="cw-muted">(host)</span>{% endif %}</span>
+              <span class="cw-chip{% if t.inherited %} t-muted{% endif %}">{{ t.label }}{% if t.inherited %} <span class="cw-muted">(host)</span>{% endif %}</span>
             {% endfor %}
           </div>
           {% else %}
@@ -519,27 +520,21 @@
             <div class="cw-chaincard">
               <div class="cw-chiprow between">
                 <span class="cw-id">{{ c.subject_cn }}</span>
-                <span class="cw-tl-role">{{ 'Root CA (self-issued)' if c.self_issued else 'Intermediate CA' }}</span>
+                <span class="cw-tl-role">{{ c.role_label }}</span>
               </div>
               <div class="cw-chiprow cw-metarow">
                 <span class="cw-chip">{{ icons.svg_icon('key', 11, 1.6) }}{{ c.key_type }}</span>
                 <span class="mono cw-muted">exp {{ c.not_after[:10] if c.not_after else '—' }}</span>
                 <span class="cw-spacer"></span>
-                {% set c_urg = c.days_remaining | urgency %}
+                {% set c_urg = c.urgency %}
                 {{ ui.status(c_urg, label=('Expired' if c.days_remaining < 0 else c.days_remaining ~ 'd')) }}
               </div>
             </div>
           </div>
           {% endfor %}
         </div>
-        {% set _chain_notes = {
-          'public': ('t-muted', 'link', 'public chain'),
-          'private': ('t-accent', 'shield', 'private root'),
-          'incomplete': ('t-warn', 'alert', 'chain incomplete'),
-          'self-signed': ('t-muted', 'key', 'self-signed'),
-          'invalid': ('t-crit', 'alert', 'chain invalid')
-        } %}
-        {% set _tone, _icon, _label = _chain_notes.get(chain_status, ('t-muted', 'link', 'issuer not uploaded')) %}
+        {% set _tone, _icon, _label = chain_note.tone, chain_note.icon, chain_note.label %}
+
         <div id="chain-guidance" data-testid="chain-guidance" class="cw-metarow">
           <div class="cw-note {{ _tone }}">{{ icons.svg_icon(_icon, 14) }}<b>{{ chain_guidance.title }}</b></div>
           <p class="cw-sub">{{ chain_guidance.explanation }}</p>

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
@@ -17,18 +16,7 @@ from cert_watch.auth.guards import (
     write_form_guard,
 )
 from cert_watch.auth.scope import ScopeDeniedError
-from cert_watch.chain_guidance import describe_chain
-from cert_watch.database import (
-    SqliteCertificateRepository,
-    SqliteHostRepository,
-    SqliteTrustAnchorRepository,
-    _connect,
-    _row_to_cert,
-    distinct_tags,
-    get_renewal_history,
-)
-from cert_watch.filters import issuer_cn
-from cert_watch.presenters.certificate_detail import present_certificate_technical_details
+from cert_watch.presenters.certificate_detail import present_certificate_detail
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
@@ -36,9 +24,12 @@ from cert_watch.routes._scoped import (
     tags_with_scope,
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
-from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 from cert_watch.security.csrf import get_csrf_context
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.certificate_detail import (
+    PendingHostDetailData,
+    load_certificate_detail,
+)
 from cert_watch.services.certificate_management import (
     CertificateValidationError,
     upload_certificate_bytes,
@@ -67,7 +58,6 @@ from cert_watch.services.resource_metadata import (
 from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
 )
-from cert_watch.tags import parse_tags
 
 logger = logging.getLogger("cert_watch.routes.certificates")
 
@@ -78,314 +68,47 @@ templates = get_templates()
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 
-def _detail_scan_evidence(request: Request, host_id: str) -> ScanEvidence | None:
-    if not host_id:
-        return None
-    settings = _get_settings(request)
-    return load_scan_evidence(
-        _db_path(request), host_id=host_id, hour=settings.sched_hour, minute=settings.sched_min,
-    ).get(host_id)
-
-
 @router.get("/certificates/{cert_id}", response_class=HTMLResponse, response_model=None)
 def certificate_detail(request: Request, cert_id: IdParam) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
-
-    repo = SqliteCertificateRepository(db)
-    cert = repo.get_by_id(cert_id)
-    if cert is None:
-        # No cert — maybe this is a pending host (scan failed, no cert stored yet).
-        host_repo = SqliteHostRepository(db)
-        host = host_repo.get(cert_id)
-        if host is not None:
-            denied = scope_read_denied(request, db, host_id=cert_id)
-            if denied:
-                return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-            # Get latest scan status/error for this host
-            with _connect(db) as conn:
-                scan_row = conn.execute(
-                    "SELECT status, scanned_at, error_message FROM scan_history "
-                    "WHERE hostname = ? AND port = ? "
-                    "ORDER BY scanned_at DESC LIMIT 1",
-                    (host.hostname, host.port),
-                ).fetchone()
-            csrf_ctx = get_csrf_context(request)
-            auth_ctx = get_auth_context(request)
-            settings = getattr(request.app.state, "settings", None)
-            slack_configured = (
-                getattr(settings, "webhook_kind", "") == "slack" if settings else False
-            )
-            # Pending host: same detail template, degraded (cert is None).
-            rm = host.renewal_method or ""
-            rm_label = {"acme": "ACME", "cert-manager": "cert-manager", "manual": "Manual"}.get(
-                rm, rm.capitalize() if rm else ""
-            )
-            rm_indicator = (
-                "automation configured"
-                if rm in ("acme", "cert-manager")
-                else ("requires manual action" if rm == "manual" else "")
-            )
-            return templates.TemplateResponse(
-                request=request,
-                name="certificate_detail.html",
-                context={
-                    "cert": None,
-                    "cert_id": cert_id,
-                    "subject_cn": f"{host.hostname}:{host.port}",
-                    "host_id": host.id,
-                    "hostname": host.hostname,
-                    "port": host.port,
-                    "host_info": {
-                        "owner_name": host.owner_name or None,
-                        "owner_email": host.owner_email or None,
-                        "owner_slack": host.owner_slack or None,
-                        "renewal_method": host.renewal_method or "",
-                        "runbook_url": host.runbook_url or None,
-                        "notes": host.notes or "",
-                        "tags": host.tags or "",
-                        "threshold_days": host.threshold_days,
-                        "scan_interval_hours": host.scan_interval_hours,
-                        "renewal_status": host.renewal_status,
-                        "expected_issuers": host.expected_issuers,
-                        "settings_writable": endpoint_settings_writable(request, db, host.id),
-                    },
-                    "renewal_method_label": rm_label,
-                    "renewal_method_indicator": rm_indicator,
-                    "all_tags": distinct_tags(db, scope_tags=scope_tags),
-                    "scan_status": scan_row["status"] if scan_row else None,
-                    "scan_error": scan_row["error_message"] if scan_row else None,
-                    "scan_at": scan_row["scanned_at"] if scan_row else None,
-                    "scan_evidence": _detail_scan_evidence(request, host.id),
-                    **auth_ctx,
-                    **csrf_ctx,
-                    "active_page": "browse",
-                    "version": __version__,
-                    "commit": __commit__,
-                    "slack_configured": slack_configured,
-                },
-            )
+    settings = _get_settings(request)
+    data = load_certificate_detail(
+        db,
+        cert_id,
+        scope_tags=scope_tags,
+        sched_hour=settings.sched_hour,
+        sched_min=settings.sched_min,
+    )
+    if data is None:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-
-    denied = scope_read_denied(request, db, cert_id=cert_id)
+    denied = (
+        scope_read_denied(request, db, host_id=cert_id)
+        if isinstance(data, PendingHostDetailData)
+        else scope_read_denied(request, db, cert_id=cert_id)
+    )
     if denied:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
-
-    from cryptography.exceptions import UnsupportedAlgorithm
-
-    # Get chain (non-leaf certs with this cert as parent)
-    with _connect(db) as conn:
-        chain_rows = conn.execute(
-            "SELECT * FROM certificates WHERE parent_cert_id = ? AND is_leaf = 0",
-            (cert_id,),
-        ).fetchall()
-
-    # Determine chain status
-    from cert_watch.cert_chain import chain_status as _chain_status
-
-    anchors = SqliteTrustAnchorRepository(db).list_entries()
-    chain_certs_objects = [_row_to_cert(cr) for cr in chain_rows]
-    cs = _chain_status(cert, chain_certs_objects, anchors)
-    technical_view = present_certificate_technical_details(
-        cert,
-        [
-            (row["id"], chain_cert)
-            for row, chain_cert in zip(chain_rows, chain_certs_objects, strict=True)
-        ],
-        cs,
+    host_id = data.host.id if data.host is not None else ""
+    view = present_certificate_detail(
+        data,
+        settings_writable=(
+            endpoint_settings_writable(request, db, host_id) if host_id else False
+        ),
+        slack_configured=settings.webhook_kind == "slack",
+        endpoint_saved=bool(request.query_params.get("endpoint_saved")),
+        endpoint_error=request.query_params.get("endpoint_error", ""),
     )
-
-    # Get host info if scanned
-    hostname = ""
-    port = 443
-    with _connect(db) as conn:
-        host_row = conn.execute(
-            "SELECT hostname, port FROM certificates WHERE id = ?", (cert_id,)
-        ).fetchone()
-        if host_row:
-            hostname = host_row["hostname"] or ""
-            port = host_row["port"] or 443
-
-    # Get host info for operation summary
-    host_info = None
-    host_id = ""
-    renewal_method_label = ""
-    renewal_method_indicator = ""
-    if hostname:
-        with _connect(db) as conn:
-            host_row = conn.execute(
-                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
-                (hostname, port),
-            ).fetchone()
-        if host_row:
-            h = dict(host_row)
-            host_id = h.get("id", "")
-            host_info = {
-                "owner_name": h.get("owner_name") or None,
-                "owner_email": h.get("owner_email") or None,
-                "owner_slack": h.get("owner_slack") or None,
-                "renewal_status": h.get("renewal_status", "pending"),
-                "renewal_method": h.get("renewal_method", ""),
-                "runbook_url": h.get("runbook_url") or None,
-                "notes": h.get("notes", ""),
-                "tags": h.get("tags", ""),
-                "threshold_days": h.get("threshold_days"),
-                "scan_interval_hours": h.get("scan_interval_hours"),
-                "expected_issuers": h.get("expected_issuers", ""),
-                "settings_writable": endpoint_settings_writable(request, db, host_id),
-            }
-            rm = h.get("renewal_method", "")
-            if rm == "acme":
-                renewal_method_label = "ACME"
-                renewal_method_indicator = "automation configured"
-            elif rm == "cert-manager":
-                renewal_method_label = "cert-manager"
-                renewal_method_indicator = "automation configured"
-            elif rm == "manual":
-                renewal_method_label = "Manual"
-                renewal_method_indicator = "requires manual action"
-            elif rm:
-                renewal_method_label = rm.capitalize()
-
-    # Get renewal history
-    renewal_history = get_renewal_history(db, cert_id)
-
-    # Get drift events from cert_history (compare consecutive entries)
-    drift_events = []
-    if hostname:
-        from cert_watch.database import list_cert_history
-
-        history_entries = list_cert_history(db, hostname, port, limit=50)
-        for i in range(len(history_entries) - 1):
-            curr = history_entries[i]
-            prev = history_entries[i + 1]
-            changes = []
-            if (
-                curr.get("issuer") and prev.get("issuer")
-                and curr["issuer"] != prev["issuer"]
-            ):
-                prev_issuer = issuer_cn(prev["issuer"])
-                curr_issuer = issuer_cn(curr["issuer"])
-                changes.append({
-                    "field": "Issuer changed",
-                    "change": f"{prev_issuer} → {curr_issuer}",
-                    "sev": "high",
-                })
-            if (
-                curr.get("key_algo") and prev.get("key_algo")
-                and curr["key_algo"] != prev["key_algo"]
-            ):
-                changes.append({
-                    "field": "Key algorithm changed",
-                    "change": f'{prev["key_algo"]} → {curr["key_algo"]}',
-                    "sev": "high",
-                })
-            if (
-                curr.get("sig_algo") and prev.get("sig_algo")
-                and curr["sig_algo"] != prev["sig_algo"]
-            ):
-                curr_sig = (curr["sig_algo"] or "").lower()
-                prev_sig = (prev["sig_algo"] or "").lower()
-                is_downgrade = "sha1" in curr_sig and "sha1" not in prev_sig
-                changes.append({
-                    "field": "Signature algorithm changed",
-                    "change": f'{prev["sig_algo"]} → {curr["sig_algo"]}',
-                    "sev": "high" if is_downgrade else "info",
-                })
-            if (
-                curr.get("posture_grade") and prev.get("posture_grade")
-                and curr["posture_grade"] != prev["posture_grade"]
-            ):
-                from cert_watch.posture import GRADE_WORST_ORDER
-
-                grade_order = GRADE_WORST_ORDER
-                curr_g = grade_order.get(curr["posture_grade"], 0)
-                prev_g = grade_order.get(prev["posture_grade"], 0)
-                if curr_g > prev_g:
-                    changes.append({
-                        "field": "Posture grade dropped",
-                        "change": (
-                            f'{prev["posture_grade"]} '
-                            f'→ {curr["posture_grade"]}'
-                        ),
-                        "sev": "high",
-                    })
-            for change in changes:
-                change["when"] = curr.get("scanned_at", "")[:10]
-                drift_events.append(change)
-
-    # Get posture evaluation
-    from cert_watch.database import get_posture_for_cert
-    from cert_watch.posture import evaluate_posture
-
-    _posture = get_posture_for_cert(db, cert_id)
-    posture_data: dict[str, Any] | None = None
-    if _posture:
-        posture_data = _posture
-    else:
-        try:
-            result = evaluate_posture(
-                cert=cert,
-                chain_status=cs,
-                chain_incomplete=False,
-            )
-            posture_data = {
-                "grade": result.grade,
-                "findings": [
-                    {"check": f.check, "status": f.status, "message": f.message}
-                    for f in result.findings
-                ],
-                "protocol_version": result.protocol_version,
-                "ocsp_stapling": result.ocsp_stapling,
-                "hsts": result.hsts,
-                "must_staple": result.must_staple,
-            }
-        except (ValueError, TypeError, UnsupportedAlgorithm):
-            logger.exception("posture evaluation failed for cert %s", cert_id)
-
-    csrf_ctx = get_csrf_context(request)
-    auth_ctx = get_auth_context(request)
-    from datetime import UTC, datetime
-
-    settings = getattr(request.app.state, "settings", None)
-    slack_configured = (
-        getattr(settings, "webhook_kind", "") == "slack" if settings else False
-    )
-
     return templates.TemplateResponse(
         request=request,
         name="certificate_detail.html",
         context={
-            "cert": cert,
-            "cert_id": cert_id,
-            "all_tags": distinct_tags(db, scope_tags=scope_tags),
+            **view.template_context(),
             "version": __version__,
             "commit": __commit__,
-            **auth_ctx,
+            **get_auth_context(request),
             "active_page": "browse",
-            **technical_view.template_context(),
-            "chain_status": cs,
-            "chain_guidance": describe_chain(cert, chain_certs_objects, cs),
-            "chain_posture_changed": bool(
-                _posture and _posture.get("chain_status") != cs
-            ),
-            "hostname": hostname,
-            "port": port,
-            "host_id": host_id,
-            "scan_evidence": (
-                _detail_scan_evidence(request, host_id) if cert.source == "scanned" else None
-            ),
-            "host_info": host_info,
-            "cert_tags": parse_tags(repo.get_tags(cert_id)),
-            "effective_tags": repo.effective_tags(cert_id),
-            "renewal_history": renewal_history,
-            "renewal_method_label": renewal_method_label,
-            "renewal_method_indicator": renewal_method_indicator,
-            "now": datetime.now(UTC),
-            "posture": posture_data,
-            "drift_events": drift_events,
-            "slack_configured": slack_configured,
-            **csrf_ctx,
+            **get_csrf_context(request),
         },
     )
 

@@ -40,7 +40,14 @@ from cert_watch.database.connection import _row_to_cert as _row_to_cert
 from cert_watch.database.connection import get_write_lock
 
 # Dashboard
-from cert_watch.database.dashboard_detail import get_cert_detail as get_cert_detail
+from cert_watch.database.dashboard_detail import (
+    LatestScanRecord,
+    PendingHostDetailRecords,
+    StoredCertificateDetailRecords,
+    get_cert_detail,
+    get_pending_host_detail_records,
+    get_stored_certificate_detail_records,
+)
 from cert_watch.database.dashboard_grouped import (
     list_dashboard_grouped_page as list_dashboard_grouped_page,
 )
@@ -252,12 +259,15 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "AlertRepository",
     "CertificateRepository",
     "HostEntry",
+    "LatestScanRecord",
+    "PendingHostDetailRecords",
     "ScopedAlertRepository",
     "SqliteAlertGroupRepository",
     "SqliteAlertRepository",
     "SqliteCertificateRepository",
     "SqliteHostRepository",
     "SqliteTrustAnchorRepository",
+    "StoredCertificateDetailRecords",
     "TrustAnchorEntry",
     # api keys
     "ApiKeyAuth",
@@ -295,6 +305,8 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "dashboard_expiry_stats",
     "dashboard_urgency_stats",
     "get_cert_detail",
+    "get_pending_host_detail_records",
+    "get_stored_certificate_detail_records",
     "list_dashboard_grouped_page",
     "list_dashboard_page",
     "list_dashboard_rows",
