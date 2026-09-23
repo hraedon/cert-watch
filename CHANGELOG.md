@@ -108,6 +108,10 @@ All notable changes to cert-watch are documented in this file.
 - **Manual Flush queue no longer exhausts alert retries.** Operator-initiated
   flushes still record append-only delivery evidence and schedule normal
   backoff after failure, but do not advance the persisted give-up counter.
+- **Alert settlement is failure-isolated and prompt.** A second refused
+  database update in either evidence-deferral recovery branch no longer aborts
+  the delivery cycle. Accepted alerts are marked `sent` immediately, closing
+  the lease window in which a long cycle and concurrent flush could resend one.
 - **The container image supports LDAP and OAuth sign-in.** The published image
   was built without the optional `ldap3` / `authlib` libraries, so
   `AUTH_PROVIDER=ldap|oauth` could not work in it. The image now installs the

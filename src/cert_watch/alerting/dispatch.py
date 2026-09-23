@@ -51,6 +51,7 @@ class _Delivery:
     evidence_recorded: bool = False
     evidence_unavailable: bool = False
     configuration_missing: bool = False
+    settled: bool = False
     lease_lost: bool = False
 
     @property
@@ -273,6 +274,23 @@ class Dispatcher:
                     transports=self.transports,
                     claim_owner=self.lease_owner,
                 )
+                if item.delivered:
+                    try:
+                        item.settled = self.store.complete_sent(
+                            item.alert.id,
+                            lease_owner=self.lease_owner,
+                            attempts=self._attempts_to_persist(item),
+                            now=_utc(self.clock()),
+                        )
+                    except (sqlite3.Error, OSError):
+                        logger.error(
+                            "Alert %s was delivered but its sent state could not "
+                            "be recorded; leaving the lease to expire",
+                            item.alert.id,
+                            exc_info=True,
+                        )
+                    if not item.settled:
+                        item.lease_lost = True
 
             active = [
                 item
@@ -307,6 +325,9 @@ class Dispatcher:
         now = _utc(self.clock())
         for item in queue:
             alert = item.alert
+            if item.settled:
+                sent += 1
+                continue
             if item.lease_lost:
                 continue
             if item.delivered:
@@ -409,13 +430,7 @@ class Dispatcher:
                     alert.id,
                     exc_info=True,
                 )
-                completed = self.store.complete_pending(
-                    alert.id,
-                    lease_owner=self.lease_owner,
-                    attempts=self._attempts_to_persist(item),
-                    now=now,
-                    next_attempt_at=None,
-                )
+                completed = self._fallback_complete_pending(item, now=now)
                 return "deferred" if completed else "lost"
             finally:
                 self._clear_repo_settlement()
@@ -445,17 +460,30 @@ class Dispatcher:
                 alert.id,
                 exc_info=True,
             )
-            completed = self.store.complete_pending(
-                alert.id,
+            completed = self._fallback_complete_pending(item, now=now)
+            return "deferred" if completed else "lost"
+        finally:
+            self._clear_repo_settlement()
+        return "deferred" if completed else "lost"
+
+    def _fallback_complete_pending(self, item: _Delivery, *, now: datetime) -> bool:
+        """Best-effort release after the primary evidence settlement refused."""
+        try:
+            return self.store.complete_pending(
+                item.alert.id,
                 lease_owner=self.lease_owner,
                 attempts=self._attempts_to_persist(item),
                 now=now,
                 next_attempt_at=None,
             )
-            return "deferred" if completed else "lost"
-        finally:
-            self._clear_repo_settlement()
-        return "deferred" if completed else "lost"
+        except (sqlite3.Error, OSError):
+            logger.error(
+                "Alert %s fallback settlement also failed; leaving its lease "
+                "to expire",
+                item.alert.id,
+                exc_info=True,
+            )
+            return False
 
     def _prepare_repo_settlement(
         self,

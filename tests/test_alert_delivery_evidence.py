@@ -694,6 +694,36 @@ def test_a_refused_deferral_stamp_is_tolerated(monkeypatch, tmp_path):
     assert _deferred_since(db, alert.id) is None
 
 
+@pytest.mark.parametrize("past_give_up", [False, True])
+def test_refused_evidence_fallback_update_never_escapes(
+    monkeypatch, tmp_path, past_give_up
+):
+    """Both #38 recovery branches tolerate the fallback UPDATE refusing too."""
+    db, repo, alert = _pending(tmp_path)
+    if past_give_up:
+        _stamp_deferred_since(
+            db, alert.id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 1
+        )
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+    method = "mark_failed" if past_give_up else "note_deferral"
+    monkeypatch.setattr(
+        SqliteAlertRepository,
+        method,
+        Mock(side_effect=sqlite3.OperationalError("first settlement refused")),
+    )
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.AlertStore.complete_pending",
+        Mock(side_effect=sqlite3.OperationalError("fallback settlement refused")),
+    )
+
+    assert process_pending(repo, _config()) == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 0,
+    }
+
+
 def test_an_attempt_recorded_this_cycle_restarts_the_deferral_clock(monkeypatch, tmp_path):
     """A transport was reached, then the store became unwritable mid-retry.
 

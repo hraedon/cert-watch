@@ -77,6 +77,9 @@ restore the pre-migration backup.
   their last diagnostic and back off; rows not reached remain immediately
   eligible for the next worker. Operator-initiated **Flush queue** attempts are
   recorded in delivery evidence but do not consume the bounded give-up budget.
+  Successful deliveries settle immediately rather than waiting for the whole
+  queue, and database refusal during evidence-deferral recovery is isolated to
+  that row so later alerts continue processing.
 
 - **Everyone signs in again once after upgrading.** The session format
   changed (the version is bound into the session signature), and sessions

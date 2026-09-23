@@ -294,6 +294,43 @@ def test_operator_flush_records_evidence_without_spending_give_up_budget(
     ).process_pending() == {"sent": 0, "failed": 0, "deferred": 0}
 
 
+def test_delivered_row_is_completed_before_later_queue_work_can_reclaim_it(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "complete-immediately.sqlite3"
+    init_schema(db)
+    _alert(db, "first")
+    _alert(db, "second")
+    current = datetime(2026, 9, 22, 10, 0, tzinfo=UTC)
+    duplicate_transport = CountingTransport()
+
+    class ReentrantTransport(CountingTransport):
+        def send(self, message):
+            nonlocal current
+            result = super().send(message)
+            if message.cert_id == "second":
+                current += timedelta(seconds=421)
+                Dispatcher(
+                    db,
+                    transports=[duplicate_transport],
+                    clock=lambda: current,
+                    lease_owner="concurrent-flush",
+                ).process_pending()
+            return result
+
+    result = Dispatcher(
+        db,
+        transports=[ReentrantTransport()],
+        clock=lambda: current,
+        lease_owner="slow-cycle",
+    ).process_pending()
+
+    assert result["sent"] >= 1
+    assert duplicate_transport.counts.get("first", 0) == 0
+    first = SqliteAlertRepository(db).list_for_cert("first")[0]
+    assert first.status == "sent"
+
+
 def test_flush_and_scheduler_dispatchers_still_send_once(tmp_path: Path) -> None:
     db = tmp_path / "flush-scheduler.sqlite3"
     init_schema(db)
