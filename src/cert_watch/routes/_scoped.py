@@ -7,6 +7,13 @@ from typing import Any
 
 from fastapi import Request
 
+from cert_watch.auth.scope import (
+    _effective_tags,
+    _folded,
+    new_tags_scope_error,
+    write_scope_error,
+)
+
 
 def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
     """Return the active scope tags for tag-scoped access control (WI-051).
@@ -26,12 +33,6 @@ def scope_tags_from_auth(auth_ctx: Any) -> tuple[str, ...]:
     return tuple(parse_tags(scope_tag))
 
 
-def _folded(tags: Any) -> set[str]:
-    """Casefold a tag collection: scope matching is case-insensitive (#69),
-    as in ``tags_match`` and the SQL-side effective-tag filter."""
-    return {t.casefold() for t in tags}
-
-
 def tags_with_scope(request: Request, tags: str) -> str:
     """Merge the authenticated user's scope tag into *tags* (WI-052)."""
     auth_ctx = getattr(request.state, "auth_context", None)
@@ -43,34 +44,6 @@ def tags_with_scope(request: Request, tags: str) -> str:
     return format_tags(merge_tags(tags, scope))
 
 
-def _effective_tags(
-    db_path: str | Path,
-    *,
-    cert_id: str | None = None,
-    host_id: str | None = None,
-) -> set[str]:
-    """Return the effective (cert ∪ host) tag set for a target, if it exists."""
-    from cert_watch.database import SqliteCertificateRepository
-    from cert_watch.tags import parse_tags
-
-    tags: set[str] = set()
-    if cert_id:
-        cert_repo = SqliteCertificateRepository(db_path)
-        cert = cert_repo.get_by_id(cert_id)
-        if cert is not None:
-            tags.update(cert_repo.effective_tags(cert_id))
-            return tags
-    if host_id:
-        from cert_watch.database import SqliteHostRepository
-
-        host_repo = SqliteHostRepository(db_path)
-        host = host_repo.get(host_id)
-        if host is not None:
-            tags.update(parse_tags(host.tags))
-        return tags
-    return tags
-
-
 def scope_write_denied(
     request: Request,
     db_path: str | Path,
@@ -78,30 +51,11 @@ def scope_write_denied(
     cert_id: str | None = None,
     host_id: str | None = None,
 ) -> str | None:
-    """Return an error message if a scoped user can't mutate the target.
-
-    Admins and users without a scope tag pass. Targets whose effective tags
-    do not include any of the user's scope tags are denied.
-    """
-    auth_ctx = getattr(request.state, "auth_context", None)
-    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
-        return None
-    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
-    if not scope_tag:
-        return None
-    from cert_watch.tags import parse_tags
-
-    scope_tags = _folded(parse_tags(scope_tag))
-    target_tags = _effective_tags(db_path, cert_id=cert_id, host_id=host_id)
-    if not scope_tags & _folded(target_tags):
-        return "operation not permitted outside your team scope"
-    # Plan 053 (WI-064): visibility is necessary but no longer sufficient —
-    # the write tier must also cover the target's tags. may_write_tags is
-    # True for global writers and for any intersecting per-tag operator.
-    may_write_tags = getattr(auth_ctx, "may_write_tags", None)
-    if callable(may_write_tags) and not may_write_tags(target_tags):
-        return "your access to this resource's tags is read-only"
-    return None
+    """:func:`write_scope_error` for the request's AuthContext."""
+    return write_scope_error(
+        getattr(request.state, "auth_context", None),
+        db_path, cert_id=cert_id, host_id=host_id,
+    )
 
 
 def scope_read_denied(
@@ -162,22 +116,5 @@ def scope_new_tags_denied(
     request: Request,
     new_tags: str,
 ) -> str | None:
-    """Validate that *new_tags* are within the caller's scope.
-
-    For scoped users, every submitted tag must be in their scope set.
-    Admins and unscoped users can set any tags.  Returns an error message
-    if any tag is outside scope, or None if all tags are allowed.
-    """
-    auth_ctx = getattr(request.state, "auth_context", None)
-    if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
-        return None
-    scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
-    if not scope_tag:
-        return None
-    from cert_watch.tags import parse_tags
-
-    scope_tags = _folded(parse_tags(scope_tag))
-    for tag in parse_tags(new_tags):
-        if tag.casefold() not in scope_tags:
-            return f"tag '{tag}' is outside your team scope"
-    return None
+    """:func:`new_tags_scope_error` for the request's AuthContext."""
+    return new_tags_scope_error(getattr(request.state, "auth_context", None), new_tags)

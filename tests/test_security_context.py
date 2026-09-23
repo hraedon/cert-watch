@@ -20,7 +20,7 @@ def test_security_context_threads_through_session_signing():
 
 
 def test_security_context_threads_through_csrf():
-    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    from cert_watch.security.csrf import make_csrf_token, validate_csrf_token
 
     a = SecurityContext(signing_key="s", csrf_secret="csrf-a")
     b = SecurityContext(signing_key="s", csrf_secret="csrf-b")
@@ -58,8 +58,7 @@ def test_create_app_resolves_security_from_env_when_not_injected(tmp_path, monke
 def test_two_apps_with_different_keys_reject_each_others_sessions(tmp_path, monkeypatch):
     """End-to-end: a session validated through the request path uses the
     per-app SecurityContext, not a shared global."""
-    from cert_watch.auth import create_session
-    from cert_watch.middleware import validate_session
+    from cert_watch.auth import create_session, validate_session
 
     sec_a = SecurityContext(signing_key="app-a-key", csrf_secret="c")
     sec_b = SecurityContext(signing_key="app-b-key", csrf_secret="c")

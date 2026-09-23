@@ -34,10 +34,10 @@ def _seed_local_admin(tmp_path):
 
 
 def _no_secure_cookies(monkeypatch):
-    import cert_watch.middleware as mw
     import cert_watch.routes.auth as auth_routes
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    monkeypatch.setattr(csrf_mod, "_COOKIE_SECURE", False)
     monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
 
 

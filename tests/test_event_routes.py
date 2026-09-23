@@ -274,11 +274,12 @@ def test_api_events_stream_has_require_auth_dep():
     We verify the dependency directly rather than making a request, because
     EventSourceResponse keeps the connection open and would hang TestClient.
     """
+    from cert_watch.auth.guards import require_auth
     from cert_watch.routes.api.events import router
 
     route = next(r for r in router.routes if r.path == "/api/events/stream")
     dep = route.dependant.dependencies[0]
-    assert dep.call.__name__ == "require_auth"
+    assert dep.call is require_auth
 
 
 def test_api_events_stream_has_ping_configured():

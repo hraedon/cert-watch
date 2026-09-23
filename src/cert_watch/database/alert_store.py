@@ -247,8 +247,16 @@ class AlertStore:
             conn.commit()
         return cursor.rowcount == 1
 
-    def operator_retry(self, alert_id: str) -> bool:
+    def operator_retry(self, alert_id: str, *, auth: Any) -> bool:
+        from cert_watch.auth.scope import ensure_write_scope
+
         with _connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT cert_id FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+            if row is None:
+                return False
+            ensure_write_scope(auth, self.db_path, cert_id=row["cert_id"])
             cursor = conn.execute(
                 """UPDATE alerts SET status = 'pending', attempt_count = 0,
                        next_attempt_at = NULL, lease_owner = NULL, lease_expires_at = NULL,

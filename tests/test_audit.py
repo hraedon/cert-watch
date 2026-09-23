@@ -203,7 +203,7 @@ def test_resolve_source_ip_no_client() -> None:
 
 def test_audit_page_not_public_under_auth() -> None:
     """AC-3: /audit is not a public path."""
-    from cert_watch.middleware import is_public_path
+    from cert_watch.auth.request_context import is_public_path
     assert not is_public_path("/audit")
     assert not is_public_path("/api/audit")
 

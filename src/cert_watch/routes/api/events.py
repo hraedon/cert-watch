@@ -15,8 +15,8 @@ from fastapi.responses import JSONResponse
 from sse_starlette.event import ServerSentEvent
 from sse_starlette.sse import EventSourceResponse
 
+from cert_watch.auth.guards import require_auth
 from cert_watch.events import get_events, get_failed_deliveries
-from cert_watch.middleware import require_auth
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes._scoped import scope_tags_from_auth
 

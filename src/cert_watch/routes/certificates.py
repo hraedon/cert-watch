@@ -13,6 +13,13 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import (
+    admin_form_guard,
+    get_auth_context,
+    require_auth,
+    write_form_guard,
+)
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
@@ -28,17 +35,8 @@ from cert_watch.database import (
     get_write_lock,
 )
 from cert_watch.filters import issuer_cn
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
-    get_auth_context,
-    get_csrf_context,
-    require_admin_write_form,
-    require_auth,
-    require_write_form,
-)
 from cert_watch.presenters.certificate_detail import present_certificate_technical_details
-from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
+from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth, get_templates
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
@@ -47,6 +45,8 @@ from cert_watch.routes._scoped import (
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.security.csrf import get_csrf_context
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
     HostOwnershipTargetError,
@@ -58,7 +58,6 @@ from cert_watch.services.host_ownership import (
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,
-    normalize_tags,
 )
 from cert_watch.services.resource_metadata import (
     update_certificate_tags as persist_certificate_tags,
@@ -420,10 +419,9 @@ def certificate_posture_api(
 
 
 @router.post("/certificates/{cert_id}/delete")
-async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
+async def delete_certificate(
+    request: Request, cert_id: IdParam, _auth: str = Depends(write_form_guard),
+) -> RedirectResponse:
     db = _db_path(request)
     denied = scope_write_denied(request, db, cert_id=cert_id)
     if denied:
@@ -447,33 +445,24 @@ async def delete_certificate(request: Request, cert_id: IdParam) -> RedirectResp
 
 @router.post("/certificates/{cert_id}/tags")
 async def update_certificate_tags(
-    request: Request, cert_id: IdParam, tags: str = Form("")
+    request: Request, cert_id: IdParam, tags: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     db = _db_path(request)
-    denied = scope_write_denied(request, db, cert_id=cert_id)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
-    try:
-        normalized = normalize_tags(tags)
-    except ResourceMetadataValidationError as exc:
-        return RedirectResponse(
-            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
-        )
-    from cert_watch.routes._scoped import scope_new_tags_denied
-
-    new_tags_denied = scope_new_tags_denied(request, normalized)
-    if new_tags_denied:
-        return RedirectResponse(url=f"/?error={quote(new_tags_denied)}", status_code=303)
     try:
         persist_certificate_tags(
             db,
             cert_id,
-            normalized,
+            tags,
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
+        )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except ResourceMetadataValidationError as exc:
+        return RedirectResponse(
+            url=f"/certificates/{cert_id}?error={quote(str(exc))}", status_code=303,
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -490,10 +479,8 @@ async def update_certificate_owner(
     owner_slack: str = Form(""),
     renewal_method: str = Form(""),
     runbook_url: str = Form(""),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    write_err = await require_write_form(request)
-    if write_err:
-        return write_err
     if not check_rate_limit(f"cert_owner:{_extract_client_ip(request)}", 30, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -512,17 +499,11 @@ async def update_certificate_owner(
             url=f"/certificates/{cert_id}?error={quote(message)}", status_code=303,
         )
 
-    scope_target = (
-        {"host_id": target.host_id} if target.source == "host" else {"cert_id": cert_id}
-    )
-    denied = scope_write_denied(request, db, **scope_target)
-    if denied:
-        return RedirectResponse(url=f"/?error={quote(denied)}", status_code=303)
     host_id = target.host_id
     try:
         update_host_ownership(
             db,
-            host_id,
+            target,
             HostOwnershipUpdate(
                 owner_name=owner_name,
                 owner_email=owner_email,
@@ -530,9 +511,12 @@ async def update_certificate_owner(
                 renewal_method=renewal_method,
                 runbook_url=runbook_url,
             ),
+            auth=acting_auth(request),
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostOwnershipValidationError as exc:
         message = "invalid renewal method" if exc.field == "renewal_method" else str(exc)
         return RedirectResponse(
@@ -551,10 +535,8 @@ async def upload(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008 — FastAPI dependency injection pattern
     password: str | None = Form(None),
+    _auth: str = Depends(write_form_guard),
 ) -> RedirectResponse:
-    csrf_err = await require_write_form(request)
-    if csrf_err:
-        return csrf_err
     if not check_rate_limit(f"upload:{_extract_client_ip(request)}", 10, 60):
         return RedirectResponse(
             url=f"/?error={quote('rate limited: too many requests')}", status_code=303
@@ -600,12 +582,10 @@ async def upload(
 async def add_trust_anchor(
     request: Request,
     file: UploadFile = File(...),  # noqa: B008
+    _auth: str = Depends(admin_form_guard),
 ) -> RedirectResponse:
     # #65: a trust anchor changes chain validation for the whole fleet, so it
     # is admin-only (like the /settings/trust-anchors page), not write-gated.
-    admin_err = await require_admin_write_form(request)
-    if admin_err:
-        return admin_err
     db = _db_path(request)
     allowed_suffixes = {".pem", ".crt", ".cer", ".der"}
     raw_suffix = Path(file.filename or "uploaded").suffix.lower()
@@ -664,10 +644,10 @@ async def add_trust_anchor(
 
 
 @router.post("/trust-anchors/{anchor_id}/delete")
-async def delete_trust_anchor(request: Request, anchor_id: IdParam) -> RedirectResponse:
-    admin_err = await require_admin_write_form(request)  # #65: admin-only
-    if admin_err:
-        return admin_err
+async def delete_trust_anchor(
+    request: Request, anchor_id: IdParam,
+    _auth: str = Depends(admin_form_guard),  # #65: admin-only
+) -> RedirectResponse:
     db = _db_path(request)
     repo = SqliteTrustAnchorRepository(db)
     with get_write_lock():

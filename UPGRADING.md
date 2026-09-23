@@ -68,6 +68,24 @@ restore the pre-migration backup.
   belong to a local account, the break-glass admin or a directory user.
   Expect every user, including the break-glass admin, to land on the sign-in
   page on first visit after the upgrade. API keys are unaffected.
+- **`CERT_WATCH_ADMINS` now restricts admin when no role map is configured.**
+  It was documented as the list of users allowed to reach Settings, but with
+  no role map (neither `CERT_WATCH_ROLE_MAP` nor a Settings → Roles mapping)
+  every directory user was treated as admin, so the list restricted nothing
+  -- and a user outside `CERT_WATCH_WRITE_USERS` could create an API key,
+  including a write-scoped one, and write with it. Now, for directory users
+  with no role map: when `CERT_WATCH_ADMINS` is set, only its members get
+  Settings, API-key management, trust anchors, alert groups and the other
+  admin actions (they are refused with `admin required`); when
+  `CERT_WATCH_WRITE_USERS` is set, only its members (and listed admins) can
+  write, as before. Admin implies write: when only `CERT_WATCH_WRITE_USERS`
+  is set, admin also requires membership in it, so a user who cannot write
+  data can never administer or create API keys. With neither list set,
+  every signed-in user is still full access. The break-glass admin, local accounts and role-map
+  deployments are unaffected. **If you set `CERT_WATCH_ADMINS` and your
+  administrators are not all in it, add them before upgrading** (or move to
+  a role map). API keys minted by now-unlisted users keep working until
+  revoked; review Settings → API keys after upgrading.
 - **Local accounts are authorized by their own role; the Settings → Roles IdP
   mapping now takes effect.** Review both before upgrading.
   - Accounts created in Settings → Users can now sign in (#59; before, every

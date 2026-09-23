@@ -10,6 +10,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
+from cert_watch.auth.guards import get_auth_context
 from cert_watch.compliance import build_compliance_report, report_to_dict
 from cert_watch.crypto_posture import analyze_fleet_crypto, crypto_posture_to_dict
 from cert_watch.database import (
@@ -17,12 +18,12 @@ from cert_watch.database import (
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import get_auth_context, get_csrf_context
 from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes._scoped import enforce_scope_tag, scope_tags_from_auth
 from cert_watch.routes.api._shared import compliance_signing_key
+from cert_watch.security.csrf import get_csrf_context
 
 logger = logging.getLogger("cert_watch.routes.insights")
 

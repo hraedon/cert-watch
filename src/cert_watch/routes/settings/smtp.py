@@ -9,10 +9,14 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.alerting.transports.smtp import connect_smtp_transport, negotiate_starttls
+from cert_watch.auth.guards import admin_write_guard
 from cert_watch.http_client import resolve_smtp_host
-from cert_watch.middleware import require_admin_write
 from cert_watch.routes.settings.config import _SMTP_KEYS
-from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section
+from cert_watch.routes.settings.core import (
+    _sanitize_test_error,
+    _save_config_section,
+    settings_tab_form,
+)
 
 router = APIRouter()
 
@@ -41,14 +45,16 @@ def _send_smtp_test(
 
 
 @router.post("/settings/smtp")
-async def save_smtp_config(request: Request) -> RedirectResponse:
+async def save_smtp_config(
+    request: Request, _auth: str = Depends(settings_tab_form("smtp")),
+) -> RedirectResponse:
     return await _save_config_section(request, _SMTP_KEYS, "smtp", encrypt=True, rebuild=True)
 
 
 @router.post("/settings/test-smtp")
 async def test_smtp_connection(
     request: Request,
-    _auth: str = Depends(require_admin_write),
+    _auth: str = Depends(admin_write_guard),
 ) -> JSONResponse:
     import logging
 
