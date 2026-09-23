@@ -443,7 +443,7 @@ class TestDeliverWebhookSSRFPolicy:
             captured["allowed_subnets"] = wc.allowed_subnets
             return True
 
-        monkeypatch.setattr("cert_watch.alerts.send_webhook", _fake_send)
+        monkeypatch.setattr("cert_watch.alerting.transports.webhook.send_webhook", _fake_send)
         return captured
 
     def _emit(self, db):

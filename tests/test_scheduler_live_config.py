@@ -42,9 +42,9 @@ def test_saved_settings_reach_existing_scheduler_job(monkeypatch, tmp_path):
     monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
     delivered = Mock(return_value={"sent": 0, "failed": 0})
     renewal = Mock()
-    monkeypatch.setattr("cert_watch.alerts.process_pending", delivered)
-    monkeypatch.setattr("cert_watch.alerts.evaluate_all_certs", Mock())
-    monkeypatch.setattr("cert_watch.alerts.evaluate_renewal_window", renewal)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", delivered)
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", Mock())
+    monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", renewal)
 
     _rebuild_settings(request, settings.db_path)
     context.run_alerts()
@@ -127,7 +127,7 @@ def test_lifespan_jobs_use_saved_configuration_without_restart(
     wake = Mock()
     monkeypatch.setattr("cert_watch.scheduler_context.wake_scheduler", wake)
     delivered = Mock(return_value={"sent": 0, "failed": 0})
-    monkeypatch.setattr("cert_watch.alerts.process_pending", delivered)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", delivered)
     app = reload_app().app
     with TestClient(app) as client:
         smtp = client.post("/settings/smtp", data={
@@ -250,9 +250,11 @@ def _drive_timer(monkeypatch, settings, on_wait, *, scan_fn=None, schedule_provi
     monkeypatch.setattr(scheduler, "_scheduler_wake", wake)
     monkeypatch.setattr(scheduler, "_scheduler_thread", None)
     monkeypatch.setattr(scheduler, "_start_renewal_webhook_pool", Mock())
-    monkeypatch.setattr("cert_watch.digest.start_digest_pool", Mock())
+    monkeypatch.setattr("cert_watch.alerting.digest.engine.start_digest_pool", Mock())
     monkeypatch.setattr(scheduler, "_detach_renewal_webhook_pool", Mock(return_value=None))
-    monkeypatch.setattr("cert_watch.digest._detach_digest_pool", Mock(return_value=None))
+    monkeypatch.setattr(
+        "cert_watch.alerting.digest.engine._detach_digest_pool", Mock(return_value=None)
+    )
     monkeypatch.setattr(scheduler.threading, "Thread", lambda **kwargs: SimpleNamespace(
         start=kwargs["target"], is_alive=lambda: False, join=Mock(),
     ))
@@ -453,10 +455,10 @@ def test_alert_job_keeps_matching_transports_through_mid_job_update(monkeypatch,
 
     pending_spy = Mock(side_effect=pending)
     digest = Mock(return_value=False)
-    monkeypatch.setattr("cert_watch.alerts.evaluate_all_certs", Mock())
-    monkeypatch.setattr("cert_watch.alerts.evaluate_renewal_window", Mock())
-    monkeypatch.setattr("cert_watch.alerts.process_pending", pending_spy)
-    monkeypatch.setattr("cert_watch.alerts.send_expiry_digest", digest)
+    monkeypatch.setattr("cert_watch.alerting.rules.expiry.evaluate_all_certs", Mock())
+    monkeypatch.setattr("cert_watch.alerting.rules.renewal.evaluate_renewal_window", Mock())
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", pending_spy)
+    monkeypatch.setattr("cert_watch.alerting.digest.expiry.send_expiry_digest", digest)
 
     context.run_alerts()
     context.run_alerts()

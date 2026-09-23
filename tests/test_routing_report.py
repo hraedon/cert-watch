@@ -243,7 +243,10 @@ def test_source_queries_never_read_credentials(estate: Estate, monkeypatch):
 
 
 def test_diagnostic_does_not_load_settings_migrate_evaluate_or_connect(estate: Estate, monkeypatch):
-    import cert_watch.alerts as alerts
+    import cert_watch.alerting.digest.expiry as expiry_digest
+    import cert_watch.alerting.digest.renewal as renewal_digest
+    import cert_watch.alerting.dispatch as dispatch
+    import cert_watch.alerting.rules.expiry as expiry_rules
     import cert_watch.config as config
     import cert_watch.database as database
     import cert_watch.database.schema as schema
@@ -254,9 +257,10 @@ def test_diagnostic_does_not_load_settings_migrate_evaluate_or_connect(estate: E
 
     for module, name in [
         (config.Settings, "from_env"), (database, "init_schema"), (schema, "init_schema"),
-        (migrations, "run_pending_migrations"), (alerts, "evaluate_all_certs"),
-        (alerts, "send_alert"), (alerts, "send_webhook"), (socket, "create_connection"),
-        (socket.socket, "connect"),
+        (migrations, "run_pending_migrations"), (expiry_rules, "evaluate_all_certs"),
+        (dispatch, "send_alert"), (dispatch, "send_webhook"),
+        (expiry_digest, "send_webhook"), (renewal_digest, "send_webhook"),
+        (socket, "create_connection"), (socket.socket, "connect"),
     ]:
         monkeypatch.setattr(module, name, forbidden)
     assert build_routing_report(estate.path)["counts"]["leaf_certificates"] == 8
@@ -353,12 +357,12 @@ def test_internal_resolver_defect_is_not_blamed_on_the_snapshot(estate: Estate, 
     The old catch-all rewrote it as "provide a readable, complete backup",
     sending the operator to re-acquire a backup that was never the problem.
     """
-    import cert_watch.alerts as alerts
+    import cert_watch.alerting.routing as routing
 
     def defective_resolver(*_args, **_kwargs):
         raise TypeError("injected resolver defect")
 
-    monkeypatch.setattr(alerts, "resolve_cert_recipients", defective_resolver)
+    monkeypatch.setattr(routing, "resolve_cert_recipients", defective_resolver)
     with pytest.raises(TypeError, match="injected resolver defect") as caught:
         build_routing_report(estate.path)
     assert not isinstance(caught.value, RoutingReportError)
@@ -389,16 +393,16 @@ def test_missing_routing_column_is_not_defaulted_or_repaired(snapshot: Path):
 def test_credential_expression_cannot_impersonate_a_routing_column(
     estate: Estate, replacement, monkeypatch,
 ):
-    import cert_watch.alerts as alerts
+    import cert_watch.alerting.routing as routing
 
     resolver_calls = []
-    original_resolver = alerts._resolve_group_config
+    original_resolver = routing._resolve_group_config
 
     def record_resolution(*args, **kwargs):
         resolver_calls.append(True)
         return original_resolver(*args, **kwargs)
 
-    monkeypatch.setattr(alerts, "_resolve_group_config", record_resolution)
+    monkeypatch.setattr(routing, "_resolve_group_config", record_resolution)
     if replacement == "view":
         estate.edit("ALTER TABLE users RENAME TO original_users")
         estate.edit(
@@ -460,9 +464,9 @@ def test_uri_sensitive_filename_is_read_as_the_actual_file(snapshot: Path):
 
 @pytest.mark.parametrize("mutation", ["identity", "bytes"])
 def test_source_change_during_inspection_invalidates_report(estate: Estate, monkeypatch, mutation):
-    import cert_watch.alerts as alerts
+    import cert_watch.alerting.routing as routing
 
-    original_resolver = alerts.resolve_cert_recipients
+    original_resolver = routing.resolve_cert_recipients
     changed = False
 
     def change_source_then_resolve(*args, **kwargs):
@@ -482,7 +486,7 @@ def test_source_change_during_inspection_invalidates_report(estate: Estate, monk
             assert estate.path.stat().st_size == state.st_size
         return original_resolver(*args, **kwargs)
 
-    monkeypatch.setattr(alerts, "resolve_cert_recipients", change_source_then_resolve)
+    monkeypatch.setattr(routing, "resolve_cert_recipients", change_source_then_resolve)
     with pytest.raises(ValueError):
         build_routing_report(estate.path)
     assert changed, "External-change simulation must run during actual resolver execution"
@@ -519,7 +523,7 @@ def test_text_discloses_raw_routing_and_unverified_delivery(estate: Estate, caps
 
 
 def test_failure_cleans_scratch_and_does_not_change_source(estate: Estate, monkeypatch):
-    import cert_watch.alerts as alerts
+    import cert_watch.alerting.routing as routing
     import cert_watch.routing_report as routing_report
 
     real_temporary_directory = tempfile.TemporaryDirectory
@@ -534,7 +538,7 @@ def test_failure_cleans_scratch_and_does_not_change_source(estate: Estate, monke
         raise ValueError("injected resolver failure")
 
     monkeypatch.setattr(routing_report, "TemporaryDirectory", record_temporary_directory)
-    monkeypatch.setattr(alerts, "resolve_cert_recipients", fail_resolver)
+    monkeypatch.setattr(routing, "resolve_cert_recipients", fail_resolver)
     before = _tree_bytes(estate.path.parent)
     with pytest.raises(ValueError):
         build_routing_report(estate.path)
