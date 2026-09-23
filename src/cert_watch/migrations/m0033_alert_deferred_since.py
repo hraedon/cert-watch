@@ -37,4 +37,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(alerts)").fetchall()}
     if "deferred_since" not in cols:
         conn.execute(COLUMN_SQL)
-    conn.commit()

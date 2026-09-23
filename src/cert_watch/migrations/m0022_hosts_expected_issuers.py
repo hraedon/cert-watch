@@ -15,4 +15,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(hosts)").fetchall()}
     if "expected_issuers" not in cols:
         conn.execute("ALTER TABLE hosts ADD COLUMN expected_issuers TEXT NOT NULL DEFAULT ''")
-    conn.commit()

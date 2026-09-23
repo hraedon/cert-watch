@@ -16,6 +16,9 @@ class AuthResult:
     groups: list[str] | None = None
     roles: list[str] | None = None
     email: str = ""  # User email (Plan 040: for local users + AD/Entra contact)
+    # Set only by LocalAdminProvider: "user" (users-table account) or
+    # "break-glass" (env/kv local admin). Decides how the session is authorized.
+    local_account: str = ""
 
 
 class AuthProvider(ABC):

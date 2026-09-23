@@ -48,4 +48,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     if "trigger_cert_id" not in cols:
         conn.execute(COLUMN_SQL)
     conn.execute(BACKFILL_SQL)
-    conn.commit()

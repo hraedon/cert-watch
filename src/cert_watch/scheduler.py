@@ -109,14 +109,26 @@ def _host_scan_deadlines(
             """
         ).fetchall()
 
-    def timestamp(value: str) -> datetime:
-        parsed = datetime.fromisoformat(value)
+    def timestamp(value: str, hostname: str, field_name: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            logger.warning(
+                "host %s has a malformed %s scan timestamp (%r); ignoring it",
+                hostname,
+                field_name,
+                value,
+            )
+            return None
         return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
 
     deadlines: list[tuple[str, int, datetime, bool]] = []
     for r in rows:
-        last = timestamp(r["last_scan"]) if r["last_scan"] else None
-        attempt = timestamp(r["last_attempt"]) if r["last_attempt"] else None
+        last = timestamp(r["last_scan"], r["hostname"], "successful") if r["last_scan"] else None
+        attempt = (
+            timestamp(r["last_attempt"], r["hostname"], "attempt")
+            if r["last_attempt"] else None
+        )
         if last is None:
             deadline = now
         else:
@@ -173,6 +185,18 @@ _scheduler_stop = threading.Event()
 _scheduler_wake = threading.Event()
 _scheduler_lock = threading.Lock()
 _cycle_lock = threading.Lock()
+
+
+def try_run_alert_delivery(
+    delivery_fn: Callable[[], dict[str, int]],
+) -> dict[str, int] | None:
+    """Run alert delivery only when no scheduler cycle is in progress."""
+    if not _cycle_lock.acquire(blocking=False):
+        return None
+    try:
+        return delivery_fn()
+    finally:
+        _cycle_lock.release()
 
 
 def wake_scheduler() -> None:
@@ -308,7 +332,7 @@ def start_scheduler(
         if _scheduler_thread is not None and _scheduler_thread.is_alive():
             return
 
-        from cert_watch.alerting.digest.engine import start_digest_pool
+        from cert_watch.alerting.digest.pool import start_digest_pool
 
         _start_renewal_webhook_pool()
         start_digest_pool()
@@ -379,12 +403,12 @@ def stop_scheduler() -> None:
     # cycle checks the stop event between stages, and neither pool is recreated
     # until the next explicit start_scheduler() call.
     renewal_pool = _detach_renewal_webhook_pool()
-    from cert_watch.alerting.digest.engine import _detach_digest_pool
+    from cert_watch.alerting.digest.pool import _detach_digest_pool
     digest_pool = _detach_digest_pool()
     if renewal_pool is not None:
-        renewal_pool.shutdown(wait=True)
+        renewal_pool.shutdown(wait=True, cancel_futures=True)
     if digest_pool is not None:
-        digest_pool.shutdown(wait=True)
+        digest_pool.shutdown(wait=True, cancel_futures=True)
     if _scheduler_thread is not None:
         _scheduler_thread.join(timeout=30)
 
@@ -422,26 +446,38 @@ def run_scan_now(
             logger.exception("scan_fn raised for %s:%s", hostname, port)
             failures += 1
             if db_path is not None:
-                record_scan_history(
-                    db_path,
-                    ScanHistory(
-                        hostname=hostname, port=port, status="failure",
-                        error_message=str(exc),
-                    ),
-                )
+                try:
+                    record_scan_history(
+                        db_path,
+                        ScanHistory(
+                            hostname=hostname, port=port, status="failure",
+                            error_message=str(exc),
+                        ),
+                    )
+                except sqlite3.Error:
+                    logger.warning(
+                        "could not record scan failure for %s:%s",
+                        hostname, port, exc_info=True,
+                    )
             continue
 
         # Treat a result with `error_message` attribute as a ScanError.
         if hasattr(result, "error_message"):
             failures += 1
             if db_path is not None:
-                record_scan_history(
-                    db_path,
-                    ScanHistory(
-                        hostname=hostname, port=port, status="failure",
-                        error_message=getattr(result, "error_message", "unknown"),
-                    ),
-                )
+                try:
+                    record_scan_history(
+                        db_path,
+                        ScanHistory(
+                            hostname=hostname, port=port, status="failure",
+                            error_message=getattr(result, "error_message", "unknown"),
+                        ),
+                    )
+                except sqlite3.Error:
+                    logger.warning(
+                        "could not record scan failure for %s:%s",
+                        hostname, port, exc_info=True,
+                    )
                 try:
                     from cert_watch.events import Event, emit_event
 
@@ -585,44 +621,46 @@ def _check_renewal_overdue(
             if (hostname, port) in seen:
                 continue
             seen.add((hostname, port))
-            signal = detect_renewal_overdue(db_path, hostname, port=port)
-            if signal is not None:
-                if (
-                    (signal.hostname, port, signal.cert_fingerprint) in already_emitted
-                    or (signal.hostname, signal.cert_fingerprint) in legacy_emitted
-                ):
-                    continue
-                emit_event(
-                    Event(
-                        event_type="renewal_overdue",
-                        timestamp=datetime.now(UTC),
-                        payload={
-                            "hostname": signal.hostname,
-                            "port": port,
-                            "cert_fingerprint": signal.cert_fingerprint,
-                            "days_remaining": signal.days_remaining,
-                            "expected_renewal_at_days": signal.expected_renewal_at_days,
-                            "days_overdue": signal.days_overdue,
-                            "confidence": signal.confidence,
-                        },
-                        source="scheduler",
-                    ),
-                    db_path,
+            try:
+                signal = detect_renewal_overdue(db_path, hostname, port=port)
+                if signal is not None:
+                    if (
+                        (signal.hostname, port, signal.cert_fingerprint) in already_emitted
+                        or (signal.hostname, signal.cert_fingerprint) in legacy_emitted
+                    ):
+                        continue
+                    emit_event(
+                        Event(
+                            event_type="renewal_overdue",
+                            timestamp=datetime.now(UTC),
+                            payload={
+                                "hostname": signal.hostname,
+                                "port": port,
+                                "cert_fingerprint": signal.cert_fingerprint,
+                                "days_remaining": signal.days_remaining,
+                                "expected_renewal_at_days": signal.expected_renewal_at_days,
+                                "days_overdue": signal.days_overdue,
+                                "confidence": signal.confidence,
+                            },
+                            source="scheduler",
+                        ),
+                        db_path,
+                    )
+                    already_emitted.add((signal.hostname, port, signal.cert_fingerprint))
+                    try:
+                        _send_renewal_webhook_if_configured(
+                            signal, hostname, port, db_path, settings=settings,
+                        )
+                    except Exception:
+                        logger.exception(
+                            "renewal webhook failed for %s:%s — continuing sweep",
+                            hostname, port,
+                        )
+            except Exception:
+                logger.exception(
+                    "renewal overdue check failed for %s:%s — continuing sweep",
+                    hostname, port,
                 )
-                already_emitted.add((signal.hostname, port, signal.cert_fingerprint))
-                # Per-endpoint guard: build_renewal_payload raises on an
-                # out-of-range or conflicting port, and this loop's only `try`
-                # wraps the whole sweep — so one legacy host row would silently
-                # cost every later host its renewal webhook.
-                try:
-                    _send_renewal_webhook_if_configured(
-                        signal, hostname, port, db_path, settings=settings,
-                    )
-                except Exception:
-                    logger.exception(
-                        "renewal webhook failed for %s:%s — continuing sweep",
-                        hostname, port,
-                    )
     except Exception:  # Best-effort overdue detection must not stop the scan cycle.
         logger.exception("renewal overdue check failed")
 

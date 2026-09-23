@@ -74,6 +74,8 @@ def alerts_view(
     page: int = 1,
     filter_type: str = "all",
     saved: str = "",
+    warning: str = "",
+    error: str = "",
 ) -> HTMLResponse:
     db = _db_path(request)
     per_page = 50
@@ -125,5 +127,7 @@ def alerts_view(
             "filter_type": filter_type,
             "alert_counts": counts,
             "saved": saved,
+            "warning": warning,
+            "error": error,
         },
     )

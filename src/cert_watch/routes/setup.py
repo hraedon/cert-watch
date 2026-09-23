@@ -119,6 +119,9 @@ async def setup_submit(
 
         enc_key = _get_encryption_key(request)
         with get_write_lock():
+            # Revoke any residual session for this name before the new admin
+            # exists (bumped again below, after auth is switched on).
+            bump_session_version(db, username)
             kv_set(db, LOCAL_ADMIN_USER, username)
             if enc_key:
                 from cert_watch.database import kv_set_secret

@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.concurrency import run_in_threadpool
 
 from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
@@ -348,8 +349,17 @@ async def flush_alert_queue(request: Request) -> RedirectResponse:
     alert_config = s.build_alert_config() if s.smtp_host else None
     webhook_config = s.build_webhook_config() if s.webhook_url else None
     from cert_watch.alerting.dispatch import process_pending
+    from cert_watch.scheduler import try_run_alert_delivery
 
-    result = process_pending(alert_repo, alert_config, webhook_config)
+    result = await run_in_threadpool(
+        try_run_alert_delivery,
+        lambda: process_pending(alert_repo, alert_config, webhook_config),
+    )
+    if result is None:
+        return RedirectResponse(
+            url=f"/alerts?warning={quote('Alert delivery already in progress')}",
+            status_code=303,
+        )
     record_audit(
         db,
         actor=resolve_actor(request),

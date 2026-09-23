@@ -23,4 +23,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
             "ALTER TABLE roles ADD COLUMN alert_group_id TEXT"
             " REFERENCES alert_groups(id) ON DELETE SET NULL"
         )
-    conn.commit()

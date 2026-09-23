@@ -18,4 +18,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE scan_posture ADD COLUMN tls_verified INTEGER"
         )
-    conn.commit()

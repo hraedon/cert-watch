@@ -77,6 +77,32 @@ def test_scheduled_scan_selects_due_hosts_only(monkeypatch, tmp_path):
     assert result["scanned"] == 1
 
 
+def test_scheduled_scan_executes_deferred_operations_when_scan_batch_raises(
+    monkeypatch, tmp_path
+):
+    settings = _settings(tmp_path)
+    context = SchedulerContext(settings, None, None)
+    monkeypatch.setattr("cert_watch.scheduler_context._evaluate_posture", Mock())
+    monkeypatch.setattr(
+        "cert_watch.scheduler_context.store_scanned", Mock(return_value="leaf")
+    )
+    execute_deferred = Mock()
+    monkeypatch.setattr(
+        "cert_watch.scan._execute_deferred_post_commit", execute_deferred
+    )
+
+    def fail_after_store(**kwargs):
+        kwargs["store_fn"](object())
+        raise RuntimeError("later host failed")
+
+    monkeypatch.setattr("cert_watch.scheduler_context.run_scan_now", fail_after_store)
+
+    with pytest.raises(RuntimeError, match="later host failed"):
+        context.scan_all()
+
+    execute_deferred.assert_called_once()
+
+
 def test_explicit_scan_honors_tls_and_drift_settings(monkeypatch, tmp_path):
     settings = _settings(tmp_path, tls_verify=True, drift_alerts=False)
     scan = AsyncMock(return_value=object())
@@ -250,10 +276,10 @@ def _drive_timer(monkeypatch, settings, on_wait, *, scan_fn=None, schedule_provi
     monkeypatch.setattr(scheduler, "_scheduler_wake", wake)
     monkeypatch.setattr(scheduler, "_scheduler_thread", None)
     monkeypatch.setattr(scheduler, "_start_renewal_webhook_pool", Mock())
-    monkeypatch.setattr("cert_watch.alerting.digest.engine.start_digest_pool", Mock())
+    monkeypatch.setattr("cert_watch.alerting.digest.pool.start_digest_pool", Mock())
     monkeypatch.setattr(scheduler, "_detach_renewal_webhook_pool", Mock(return_value=None))
     monkeypatch.setattr(
-        "cert_watch.alerting.digest.engine._detach_digest_pool", Mock(return_value=None)
+        "cert_watch.alerting.digest.pool._detach_digest_pool", Mock(return_value=None)
     )
     monkeypatch.setattr(scheduler.threading, "Thread", lambda **kwargs: SimpleNamespace(
         start=kwargs["target"], is_alive=lambda: False, join=Mock(),

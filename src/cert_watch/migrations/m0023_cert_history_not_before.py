@@ -13,4 +13,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(cert_history)").fetchall()}
     if "not_before" not in cols:
         conn.execute("ALTER TABLE cert_history ADD COLUMN not_before TEXT")
-    conn.commit()

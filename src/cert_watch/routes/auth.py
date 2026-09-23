@@ -13,13 +13,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.auth import (
     SESSION_COOKIE,
-    LocalAdminProvider,
     NoAuthProvider,
-    _CompositeProvider,
     check_authz,
     create_session,
+    decode_session,
 )
-from cert_watch.auth.rbac import claims_for_session
+from cert_watch.auth.rbac import BREAK_GLASS_CLAIM, LOCAL_USER_CLAIM, claims_for_session
 from cert_watch.database import bump_session_version, get_session_version
 from cert_watch.middleware import (
     _COOKIE_SECURE,
@@ -96,9 +95,9 @@ async def login_submit(
         return RedirectResponse(
             url=f"/login?error={quote(result.error or 'login failed')}", status_code=303
         )
-    is_break_glass = isinstance(auth, LocalAdminProvider) or (
-        isinstance(auth, _CompositeProvider) and result.username == auth._local.username
-    )
+    # Decided by which provider authenticated, not by the username: a directory
+    # user who shares the break-glass name is not break-glass.
+    is_break_glass = result.local_account == "break-glass"
     if is_break_glass:
         logger.warning("Break-glass login by local admin: %s", result.username)
         try:
@@ -116,7 +115,7 @@ async def login_submit(
                 )
         except OSError:
             logger.debug("audit log write failed for break-glass login", exc_info=True)
-    else:
+    elif not result.local_account:
         settings = getattr(request.app.state, "settings", None)
         allowed_groups = list(settings.allowed_groups) if settings else []
         allowed_roles = list(settings.allowed_roles) if settings else []
@@ -140,6 +139,13 @@ async def login_submit(
     # post-login redirect loop (see claims_for_session).
     role_map = getattr(settings, "role_map", {}) or {}
     stored_groups, stored_roles = claims_for_session(result.groups, result.roles, role_map)
+    if result.local_account:
+        # Local accounts are authorized from the users/roles tables (or as
+        # break-glass admin) on every request, never from the role map.
+        stored_groups = []
+        stored_roles = [
+            BREAK_GLASS_CLAIM if result.local_account == "break-glass" else LOCAL_USER_CLAIM
+        ]
     token = create_session(
         result.username,
         _request_security(request),
@@ -148,6 +154,15 @@ async def login_submit(
         roles=stored_roles,
         email=result.email,
     )
+    if result.local_account:
+        # Fail closed: a local session that cannot carry its marker would be
+        # authorized as a directory user, so refuse the login instead.
+        minted = decode_session(token, _request_security(request))
+        if minted is None or not set(stored_roles) <= set(minted.roles):
+            logger.error("refusing login for %s: session marker lost", result.username)
+            return RedirectResponse(
+                url="/login?error=session+could+not+be+created", status_code=303
+            )
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
@@ -199,7 +214,10 @@ def oauth_start(request: Request) -> RedirectResponse:
             "cw_oauth_state",
             result.oauth_state,
             httponly=True,
-            samesite="strict",
+            # #58: Lax, not Strict. The IdP's redirect to /auth/callback is a
+            # cross-site top-level GET, on which browsers withhold a Strict
+            # cookie; Lax still withholds it from cross-site subrequests/POSTs.
+            samesite="lax",
             max_age=600,
             secure=_COOKIE_SECURE,
             path="/",
@@ -222,7 +240,7 @@ def oauth_callback(
             url=f"/login?error={quote(error)}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     if not code:
@@ -230,7 +248,7 @@ def oauth_callback(
             url="/login?error=no+authorization+code", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     signed_state = request.cookies.get("cw_oauth_state", "")
@@ -246,7 +264,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     cookie_raw, _nonce, _verifier = verify_result
@@ -255,7 +273,7 @@ def oauth_callback(
             url="/login?error=OAuth+state+mismatch", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     base = _get_base_url(request)
@@ -271,7 +289,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'OAuth failed')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     # Authorization gate: check group/role membership
@@ -284,7 +302,7 @@ def oauth_callback(
             url=f"/login?error={quote(result.error or 'access denied')}", status_code=303
         )
         response.delete_cookie(
-            "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+            "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
         )
         return response
     # BC-081: embed current session version in the token
@@ -317,7 +335,7 @@ def oauth_callback(
         secure=_COOKIE_SECURE, path="/",
     )
     response.delete_cookie(
-        "cw_oauth_state", httponly=True, samesite="strict", secure=_COOKIE_SECURE,
+        "cw_oauth_state", httponly=True, samesite="lax", secure=_COOKIE_SECURE,
     )
     logger.info("user logged in via OAuth: %s", result.username)
     return response

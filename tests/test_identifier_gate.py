@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -561,9 +562,94 @@ def test_redacted_ci_output_omits_identifier_and_source_line(
     assert gate.main(["--redact-output"]) == 1
 
     err = capsys.readouterr().err
-    assert "src/settings.py:1: denylist entry #1" in err
+    assert "<path sha256:3ac2227be4f4>:1: denylist entry #1" in err  # src/settings.py
     assert identifier not in err
     assert source_line not in err
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "private-widget-92831/settings.py",
+        "src/private-widget-92831-settings.py",
+    ],
+    ids=["directory-name", "filename"],
+)
+def test_redacted_ci_output_omits_identifier_from_path_components(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    path: str,
+) -> None:
+    identifier = "private-widget-92831"
+    _track(repo, path, f"endpoint = https://{identifier}.example.test\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    assert gate.main(["--redact-output"]) == 1
+
+    err = capsys.readouterr().err
+    assert "<path sha256:" in err
+    assert identifier not in err
+
+
+def test_redacted_guard_report_omits_identifier_from_path(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    identifier = "private-widget-92831"
+    _track(repo, f"{GUARDED}/{identifier}/capture.json", "{}\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    assert gate.main(["--redact-output"]) == 1
+
+    err = capsys.readouterr().err
+    assert "<path sha256:" in err
+    assert GUARDED not in err
+    assert identifier not in err
+
+
+def test_redacted_unreadable_report_omits_identifier_from_path(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    identifier = "private-widget-92831"
+    path = Path("docs") / f"{identifier}.md"
+    _track(repo, path.as_posix(), "clean content\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    def collect_as_unreadable(
+        identifiers: frozenset[str],
+        paths: list[Path],
+        *,
+        unreadable: list[Path],
+    ) -> list[object]:
+        assert identifiers == frozenset({identifier})
+        assert path in paths
+        unreadable.append(path)
+        return []
+
+    monkeypatch.setattr(gate, "scan_files", collect_as_unreadable)
+
+    assert gate.main(["--redact-output"]) == 1
+
+    err = capsys.readouterr().err
+    assert "<path sha256:" in err
+    assert "docs/" not in err
+    assert identifier not in err
+
+
+def test_print_report_requires_identifiers_when_redacting() -> None:
+    violation = gate.Violation(
+        identifier="private-widget-92831",
+        path=Path("src/settings.py"),
+        line_number=1,
+        line="private-widget-92831",
+    )
+
+    with pytest.raises(gate.GateError, match="redacted reports require the identifier set"):
+        gate.print_report([violation], redact_output=True)
 
 
 def test_configured_gate_catches_a_quoted_phrase_in_a_tracked_file(
@@ -969,6 +1055,119 @@ def _identifier_gate_workflow() -> dict[str, object]:
     return yaml.safe_load(_WORKFLOW.read_text(encoding="utf-8"))
 
 
+_IF_TOKEN = re.compile(
+    r"\s*(?:(?P<op>==|!=|&&|\|\||\(|\))|"
+    r"(?P<string>'[^']*')|(?P<name>[A-Za-z_][A-Za-z0-9_.]*))"
+)
+
+
+def _evaluate_workflow_if(expression: str, context: dict[str, object]) -> bool:
+    """Evaluate the small GitHub-expression subset used by this workflow.
+
+    The parser intentionally rejects everything outside identifiers, single-quoted
+    strings, null, comparisons, boolean operators, and parentheses. A permissive
+    test evaluator would turn new workflow syntax into an untested branch.
+    """
+    tokens: list[str] = []
+    offset = 0
+    while offset < len(expression):
+        match = _IF_TOKEN.match(expression, offset)
+        if match is None:
+            raise AssertionError(
+                f"unsupported workflow if syntax at {expression[offset:]!r}"
+            )
+        token = next(group for group in match.groups() if group is not None)
+        tokens.append(token)
+        offset = match.end()
+
+    position = 0
+
+    def peek() -> str | None:
+        return tokens[position] if position < len(tokens) else None
+
+    def consume(expected: str | None = None) -> str:
+        nonlocal position
+        token = peek()
+        if token is None or (expected is not None and token != expected):
+            raise AssertionError(f"expected {expected!r}, got {token!r} in {expression!r}")
+        position += 1
+        return token
+
+    def resolve(name: str) -> object:
+        if name == "null":
+            return None
+        value: object = context
+        for part in name.split("."):
+            if not isinstance(value, dict):
+                return None
+            value = value.get(part)
+        return value
+
+    def primary() -> object:
+        token = peek()
+        if token == "(":
+            consume("(")
+            value = disjunction()
+            consume(")")
+            return value
+        if token is None:
+            raise AssertionError(f"unexpected end of workflow if expression {expression!r}")
+        consume()
+        if token.startswith("'"):
+            return token[1:-1]
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]*", token):
+            return resolve(token)
+        raise AssertionError(f"unsupported workflow if token {token!r}")
+
+    def comparison() -> bool:
+        left = primary()
+        operator = peek()
+        if operator not in {"==", "!="}:
+            if isinstance(left, bool):
+                return left
+            raise AssertionError(
+                f"workflow if operand lacks a supported comparison in {expression!r}"
+            )
+        consume()
+        right = primary()
+        return left == right if operator == "==" else left != right
+
+    def conjunction() -> bool:
+        value = comparison()
+        while peek() == "&&":
+            consume("&&")
+            value = comparison() and value
+        return value
+
+    def disjunction() -> bool:
+        value = conjunction()
+        while peek() == "||":
+            consume("||")
+            value = conjunction() or value
+        return value
+
+    result = disjunction()
+    if position != len(tokens):
+        raise AssertionError(f"unsupported trailing workflow if tokens: {tokens[position:]}")
+    return result
+
+
+def _workflow_context(event: str, head_repository: str | None) -> dict[str, object]:
+    return {
+        "github": {
+            "event_name": event,
+            "repository": "owner/cert-watch",
+            "event": {
+                "pull_request": {
+                    "head": {
+                        "repo": None if head_repository is None else {"full_name": head_repository}
+                    }
+                }
+            },
+        }
+    }
+
+
 def test_workflow_push_with_tracked_pr_tree_scans_full_tree(repo: Path) -> None:
     """A tracked ``pr-tree/`` directory cannot switch a push to subtree mode."""
     workflow = _identifier_gate_workflow()
@@ -998,37 +1197,57 @@ def test_workflow_push_with_tracked_pr_tree_scans_full_tree(repo: Path) -> None:
     )
 
     assert result.returncode == 1
-    assert "outside-pr-tree.txt:1: denylist entry #1" in result.stderr
+    assert "<path sha256:eb973e9e39b9>:1: denylist entry #1" in result.stderr  # outside-pr-tree.txt
     assert identifier not in result.stderr
 
 
 def test_workflow_fork_pr_fails_closed_without_secret_or_checkout() -> None:
     workflow = _identifier_gate_workflow()
     job = workflow["jobs"]["identifier-gate"]
-    job_condition = job["if"]
-    assert "github.event_name == 'pull_request_target'" in job_condition
-    assert "head.repo.full_name != github.repository" in job_condition
+    cases = [
+        ("push", None, {"checkout", "setup", "scan"}),
+        ("pull_request", "owner/cert-watch", {"checkout", "setup", "scan"}),
+        ("pull_request", "contributor/fork", set()),
+        ("pull_request_target", "owner/cert-watch", set()),
+        ("pull_request_target", "contributor/fork", {"reject"}),
+        ("pull_request_target", None, {"reject"}),  # deleted fork: fail closed
+    ]
+    def step_name(step: dict[str, object]) -> str:
+        name = step.get("name")
+        if name == "Reject fork pull request without exposing the denylist":
+            return "reject"
+        if name == "Set up Python":
+            return "setup"
+        if name == "Check for committed work-domain identifiers":
+            return "scan"
+        uses = step.get("uses")
+        if isinstance(uses, str) and uses.startswith("actions/checkout@"):
+            return "checkout"
+        raise AssertionError(f"unrecognized identifier-gate step: {step!r}")
 
-    fork_step = next(
-        step
-        for step in job["steps"]
-        if step.get("name") == "Reject fork pull request without exposing the denylist"
-    )
+    for event, head_repository, expected in cases:
+        context = _workflow_context(event, head_repository)
+        if not _evaluate_workflow_if(job["if"], context):
+            actual: set[str] = set()
+        else:
+            actual = set()
+            for step in job["steps"]:
+                condition = step.get("if")
+                if condition is None or _evaluate_workflow_if(condition, context):
+                    actual.add(step_name(step))
+        assert actual == expected, (event, head_repository)
+
+    scan_step = next(step for step in job["steps"] if step.get("name", "").startswith("Check"))
+    assert scan_step["env"] == {
+        "CERT_WATCH_FORBIDDEN_IDENTIFIERS": "${{ secrets.CERT_WATCH_FORBIDDEN_IDENTIFIERS }}"
+    }
+
+    fork_step = next(step for step in job["steps"] if step.get("name", "").startswith("Reject"))
     result = subprocess.run(
-        ["bash", "-c", fork_step["run"]],
-        capture_output=True,
-        text=True,
-        check=False,
+        ["bash", "-c", fork_step["run"]], capture_output=True, text=True, check=False
     )
     assert result.returncode == 1
     assert "maintainer must re-push" in result.stdout
-
-    non_fork_steps = [step for step in job["steps"] if step is not fork_step]
-    assert non_fork_steps
-    assert all(
-        step.get("if") == "github.event_name != 'pull_request_target'"
-        for step in non_fork_steps
-    )
     fork_serialized = yaml.safe_dump(fork_step)
     assert "CERT_WATCH_FORBIDDEN_IDENTIFIERS" not in fork_serialized
     assert "actions/checkout" not in fork_serialized
@@ -1221,3 +1440,36 @@ def test_pre_push_hook_fails_closed_for_public_repo_without_a_denylist(
     )
     assert result.returncode == 1
     assert "IDENTIFIERS" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("identifier", "path"),
+    [
+        # A phrase split across path components: no per-component match sees it.
+        ("two words", "two/words.md"),
+        # The same identifier in a different Unicode normalisation form.
+        ("priva\u0301te-widget-92831", "priv\u00e1te-widget-92831/f.txt"),
+    ],
+)
+def test_redacted_report_never_prints_a_path(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    identifier: str,
+    path: str,
+) -> None:
+    _track(repo, path, "the two words estate\n" + identifier + "\n")
+    monkeypatch.setenv("CERT_WATCH_FORBIDDEN_IDENTIFIERS", identifier)
+
+    gate.main(["--redact-output"])
+
+    err = capsys.readouterr().err
+    assert Path(path).parts[0] not in err
+    assert Path(path).name not in err
+
+
+def test_redacted_path_digest_matches_the_documented_recipe() -> None:
+    import hashlib
+
+    digest = hashlib.sha256(b"docs/private.md").hexdigest()[:12]
+    assert gate._redact_path(Path("docs") / "private.md") == f"<path sha256:{digest}>"

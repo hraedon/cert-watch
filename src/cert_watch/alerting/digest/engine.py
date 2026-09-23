@@ -1,4 +1,4 @@
-"""Machinery shared by the digest kinds: claimed SMTP delivery and the pool.
+"""Machinery shared by the digest kinds: claimed SMTP delivery.
 
 Plan 058 PR 5 folds both digest senders into one ``DigestEngine``; until then
 this module holds only the helpers that both senders already call.
@@ -6,15 +6,12 @@ this module holds only the helpers that both senders already call.
 
 from __future__ import annotations
 
-import concurrent.futures
 import contextlib
 import hashlib
 import logging
-import threading
 from collections.abc import Callable, Mapping
 from email.message import EmailMessage
 from pathlib import Path
-from typing import Any
 
 from cert_watch.alerting.model import (
     ALERT_MAX_RETRIES,
@@ -26,58 +23,6 @@ from cert_watch.alerting.transports.smtp import _open_smtp_connection, _sanitize
 from cert_watch.retry import backoff_range
 
 logger = logging.getLogger("cert_watch.alerts")
-
-
-_digest_pool: concurrent.futures.ThreadPoolExecutor | None = concurrent.futures.ThreadPoolExecutor(
-    max_workers=2, thread_name_prefix="cw-digest",
-)
-_digest_pool_lock = threading.Lock()
-
-
-def _flush_digest_pool() -> None:
-    """Drain pending tasks and explicitly reset the pool (test helper)."""
-    global _digest_pool
-    with _digest_pool_lock:
-        pool = _digest_pool
-        _digest_pool = None
-    if pool is not None:
-        pool.shutdown(wait=True)
-    start_digest_pool()
-
-
-def start_digest_pool() -> None:
-    """Enable digest task submission for an explicit scheduler startup."""
-    global _digest_pool
-    with _digest_pool_lock:
-        if _digest_pool is None:
-            _digest_pool = concurrent.futures.ThreadPoolExecutor(
-                max_workers=2, thread_name_prefix="cw-digest",
-            )
-
-
-def shutdown_digest_pool() -> None:
-    """Terminally stop digest submissions until ``start_digest_pool``."""
-    pool = _detach_digest_pool()
-    if pool is not None:
-        pool.shutdown(wait=True)
-
-
-def _detach_digest_pool() -> concurrent.futures.ThreadPoolExecutor | None:
-    """Close the submission gate immediately and return the pool to drain."""
-    global _digest_pool
-    with _digest_pool_lock:
-        pool = _digest_pool
-        _digest_pool = None
-    return pool
-
-
-def _submit_digest_task(fn: Callable[..., Any], *args: Any) -> bool:
-    """Submit only while the pool is accepting work; never revive it implicitly."""
-    with _digest_pool_lock:
-        if _digest_pool is None:
-            return False
-        _digest_pool.submit(fn, *args)
-    return True
 
 
 def _webhook_channel(config: WebhookConfig) -> str:

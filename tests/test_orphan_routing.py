@@ -240,7 +240,7 @@ def test_orphan_notice_offloaded_to_pool_not_blocking(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")
     submit_mock = MagicMock(wraps=lambda *a, **kw: None)
-    with patch("cert_watch.alerting.digest.engine._digest_pool.submit", new=submit_mock):
+    with patch("cert_watch.alerting.digest.pool._digest_pool.submit", new=submit_mock):
         send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     assert submit_mock.called, "orphan notice must be submitted to the thread pool"
@@ -255,9 +255,22 @@ def test_orphan_notice_pool_submit_fallback_inline(db: Path):
     conn = _patch_smtp()
     with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn), \
          patch(
-             "cert_watch.alerting.digest.engine._digest_pool.submit",
+             "cert_watch.alerting.digest.pool._digest_pool.submit",
              side_effect=RuntimeError("pool closed"),
          ):
         send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     conn.send_message.assert_called_once()
+
+
+def test_orphan_notice_task_exception_is_logged(db: Path, caplog):
+    from cert_watch.digest import _flush_digest_pool
+
+    with patch(
+        "cert_watch.alerting.digest.renewal.send_orphan_notice",
+        side_effect=RuntimeError("orphan lookup failed"),
+    ):
+        assert send_renewal_digest(db, _cfg(), None, days=7) is True
+        _flush_digest_pool()
+
+    assert "orphan notice delivery task failed" in caplog.text

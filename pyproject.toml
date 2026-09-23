@@ -28,6 +28,7 @@ dev = [
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "pytest-xdist>=3.8",
+    "pyyaml>=6",
     # Starlette >=1.3 uses httpx2 for TestClient.
     "httpx2>=2.12.0",
     "ruff>=0.16,<0.17",
@@ -120,7 +121,6 @@ playwright_visual_snapshot_threshold = "0.2"
 source = ["cert_watch"]
 omit = [
     "cert_watch/__main__",
-    "cert_watch/migrations/*",
 ]
 
 [tool.coverage.report]

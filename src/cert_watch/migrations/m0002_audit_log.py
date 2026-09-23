@@ -30,4 +30,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_audit_target ON audit_log(target_type, target_id)"
     )
-    conn.commit()

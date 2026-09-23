@@ -121,58 +121,98 @@ def sign_report(report: ComplianceReport, signing_key: str) -> None:
 def verify_report_signature(
     report_json: dict[str, Any], signing_key: str
 ) -> tuple[bool, str]:
+    if not isinstance(report_json, dict):
+        return False, "malformed report"
     content_sha256 = report_json.get("content_sha256", "")
     signature = report_json.get("signature", "")
     if not content_sha256 or not signature:
         return False, "missing content_sha256 or signature"
-    rebuilt = ComplianceReport(
-        generated_at=report_json.get("generated_at", ""),
-        version=report_json.get("version", ""),
-        commit=report_json.get("commit", ""),
-        scope_tag=report_json.get("scope_tag", ""),
-        scope_description=report_json.get("scope_description", ""),
-        total_certs=report_json.get("total_certs", 0),
-        total_hosts=report_json.get("total_hosts", 0),
-        grade_distribution=report_json.get("grade_distribution", {}),
-        fleet_grade=report_json.get("fleet_grade", ""),
-        compliance_metrics=[
-            ComplianceMetric(
-                label=m["label"], passing=m["passing"], total=m["total"],
-                collected=m.get("collected", True),
-            )
-            for m in report_json.get("compliance_metrics", [])
-        ],
-        remediation_buckets=[
-            RemediationBucket(
-                label=b["label"],
-                entries=[
-                    RemediationEntry(
-                        host=e["host"],
-                        port=e["port"],
-                        subject=e["subject"],
-                        issuer=e["issuer"],
-                        not_after=e["not_after"],
-                        days_remaining=e["days_remaining"],
-                        urgency=e["urgency"],
-                        findings=e.get("findings", []),
-                        owner=e.get("owner", ""),
-                        tags=e.get("tags", ""),
-                    )
-                    for e in b.get("entries", [])
-                ],
-            )
-            for b in report_json.get("remediation_buckets", [])
-        ],
-    )
-    canonical = _canonical_json(rebuilt)
-    expected_hash = hashlib.sha256(canonical).hexdigest()
-    derived_key = hmac.new(signing_key.encode(), b"compliance-report", hashlib.sha256).hexdigest()
-    expected_sig = hmac.new(
-        derived_key.encode(), canonical, hashlib.sha256
-    ).hexdigest()
+    try:
+        supplied_metrics = report_json.get("compliance_metrics", [])
+        supplied_buckets = report_json.get("remediation_buckets", [])
+        if not isinstance(supplied_metrics, list) or not isinstance(supplied_buckets, list):
+            raise TypeError
+        rebuilt = ComplianceReport(
+            generated_at=report_json.get("generated_at", ""),
+            version=report_json.get("version", ""),
+            commit=report_json.get("commit", ""),
+            scope_tag=report_json.get("scope_tag", ""),
+            scope_description=report_json.get("scope_description", ""),
+            total_certs=report_json.get("total_certs", 0),
+            total_hosts=report_json.get("total_hosts", 0),
+            grade_distribution=report_json.get("grade_distribution", {}),
+            fleet_grade=report_json.get("fleet_grade", ""),
+            compliance_metrics=[
+                ComplianceMetric(
+                    label=m["label"], passing=m["passing"], total=m["total"],
+                    collected=m.get("collected", True),
+                )
+                for m in supplied_metrics
+            ],
+            remediation_buckets=[
+                RemediationBucket(
+                    label=b["label"],
+                    entries=[
+                        RemediationEntry(
+                            host=e["host"],
+                            port=e["port"],
+                            subject=e["subject"],
+                            issuer=e["issuer"],
+                            not_after=e["not_after"],
+                            days_remaining=e["days_remaining"],
+                            urgency=e["urgency"],
+                            findings=e.get("findings", []),
+                            owner=e.get("owner", ""),
+                            tags=e.get("tags", ""),
+                        )
+                        for e in b.get("entries", [])
+                    ],
+                )
+                for b in supplied_buckets
+            ],
+        )
+        for supplied, metric in zip(
+            supplied_metrics, rebuilt.compliance_metrics, strict=True
+        ):
+            if (
+                supplied["pct"] != round(metric.pct, 1)
+                or supplied["display"] != metric.display
+            ):
+                return False, "presentation value mismatch"
+        for supplied, bucket in zip(
+            supplied_buckets, rebuilt.remediation_buckets, strict=True
+        ):
+            if supplied["count"] != len(bucket.entries):
+                return False, "presentation value mismatch"
+        # The signed digest covers the primitives the report is rebuilt from;
+        # everything else in the file is derived. Require the supplied document
+        # to be exactly what those primitives render to, so no derived value
+        # can be altered and no unsigned key can be added.
+        def _unsigned(d: dict[str, Any]) -> str:
+            rest = {k: v for k, v in d.items() if k not in ("content_sha256", "signature")}
+            return json.dumps(rest, sort_keys=True, default=str)
+
+        if _unsigned(json.loads(json.dumps(report_to_dict(rebuilt), default=str))) != _unsigned(
+            report_json
+        ):
+            return False, "report content does not match its signed values"
+        canonical = _canonical_json(rebuilt)
+        expected_hash = hashlib.sha256(canonical).hexdigest()
+        derived_key = hmac.new(
+            signing_key.encode(), b"compliance-report", hashlib.sha256
+        ).hexdigest()
+        expected_sig = hmac.new(
+            derived_key.encode(), canonical, hashlib.sha256
+        ).hexdigest()
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return False, "malformed report"
     if expected_hash != content_sha256:
         return False, f"content hash mismatch: expected {expected_hash}, got {content_sha256}"
-    if not hmac.compare_digest(expected_sig, signature):
+    try:
+        signature_matches = hmac.compare_digest(expected_sig, signature)
+    except TypeError:
+        return False, "malformed report"
+    if not signature_matches:
         return False, "signature verification failed"
     return True, "PASS"
 

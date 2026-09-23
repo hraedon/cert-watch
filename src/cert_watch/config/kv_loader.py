@@ -6,6 +6,7 @@ Decomposed from the monolithic config.py (BC-144a / config decomposition).
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from cert_watch.config.helpers import (
@@ -220,9 +221,8 @@ def _merge_kv_settings(
             LOCAL_ADMIN_PASSWORD_HASH, kv.get(LOCAL_ADMIN_PASSWORD_HASH, "")
         )
 
-    return base.__class__(
-        db_path=db_path,
-        data_dir=base.data_dir,
+    return replace(
+        base,
         sched_hour=sched_hour,
         sched_min=sched_min,
         smtp_host=smtp_host,
@@ -237,15 +237,8 @@ def _merge_kv_settings(
         webhook_kind=webhook_kind,
         pagerduty_routing_key=pagerduty_routing_key,
         alert_digest_only=alert_digest_only,
-        tls_verify=base.tls_verify,
-        allow_private=base.allow_private,
         allowed_subnets=allowed_subnets,
-        dns_servers=base.dns_servers,
-        log_format=base.log_format,
-        audit_retention_days=base.audit_retention_days,
-        history_retention_days=base.history_retention_days,
         alert_retention_days=alert_retention_days,
-        event_retention_days=base.event_retention_days,
         drift_alerts=drift_alerts,
         renewal_window_days=renewal_window_days,
         check_revocation=check_revocation,
@@ -267,20 +260,6 @@ def _merge_kv_settings(
         oauth_authorization_endpoint=oauth_authorization_endpoint,
         oauth_token_endpoint=oauth_token_endpoint,
         oauth_userinfo_endpoint=oauth_userinfo_endpoint,
-        allowed_groups=base.allowed_groups,
-        allowed_roles=base.allowed_roles,
-        admin_users=base.admin_users,
-        session_ttl=base.session_ttl,
-        write_users=base.write_users,
-        role_map=base.role_map,
         local_admin_user=local_admin_user,
         local_admin_password_hash=local_admin_password_hash,
-        base_url=base.base_url,
-        allow_unauth=base.allow_unauth,
-        jwks_cache_ttl=base.jwks_cache_ttl,
-        scan_timeout=base.scan_timeout,
-        scan_retries=base.scan_retries,
-        scan_retry_backoff=base.scan_retry_backoff,
-        scan_max_output_bytes=base.scan_max_output_bytes,
-        hsts_timeout=base.hsts_timeout,
     )

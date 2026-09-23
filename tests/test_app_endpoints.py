@@ -596,6 +596,117 @@ def test_flush_alert_queue(tmp_path, reload_app):
     assert r.headers["location"].startswith("/alerts?")
 
 
+def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from urllib.parse import unquote_plus
+
+    from starlette.requests import Request
+
+    from cert_watch.routes.dashboard import flush_alert_queue
+    from cert_watch.scheduler import _cycle_lock
+
+    async def allow_write(_request):
+        return None
+
+    async def run_in_worker(fn, *args):
+        result = []
+        worker = threading.Thread(target=lambda: result.append(fn(*args)))
+        worker.start()
+        worker.join()
+        return result[0]
+
+    process = Mock(return_value={"sent": 0, "failed": 0, "deferred": 0})
+    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
+    monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
+    monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
+    monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
+    monkeypatch.setattr(
+        "cert_watch.routes.dashboard._get_settings",
+        lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
+    )
+    monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/alerts/flush",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    assert _cycle_lock.acquire(blocking=False)
+    try:
+        response = asyncio.run(flush_alert_queue(request))
+    finally:
+        _cycle_lock.release()
+
+    assert response.status_code == 303
+    assert "delivery already in progress" in unquote_plus(response.headers["location"])
+    process.assert_not_called()
+
+
+def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
+    tmp_path, monkeypatch
+):
+    import asyncio
+    import threading
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from starlette.requests import Request
+
+    from cert_watch.routes.dashboard import flush_alert_queue
+
+    thread_ids = {}
+
+    async def allow_write(_request):
+        thread_ids["event_loop"] = threading.get_ident()
+        return None
+
+    def process_pending(*_args, **_kwargs):
+        thread_ids["delivery"] = threading.get_ident()
+        return {"sent": 0, "failed": 0, "deferred": 0}
+
+    async def run_in_worker(fn, *args):
+        result = []
+        worker = threading.Thread(target=lambda: result.append(fn(*args)))
+        worker.start()
+        worker.join()
+        return result[0]
+
+    monkeypatch.setattr("cert_watch.routes.dashboard.require_write_form", allow_write)
+    monkeypatch.setattr("cert_watch.routes.dashboard.run_in_threadpool", run_in_worker)
+    monkeypatch.setattr("cert_watch.routes.dashboard.check_rate_limit", lambda *_args: True)
+    monkeypatch.setattr("cert_watch.routes.dashboard._db_path", lambda _request: tmp_path / "db")
+    monkeypatch.setattr(
+        "cert_watch.routes.dashboard._get_settings",
+        lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
+    )
+    monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process_pending)
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/alerts/flush",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+        }
+    )
+
+    response = asyncio.run(flush_alert_queue(request))
+
+    assert response.status_code == 303
+    assert thread_ids["delivery"] != thread_ids["event_loop"]
+
+
 def test_flush_alert_queue_rate_limited(tmp_path, reload_app):
     """Flush is rate-limited: too many requests returns a rate-limit redirect."""
     app_mod = reload_app()

@@ -80,6 +80,9 @@ def _build_unified_from_dash(
                     "kind": "pending",
                     "name": host_key,
                     "host": host_key,
+                    # #69: scoped drill-downs filter on "tags"; without it every
+                    # pending host was dropped (matches _build_pending_entries).
+                    "tags": host_tags_map.get((h["hostname"], h["port"]), ""),
                     "source": "scanned",
                     "subject": None,
                     "issuer": None,
@@ -218,15 +221,17 @@ def _build_host_filter(
         if include_null:
             return f"{prefixed} IS NULL", ()
         return "1=0", ()
+    # The clause is interpolated after ``AND`` in the callers, so an ``OR``
+    # must be parenthesised or it escapes the host/cert join condition.
     if len(values) == 1:
         eq = f"{prefixed} = ?"
         if include_null:
-            return f"COALESCE({prefixed}, '') = ? OR {prefixed} IS NULL", (values[0],)
+            return f"(COALESCE({prefixed}, '') = ? OR {prefixed} IS NULL)", (values[0],)
         return eq, (values[0],)
     ph = ",".join("?" * len(values))
     clause = f"{prefixed} IN ({ph})"
     if include_null:
-        clause = f"COALESCE({prefixed}, '') IN ({ph}) OR {prefixed} IS NULL"
+        clause = f"(COALESCE({prefixed}, '') IN ({ph}) OR {prefixed} IS NULL)"
     return clause, tuple(values)
 
 
@@ -263,7 +268,10 @@ def _load_unified_filtered(
     with _connect(db_path) as conn:
         if host_where:
             host_rows = conn.execute(
-                f"SELECT * FROM hosts WHERE {host_where} ORDER BY added_at",
+                # The filter clause is ``h.``-prefixed for the EXISTS subqueries
+                # below, so the alias is required here too (the owner and
+                # renewal-method drill-downs raised "no such column").
+                f"SELECT * FROM hosts h WHERE {host_where} ORDER BY added_at",
                 host_params,
             ).fetchall()
         else:

@@ -436,6 +436,9 @@ class Settings:
             allowed_roles=list(self.allowed_roles),
             local_admin_user=local_admin_user,
             local_admin_password_hash=local_admin_password_hash,
+            # #59: without the DB path the provider never consults the users
+            # table, so accounts created in /settings/users could never log in.
+            db_path=str(self.db_path),
             security=security,
         )
 
@@ -447,5 +450,29 @@ class Settings:
         When *encryption_key* is set, sensitive kv_store values with the
         ``enc:v1:`` prefix are transparently decrypted (BC-082).
         """
+        import dataclasses
+
+        from cert_watch.auth.rbac import (
+            RBAC_ENFORCED_KEY,
+            normalize_ui_role_map,
+            ui_role_map_by_name,
+            ui_role_map_configured,
+        )
         from cert_watch.config.kv_loader import _merge_kv_settings
-        return _merge_kv_settings(cls.from_env(), db_path, encryption_key)
+
+        merged = _merge_kv_settings(cls.from_env(), db_path, encryption_key)
+        # The role mapping saved from Settings → Roles (kv ``ldap_role_map``)
+        # was stored but never read, so the UI's mapping had no effect. Merge it
+        # per role, with CERT_WATCH_ROLE_MAP winning for any role it names.
+        # Entries for roles that no longer exist are dropped (PR #78, B1).
+        # Database errors propagate: a failed rebuild keeps the previous
+        # Settings rather than one with an empty (= full access) role map.
+        normalize_ui_role_map(db_path)
+        role_map = {**ui_role_map_by_name(db_path), **merged.role_map}
+        if not role_map and ui_role_map_configured(db_path):
+            # Mapping was configured and then emptied: least privilege, not
+            # the never-configured "full access" default (N-1).
+            role_map = {RBAC_ENFORCED_KEY: {}}
+        if role_map == merged.role_map:
+            return merged
+        return dataclasses.replace(merged, role_map=role_map)

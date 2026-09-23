@@ -809,3 +809,16 @@ def test_an_unreadable_timestamp_does_not_manufacture_an_undelivered_alert(
 
     assert "Not yet delivered" not in page.text
     assert health["undelivered_alerts"] == 0
+
+
+def test_alerts_page_renders_warning_and_error_flash(monkeypatch, reload_app):
+    """The flush route reports "delivery already in progress" and failures as
+    ?warning= / ?error=; the page must show them rather than drop them."""
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app().app) as client:
+        warned = client.get("/alerts", params={"warning": "Alert delivery already in progress"})
+        errored = client.get("/alerts", params={"error": "rate limited"})
+    assert 'id="cw-flash-warn"' in warned.text
+    assert "Alert delivery already in progress" in warned.text
+    assert 'id="cw-flash-error"' in errored.text

@@ -50,6 +50,61 @@ restore the pre-migration backup.
 
 ### Behaviour changes in this line to be aware of
 
+- **Everyone signs in again once after upgrading.** The session format
+  changed (the version is bound into the session signature), and sessions
+  minted by earlier releases are rejected: they cannot say whether they
+  belong to a local account, the break-glass admin or a directory user.
+  Expect every user, including the break-glass admin, to land on the sign-in
+  page on first visit after the upgrade. API keys are unaffected.
+- **Local accounts are authorized by their own role; the Settings → Roles IdP
+  mapping now takes effect.** Review both before upgrading.
+  - Accounts created in Settings → Users can now sign in (#59; before, every
+    one of them was rejected). Each one's permissions come from its assigned
+    role, re-read on every request, whether or not a role map is configured.
+    An account with no role, or whose role has been deleted, is **read-only**
+    (viewer). The legacy `CERT_WATCH_WRITE_USERS` / `CERT_WATCH_ADMINS` lists
+    do not widen a local account, and `CERT_WATCH_ALLOWED_GROUPS` /
+    `_ROLES` (a directory login gate) does not apply to one.
+  - The break-glass local admin is always admin, including under a role map
+    that does not map it.
+  - The group/user → role mapping edited on Settings → Roles was saved but
+    never read; it is now merged into the role map at startup and on save.
+    `CERT_WATCH_ROLE_MAP` wins for any role it names. **Saving any mapping
+    switches directory (LDAP/OAuth) users from "no role map = full access" to
+    role-based access:** a directory user who matches no mapping becomes a
+    viewer. Map your administrators (by group, or by username in the Users
+    field) before saving the first mapping, or keep the break-glass admin to
+    hand. A group mapping applies from the user's next sign-in (the session
+    holds only the groups the map referenced at sign-in); a username mapping
+    applies immediately. With no mapping anywhere, directory users keep full
+    access as before.
+  - A directory user who shares the break-glass username is no longer treated
+    as break-glass at sign-in (it was decided by name).
+  - Role mappings are stored by role id. On first load after the upgrade,
+    name-keyed entries are rewritten to the id of the role with that name,
+    and entries for which no such role exists are dropped; name keys are not
+    honoured after that.
+  - **Mapping is sticky.** If a mapping exists (from an earlier release or
+    saved now), cert-watch records that RBAC mapping is configured. Removing
+    or clearing every mapping afterwards leaves directory users **read-only**
+    rather than restoring "no role map = full access". Only an install that
+    never had a UI mapping (and no `CERT_WATCH_ROLE_MAP`) keeps the legacy
+    full-access default. To deliberately return to it, delete the kv keys
+    `ldap_role_map` and `ldap_role_map_configured`.
+  - If persisted settings cannot be read at startup, directory users start
+    read-only (unless `CERT_WATCH_ROLE_MAP` maps them) and an error is
+    logged; local accounts and the break-glass admin are unaffected.
+  - Settings → Users rejects usernames over 128 characters, emails over 254,
+    and the break-glass username. Existing accounts are not changed; an
+    existing account named like the break-glass admin no longer blocks the
+    break-glass password.
+  - Renaming a local account signs out sessions under both the old and new
+    name, and creating an account signs out any leftover session for that
+    name, so an old cookie can never attach to a different account.
+  - Scope tags and usernames in role mappings compare by Unicode casefold,
+    not only ASCII case: `Payments` matches `payments`, and `straße` matches
+    `strasse`.
+
 - **An install with no alert transport no longer reports its queued alerts as
   undelivered.** With neither SMTP nor a webhook configured, `process_pending`
   has always returned immediately, so every alert stays `pending` for ever by

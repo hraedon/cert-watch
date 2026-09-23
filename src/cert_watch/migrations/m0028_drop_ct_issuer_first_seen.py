@@ -11,4 +11,3 @@ import sqlite3
 
 def upgrade(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS ct_issuer_first_seen")
-    conn.commit()

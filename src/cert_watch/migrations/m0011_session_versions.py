@@ -22,4 +22,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_session_versions_username"
         " ON session_versions(username)"
     )
-    conn.commit()

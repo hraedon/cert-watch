@@ -9,17 +9,20 @@ there -- patching this module no longer reaches the moved code.
 from __future__ import annotations
 
 from cert_watch.alerting.digest.engine import (
-    _detach_digest_pool,
-    _flush_digest_pool,
-    _submit_digest_task,
     _webhook_channel,
-    shutdown_digest_pool,
-    start_digest_pool,
 )
 from cert_watch.alerting.digest.orphan import (
     _admin_emails,
     _build_orphan_message,
     send_orphan_notice,
+)
+from cert_watch.alerting.digest.pool import (
+    _detach_digest_pool,
+    _flush_digest_pool,
+    _handle_digest_task_completion,
+    _submit_digest_task,
+    shutdown_digest_pool,
+    start_digest_pool,
 )
 from cert_watch.alerting.digest.renewal import (
     RenewalDigest,
@@ -45,6 +48,7 @@ __all__ = [
     "_event_endpoint",
     "_flush_digest_pool",
     "_fmt_expiry",
+    "_handle_digest_task_completion",
     "_merge_owner_address_variants",
     "_parse_event_payload",
     "_submit_digest_task",

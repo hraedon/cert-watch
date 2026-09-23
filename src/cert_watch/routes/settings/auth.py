@@ -16,7 +16,12 @@ from cert_watch.middleware import check_csrf, require_admin_form, require_admin_
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
 from cert_watch.routes.settings.config import _AUTH_KEYS
-from cert_watch.routes.settings.core import _sanitize_test_error, _save_config_section, logger
+from cert_watch.routes.settings.core import (
+    _rebuild_settings,
+    _sanitize_test_error,
+    _save_config_section,
+    logger,
+)
 
 router = APIRouter()
 
@@ -51,20 +56,21 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         return RedirectResponse(url=f"/settings?tab=auth&error={csrf_err}", status_code=303)
 
     form = await request.form()
-    from cert_watch.database import SqliteRoleRepository, kv_get, kv_set
+    from cert_watch.database import SqliteRoleRepository, kv_set
 
     db = _db_path(request)
     role_repo = SqliteRoleRepository(db)
 
     # Merge into the existing map: each role's mapping is now edited on its own
     # row in the Roles tab, so a submit only carries the role(s) being edited.
-    # Roles not present in this form must be left untouched.
-    try:
-        map_data = json.loads(kv_get(db, "ldap_role_map") or "{}")
-        if not isinstance(map_data, dict):
-            map_data = {}
-    except (ValueError, TypeError):
-        map_data = {}
+    # Roles not present in this form must be left untouched. Keyed by role id
+    # (load_ui_role_map normalises legacy name keys and drops stale entries).
+    from cert_watch.auth.rbac import (
+        UI_ROLE_MAP_CONFIGURED_KV_KEY,
+        UI_ROLE_MAP_KV_KEY,
+        load_ui_role_map,
+        normalize_ui_role_map,
+    )
 
     # Collect the role ids referenced by either the groups or users fields.
     role_ids: set[str] = set()
@@ -74,9 +80,30 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         elif key.startswith("role_users_"):
             role_ids.add(key[len("role_users_"):])
 
-    def _split(raw: str, sep: str) -> list[str]:
-        return [p.strip() for p in raw.split(sep) if p.strip()]
+    # Read-modify-write under the lock, so two admins saving at once cannot
+    # drop each other's edit.
+    with get_write_lock():
+        normalize_ui_role_map(db)
+        map_data: dict[str, Any] = dict(load_ui_role_map(db))
+        _apply_mapping_form(form, role_ids, role_repo, map_data)
+        kv_set(db, UI_ROLE_MAP_KV_KEY, json.dumps(map_data))
+        if map_data:
+            # Sticky (N-1): from now on an empty map is least privilege.
+            kv_set(db, UI_ROLE_MAP_CONFIGURED_KV_KEY, "1")
+    # Apply the mapping now: it is part of Settings.role_map (merged in
+    # Settings.from_env_with_kv), which request-time RBAC reads.
+    _rebuild_settings(request, db)
+    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
 
+
+def _split(raw: str, sep: str) -> list[str]:
+    return [p.strip() for p in raw.split(sep) if p.strip()]
+
+
+def _apply_mapping_form(
+    form: Any, role_ids: set[str], role_repo: Any, map_data: dict[str, Any],
+) -> None:
+    """Apply one Roles-tab submit to *map_data* (keyed by role id), in place."""
     for role_id in role_ids:
         role = role_repo.get(role_id)
         if not role:
@@ -87,14 +114,10 @@ async def save_ldap_role_map(request: Request) -> RedirectResponse:
         groups = _split(str(form.get(f"role_map_{role_id}") or ""), ";")
         users = _split(str(form.get(f"role_users_{role_id}") or ""), ",")
         if groups or users:
-            map_data[role.name] = {"groups": groups, "users": users}
+            map_data[role.id] = {"groups": groups, "users": users}
         else:
             # Both cleared → drop the mapping for this role.
-            map_data.pop(role.name, None)
-
-    with get_write_lock():
-        kv_set(db, "ldap_role_map", json.dumps(map_data))
-    return RedirectResponse(url="/settings?tab=roles&saved=1", status_code=303)
+            map_data.pop(role.id, None)
 
 
 # ---------- Test LDAP connection ----------

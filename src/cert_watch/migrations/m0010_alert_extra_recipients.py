@@ -11,4 +11,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE alerts ADD COLUMN extra_recipients TEXT NOT NULL DEFAULT '[]'"
         )
-    conn.commit()

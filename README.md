@@ -400,7 +400,7 @@ full access).
 | `CERT_WATCH_WRITE_USERS` | — | Usernames allowed to mutate data; when set, everyone else is read-only (admins always write) |
 | `CERT_WATCH_LOCAL_ADMIN_USER` | — | Break-glass local admin username (works even when the directory is down) |
 | `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` | — | scrypt hash for the break-glass admin; generate with `cert-watch hash-password` (`*_FILE` supported) |
-| `CERT_WATCH_ROLE_MAP` | — | JSON object mapping cert-watch roles to IdP groups/roles. When set, privilege is derived from directory membership rather than username lists. Example: `{"operator":{"groups":["CN=ops,..."],"roles":["app-operator"]}}`. Unset = all authenticated users get full access (backward compat) |
+| `CERT_WATCH_ROLE_MAP` | — | JSON object mapping cert-watch roles to IdP groups/roles. When set, privilege is derived from directory membership rather than username lists. Example: `{"operator":{"groups":["CN=ops,..."],"roles":["app-operator"]}}`. Merged with the mapping edited on Settings → Roles (this variable wins per role). Unset and no UI mapping = all authenticated directory users get full access (backward compat). Local accounts (Settings → Users) always use their assigned role; the break-glass admin is always admin |
 
 ##### Role-based access control (RBAC)
 
@@ -419,7 +419,11 @@ whose `groups`/`roles` intersect their directory membership, falling back to
 `viewer` if none match. Gating is enforced **server-side** — viewers don't see
 write buttons, and a viewer's write request is rejected (303 redirect for forms,
 403 for the JSON API), not merely hidden. With no role map set, all authenticated
-users keep full access (backward compat).
+directory users keep full access (backward compat). Local accounts created in
+Settings → Users are always authorized by their own assigned role (none, or a
+deleted role, means viewer), and the break-glass admin is always admin.
+Scope tags, and usernames in a role map's `users` list, compare by Unicode
+casefold (`Payments` = `payments`, `straße` = `strasse`).
 
 #### API keys (machine-to-machine)
 

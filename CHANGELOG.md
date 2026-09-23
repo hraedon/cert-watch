@@ -34,6 +34,10 @@ All notable changes to cert-watch are documented in this file.
   refusal checks, rather than being silently excluded by integration markers.
 
 ### Changed
+- **Schema creation now has one source of truth.** Fresh databases and upgrades
+  both traverse the numbered migration chain, each migration commits its schema
+  work and version row atomically, and migration 0035 reconciles objects that
+  older startup code created outside that chain.
 - **Audit action names for tag edits are unified.** The HTML and JSON paths now
   share one service, and both record `host.update_tags` / `cert.update_tags`.
   The JSON API previously recorded `host.set_tags` / `cert.set_tags`; audit or
@@ -46,6 +50,11 @@ All notable changes to cert-watch are documented in this file.
   shims and will be removed in a later release; logger names are unchanged.
 
 ### Fixed
+- **Alerts page flash messages.** `/alerts` now shows `?warning=` and `?error=`
+  messages (flush busy, flush failures, rate limits); they were silently dropped.
+- **Signed compliance reports reject unsigned additions.** Verification now
+  requires the file to be exactly what its signed values render to, so an
+  added key (anywhere in the document) fails instead of passing.
 - **SIEM export no longer runs under the write lock.** Audit events recorded
   inside a transaction are now sent to the SIEM after the transaction commits
   and the global write lock is released, so a slow or unreachable syslog/HEC
@@ -67,6 +76,42 @@ All notable changes to cert-watch are documented in this file.
   remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+- **Accounts created in Settings → Users can log in (#59).** The auth provider
+  was built without the database path, so the users table was never consulted
+  and every locally created account was rejected. Each account is authorized
+  by its assigned role (see Security).
+- **OAuth/Entra sign-in works (#58).** `/auth/login` was not a public path, so
+  the "Sign in with …" button bounced back to `/login`; and the OAuth state
+  cookie was `SameSite=Strict`, which browsers withhold on the IdP's cross-site
+  redirect back to `/auth/callback`. The route is now public and the cookie is
+  `SameSite=Lax` (still `HttpOnly`, 10-minute lifetime).
+- **Tag scopes match case-insensitively everywhere (#69).** The per-resource
+  read/write gates and the per-tag write tier compared tags case-sensitively,
+  so a role scoped to `Payments` saw a host tagged `payments` in lists but could
+  not open or edit it.
+- **Pending hosts appear in the scoped fleet-pivot drill-down (#69).** The
+  drill-down dropped every never-scanned host for a tag-scoped user, so the
+  group count and its rows disagreed.
+- **The owner and renewal-method pivot drill-downs no longer fail.** The
+  loader's host filter referenced an un-aliased table and raised an SQL error
+  (`GET /api/pivot/owner/…`, `/api/pivot/renewal_method/…`).
+- **Saved settings no longer disable environment-configured renewal webhooks.**
+  KV overrides now replace only their declared fields instead of rebuilding and
+  silently dropping newer `Settings` fields.
+- **Manual alert flushes no longer block or race scheduled delivery.** The
+  blocking send runs in a worker thread and skips with a clear busy message
+  while a scheduler cycle owns delivery.
+- **Digest delivery remains retryable.** Short-lived certificates retain their
+  final lifetime-relative threshold in digest mode, and background webhook or
+  orphan-notice exceptions are logged and release the weekly in-flight guard
+  (#60, #61).
+- **Compliance report verification covers derived presentation fields.** Changes
+  to metric percentages/displays or remediation counts now fail verification;
+  malformed reports fail cleanly instead of raising `KeyError` (#66).
+- **Scheduler failures stay isolated and shutdown stays bounded.** Scan-history
+  write errors, malformed timestamps, per-host renewal analysis, and deferred
+  post-commit work no longer abort unrelated work; queued pool tasks are
+  cancelled during shutdown (#67, #68).
 - **A genuine renewal now resolves the PagerDuty incident the trigger actually
   opened.** The dedup key was derived from the certificate row id, but an
   unchanged rescan rewrites that row (#57) and carries the alert to the new
@@ -343,6 +388,74 @@ All notable changes to cert-watch are documented in this file.
   `deploy/iis/README.md`.
 
 ### Security
+- **Local accounts are authorized by their assigned role, not the role map.**
+  With #59 fixed, accounts created in Settings → Users would have received
+  full access whenever no `CERT_WATCH_ROLE_MAP` was set. A users-table
+  session now resolves from its own role on every request (no role, or a
+  deleted role, means read-only) and ignores the legacy write/admin user
+  lists; the break-glass admin is always admin. How a session was minted
+  travels as a reserved claim an IdP cannot supply, so a directory user who
+  shares a local username gets neither its role nor break-glass status.
+- **The Settings → Roles IdP mapping takes effect.** It was stored but never
+  read, so directory users kept full access while the UI showed them mapped.
+  It is now merged into the role map (env `CERT_WATCH_ROLE_MAP` wins per role)
+  at startup and when saved. See UPGRADING.md before saving a first mapping.
+- **A role mapping cannot outlive its role.** Settings → Roles mappings are
+  now stored by role id: renaming a role keeps its mapping, deleting a role
+  deletes it, and an entry that names no existing role grants nothing. (Keyed
+  by name, a deleted or renamed role called `admin` left a mapping that fell
+  back to the built-in admin tier.) Legacy name-keyed entries are honoured
+  while a role of that name exists and rewritten by id on the next save.
+- **Oversized sessions fail closed.** Trimming a session to fit the cookie
+  limit could drop its roles, and with them the local-account marker, turning
+  a read-only local account into full access. Roles are never trimmed now
+  (groups, then email, are); a local login whose session cannot carry its
+  marker is refused. Local usernames are capped at 128 characters and emails
+  at 254.
+- **Sessions from earlier releases are rejected (everyone signs in once).**
+  They carry no local-account marker, so an unmarked session would have been
+  authorized as a directory user (full access with no role map), and a
+  directory session holding the literal claim `cw:break-glass` would have
+  read as break-glass. The session format version is now bound into the
+  signature; older tokens fail verification.
+- **A renamed account's cookie cannot attach to a new account.** Renaming a
+  local user revokes sessions for the old and new names, and creating a user
+  revokes any residual session for that name; previously an old `alice`
+  cookie resolved to a later account created as `alice`. The revocation happens
+  before the new or renamed account becomes visible (and again after), so
+  there is no window in which an old cookie matches it.
+- **A role-map read error no longer grants full access.** A database error
+  while reading the Settings → Roles mapping (e.g. `database is locked`
+  during a settings rebuild) used to produce an empty role map, which means
+  "full access" for directory users. The error now propagates and the last
+  good settings stay in force; if settings cannot be loaded at startup,
+  directory users are read-only until they load cleanly.
+- **Removing the last IdP mapping no longer restores full access.** Once a
+  Settings → Roles mapping has been saved (or one exists from an earlier
+  release), an empty mapping leaves directory users read-only instead of
+  reverting to the never-configured "full access" default. The Roles page
+  warns before the last mapped role is deleted. A stored mapping that is not a
+  readable JSON object is treated the same way (and logged), rather than as
+  "never configured".
+- **Legacy name-keyed mappings are normalised once.** Entries stored by role
+  name are rewritten to role ids on load (dropped if no role has that name)
+  and name keys are then ignored, so a role created later with a reused name
+  never inherits an old mapping.
+- **OAuth state and session tokens are signed in separate domains.** A
+  session token (including a pre-1.0 one) no longer verifies as an OAuth
+  state token, or vice versa. An OAuth sign-in in progress during the
+  upgrade must be restarted.
+- **A local account cannot shadow the break-glass admin.** Settings → Users
+  rejects the break-glass username (case-insensitive) on create and rename,
+  and sign-in tries the break-glass password even if a same-named account
+  already exists.
+- **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
+  and `POST /trust-anchors/{id}/delete` required only write access on some tag,
+  so a tag-scoped operator could install or remove a fleet-wide trust anchor.
+  They now require an administrator (with CSRF), matching the settings page.
+- **Scan history is scope-filtered.** `/scan-history` showed every host's
+  name, port and scan error to tag-scoped users; it now lists only scans of
+  hosts inside the user's scope.
 - **Cryptography security floor.** `cryptography` now requires 50.0.0, which
   fixes CVE-2026-69247 / PYSEC-2026-3552. cert-watch does not use the affected
   PKCS#7 decryption APIs, but the update keeps the locked closure and strict

@@ -516,9 +516,13 @@ def get_csrf_context(request: Request) -> dict[str, Any]:
 
 # ---------- Middleware functions ----------
 
+# Every /auth/* route is part of the pre-session login flow and is listed here
+# explicitly (#58: /auth/login, the OAuth start, was missing, so the only OAuth
+# entry point bounced to /login). No /auth/ prefix rule, so a future /auth/*
+# route is private until it is added deliberately.
 _PUBLIC_PATHS = frozenset({
-    "/healthz", "/readyz", "/login", "/auth/callback", "/auth/logout", "/setup",
-    "/favicon.ico",
+    "/healthz", "/readyz", "/login", "/auth/login", "/auth/callback", "/auth/logout",
+    "/setup", "/favicon.ico",
 })
 
 _METRICS_TOKEN = os.environ.get("CERT_WATCH_METRICS_TOKEN") or None
@@ -692,17 +696,22 @@ async def auth_middleware(
         # enforce RBAC even when they don't go through the require_auth dependency.
         settings = getattr(request.app.state, "settings", None)
         role_map = getattr(settings, "role_map", {}) if settings else {}
-        role_repo = None
+        role_repo = user_repo = None
         if settings:
             try:
-                from cert_watch.database.users_roles import SqliteRoleRepository
+                from cert_watch.database.users_roles import (
+                    SqliteRoleRepository,
+                    SqliteUserRepository,
+                )
                 role_repo = SqliteRoleRepository(settings.db_path)
+                user_repo = SqliteUserRepository(settings.db_path)
             except (OSError, sqlite3.Error):
                 pass
         info = decode_session(token, _request_security(request))
         if info is not None:
             auth_ctx = build_auth_context(
-                username, info.groups, info.roles, role_map, role_repo=role_repo,
+                username, info.groups, info.roles, role_map,
+                role_repo=role_repo, user_repo=user_repo,
             )
             request.state.auth_context = auth_ctx
         return await call_next(request)
@@ -858,8 +867,9 @@ def _write_denied(request: Request, username: str) -> bool:
         return api_ctx is None or not api_ctx.may_write()
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
-    if role_map:
-        auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+    auth_ctx: AuthContext | None = getattr(request.state, "auth_context", None)
+    # A local account's role is authoritative with or without a role map.
+    if role_map or (auth_ctx is not None and auth_ctx.local_account):
         # Plan 053: a user whose only write grants are per-tag tiers passes
         # this gate; the per-resource decision happens at the scope seam
         # (routes/_scoped.py:scope_write_denied via may_write_tags).
@@ -890,7 +900,7 @@ def _admin_allowed(request: Request, user: str, *, use_legacy: bool = False) -> 
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
     ctx: AuthContext | None = getattr(request.state, "auth_context", None)
-    if role_map or not use_legacy:
+    if role_map or not use_legacy or (ctx is not None and ctx.local_account):
         return ctx is not None and ctx.is_admin
     admin_ok = ctx is not None and ctx.is_admin
     if not admin_ok:
@@ -909,15 +919,20 @@ class _AuthResult(NamedTuple):
 def _set_request_auth_context(request: Request, username: str, info: SessionInfo) -> None:
     settings = getattr(request.app.state, "settings", None)
     role_map = getattr(settings, "role_map", {}) if settings else {}
-    role_repo = None
+    role_repo = user_repo = None
     if settings:
         try:
-            from cert_watch.database.users_roles import SqliteRoleRepository
+            from cert_watch.database.users_roles import (
+                SqliteRoleRepository,
+                SqliteUserRepository,
+            )
             role_repo = SqliteRoleRepository(settings.db_path)
+            user_repo = SqliteUserRepository(settings.db_path)
         except (OSError, sqlite3.Error):
             pass
     auth_ctx = build_auth_context(
-        username, info.groups, info.roles, role_map, role_repo=role_repo,
+        username, info.groups, info.roles, role_map,
+        role_repo=role_repo, user_repo=user_repo,
     )
     request.state.auth_context = auth_ctx
     request.scope["auth_user"] = username

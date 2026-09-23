@@ -20,4 +20,3 @@ def upgrade(conn: sqlite3.Connection) -> None:
         "CREATE INDEX IF NOT EXISTS idx_scan_history_host_port_ts"
         " ON scan_history(hostname, port, scanned_at DESC)"
     )
-    conn.commit()

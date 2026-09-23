@@ -11,12 +11,9 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
 
-from cert_watch.alerting.digest.engine import (
-    _send_claimed_digest_smtp,
-    _submit_digest_task,
-    _webhook_channel,
-)
+from cert_watch.alerting.digest.engine import _send_claimed_digest_smtp, _webhook_channel
 from cert_watch.alerting.digest.orphan import send_orphan_notice
+from cert_watch.alerting.digest.pool import _submit_digest_task
 from cert_watch.alerting.model import (
     ALERT_MAX_RETRIES,
     ALERT_RETRY_DELAY,
@@ -282,7 +279,12 @@ def send_renewal_digest(
     # Offloaded to the thread pool so SMTP latency does not block the scheduler
     # thread (same bug class as WI-134 webhook path).
     try:
-        orphan_submitted = _submit_digest_task(send_orphan_notice, db_path, alert_config)
+        orphan_submitted = _submit_digest_task(
+            send_orphan_notice,
+            db_path,
+            alert_config,
+            task_name="orphan notice delivery",
+        )
     except Exception:
         logger.warning(
             "orphan notice pool submit failed; delivering inline",
@@ -473,7 +475,11 @@ def send_renewal_digest(
             return delivered
 
         try:
-            submitted = _submit_digest_task(_deliver_all_digest_webhooks)
+            submitted = _submit_digest_task(
+                _deliver_all_digest_webhooks,
+                task_name="renewal digest webhook delivery",
+                failure_callback=delivery_completion_callback,
+            )
         except Exception:
             logger.warning(
                 "digest webhook pool submit failed; delivering inline",

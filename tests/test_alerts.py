@@ -1563,6 +1563,28 @@ def test_urgent_only_fires_final_countdown(alert_repo):
     assert alerts[0].threshold_days == 3
 
 
+def test_urgent_only_keeps_short_cert_final_threshold(alert_repo):
+    """Digest mode must retain a final alert for lifetime-relative thresholds."""
+    from datetime import UTC, datetime, timedelta
+
+    now = datetime.now(UTC)
+    cert = Certificate(
+        subject="CN=short-lived.example.com",
+        issuer="CN=test-ca",
+        not_before=now - timedelta(days=54),
+        not_after=now + timedelta(days=5, hours=12),
+        san_dns_names=[],
+        fingerprint_sha256="fp-short-lived-digest",
+        raw_der=b"",
+        is_leaf=True,
+    )
+
+    alerts = evaluate_thresholds(cert, alert_repo, urgent_only=True)
+
+    assert len(alerts) == 1
+    assert alerts[0].threshold_days == 6
+
+
 def test_routine_threshold_fires_when_not_digest(alert_repo):
     # Same 10-day cert fires normally when not in digest mode (sanity).
     cert = _leaf_expiring_in(10, "fp-normal")

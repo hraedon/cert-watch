@@ -73,7 +73,8 @@ def evaluate_thresholds(
     # Digest mode: only the final-countdown thresholds fire as individual alerts;
     # the rest are summarized by the weekly digest.
     if urgent_only:
-        thresholds = tuple(t for t in thresholds if t <= URGENT_THRESHOLD_DAYS)
+        urgent_thresholds = tuple(t for t in thresholds if t <= URGENT_THRESHOLD_DAYS)
+        thresholds = urgent_thresholds or ((min(thresholds),) if thresholds else ())
     cid = cert_id or cert.fingerprint_sha256
 
     # Suppress alerts when renewal is complete.
