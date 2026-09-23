@@ -941,7 +941,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
     """UPGRADING.md tells an operator how to apply 0033 by hand. Prove that the
     documented statements leave the database exactly where startup would."""
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
-    from cert_watch.migrations.m0033_alert_deferred_since import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.m0033_alert_deferred_since import MANUAL_SQL
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "manual.sqlite3"
@@ -1033,7 +1033,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
     """UPGRADING.md tells an operator how to apply 0034 by hand. Prove that the
     documented statements leave the database exactly where startup would."""
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
-    from cert_watch.migrations.m0034_alert_trigger_cert_id import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.m0034_alert_trigger_cert_id import MANUAL_SQL
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "manual.sqlite3"
