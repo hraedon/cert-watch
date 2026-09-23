@@ -367,14 +367,21 @@ def reload_app(monkeypatch, tmp_path):
     """
     from types import SimpleNamespace
 
-    def _build(**env):
+    def _build(*, _pure_env: bool = False, **env):
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         for k, v in env.items():
             monkeypatch.setenv(k, v)
         from cert_watch.app import create_app
         from cert_watch.config import Settings
+        from cert_watch.database import init_schema
 
-        application = create_app(settings=Settings.from_env())
+        base = Settings.from_env()
+        if _pure_env:
+            settings = base
+        else:
+            init_schema(base.db_path)
+            settings = Settings.from_env_with_kv(base.db_path)
+        application = create_app(settings=settings)
         return SimpleNamespace(app=application)
 
     return _build

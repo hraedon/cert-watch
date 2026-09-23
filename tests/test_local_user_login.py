@@ -107,6 +107,7 @@ def test_settings_build_auth_provider_passes_db_path(tmp_path, monkeypatch):
     _seed_local_admin(tmp_path)
     from cert_watch.config import Settings
 
-    s = Settings.from_env()
+    base = Settings.from_env()
+    s = Settings.from_env_with_kv(base.db_path)
     provider = s.build_auth_provider()
     assert getattr(provider, "db_path", None) == str(s.db_path)
