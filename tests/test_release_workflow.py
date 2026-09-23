@@ -270,3 +270,13 @@ def test_version_tag_computation_in_isolated_repository(tmp_path) -> None:
     invalid = subprocess.run(command, cwd=tmp_path, env=env, capture_output=True)
     assert invalid.returncode != 0
     assert b"must be a semantic version" in invalid.stderr
+
+
+def test_eventlog_readback_window_tolerates_whole_second_timestamps() -> None:
+    """Get-EventLog -After is strict and TimeGenerated is truncated to the second,
+    so a window starting at the write instant misses the record it is looking for."""
+    smoke = _workflow("deploy-smoke.yml")
+    step = smoke[smoke.index("Verify optional Windows Event Log sink"):]
+    step = step[: step.index("Start app on loopback")]
+    assert "$started = (Get-Date).AddSeconds(-" in step
+    assert "$started = Get-Date\n" not in step
