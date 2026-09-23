@@ -108,9 +108,8 @@ def test_never_leaves_https_unbound(script_text: str) -> None:
     assert add_ipport < delete_hostnameport, "default: add catch-all before delete hostnameport"
 
 
-def test_no_single_quotes_inside_double_quoted_strings(script_text: str) -> None:
-    """PowerShell 5.1 ANSI parsing bug rule: never ' inside "..." """
-    code = _code_without_block_comments(script_text)
+def _find_single_quote_in_double(code: str) -> str | None:
+    """Return a description of the first ' inside "..." on a line, else None."""
     for lineno, raw_line in enumerate(code.splitlines(), start=1):
         line = raw_line.strip()
         # Skip pure line comments and empty/whitespace-only lines.
@@ -136,9 +135,70 @@ def test_no_single_quotes_inside_double_quoted_strings(script_text: str) -> None
                 in_double = not in_double
                 continue
             if in_double and ch == "'":
-                pytest.fail(
-                    f"single quote inside double-quoted string at line {lineno}: {raw_line!r}"
-                )
+                return f"single quote inside double-quoted string at line {lineno}: {raw_line!r}"
+    return None
+
+
+def test_no_single_quotes_inside_double_quoted_strings(script_text: str) -> None:
+    """PowerShell 5.1 ANSI parsing bug rule: never ' inside "..." """
+    problem = _find_single_quote_in_double(_code_without_block_comments(script_text))
+    if problem is not None:
+        pytest.fail(problem)
+
+
+def test_script_is_ascii() -> None:
+    """Windows PowerShell 5.1 reads a BOM-less file as ANSI; keep it ASCII."""
+    SCRIPT.read_bytes().decode("ascii")
+
+
+def test_first_run_admin_message_only_on_fresh_install(script_text: str) -> None:
+    """The one-time-password hint must not print on an upgrade. Whether the
+    database exists is decided before the pool restarts (preload would create
+    it); the behaviour of Resolve-DataDirState is covered in
+    tests/test_windows_tooling_behaviour.py."""
+    code = _code_without_block_comments(script_text)
+    decided = code.index("$dataState = Resolve-DataDirState")
+    assert decided < code.index("start apppool")
+    assert "Get-Website -Name \"cert-watch\"" in code[:decided]
+    msg = code.index("auto-provisions an")
+    gate = code.rfind('if ($dataState.State -eq "existing")', 0, msg)
+    assert gate != -1, "first-run admin message must be gated on the detected state"
+    assert '} elseif ($dataState.State -eq "fresh") {' in code[gate:msg]
+
+
+def test_install_record_is_written_atomically_and_quoted_literally(script_text: str) -> None:
+    code = _code_without_block_comments(script_text)
+    assert "Write-TextFileAtomic -Path $argsRecordPath" in code
+    assert "WriteAllText($argsRecordPath" not in code
+    fmt = code.split("function Format-InstallCommand", 1)[1].split("\nfunction ", 1)[0]
+    assert "ConvertTo-PsSingleQuotedLiteral" in fmt
+    assert '`"$value`"' not in fmt
+
+
+def test_install_arguments_record_is_an_allowlist(script_text: str) -> None:
+    """Arguments are recorded for re-use on upgrade, from an explicit allowlist
+    of non-secret parameters. Every declared parameter must be in the allowlist
+    or deliberately excluded here; nothing secret-looking may be recorded."""
+    code = _code_without_block_comments(script_text)
+    m = re.search(r"\$recordableParams = @\(([^)]*)\)", code)
+    assert m, "expected an explicit $recordableParams allowlist"
+    recorded = set(re.findall(r'"(\w+)"', m.group(1)))
+    params_block = re.search(r"\bparam\((.*?)\n\)", code, flags=re.DOTALL)
+    assert params_block
+    declared = set(re.findall(r"\$(\w+)", params_block.group(1)))
+    assert recorded == declared, (
+        "a new install-windows.ps1 parameter needs a decision: add it to "
+        "$recordableParams if it is non-secret, or exclude it here"
+    )
+    for name in recorded:
+        assert not re.search(r"(?i)secret|password|token|key|credential", name), name
+    assert '"install-args.json"' in code
+    # Only the allowlisted dictionary is serialised, not $PSBoundParameters.
+    assert "Get-RecordedArgumentSet -Bound $PSBoundParameters" in code
+    assert "$PSBoundParameters | ConvertTo-Json" not in code
+    assert "arguments        = $currentArgs" in code
+    # A previous record is shown at the start of a run.
+    assert code.index("Test-Path $argsRecordPath") < code.index("Locate a Python")
 
 
 def test_catch_all_binding_remains_default(script_text: str) -> None:

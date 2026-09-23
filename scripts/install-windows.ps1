@@ -100,6 +100,248 @@ $venv     = Join-Path $InstallDir "venv"
 $secrets  = Join-Path $InstallDir "secrets"
 $logs     = Join-Path $InstallDir "logs"
 
+# --- Invocation record (so an upgrade can re-run with the same arguments) ---
+# Only the parameters named here are ever recorded. This is an allowlist on
+# purpose: a parameter added later (possibly a secret) is NOT recorded unless
+# someone adds it here deliberately. None of these values is secret; the TLS
+# thumbprint is a public identifier of a certificate in LocalMachine\My.
+$argsRecordPath = Join-Path $InstallDir "install-args.json"
+$recordableParams = @("InstallDir", "AppPool", "ConfigureIIS", "SitePath", "HostName", "SharePort443", "TlsCertThumbprint", "WithAuthExtras")
+$switchParams = @("ConfigureIIS", "SharePort443", "WithAuthExtras")
+
+function Get-RecordedArgumentSet {
+    param($Bound)
+    $argsOut = [ordered]@{}
+    foreach ($name in $recordableParams) {
+        if (-not $Bound.ContainsKey($name)) { continue }
+        if ($switchParams -contains $name) {
+            $argsOut[$name] = [bool]$Bound[$name]
+        } else {
+            $argsOut[$name] = [string]$Bound[$name]
+        }
+    }
+    return $argsOut
+}
+
+# Quote a value as a PowerShell single-quoted literal, so the recorded command
+# can be pasted without anything in it expanding: no $variables, no $(...)
+# subexpressions, no backtick escapes. Inside single quotes the only special
+# characters are the quote characters themselves; PowerShell treats the
+# typographic single quotes (U+2018..U+201B) as quotes too, and a doubled quote
+# of any of these kinds is a literal one. [char] codes are used here because
+# this file must stay ASCII and must not put a single quote inside "...".
+function ConvertTo-PsSingleQuotedLiteral {
+    param([string]$Value)
+    $q = [string][char]39
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.Append($q)
+    foreach ($ch in $Value.ToCharArray()) {
+        $code = [int]$ch
+        if ($code -eq 39 -or ($code -ge 0x2018 -and $code -le 0x201B)) { [void]$sb.Append($ch) }
+        [void]$sb.Append($ch)
+    }
+    [void]$sb.Append($q)
+    return $sb.ToString()
+}
+
+function Format-InstallCommand {
+    param($RecordedArgs)
+    $parts = @(".\scripts\install-windows.ps1")
+    foreach ($name in $recordableParams) {
+        if (-not $RecordedArgs.Contains($name)) { continue }
+        $value = $RecordedArgs[$name]
+        if ($switchParams -contains $name) {
+            if ($value) { $parts += "-$name" } else { $parts += "-${name}:`$false" }
+        } else {
+            $parts += ("-$name " + (ConvertTo-PsSingleQuotedLiteral ([string]$value)))
+        }
+    }
+    return ($parts -join " ")
+}
+
+# Write a text file atomically: write a temp file in the SAME directory, then
+# swap it into place, so a crash or a full disk never leaves a truncated record.
+function Write-TextFileAtomic {
+    param([string]$Path, [string]$Text)
+    $dir = Split-Path -Parent $Path
+    $tmp = Join-Path $dir ((Split-Path -Leaf $Path) + ".tmp-" + [guid]::NewGuid().ToString("N"))
+    try {
+        [System.IO.File]::WriteAllText($tmp, $Text, (New-Object System.Text.UTF8Encoding $false))
+        if (Test-Path -LiteralPath $Path) {
+            [System.IO.File]::Replace($tmp, $Path, [NullString]::Value)
+        } else {
+            [System.IO.File]::Move($tmp, $Path)
+        }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+# Names of recorded parameters whose values differ between a previous record
+# (parsed JSON) and this run. Compares values, not the printed command, so a
+# change in how the command is quoted is not reported as a difference.
+function Compare-RecordedArgumentSet {
+    param($Previous, $Current)
+    $diff = @()
+    $prevNames = @()
+    if ($Previous) { $prevNames = @($Previous.PSObject.Properties | ForEach-Object { $_.Name }) }
+    foreach ($name in $recordableParams) {
+        $inPrev = $prevNames -contains $name
+        $inCur = $Current.Contains($name)
+        if (-not $inPrev -and -not $inCur) { continue }
+        if ($inPrev -ne $inCur) { $diff += $name; continue }
+        if ([string]$Previous.$name -cne [string]$Current[$name]) { $diff += $name }
+    }
+    return ,$diff
+}
+
+$currentArgs = Get-RecordedArgumentSet -Bound $PSBoundParameters
+$currentCommand = Format-InstallCommand -RecordedArgs $currentArgs
+if (Test-Path $argsRecordPath) {
+    try {
+        $previous = Get-Content $argsRecordPath -Raw | ConvertFrom-Json
+        Write-Host "Previous install arguments (from $argsRecordPath):"
+        Write-Host "  recorded: $($previous.recordedAtUtc)   cert-watch: $($previous.certWatchVersion)"
+        Write-Host "  command:  $($previous.command)"
+        $changed = Compare-RecordedArgumentSet -Previous $previous.arguments -Current $currentArgs
+        if ($changed.Count -gt 0) {
+            Write-Host "  [warn] This run uses different arguments ($($changed -join ", ")):"
+            Write-Host "          $currentCommand"
+            Write-Host "         On an upgrade, dropping a switch such as -WithAuthExtras or -ConfigureIIS changes the install."
+        }
+        Write-Host ""
+    } catch {
+        Write-Host "  [warn] Could not read the previous install-arguments record at $argsRecordPath ($($_.Exception.Message))."
+    }
+}
+
+# --- Is this a fresh install or an upgrade? ---
+# Decide BEFORE anything starts the app: with preload on, restarting the pool
+# at the end creates the database, so checking afterwards would always say
+# "upgrade". The data dir comes from the web.config IIS actually serves (the
+# live site physicalPath first, then -SitePath): its CERT_WATCH_DATA_DIR,
+# resolved against the site directory when relative (HttpPlatformHandler starts
+# the process there), or the app default when it sets none. With no web.config
+# a machine-level CERT_WATCH_DATA_DIR wins, else InstallDir (where a fresh
+# template points it). State is "existing", "fresh" or "unknown"; the first-run
+# admin hint is only printed for "fresh".
+# Expand %VARS% and root a relative path against the site directory, where
+# HttpPlatformHandler starts the process. Returns "" when a relative path has
+# no site directory to resolve against.
+function Resolve-DataDirValue {
+    param([string]$Value, [string]$BaseDir)
+    if (-not $Value) { return "" }
+    $v = [Environment]::ExpandEnvironmentVariables($Value)
+    if ([System.IO.Path]::IsPathRooted($v)) { return $v }
+    if (-not $BaseDir) { return "" }
+    return [System.IO.Path]::GetFullPath((Join-Path $BaseDir $v))
+}
+
+function Resolve-DataDirState {
+    param(
+        [string]$InstallDir,
+        [string[]]$SitePaths,
+        [string]$MachineDataDir,
+        [string]$AppDefaultDataDir,
+        [bool]$WillLayTemplate
+    )
+    $dbName = "cert-watch.sqlite3"
+    $sites = @($SitePaths | Where-Object { $_ } | Select-Object -Unique)
+    $dataDir = $InstallDir
+    $source = "InstallDir"
+    $webConfigFound = $false
+    $parseFailed = $false
+    $uncertain = $false
+    # The site directory a relative machine-level value is resolved against:
+    # the one whose web.config IIS serves, else the first candidate.
+    $baseDir = ""
+    if ($sites.Count -gt 0) { $baseDir = $sites[0] }
+    foreach ($sp in $sites) {
+        $wc = Join-Path $sp "web.config"
+        if (-not (Test-Path -LiteralPath $wc)) { continue }
+        $webConfigFound = $true
+        $baseDir = $sp
+        try {
+            $wcXml = [xml](Get-Content -LiteralPath $wc -Raw)
+            # Full path from the root, no namespace, so a <location>-wrapped or
+            # namespaced decoy cannot shadow the setting IIS actually applies.
+            $node = $wcXml.SelectSingleNode('/configuration/system.webServer/httpPlatform/environmentVariables/environmentVariable[@name="CERT_WATCH_DATA_DIR"]')
+            if ($node -and $node.GetAttribute("value")) {
+                $dataDir = Resolve-DataDirValue ([string]$node.GetAttribute("value")) $sp
+                $source = "CERT_WATCH_DATA_DIR in $wc"
+            } elseif ($MachineDataDir) {
+                $dataDir = Resolve-DataDirValue $MachineDataDir $sp
+                $source = "machine CERT_WATCH_DATA_DIR ($wc sets none)"
+            } else {
+                $dataDir = $AppDefaultDataDir
+                $source = "app default ($wc sets no CERT_WATCH_DATA_DIR)"
+            }
+        } catch {
+            $parseFailed = $true
+            $source = "unparseable $wc"
+        }
+        break
+    }
+    $machineResolved = Resolve-DataDirValue $MachineDataDir $baseDir
+    if ($MachineDataDir -and -not $machineResolved) { $uncertain = $true }
+    if (-not $webConfigFound -and $MachineDataDir) {
+        if ($WillLayTemplate) {
+            # The template this run lays down sets CERT_WATCH_DATA_DIR to
+            # InstallDir, which wins over the machine value for the app.
+            $source = "InstallDir (template web.config; machine CERT_WATCH_DATA_DIR is overridden)"
+        } else {
+            $dataDir = $machineResolved
+            $source = "machine CERT_WATCH_DATA_DIR"
+        }
+    }
+    if (-not $dataDir) {
+        $dataDir = $InstallDir
+        $uncertain = $true
+    }
+    $dbPath = Join-Path $dataDir $dbName
+    $state = "unknown"
+    if (-not $parseFailed -and -not $uncertain -and (Test-Path -LiteralPath $dbPath)) {
+        $state = "existing"
+    } else {
+        # A database somewhere else we know about means we cannot be sure.
+        $elsewhere = $false
+        foreach ($c in @($InstallDir, $AppDefaultDataDir, $machineResolved)) {
+            if ($c -and (Test-Path -LiteralPath (Join-Path $c $dbName))) { $elsewhere = $true }
+        }
+        if ($parseFailed -or $uncertain -or $elsewhere) {
+            $state = "unknown"
+        } elseif ($webConfigFound -or $WillLayTemplate) {
+            $state = "fresh"
+        } else {
+            # No web.config and no IIS setup this run: the app runs some other
+            # way (service, manual) whose environment we cannot see.
+            $state = "unknown"
+        }
+    }
+    return [PSCustomObject]@{ State = $state; DataDir = $dataDir; DbPath = $dbPath; Source = $source }
+}
+
+$sitePathsToCheck = @()
+if (Get-Module -ListAvailable WebAdministration -ErrorAction SilentlyContinue) {
+    try {
+        Import-Module WebAdministration -ErrorAction Stop
+        $liveSite = Get-Website -Name "cert-watch" -ErrorAction SilentlyContinue
+        if ($liveSite -and $liveSite.physicalPath) {
+            $sitePathsToCheck += [Environment]::ExpandEnvironmentVariables([string]$liveSite.physicalPath)
+        }
+    } catch {
+        Write-Host "  [warn] Could not query the IIS site for its web.config ($($_.Exception.Message))."
+    }
+}
+$sitePathsToCheck += $SitePath
+$appDefaultDataDir = ""
+if ($env:ProgramData) { $appDefaultDataDir = Join-Path $env:ProgramData "cert-watch" }
+$dataState = Resolve-DataDirState -InstallDir $InstallDir -SitePaths $sitePathsToCheck `
+    -MachineDataDir ([Environment]::GetEnvironmentVariable("CERT_WATCH_DATA_DIR", "Machine")) `
+    -AppDefaultDataDir $appDefaultDataDir -WillLayTemplate ([bool]$ConfigureIIS)
+$dataDir = $dataState.DataDir
+$dbPath = $dataState.DbPath
+
 # --- Locate a Python 3.12+ launcher ---
 # The Windows 'py' launcher works interactively but can fail through
 # PowerShell's & operator (Windows Store stubs, argument mangling).
@@ -123,7 +365,7 @@ function Invoke-PyProbe {
 # come first because they work in non-interactive sessions (SSH / scheduled
 # task / service); the bare `py` / `python` / `python3` PATH launchers come
 # last and are skipped below when they resolve to a Windows Store
-# execution-alias stub under WindowsApps — those 0-byte reparse points fail
+# execution-alias stub under WindowsApps -- those 0-byte reparse points fail
 # with "cannot be accessed by the system" outside an interactive logon, which
 # is exactly what broke a remote (SSH) re-install (WI-050).
 $launchers = @()
@@ -131,7 +373,7 @@ $launchers = @()
 #    every re-install/upgrade and guaranteed outside a user profile/WindowsApps.
 $sharedCandidate = Join-Path $InstallDir "python\python.exe"
 if (Test-Path $sharedCandidate) { $launchers += @{ Exe = $sharedCandidate; Args = @() } }
-# 2. Python Install Manager per-user runtimes (full prefixes, real exes — not
+# 2. Python Install Manager per-user runtimes (full prefixes, real exes -- not
 #    the Store aliases). Prefer the runtime dir over the bin\ shims so the
 #    "ensure shared" copy below has a complete prefix to copy.
 $imRoot = Join-Path $env:LOCALAPPDATA "Python"
@@ -411,7 +653,7 @@ function Grant-AppPoolAcls {
 # App-pool virtual accounts ("IIS AppPool\<name>") only exist once the pool
 # does. Grant now if the pool is already there (upgrade-in-place); otherwise
 # -ConfigureIIS grants right after creating the pool. A plain venv install
-# (CI smoke, dev box) skips the grant — icacls would fail with "No mapping
+# (CI smoke, dev box) skips the grant -- icacls would fail with "No mapping
 # between account names and security IDs" and poison the script's exit code.
 if (Test-AccountResolves $identity) {
     Grant-AppPoolAcls
@@ -561,7 +803,7 @@ if ($ConfigureIIS) {
         Set-ItemProperty $poolPath -Name recycling.periodicRestart.time -Value "00:00:00"
         Write-Host "    App pool configured (No Managed Code, AlwaysRunning, no idle timeout, no periodic restart)."
 
-        # The pool (and its virtual account) now exists — apply the data/
+        # The pool (and its virtual account) now exists -- apply the data/
         # secrets/python ACLs that were skipped earlier if it was missing.
         Grant-AppPoolAcls
 
@@ -741,8 +983,34 @@ if ($script:iisActuallyConfigured) {
         Write-Host "Browse: https://<hostname>/"
     }
 }
+
+# Record the arguments this run used (allowlisted, non-secret) for the next upgrade.
+$installRecord = [ordered]@{
+    recordedAtUtc    = (Get-Date).ToUniversalTime().ToString("o")
+    certWatchVersion = $installedVer
+    arguments        = $currentArgs
+    command          = $currentCommand
+}
+try {
+    $recordJson = $installRecord | ConvertTo-Json -Depth 4
+    Write-TextFileAtomic -Path $argsRecordPath -Text $recordJson
+    Write-Host "Install arguments recorded in $argsRecordPath"
+    Write-Host "  Re-run for an upgrade with: $currentCommand"
+} catch {
+    Write-Host "  [warn] Could not record install arguments to $argsRecordPath ($($_.Exception.Message))."
+}
+
 Write-Host ""
-Write-Host "On first run (behind IIS, TRUST_PROXY=1) cert-watch auto-provisions an"
-Write-Host "admin. Get the one-time password from:"
-Write-Host "  $InstallDir\initial-admin-password   (or logs\stdout*.log)"
-Write-Host "For production, set AUTH_PROVIDER (LDAP/OAuth) in web.config instead."
+if ($dataState.State -eq "existing") {
+    Write-Host "Existing database kept: $dbPath (upgrade in place; no first-run admin is provisioned)."
+} elseif ($dataState.State -eq "fresh") {
+    Write-Host "On first run (behind IIS, TRUST_PROXY=1) cert-watch auto-provisions an"
+    Write-Host "admin. Get the one-time password from:"
+    Write-Host "  $dataDir\initial-admin-password   (or logs\stdout*.log)"
+    Write-Host "For production, set AUTH_PROVIDER (LDAP/OAuth) in web.config instead."
+} else {
+    Write-Host "Could not tell whether this was a first install (data dir: $dataDir, from $($dataState.Source))."
+    Write-Host "If cert-watch had no database yet and no auth provider is configured, it"
+    Write-Host "provisions an admin on first start and writes the one-time password to"
+    Write-Host "initial-admin-password in its data dir. An existing install is left as it was."
+}
