@@ -148,6 +148,14 @@ class ChainNoteView:
 
 
 @dataclass(frozen=True)
+class CertificateAlertView:
+    message: str
+    status: str
+    status_label: str
+    status_tone: str
+
+
+@dataclass(frozen=True)
 class CertificateDetailView:
     cert: CertificateView | None
     cert_id: str
@@ -185,6 +193,7 @@ class CertificateDetailView:
     validity_percent: int
     posture: PostureView | None
     drift_events: tuple[DriftEventView, ...]
+    certificate_alerts: tuple[CertificateAlertView, ...]
     slack_configured: bool
     source_label: str
     source_icon: str
@@ -499,6 +508,7 @@ def present_certificate_detail(
             validity_percent=0,
             posture=None,
             drift_events=(),
+            certificate_alerts=(),
             slack_configured=slack_configured,
             source_label="Monitored",
             source_icon="server",
@@ -592,6 +602,23 @@ def present_certificate_detail(
             guidance=guidance,
         ),
         drift_events=_drift_events(data.history_entries),
+        certificate_alerts=tuple(
+            CertificateAlertView(
+                message=alert.message,
+                status=alert.status,
+                status_label={
+                    "sending": "Sending",
+                    "sent": "Sent",
+                    "failed": "Failed",
+                    "cancelled": "Cancelled",
+                }.get(alert.status, "Pending"),
+                status_tone={
+                    "sent": "t-ok",
+                    "failed": "t-crit",
+                }.get(alert.status, "t-muted"),
+            )
+            for alert in data.alerts
+        ),
         slack_configured=slack_configured,
         source_label=source_label,
         source_icon=source_icon,

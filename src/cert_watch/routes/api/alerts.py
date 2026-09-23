@@ -9,8 +9,15 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import admin_write_guard, require_admin, require_auth
+from cert_watch.auth.guards import (
+    admin_write_guard,
+    require_admin,
+    require_auth,
+    write_guard,
+)
+from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import (
+    AlertStore,
     SqliteAlertGroupRepository,
     SqliteCertificateRepository,
     _total_alerts,
@@ -49,6 +56,17 @@ def api_list_alerts(
     rows = list_alerts_with_subject(db, page=page, limit=limit, scope_tags=scope_tags)
     for row in rows:
         row.pop("historical_cert", None)  # Internal Activity presentation, not an API field.
+        # Dispatch bookkeeping is internal state, not part of the public alert
+        # representation.  The public status still exposes the new ``sending``
+        # lifecycle state.
+        for field in (
+            "attempt_count",
+            "next_attempt_at",
+            "last_attempt_at",
+            "lease_expires_at",
+            "failure_reason",
+        ):
+            row.pop(field, None)
     return JSONResponse(
         content={
             "alerts": rows,
@@ -61,6 +79,51 @@ def api_list_alerts(
             },
         }
     )
+
+
+@router.post("/api/alerts/{alert_id}/retry")
+def api_retry_failed_alert(
+    request: Request,
+    alert_id: IdParam,
+    _auth: str = Depends(write_guard),
+) -> JSONResponse:
+    db = _db_path(request)
+    try:
+        with get_write_lock():
+            retried = AlertStore(db).operator_retry(alert_id, auth=acting_auth(request))
+    except ScopeDeniedError:
+        record_audit(
+            db,
+            actor=resolve_actor(request),
+            action="alert.retry_denied",
+            target_type="alert",
+            target_id=alert_id,
+            detail={"reason": "scope_denied"},
+            source_ip=resolve_source_ip(request),
+        )
+        return JSONResponse(content={"error": "alert not found"}, status_code=404)
+    if not retried:
+        from cert_watch.database import _connect
+
+        with _connect(db) as conn:
+            row = conn.execute(
+                "SELECT status FROM alerts WHERE id = ?", (alert_id,)
+            ).fetchone()
+        if row is None:
+            return JSONResponse(content={"error": "alert not found"}, status_code=404)
+        return JSONResponse(
+            content={"error": "only failed alerts can be retried"}, status_code=409
+        )
+    record_audit(
+        db,
+        actor=resolve_actor(request),
+        action="alert.retry_failed",
+        target_type="alert",
+        target_id=alert_id,
+        detail={"previous_status": "failed"},
+        source_ip=resolve_source_ip(request),
+    )
+    return JSONResponse(content={"ok": True, "id": alert_id, "status": "pending"})
 
 
 # ---------- Alert Groups ----------

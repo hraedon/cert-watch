@@ -13,8 +13,10 @@ from cert_watch import posture
 from cert_watch.cert_chain import chain_status
 from cert_watch.certificate_model import Certificate
 from cert_watch.database import (
+    Alert,
     HostEntry,
     LatestScanRecord,
+    SqliteAlertRepository,
     SqliteCertificateRepository,
     SqliteTrustAnchorRepository,
     distinct_tags,
@@ -47,6 +49,7 @@ class StoredCertificateDetailData:
     cert_tags: list[str]
     effective_tags: list[str]
     all_tags: list[str]
+    alerts: tuple[Alert, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,4 +155,11 @@ def load_certificate_detail(
         cert_tags=parse_tags(repo.get_tags(cert_id)),
         effective_tags=repo.effective_tags(cert_id),
         all_tags=all_tags,
+        alerts=tuple(
+            sorted(
+                SqliteAlertRepository(db_path).list_for_cert(cert_id),
+                key=lambda alert: alert.created_at,
+                reverse=True,
+            )[:5]
+        ),
     )

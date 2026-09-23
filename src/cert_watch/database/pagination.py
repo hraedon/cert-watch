@@ -55,6 +55,8 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
+                       a.attempt_count, a.next_attempt_at, a.last_attempt_at,
+                       a.lease_expires_at, a.failure_reason,
                        a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
                                         NULLIF(a.hostname, ''),
                                         '(unknown certificate)') AS subject,
@@ -73,6 +75,8 @@ def list_alerts_with_subject(
                 f"""
                 SELECT a.id, a.cert_id, a.created_at, a.alert_type, a.status,
                        a.threshold_days, a.sent_at, a.error_message, a.message,
+                       a.attempt_count, a.next_attempt_at, a.last_attempt_at,
+                       a.lease_expires_at, a.failure_reason,
                        a.read, COALESCE(NULLIF(c.subject, ''), NULLIF(a.subject, ''),
                                         NULLIF(a.hostname, ''),
                                         '(unknown certificate)') AS subject,

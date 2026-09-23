@@ -21,6 +21,7 @@ from cert_watch.alerts import (
 )
 from cert_watch.database import (
     Alert,
+    ScopedAlertRepository,
     SqliteAlertRepository,
     _connect,
     init_schema,
@@ -133,10 +134,10 @@ def test_smtp_failure_then_webhook_records_separate_attempts_and_no_secrets(monk
     assert alert.message not in raw
 
 
-def test_failed_retries_append_each_attempt(monkeypatch, tmp_path):
+def test_failed_round_appends_each_attempt_before_backoff(monkeypatch, tmp_path):
     db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=TimeoutError("do not retain this diagnostic"))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     attempts = list_attempts(db, [alert.id])[alert.id]
     assert len(attempts) == ALERT_MAX_RETRIES
@@ -190,14 +191,17 @@ def test_alert_is_delivered_once_the_database_recovers(monkeypatch, tmp_path):
     assert len(list_attempts(db, [alert.id])[alert.id]) == 1
 
 
-def test_a_real_transport_failure_still_fails_the_alert(monkeypatch, tmp_path):
-    """Guard the other half: deferral must not swallow genuine delivery failures."""
+def test_a_real_transport_failure_schedules_backoff(monkeypatch, tmp_path):
+    """A genuine delivery failure spends attempts and schedules another round."""
     _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch)
     connection.send_message.side_effect = smtplib.SMTPException("mailbox unavailable")
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
-    assert repo.list_for_cert(alert.cert_id)[0].status == "failed"
+    stored = repo.list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending"
+    assert stored.attempt_count == ALERT_MAX_RETRIES
+    assert stored.next_attempt_at is not None
 
 
 def test_completion_failure_is_unknown_and_does_not_resend(monkeypatch, tmp_path):
@@ -440,7 +444,7 @@ def test_failure_message_reports_the_attempts_that_actually_happened(monkeypatch
     """The operator-visible count must not overstate what was tried."""
     _db, repo, alert = _pending(tmp_path)
     connection = _smtp(monkeypatch, error=smtplib.SMTPException("mailbox unavailable"))
-    assert process_pending(repo, _config()) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config()) == {"sent": 0, "failed": 0, "deferred": 1}
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {connection.send_message.call_count} attempts" in stored.error_message
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
@@ -480,7 +484,7 @@ def test_failure_message_counts_both_channels_not_the_retry_budget(monkeypatch, 
     )
     webhook = WebhookConfig(url="https://hooks.example.invalid/path")
 
-    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 1, "deferred": 0}
+    assert process_pending(repo, _config(), webhook) == {"sent": 0, "failed": 0, "deferred": 1}
     assert connection.send_message.call_count == ALERT_MAX_RETRIES
     stored = repo.list_for_cert(alert.cert_id)[0]
     assert f"after {2 * ALERT_MAX_RETRIES} attempts" in stored.error_message
@@ -691,6 +695,54 @@ def test_a_refused_deferral_stamp_is_tolerated(monkeypatch, tmp_path):
     assert _deferred_since(db, alert.id) is None
 
 
+@pytest.mark.parametrize("past_give_up", [False, True])
+def test_refused_evidence_fallback_update_never_escapes(
+    monkeypatch, tmp_path, past_give_up
+):
+    """Both #38 recovery branches tolerate the fallback UPDATE refusing too."""
+    db, repo, alert = _pending(tmp_path)
+    if past_give_up:
+        _stamp_deferred_since(
+            db, alert.id, hours_ago=EVIDENCE_DEFERRAL_GIVE_UP_HOURS + 1
+        )
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+    method = "mark_failed" if past_give_up else "note_deferral"
+    monkeypatch.setattr(
+        SqliteAlertRepository,
+        method,
+        Mock(side_effect=sqlite3.OperationalError("first settlement refused")),
+    )
+    monkeypatch.setattr(
+        "cert_watch.alerting.dispatch.AlertStore.complete_pending",
+        Mock(side_effect=sqlite3.OperationalError("fallback settlement refused")),
+    )
+
+    assert process_pending(repo, _config()) == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 0,
+    }
+
+
+def test_scoped_repository_forwards_dispatch_settlement_context(
+    monkeypatch, tmp_path
+):
+    db, _, alert = _pending(tmp_path)
+    scoped = ScopedAlertRepository(db, ())
+    _smtp(monkeypatch)
+    _unwritable_evidence_store(monkeypatch)
+
+    assert process_pending(scoped, _config()) == {
+        "sent": 0,
+        "failed": 0,
+        "deferred": 1,
+    }
+    stored = SqliteAlertRepository(db).list_for_cert(alert.cert_id)[0]
+    assert stored.status == "pending"
+    assert stored.deferred_since is not None
+
+
 def test_an_attempt_recorded_this_cycle_restarts_the_deferral_clock(monkeypatch, tmp_path):
     """A transport was reached, then the store became unwritable mid-retry.
 
@@ -742,6 +794,29 @@ def test_delivery_and_status_changes_clear_the_deferral_clock(monkeypatch, tmp_p
     assert repo.list_pending()[0].deferred_since is None
 
 
+def test_scoped_deferral_does_not_count_a_stolen_lease(monkeypatch, tmp_path):
+    from cert_watch.alerting.model import WebhookConfig
+    from cert_watch.database import ScopedAlertRepository
+    from cert_watch.database.connection import _connect
+
+    db, _repo, alert = _pending(tmp_path)
+
+    def steal_then_fail(*_args, **_kwargs):
+        with _connect(db) as conn:
+            conn.execute(
+                "UPDATE alerts SET lease_owner = 'thief' WHERE id = ?", (alert.id,)
+            )
+            conn.commit()
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("cert_watch.alerting.evidence.begin_attempt", steal_then_fail)
+    result = process_pending(
+        ScopedAlertRepository(db, ()), None,
+        WebhookConfig(url="https://example.invalid/hook"),
+    )
+    assert result == {"sent": 0, "failed": 0, "deferred": 0}
+
+
 def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_path, reload_app):
     """A deferral has no attempt row, so only its age distinguishes it.
 
@@ -763,6 +838,29 @@ def test_activity_marks_a_queued_alert_that_missed_its_cycle(monkeypatch, tmp_pa
     assert response.status_code == 200
     assert "Not yet delivered" in response.text
     assert "Still queued past the cycle that should have sent it." in response.text
+
+
+def test_activity_marks_an_abandoned_sending_lease_as_undelivered(
+    monkeypatch, tmp_path, reload_app
+):
+    db, _, alert = _pending(tmp_path)
+    from cert_watch.database import AlertStore
+
+    now = datetime.now(UTC)
+    AlertStore(db).claim(
+        lease_owner="dead-worker",
+        lease_expires_at=now - timedelta(minutes=1),
+        now=now - timedelta(minutes=2),
+    )
+    monkeypatch.setattr("cert_watch.app.start_scheduler", Mock())
+    monkeypatch.setattr("cert_watch.app.stop_scheduler", Mock())
+    with TestClient(reload_app(SMTP_HOST="relay.example.invalid").app) as client:
+        response = client.get("/alerts")
+
+    assert response.status_code == 200
+    assert "Sending" in response.text
+    assert "Not yet delivered" in response.text
+    assert f'data-alert-id="{alert.id}"' in response.text
 
 
 def test_activity_does_not_call_a_queued_alert_late_when_nothing_sends(

@@ -129,6 +129,24 @@
       </div>
       {% endif %}
 
+      {%- if certificate_alerts|default([]) %}
+      <div class="cw-panel" data-testid="certificate-alerts">
+        <div class="cw-panel-head">
+          <h2>Recent alerts</h2>
+          <a href="/alerts" class="cw-link">View all</a>
+        </div>
+        {% for alert in certificate_alerts %}
+        <div class="cw-panel-body">
+          <div class="cw-chiprow">
+            <span>{{ alert.message }}</span>
+            <span class="cw-spacer"></span>
+            {{ ui.status(label=alert.status_label, tone=alert.status_tone) }}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
       {% if scan_evidence %}
       <div class="cw-panel" data-testid="scan-evidence">
         <div class="cw-panel-head">

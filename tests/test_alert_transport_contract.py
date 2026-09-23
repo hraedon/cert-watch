@@ -330,6 +330,7 @@ def test_attempt_delivery_ledger_details_match_pre_refactor_golden(
         "queued_recipients": ["queued@example.invalid"],
         "groups": [],
         "groups_available": True,
+        "claim_owner": "",
     }
     assert attempt["result"] == {
         "outcome": "partial",

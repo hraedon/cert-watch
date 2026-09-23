@@ -51,6 +51,8 @@ def attempt_delivery(
     alert_id: str,
     transport: Transport,
     msg: OutboundMessage,
+    *,
+    claim_owner: str = "",
 ) -> SendResult:
     """Record before sending; a missing completion remains explicitly unknown.
 
@@ -74,6 +76,7 @@ def attempt_delivery(
         "global_recipients": [address for address in actual_recipients if address in configured],
         "queued_recipients": [address for address in actual_recipients if address in queued],
         "groups": groups, "groups_available": groups_available,
+        "claim_owner": claim_owner,
     }
     try:
         attempt_id = begin_attempt(db_path, alert_id, transport.channel, details)

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from cert_watch.certificate_model import Certificate
-from cert_watch.database import HostEntry, LatestScanRecord
+from cert_watch.database import Alert, HostEntry, LatestScanRecord
 from cert_watch.presenters.certificate_detail import (
     present_certificate_detail,
     present_certificate_technical_details,
@@ -127,6 +127,20 @@ def test_full_detail_presenter_builds_stored_certificate_view() -> None:
         cert_tags=["production"],
         effective_tags=["production", "network"],
         all_tags=["network", "production"],
+        alerts=(
+            Alert(
+                cert_id="cert-1",
+                alert_type="expiry_warning",
+                status="sending",
+                message="Certificate expires soon",
+            ),
+            Alert(
+                cert_id="cert-1",
+                alert_type="expiry_warning",
+                status="failed",
+                message="Delivery attempts exhausted",
+            ),
+        ),
     )
 
     view = present_certificate_detail(
@@ -150,6 +164,14 @@ def test_full_detail_presenter_builds_stored_certificate_view() -> None:
         "Issuer changed",
         "Posture grade dropped",
     }
+    assert [alert.status_label for alert in view.certificate_alerts] == [
+        "Sending",
+        "Failed",
+    ]
+    assert [alert.status_tone for alert in view.certificate_alerts] == [
+        "t-muted",
+        "t-crit",
+    ]
 
 
 def test_full_detail_presenter_builds_pending_host_view() -> None:

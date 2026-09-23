@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -29,6 +30,29 @@ def _is_sqlite_busy(exc: sqlite3.OperationalError) -> bool:
         return True
     message = str(exc).lower()
     return "database is locked" in message or "database table is locked" in message
+
+
+def _alert_delivery_counts(db: str | Path, *, now: datetime) -> tuple[int, int]:
+    """Return overdue pending rows and abandoned sending leases separately."""
+    cutoff = (now - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
+    with _connect(db) as conn:
+        row = conn.execute(
+            """SELECT
+                   SUM(CASE WHEN status = 'pending' AND created_at <= ?
+                            THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN status = 'sending' AND
+                                      (lease_expires_at IS NULL OR lease_expires_at <= ?)
+                            THEN 1 ELSE 0 END)
+               FROM alerts""",
+            (cutoff, now.isoformat()),
+        ).fetchone()
+    return (int(row[0] or 0), int(row[1] or 0)) if row else (0, 0)
+
+
+def _undelivered_count(db: str | Path, *, now: datetime) -> int:
+    """Count overdue pending rows and abandoned sending leases."""
+    overdue, stale_leases = _alert_delivery_counts(db, now=now)
+    return overdue + stale_leases
 
 
 @router.get("/healthz")
@@ -124,6 +148,17 @@ def readyz(request: Request) -> JSONResponse:
         checks["certificates"] = "error"
         checks["expired"] = "error"
         ok = False
+    if db_reachable:
+        try:
+            overdue, stale_leases = _alert_delivery_counts(
+                db, now=datetime.now(UTC)
+            )
+            checks["undelivered_alerts"] = str(overdue)
+            checks["stale_sending_leases"] = str(stale_leases)
+        except Exception:
+            logger.warning("readyz alert lifecycle query failed", exc_info=True)
+            checks["undelivered_alerts"] = "error"
+            checks["stale_sending_leases"] = "error"
     # Shallow body for unauthenticated callers under an auth provider; open
     # mode (no provider) and authenticated callers get the full detail.
     # /readyz is a public path, so auth_middleware never runs on it and
@@ -196,11 +231,9 @@ def build_api_health_response(request: Request) -> JSONResponse:
 
     # Alerts that did not go out. Two disjoint populations, both operator-visible:
     #
-    #   failed      — a transport was reached and refused the message.
+    #   failed      — the bounded delivery attempt policy gave up.
     #   undelivered — still `pending` well past the cycle that should have sent
-    #                 it. Nothing reached a transport at all: the delivery
-    #                 evidence store was unwritable (``process_pending``'s
-    #                 deferral path), or the scheduler is not flushing.
+    #                 it, or abandoned in `sending` under an expired lease.
     #
     # The second is queried by outcome, not by cause, deliberately. A deferral
     # is correct behavior — it keeps the alert deliverable instead of burning
@@ -220,22 +253,18 @@ def build_api_health_response(request: Request) -> JSONResponse:
     delivery_configured = delivery_is_configured(_get_settings(request))
     checks["alert_delivery_configured"] = delivery_configured
     try:
-        cutoff = (datetime.now(UTC) - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
+        now = datetime.now(UTC)
+        cutoff = (now - timedelta(hours=UNDELIVERED_AFTER_HOURS)).isoformat()
         with _connect(db) as conn:
             row = conn.execute(
-                "SELECT COUNT(*) FROM alerts WHERE status = 'failed' AND created_at > ?",
+                "SELECT COUNT(*) FROM alerts "
+                "WHERE status = 'failed' AND last_attempt_at > ?",
                 (cutoff,),
             ).fetchone()
             checks["failed_alerts_24h"] = row[0] if row else 0
-            stuck = (
-                conn.execute(
-                    "SELECT COUNT(*) FROM alerts WHERE status = 'pending' AND created_at <= ?",
-                    (cutoff,),
-                ).fetchone()
-                if delivery_configured
-                else None
+            checks["undelivered_alerts"] = (
+                _undelivered_count(db, now=now) if delivery_configured else 0
             )
-            checks["undelivered_alerts"] = stuck[0] if stuck else 0
     except Exception:
         logger.warning("health alert query failed", exc_info=True)
         checks["failed_alerts_24h"] = 0

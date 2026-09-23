@@ -76,3 +76,15 @@ spec:
               {{ $value | humanizeDuration }} ago). Check that the scheduler
               is running and the hosting environment keeps the process
               alive (IIS: application preload; systemd/k8s: service health).
+
+        - alert: CertWatchAlertDeliveryFailed
+          expr: cert_watch_alerts_failed_recent > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "cert-watch gave up delivering an alert"
+            description: >-
+              {{ $value }} alert(s) exhausted the bounded delivery policy.
+              Review Activity and use Retry failed after correcting the
+              destination or channel configuration.

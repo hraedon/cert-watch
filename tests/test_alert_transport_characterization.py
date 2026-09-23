@@ -242,9 +242,9 @@ def test_delivery_failure_observables_are_characterized(monkeypatch, tmp_path, c
     assert summary == (
         {"sent": 1, "failed": 0, "deferred": 0}
         if expected.sent
-        else {"sent": 0, "failed": 1, "deferred": 0}
+        else {"sent": 0, "failed": 0, "deferred": 1}
     )
-    assert stored.status == ("sent" if expected.sent else "failed")
+    assert stored.status == ("sent" if expected.sent else "pending")
     if expected.sent:
         assert stored.error_message is None
     else:
@@ -253,6 +253,8 @@ def test_delivery_failure_observables_are_characterized(monkeypatch, tmp_path, c
     assert len(attempts) == expected_attempts
     for attempt in attempts:
         assert attempt["channel"] == expected.channel
+        claim_owner = attempt["routing"].pop("claim_owner")
+        assert claim_owner
         assert attempt["routing"] == {
             "recipients": (
                 ["global@example.invalid", "queued@example.invalid"]

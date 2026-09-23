@@ -21,7 +21,7 @@ from cryptography import x509
 from fastapi.testclient import TestClient
 from freezegun import freeze_time
 
-from cert_watch.database import SqliteHostRepository, _connect
+from cert_watch.database import Alert, SqliteAlertRepository, SqliteHostRepository, _connect
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from tests.e2e._seed import seed_demo_certs
 
@@ -174,6 +174,17 @@ def characterized_pages(tmp_path: Path, reload_app) -> Iterator[dict[str, str]]:
         }
         rendered: dict[str, str] = {}
         for name, path in pages.items():
+            if name == "certificate_detail":
+                SqliteAlertRepository(tmp_path / "cert-watch.sqlite3").create(
+                    Alert(
+                        cert_id=cert_id,
+                        alert_type="expiry_warning",
+                        status="sending",
+                        message="Certificate expires in 60 days",
+                        threshold_days=60,
+                        created_at=frozen_now,
+                    )
+                )
             response = client.get(path)
             assert response.status_code == 200, (name, path, response.status_code)
             assert response.headers["content-type"].startswith("text/html")

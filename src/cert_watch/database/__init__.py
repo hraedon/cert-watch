@@ -13,6 +13,9 @@ All public names are re-exported so external imports
 # __future__ must stay at the top of the physical file
 from __future__ import annotations
 
+# Alert lifecycle
+from cert_watch.database.alert_store import AlertStore
+
 # API keys (Plan 039)
 from cert_watch.database.api_keys import (
     ApiKeyAuth,
@@ -251,6 +254,8 @@ from cert_watch.database.users_roles import (
 __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     # schema
     "init_schema",
+    "AlertStore",
+    "get_alert_identity",
     # connection
     "get_write_lock",
     # repo
