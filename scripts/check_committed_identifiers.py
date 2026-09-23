@@ -44,6 +44,7 @@ Run locally: python scripts/check_committed_identifiers.py
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import re
 import shlex
@@ -527,20 +528,46 @@ def _denylist_entry_numbers(identifiers: frozenset[str]) -> dict[str, int]:
     }
 
 
+def _redact_path(path: Path) -> str:
+    """Return an opaque, stable label for *path*.
+
+    CI output is public. A path can carry a denylist entry in ways no
+    per-component match catches reliably (a phrase split across directories, a
+    Unicode normalisation variant), so a redacted report never prints a path at
+    all: it prints a short digest of the repository-relative path. Run the gate
+    locally, without ``--redact-output``, to see the real path; the digest is
+    ``sha256(posix path)[:12]`` so the two can be matched.
+    """
+    digest = hashlib.sha256(path.as_posix().encode("utf-8")).hexdigest()[:12]
+    return f"<path sha256:{digest}>"
+
+
+def _reported_path(path: Path, *, redact_output: bool) -> str:
+    """Format a path for the report: verbatim locally, opaque under redaction."""
+    return _redact_path(path) if redact_output else str(path)
+
+
 def print_report(
     violations: list[Violation],
     *,
-    identifiers: frozenset[str] = frozenset(),
+    identifiers: frozenset[str] | None = None,
     redact_output: bool = False,
 ) -> None:
+    if redact_output and not identifiers:
+        raise GateError("redacted reports require the identifier set")
+    if redact_output and identifiers:
+        missing = {violation.identifier for violation in violations} - identifiers
+        if missing:
+            raise GateError("redacted reports require every violation in the identifier set")
     violations.sort(key=lambda v: (str(v.path), v.line_number, v.identifier))
     print("Committed identifier violations detected:", file=sys.stderr)
-    entry_numbers = _denylist_entry_numbers(identifiers)
+    entry_numbers = _denylist_entry_numbers(identifiers or frozenset())
     for v in violations:
         if redact_output:
             entry_number = entry_numbers[v.identifier]
+            reported_path = _redact_path(v.path)
             print(
-                f"  {v.path}:{v.line_number}: denylist entry #{entry_number}",
+                f"  {reported_path}:{v.line_number}: denylist entry #{entry_number}",
                 file=sys.stderr,
             )
         else:
@@ -717,7 +744,7 @@ def _report_message_violations(
     entry_numbers = _denylist_entry_numbers(identifiers)
     for v in sorted(violations, key=lambda v: (v.line_number, v.identifier)):
         if redact_output:
-            entry_number = entry_numbers[v.identifier]
+            entry_number = entry_numbers.get(v.identifier, "?")
             print(
                 f"  line {v.line_number}: denylist entry #{entry_number}",
                 file=sys.stderr,
@@ -798,7 +825,8 @@ def _run(args: argparse.Namespace) -> int:
     if leaked:
         print("Tracked paths that must never be committed:", file=sys.stderr)
         for p in sorted(leaked, key=str):
-            print(f"  {p}", file=sys.stderr)
+            reported_path = _reported_path(p, redact_output=args.redact_output)
+            print(f"  {reported_path}", file=sys.stderr)
         print(
             "\nThese are gitignored by convention, and .gitignore is advisory — "
             "git add -f walks straight past it. A guarded data directory holds "
@@ -855,7 +883,10 @@ def _run(args: argparse.Namespace) -> int:
         )
         print(f"{what} could not be read; the gate cannot clear them:", file=sys.stderr)
         for p in sorted(unreadable, key=str):
-            print(f"  {p}", file=sys.stderr)
+            print(
+                f"  {_reported_path(p, redact_output=args.redact_output)}",
+                file=sys.stderr,
+            )
         print(
             "\nAn unreadable tracked file may contain a forbidden identifier. Fix the "
             "permissions (or untrack the file) and re-run; the gate will not pass a "
