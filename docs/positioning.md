@@ -42,7 +42,7 @@ Stating this is what makes the rest credible:
   For simple expiry alerting it is the rational choice.
 - **SSLMate Cert Spotter** — a battle-tested, focused CT-log monitor. For pure
   CT watch with nothing else, it is more proven than anything cert-watch offered.
-  (CT monitoring was removed from cert-watch in maintenance mode — see CHANGELOG.)
+  (cert-watch dropped its own CT monitoring before 1.0; see the changelog.)
 - **Certimate** — if you want certificate *operations* (ACME issuance,
   deployment, renewal), that is a different and complementary tool.
 - **Certsentry** — a single Go binary with an embedded frontend; if avoiding a
@@ -80,33 +80,31 @@ not crowded. cert-watch's differentiation against it is the all-in-one breadth
 an SMB wants without stitching tools together: directory auth + audit log +
 posture grading + offline upload, on top of the shared core.
 
-## How this informs the roadmap
+## What that means for the product
 
-**Delivered in 0.5.0** (the regulated-SMB differentiators this lens prioritized):
-a one-click, tamper-evident **compliance/auditor report**; first-class **Teams /
-Discord / PagerDuty** channels; **SIEM/log export** (syslog, Splunk HEC, Windows
-Event Log) so cert-watch lands next to everything else a SOC already watches; and
-a **renewal-stall alert** that catches a broken ACME/cert-manager job before
-outage — observability of the *renewal automation* without becoming an ACME
-client itself (the line stays "no external-SaaS dependency").
+cert-watch 1.0 is the whole of that bundle, built to be run and maintained
+rather than extended indefinitely. Its scope is:
 
-The positioning above is the lens for what we build next. Concretely:
+- **Observe everything about a certificate estate, read-only.** Scanning,
+  uploads, chain validation, posture, drift, renewal tracking, compliance
+  reporting.
+- **Tell the right person, provably.** Routing by tag and ownership, a
+  persisted delivery lifecycle, and evidence for every attempt.
+- **Fit an audited environment.** Directory sign-in, role mapping and scoping,
+  an audit log with SIEM export, Windows/IIS as a first-class host.
 
-- **Lean into observability depth and environment fit** — certificate change
-  history & drift detection (plan 016), and the differentiators an audited SMB
-  values: discovery (AD CS / Windows cert stores), revocation-endpoint health,
-  and audit-grade reporting (plan 017).
-- **Fold multi-channel alerting into alert groups** (plan 015) rather than
-  treating it as a separate epic.
-- **Deliberately decline** features that make an external cloud service a
-  dependency, or that drift toward a different product class — external
-  cloud-API discovery, reliance on a hosted CT-streaming feed, active network
-  scanning, ACME renewal automation, and **private-CA / AD CS certificate
-  inventory**. cert-watch observes public-trust TLS certificates; private-CA
-  lifecycle management is a different product class (the CA itself already has
-  an issuance log). (Self-hostable versions of some declined features stay on
-  the table; the line is *no external-SaaS dependency*, not *no egress*.)
-  Plan 017 records *why*, so the comparison stays legible.
+It deliberately declines anything that makes an external cloud service a
+dependency, or that turns it into a different product:
+
+- cloud-API discovery;
+- a hosted CT-streaming feed;
+- active network sweeps;
+- ACME issuance and renewal automation;
+- inventory of a private CA's issuance log.
+
+The line is *no external-SaaS dependency in the trust path*, not *no
+outbound traffic*, and *observe the lifecycle*, not *drive it*. The renewal
+webhook is where observation hands off to automation you already run.
 
 ## The SC-081 window
 
@@ -116,9 +114,9 @@ days (2027-03-15) to a final 47 days (2029-03-15). This is the one predictable
 demand shock in the certificate-observability niche: every public-trust
 certificate in an SMB's estate must be re-issued more frequently, and renewal
 failures that were tolerable on a 12-month cadence become outages on a 47-day
-one. cert-watch's SC-081 readiness report (Plan 048), lifetime-relative alert
+one. cert-watch's SC-081 readiness report, lifetime-relative alert
 thresholds, and per-host renewal-analytics are the specific response. The
 window is 2026–2029: demand for renewal monitoring rises, cert-watch is
-positioned for it, and the maintenance-mode plan (Plan 049) keeps the date-keyed
-policy logic accurate through the milestone transitions without expanding the
-product surface.
+positioned for it. The date-keyed policy pack
+(`policy_packs/cab_forum_sc081.py`) is pinned by freeze-time tests at each
+milestone, so it stays correct as the dates pass.

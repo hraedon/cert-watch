@@ -2,726 +2,78 @@
 
 [![CI](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml/badge.svg)](https://github.com/hraedon/cert-watch/actions/workflows/ci.yml)
 
-All-in-one observability for the **certificate lifecycle** — built for small and
-mid-sized businesses that need one self-hosted place to see every TLS
-certificate they depend on. Live host scanning **and** offline file upload feed a
-web dashboard, REST API, and alerting; signature-verified chain validation, TLS
-posture grading, and revocation checks turn "is it
-expiring?" into "is the whole estate healthy?"
+cert-watch keeps track of every TLS certificate an organisation depends on,
+and tells the right people before one causes an outage.
 
-Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), and multi-cert chain bundles.
+It is self-hosted and built for small and mid-sized organisations that have
+dozens to a few thousand certificates spread across public websites, internal
+services, domain controllers, appliances and files nobody remembers. You tell
+it where to look, and it answers three questions:
 
-## Features
+- **What expires, and when?** Every certificate, its expiry, and whether the
+  renewal that should have replaced it has actually happened.
+- **Is it healthy?** Signature-verified chain validation against your trust
+  anchors, a TLS posture grade, and the weak spots: SHA-1, short keys, old
+  protocol versions, missing intermediates.
+- **Who needs to know?** Alerts routed by tag and ownership to email, Teams,
+  Slack, Discord, PagerDuty, Alertmanager or a webhook, with a record of every
+  delivery attempt.
 
-- **Host scanning** — TLS handshake to extract leaf + chain certificates from any host
-- **Certificate upload** — PEM, DER, PKCS#12, PKCS#7 with automatic chain extraction
-- **Web dashboard** — color-coded expiry status (red/yellow/green), chain visualization, host management
-- **REST API** — JSON endpoints for certificates, hosts, and alerts with pagination
-- **Alerting** — email (SMTP), generic webhook, and first-class **Microsoft Teams / Discord / PagerDuty** channels, with configurable per-host thresholds
-- **Renewal-stall alert** — flags a certificate inside its renewal window with no successor yet (a broken Certbot / cert-manager / ACME job) before the expiry alarm
-- **SIEM / log export** — ship the audit log to **syslog**, **Splunk HEC**, or the **Windows Event Log** (fail-open; never blocks an audited action)
-- **Scheduled scans** — daily automatic re-scan of all tracked hosts
-- **Posture page** — fleet grade, TLS-version and grade trends, crypto inventory; the expiry calendar is a dashboard view
-- **Bulk import** — CSV upload for adding many hosts at once
-- **Prometheus metrics** — `/metrics` endpoint for monitoring integration (dedicated bearer token or admin session)
-- **Renewal tracking** — links renewed certificates to their predecessors
-- **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
-- **Audit log** — append-only record of mutations and logins (admin-only view), with configurable retention
-- **Compliance report** — one-click, point-in-time posture report for SOC 2 / ISO 27001 / PCI-DSS auditors (print-to-PDF HTML + signed JSON/CSV), with a `cert-watch verify-report` tamper-evidence check
-- **Authentication** — LDAP/AD and OAuth/OIDC (Microsoft Entra, Google, etc.)
+## What it does
 
-## Stack
+- **Scans hosts** over TLS, including STARTTLS for SMTP, LDAP and friends, on
+  a daily schedule or per-host cadence. It also accepts **certificate files**
+  in PEM, DER, PKCS#12 and PKCS#7 for things it can't reach.
+- **Tracks renewals.** It links each certificate to its successor, flags
+  renewals that stall before they turn into expiries, and can call your
+  automation through a renewal webhook.
+- **Grades posture** per endpoint and across the fleet, with trends over time
+  and a signed compliance report for auditors.
+- **Routes alerts** through alert groups matched on tags, with owners, digests
+  and retries, and shows the delivery evidence for each alert.
+- **Controls access** through LDAP / Active Directory or OAuth / OIDC (Entra ID,
+  Google, …), with local accounts, role mapping, per-tag scoping and API keys.
+- **Keeps an audit log** of every sign-in and change, and can forward it to
+  syslog, Splunk HEC or the Windows Event Log.
+- **Runs anywhere** as one process with one SQLite file: in a container, on
+  Kubernetes, under systemd, or on Windows behind IIS. Prometheus metrics
+  included.
 
-- Python 3.12+ / FastAPI / Jinja2 / `cryptography` / `dnspython` (CAA + custom-nameserver resolution)
-- SQLite (single-file, WAL mode)
-- Optional: `ldap3` (LDAP auth), `authlib` (OAuth auth)
-- Docker image published to GHCR (multi-arch: amd64 + arm64)
-- Deploy: Kubernetes (Argo CD GitOps), Docker Compose, Linux + systemd, or Windows + IIS
+It deliberately does **not** issue or renew certificates, discover assets on
+its own, or monitor Certificate Transparency logs. Tools such as Certimate or
+cert-manager, your inventory, and Cert Spotter do those better;
+[docs/positioning.md](docs/positioning.md) explains where cert-watch fits.
 
-## Quick start (local)
-
-```bash
-uv venv && uv pip install -e ".[dev]"
-.venv/bin/python -m cert_watch --host 127.0.0.1   # serves http://localhost:8000
-.venv/bin/pytest -q                                # run tests
-```
-
-> The loopback bind matters: a bare loopback instance (no proxy) serves open and
-> sends you to the `/setup` wizard — exactly what you want for local dev. A
-> *network-exposed* instance instead comes up with an auto-provisioned admin (see
-> [First run](#first-run)).
-
-## First run
-
-On a fresh install with no hosts and no auth configured, cert-watch redirects
-you to `/setup` to create a local admin account. After creating the admin you
-can log in and use the dashboard.
-
-To skip the wizard (for local dev or air-gapped environments):
+## Try it
 
 ```bash
-CERT_WATCH_ALLOW_UNAUTH=1 .venv/bin/python -m cert_watch
+docker run -d --name cert-watch -p 8000:8000 \
+  -v cert-watch-data:/var/lib/cert-watch ghcr.io/hraedon/cert-watch:latest
+docker exec cert-watch cat /var/lib/cert-watch/initial-admin-password
 ```
 
-> **Secure by default — never open on a network by accident.** What happens with
-> no auth configured depends on whether the instance is *network-exposed*:
->
-> | Situation | Behaviour |
-> |-----------|-----------|
-> | Bare loopback (`127.0.0.1`, no proxy) | Serves open, redirects to `/setup` |
-> | Routable bind (`0.0.0.0`) **or** loopback + `CERT_WATCH_TRUST_PROXY=1` (IIS/nginx) | **Auto-provisions** a local `admin` with a generated password — comes up *authenticated* |
-> | Any bind + `CERT_WATCH_ALLOW_UNAUTH=1` | Serves open (explicit opt-out; dev / air-gapped only) |
->
-> When it auto-provisions, the one-time password is written to
-> `${CERT_WATCH_DATA_DIR}/initial-admin-password` (mode 0600) and logged. Log in,
-> then configure `AUTH_PROVIDER` (LDAP/OAuth) **or** pin a password via
-> `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` (generate with `cert-watch hash-password`),
-> and delete the file. A network-exposed instance therefore comes up working
-> *and* authenticated — it never serves anonymously unless you ask it to.
-
-### Settings page
-
-Once the app is running, click **Settings** in the top-right to configure:
-
-- **Auth** — switch between local admin, LDAP/AD, or OAuth/OIDC without
-  restarting. Env vars always override GUI values (escape hatch).
-- **SMTP** — alert email server with a "Send test email" button.
-- **Alerts** — webhook URL, recipients, and digest mode.
-
-### Setup wizard
-
-The wizard runs automatically on first launch. It creates a local admin
-account and optionally walks through SMTP and first-host configuration. Set
-`CERT_WATCH_ALLOW_UNAUTH=1` to suppress the redirect.
-
-## Docker
-
-The container binds `0.0.0.0`, so on first run it auto-provisions an `admin`
-(see [First run](#first-run)) and comes up authenticated:
-
-```bash
-docker build -t cert-watch:dev .
-docker run --rm -p 8000:8000 -v cert-watch-data:/var/lib/cert-watch cert-watch:dev
-docker logs <container>     # grab the one-time admin password (also in the data volume)
-```
-
-For production, configure `AUTH_PROVIDER` (LDAP/OAuth) or pin `CERT_WATCH_LOCAL_ADMIN_*`
-instead of relying on the generated password. Or with compose:
-
-```bash
-docker compose -f deploy/compose/docker-compose.yml up -d
-```
-
-## Kubernetes (Argo CD)
-
-The cluster pulls from this repo; CI bumps the image tag on `main`. One-time bootstrap:
-
-```bash
-kubectl apply -f deploy/argocd/application.yaml
-```
-
-After that, every merge to `main` builds + pushes a new image and commits a tag bump to `deploy/k8s/kustomization.yaml`; Argo CD syncs within a minute.
-
-Direct apply (no Argo CD):
-
-```bash
-kubectl apply -k deploy/k8s
-```
-
-## Linux / systemd
-
-```bash
-sudo ./scripts/install-linux.sh   # installs to /opt/cert-watch, enables cert-watch.service
-```
-
-See `deploy/systemd/cert-watch.service`.
-
-## Windows / IIS
-
-cert-watch runs on Windows with no code changes — IIS fronts the uvicorn
-process, either via the **HttpPlatformHandler** module (recommended; IIS
-supervises the process, no third-party service) or as a **reverse proxy** to a
-Windows service. Bootstrap with:
-
-```powershell
-.\scripts\install-windows.ps1   # venv + data dir + persistent signing keys
-```
-
-> **Execution policy:** The script is unsigned. If your execution policy blocks it,
-> either bypass it per-invocation
-> (`powershell -ExecutionPolicy Bypass -File .\scripts\install-windows.ps1`)
-> or sign the script with your organisation's code-signing certificate after review.
-
-Then configure the IIS site — see [`deploy/iis/README.md`](deploy/iis/README.md).
-Set `CERT_WATCH_TRUST_PROXY=1` so the client IP (for rate limiting and the audit
-log) is read from IIS's forwarded headers rather than the loopback connection.
-
-To land audit events in the **Windows Event Log** (Application log, where AMA /
-SIEM agents collect them), install the optional dependency into the same venv
-created by `install-windows.ps1`, then enable the sink. The installer intentionally
-does not select this extra; run this explicit step on each new installation that
-uses Event Log export:
-
-```powershell
-$venvPython = "C:\ProgramData\cert-watch\venv\Scripts\python.exe"
-$package = (Resolve-Path ".").Path + "[windows]"
-& $venvPython -m pip install --upgrade $package   # installs pywin32
-$env:CERT_WATCH_EVENTLOG = "1"
-```
-
-If `-InstallDir` was used, adjust `$venvPython`. Set
-`CERT_WATCH_EVENTLOG=1` in the IIS or service environment; the process-scoped
-assignment above is only a quick shell example. See the
-[`deploy/iis` runbook](deploy/iis/README.md#optional-windows-event-log-export)
-for deployment details.
-
-## Upgrading
-
-Schema migrations run automatically on startup (with a pre-migration backup).
-The supported upgrade source is **0.9.0 or later** — see [UPGRADING.md](UPGRADING.md)
-for the per-platform steps, the pre-0.9.0 path, and the rollback note.
-
-## Configuration
-
-All configuration is via environment variables.
-
-### Core
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_DATA_DIR` | `/var/lib/cert-watch` (POSIX), `%PROGRAMDATA%\cert-watch` (Windows) | Directory for SQLite database |
-| `CERT_WATCH_HOST` | `0.0.0.0` | Listen address. Also overridable with `--host`; the entrypoint normalizes the two so the secure-by-default check sees the real bind |
-| `CERT_WATCH_PORT` | `8000` | Listen port (also `--port`) |
-| `CERT_WATCH_SCHED_HOUR` | `6` | Hour to run daily scan (UTC) |
-| `CERT_WATCH_SCHED_MIN` | `0` | Minute to run daily scan |
-| `CERT_WATCH_TLS_VERIFY` | `0` | Set `1` to verify TLS certificates when scanning |
-| `CERT_WATCH_LOG_FORMAT` | `text` | Log output format; set `json` for structured logs |
-| `CERT_WATCH_AUDIT_RETENTION_DAYS` | `90` | Days of audit log to keep; purged at startup + daily. `0` disables purging |
-| `CERT_WATCH_HISTORY_RETENTION_DAYS` | `365` | Days of per-scan certificate history to keep; purged at startup + daily. `0` disables purging |
-| `CERT_WATCH_ALERT_RETENTION_DAYS` | `90` | Days of *delivered* alert records to keep; purged at startup + daily. Alerts that were never delivered (pending or failed) are kept 4× as long, so the record of a delivery outage outlives the outage. `0` disables purging |
-| `CERT_WATCH_EVENT_RETENTION_DAYS` | `30` | Days of event-log entries to keep; purged at startup + daily. `0` disables purging |
-| `CERT_WATCH_DRIFT_ALERTS` | `1` | Set `0` to disable drift alerts (issuer change, key-size drop, SHA-1 downgrade, posture/TLS downgrade) |
-| `CERT_WATCH_RENEWAL_WINDOW_DAYS` | `30` | Window for the renewal-stall alert: a leaf cert this many days from expiry with no successor certificate raises a `renewal_stalled` alert. `0` disables it |
-| `CERT_WATCH_CHECK_REVOCATION` | `0` | Set `1` to probe OCSP/CRL reachability during posture grading (findings are warnings, not penalties) |
-| `CERT_WATCH_SCAN_TIMEOUT` | `10` | Per-scan TLS connection timeout (seconds) |
-| `CERT_WATCH_SCAN_RETRIES` | `2` | Number of retry attempts for a failing scan |
-| `CERT_WATCH_SCAN_RETRY_BACKOFF` | `1` | Base delay (seconds) for scan retry backoff |
-| `CERT_WATCH_SCAN_MAX_OUTPUT_BYTES` | `1048576` | Maximum bytes to read from the openssl `s_client` output (1 MiB) |
-| `CERT_WATCH_HSTS_TIMEOUT` | `5` | Timeout (seconds) for the HSTS header probe on port 443 |
-| `CERT_WATCH_RELOAD` | `0` | Set `1` to enable uvicorn auto-reload on code changes (development only) |
-| `CERT_WATCH_DNS_SERVERS` | — | Comma-separated DNS server IPs for hostname resolution during scans (e.g. internal DCs). Falls back to the system resolver |
-| `CERT_WATCH_ALLOW_PRIVATE_IPS` | `1` | Set `1` to allow scanning private IP addresses (RFC 1918 / ULA) |
-| `CERT_WATCH_ALLOWED_SUBNETS` | — | Comma-separated CIDR allowlist scoping which **private** ranges may be scanned (e.g. `10.0.0.0/8,192.168.0.0/16`). When set, a private target is allowed only if it falls inside one of these ranges; public hosts stay scannable and loopback/link-local (incl. cloud metadata) stay blocked. Makes internal scanning an explicit, auditable capability. |
-
-### Scanning & SSRF policy
-
-cert-watch scans hosts you add to it (a TLS handshake to read the certificate),
-so the set of addresses it may reach is a security boundary. The defaults suit
-the primary use case — monitoring internal certificates in a self-hosted, AD
-shop — but should be tightened for sensitive environments:
-
-- **Loopback, link-local, and the cloud metadata endpoint (`169.254.169.254`)
-  are always blocked**, regardless of configuration.
-- **Public hosts are always scannable** (reading a public cert is the baseline
-  function).
-- **Private ranges** (RFC 1918 / ULA) are governed by policy:
-  - Default (`CERT_WATCH_ALLOW_PRIVATE_IPS=1`, no allowlist): all private ranges
-    are scannable.
-  - **Recommended for sensitive deployments:** set `CERT_WATCH_ALLOWED_SUBNETS`
-    to exactly the internal ranges you intend to monitor. Anything outside them
-    is refused. The first-run setup wizard prompts for these ranges.
-  - `CERT_WATCH_ALLOW_PRIVATE_IPS=0` blocks all private scanning.
-- For defence-in-depth, also constrain egress at the network layer (k8s
-  `NetworkPolicy`, an egress proxy, or a dedicated network segment). The shipped
-  `deploy/k8s/networkpolicy.yaml` is permissive toward internal ranges by
-  default to match the app default — tighten it alongside the allowlist.
-
-### Alerts (SMTP)
-
-cert-watch supports two alerting modes:
-
-- **Per-threshold alerts** (default): each newly-tripped expiry threshold sends
-  an alert — one when a cert crosses 14 days, another at 7, etc. Best for a
-  small number of critical certificates that need immediate attention.
-- **Digest mode** (`ALERT_DIGEST_ONLY=1`): sends one global email plus one
-  per-owner email (each listing only their certs) listing all certificates
-  expiring within 30 days. **Recommended for new deployments** — it gives you
-  a daily summary without inbox noise. Renewal-stall alerts still fire
-  individually. The weekly renewal digest runs regardless of mode.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SMTP_HOST` | — | SMTP server hostname |
-| `SMTP_PORT` | `587` | SMTP server port |
-| `SMTP_USER` | — | SMTP username (optional) |
-| `SMTP_PASSWORD` | — | SMTP password (optional; `SMTP_PASSWORD_FILE` supported) |
-| `ALERT_FROM` | — | Sender email address |
-| `ALERT_RECIPIENTS` | — | Comma-separated recipient addresses |
-| `ALERT_DIGEST_ONLY` | `0` | Set `1` for digest mode (recommended for new deployments) |
-
-### Alerts (Webhook)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ALERT_WEBHOOK_URL` | — | Webhook URL for JSON POST alerts (also the incoming-webhook URL for Teams / Discord) |
-| `ALERT_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (`*_FILE` supported) |
-| `ALERT_WEBHOOK_TEMPLATE` | — | Optional payload template (generic kind only); when unset a default JSON body is sent |
-| `ALERT_WEBHOOK_KIND` | `generic` | `generic`, `teams` (Adaptive Card via Workflows), `discord`, or `pagerduty` — selects the payload format |
-| `ALERT_PAGERDUTY_ROUTING_KEY` | — | PagerDuty Events API v2 routing key (triggers an incident; auto-resolves on renewal). `*_FILE` supported |
-
-All webhook delivery — including the Teams/Discord/PagerDuty channels — is routed
-through an **SSRF-guarded HTTP opener** that resolves and re-checks every redirect
-hop against the scan blocklist (see [Scanning & SSRF policy](#scanning--ssrf-policy)).
-
-### Renewal webhook (automation)
-
-Distinct from the alert webhook above (which is human-facing): the **renewal
-webhook** fires a machine-readable POST when cert-watch detects a
-**renewal-overdue** certificate — a cert inside its renewal window with no
-successor yet. It carries enough context (hostname, port, SANs, issuer, expiry,
-and an `automation_hint`) for an external tool — certbot, acme.sh, Certify the
-Web, an Ansible play, a custom script — to act without calling cert-watch back.
-This is the integration seam for closing the loop on a stalled renewal job;
-cert-watch itself does not renew certificates.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_RENEWAL_WEBHOOK_URL` | — | Destination URL; setting it enables the renewal webhook |
-| `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS` | — | JSON object of extra HTTP headers (e.g. an auth token; `*_FILE` supported) |
-| `CERT_WATCH_BASE_URL` | — | If set, adds a `cert_watch_url` deep-link to the cert detail page in the payload |
-
-Delivery is fired from the daily scan cycle, routed through the same
-SSRF-guarded opener as the alert webhook, and **retried** (3 attempts with
-exponential backoff) on transient failure. A persistently failing endpoint is
-logged and dropped — it never blocks the scan cycle. The POST body looks like:
-
-```json
-{
-  "event": "renewal_needed",
-  "hostname": "www.example.com",
-  "port": 443,
-  "cert_fingerprint": "…",
-  "subject_cn": "www.example.com",
-  "san_names": ["www.example.com", "example.com"],
-  "issuer": "R3",
-  "expiry": "2026-07-10T12:00:00+00:00",
-  "days_remaining": 7.0,
-  "expected_renewal_at_days": 30.0,
-  "days_overdue": 23.0,
-  "confidence": "low",
-  "automation_hint": "acme",
-  "cert_watch_url": "https://cert-watch.example.com/certificates/42"
-}
-```
-
-### SIEM / log export
-
-Ship the structured audit log (`ts, actor, action, target_type, target_id,
-detail, source_ip`) to a SIEM. Each sink is enabled only when configured, and all
-are **fail-open** — a down or slow SIEM never blocks or breaks an audited action.
-With nothing configured the audit write path is unchanged.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_SYSLOG_HOST` | — | Syslog server host; enables the syslog sink. Serves any SIEM (QRadar, Sentinel via AMA, Splunk via UF) |
-| `CERT_WATCH_SYSLOG_PORT` | `514` | Syslog port |
-| `CERT_WATCH_SYSLOG_PROTO` | `udp` | `udp` or `tcp` |
-| `CERT_WATCH_HEC_URL` | — | Splunk HTTP Event Collector URL; enables the HEC sink (delivered through the SSRF-safe opener on a background pool) |
-| `CERT_WATCH_HEC_TOKEN` | — | Splunk HEC token (required for HEC). `*_FILE` supported |
-| `CERT_WATCH_HEC_INDEX` | — | Optional Splunk index |
-| `CERT_WATCH_HEC_SOURCETYPE` | `cert_watch` | Splunk sourcetype |
-| `CERT_WATCH_EVENTLOG` | `0` | Set `1` to write to the **Windows Event Log** (Application log). Windows only; install the `cert-watch[windows]` extra (pywin32) |
-| `CERT_WATCH_EVENTLOG_SOURCE` | `cert-watch` | Event source name for the Windows Event Log sink |
-| `CERT_WATCH_INSTANCE_ID` | hostname | Instance identifier stamped on exported events |
-
-### Authentication
-
-No authentication *provider* is configured by default — set `AUTH_PROVIDER` to
-enable LDAP or OAuth/OIDC. cert-watch is nonetheless **secure by default**: a
-network-exposed instance with no provider configured **auto-provisions a local
-admin** on first run rather than serving open (see [First run](#first-run) for
-the full behaviour matrix and where the generated password lands). To run open
-anyway (dev / air-gapped), set `CERT_WATCH_ALLOW_UNAUTH=1`.
-
-#### LDAP / Active Directory
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AUTH_PROVIDER` | — | Set to `ldap` |
-| `LDAP_SERVER` | — | LDAP server URL(s), comma-separated for DC failover (e.g. `ldap://dc1.example.com,ldap://dc2.example.com`) |
-| `LDAP_BASE_DN` | — | Base DN for user search |
-| `LDAP_BIND_DN` | — | Service account DN for search phase |
-| `LDAP_BIND_PASSWORD` | — | Service account password (`*_FILE` supported) |
-| `LDAP_USER_FILTER` | `(sAMAccountName={username})` | Search filter; `{username}` is replaced |
-| `LDAP_START_TLS` | `0` | Set `1` to use StartTLS |
-| `CERT_WATCH_LDAP_ALLOW_INSECURE` | `0` | Set `1` only to permit a legacy plain-`ldap://` simple bind without StartTLS (credentials traverse the network in cleartext) |
-| `LDAP_CA_CERT` | — | CA cert for LDAPS (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
-| `LDAP_REQUIRED_GROUPS` | — | Comma-separated group DNs; transitive membership check |
-| `LDAP_CONNECT_TIMEOUT` | `5` | LDAP connection timeout (seconds) |
-| `LDAP_GROUP_FILTER` | AD transitive OID | LDAP group filter for transitive membership checks. Use `{group}` as the placeholder for the target group DN (default uses the AD `1.2.840.113556.1.4.1941` matching rule OID). Set to a standard `member={group}` filter for non-AD directories |
-
-Requires: `pip install cert-watch[auth-ldap]`
-
-#### OAuth / OIDC (Microsoft Entra, Google, etc.)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AUTH_PROVIDER` | — | Set to `oauth`, `entra`, `azure`, or `oidc` |
-| `OAUTH_CLIENT_ID` | — | OAuth application client ID |
-| `OAUTH_CLIENT_SECRET` | — | OAuth application client secret (`*_FILE` supported) |
-| `OAUTH_ISSUER_URL` | — | OIDC issuer URL (e.g. `https://login.microsoftonline.com/{tenant}/v2.0`) |
-| `OAUTH_SCOPE` | `openid profile email` | OAuth scopes |
-| `OAUTH_AUTHORIZATION_ENDPOINT` | — | Override (skip discovery) |
-| `OAUTH_TOKEN_ENDPOINT` | — | Override (skip discovery) |
-| `OAUTH_USERINFO_ENDPOINT` | — | Override (skip discovery) |
-| `CERT_WATCH_JWKS_CACHE_TTL` | `86400` | Seconds to cache the issuer's JWKS for ID-token verification |
-
-Requires: `pip install cert-watch[auth-oauth]`
-
-> **`CERT_WATCH_BASE_URL` is required for OAuth.** The OAuth redirect URI is built
-> from this value and is **not** derived from the request `Host` header (that
-> would let a Host-injection attack steer the IdP's callback). Set it to your
-> external URL, e.g. `https://certs.example.com`. OAuth login refuses to proceed
-> until it is set.
-
-When behind a reverse proxy/TLS terminator, also set `CERT_WATCH_BASE_URL` (see
-below) so the OAuth redirect URI is built with your public host.
-
-#### Authorization
-
-Once a provider authenticates a user, these optional gates decide what they can
-do. All are comma-separated and unset by default (any authenticated user gets
-full access).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_ALLOWED_GROUPS` | — | Directory group DNs/names; users outside them are denied |
-| `CERT_WATCH_ALLOWED_ROLES` | — | OAuth/OIDC roles required for access |
-| `CERT_WATCH_ADMINS` | — | Usernames allowed to reach `/settings` |
-| `CERT_WATCH_WRITE_USERS` | — | Usernames allowed to mutate data; when set, everyone else is read-only (admins always write) |
-| `CERT_WATCH_LOCAL_ADMIN_USER` | — | Break-glass local admin username (works even when the directory is down) |
-| `CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH` | — | scrypt hash for the break-glass admin; generate with `cert-watch hash-password` (`*_FILE` supported) |
-| `CERT_WATCH_ROLE_MAP` | — | JSON object mapping cert-watch roles to IdP groups/roles. When set, privilege is derived from directory membership rather than username lists. Example: `{"operator":{"groups":["CN=ops,..."],"roles":["app-operator"]}}`. Merged with the mapping edited on Settings → Roles (this variable wins per role). Unset and no UI mapping = all authenticated directory users get full access (backward compat). Local accounts (Settings → Users) always use their assigned role; the break-glass admin is always admin |
-
-##### Role-based access control (RBAC)
-
-When `CERT_WATCH_ROLE_MAP` is set, every request resolves the user's IdP
-groups/roles (carried in the signed session token) to one or more cert-watch
-**roles**, and the union of their permissions decides access:
-
-| Role | Permissions |
-|------|-------------|
-| `viewer` | read-only — sees the dashboard but no write controls |
-| `operator` | read + write (add/scan/upload/edit/delete certificates and hosts) |
-| `admin` | everything, including `/settings` |
-
-The map is `{"<role>": {"groups": [...], "roles": [...]}}`; a user gets every role
-whose `groups`/`roles` intersect their directory membership, falling back to
-`viewer` if none match. Gating is enforced **server-side** — viewers don't see
-write buttons, and a viewer's write request is rejected (303 redirect for forms,
-403 for the JSON API), not merely hidden. With no role map set, all authenticated
-directory users keep full access (backward compat). Local accounts created in
-Settings → Users are always authorized by their own assigned role (none, or a
-deleted role, means viewer), and the break-glass admin is always admin.
-Scope tags, and usernames in a role map's `users` list, compare by Unicode
-casefold (`Payments` = `payments`, `straße` = `strasse`).
-
-#### API keys (machine-to-machine)
-
-For CI pipelines, cert-manager hooks, and monitoring tools that can't carry a
-browser session, create scoped API keys under **Settings → API keys** (admin
-only). A key is shown **once** at creation as a `cwk_…` token (only its hash is
-stored). Send it as a bearer token:
-
-```bash
-curl -H "Authorization: Bearer cwk_…" https://certs.example.com/api/hosts
-```
-
-Scopes map onto the RBAC roles: `read` → viewer, `write` → operator, `admin` →
-full (including key management). Revoke a key from the same page or
-`DELETE /api/api-keys/{id}`. Key use is recorded in the audit log under the key's
-name. API-key requests are exempt from CSRF (CSRF protects the cookie session
-only); they remain subject to the same per-IP rate limits as the rest of `/api/*`.
-The API-key HMAC pepper is loaded once per process. If
-`CERT_WATCH_AUTH_SECRET_FILE` points at a rotated file, restart cert-watch after
-replacing the file; changing its contents alone does not refresh the cached
-pepper. Reissue API keys as part of an auth-secret rotation because keys hashed
-under the old secret no longer authenticate under the new one.
-
-### Secrets, sessions & CSRF
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_AUTH_SECRET` | persisted | HMAC key for session cookies. If unset, a key is generated and persisted to `${DATA_DIR}/.auth_secret` so sessions survive restarts. `*_FILE` supported. Set explicitly in production (or use the file the installers write) |
-| `CERT_WATCH_CSRF_SECRET` | persisted | HMAC key for CSRF tokens; same persistence behaviour as `CERT_WATCH_AUTH_SECRET`. `*_FILE` supported |
-| `CERT_WATCH_COOKIE_SECURE` | `1` | Cookies are `Secure`-flagged by default. Set `0` only for plain-HTTP local dev |
-| `CERT_WATCH_SESSION_TTL` | `28800` | Session-cookie lifetime in seconds (default 8 hours) |
-| `CERT_WATCH_CSP_REPORT_URI` | — | URL for CSP violation reports (added to the `report-uri` / `report-to` directives) |
-
-> Rotating `CERT_WATCH_AUTH_SECRET` invalidates existing sessions and requires
-> re-encrypting stored secrets — run `cert-watch re-encrypt <old_key>` after
-> changing it.
-
-### Reverse proxy / TLS termination
-
-Set these when IIS, nginx, or an ingress terminates TLS and forwards to
-cert-watch (see [`deploy/iis/README.md`](deploy/iis/README.md)).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CERT_WATCH_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` / `X-Real-IP` (for rate limiting + audit log) instead of the proxy's connection IP |
-| `CERT_WATCH_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for the above; restricts which sources may set forwarded headers |
-| `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Builds the OAuth redirect URI from a trusted value rather than the request `Host` header. **Required when OAuth/OIDC is enabled** |
-| `CERT_WATCH_METRICS_TOKEN` | — | Dedicated `Authorization: Bearer <token>` for `/metrics` (`*_FILE` supported); without it, an admin browser session is required when auth is enabled |
-| `CERT_WATCH_ALLOW_UNAUTH` | `0` | Set `1` to allow running with no auth provider on a non-loopback bind (suppresses the secure-by-default refusal and the `/setup` redirect) |
-
-## CLI commands
-
-The `cert-watch` entrypoint supports several subcommands:
-
-```bash
-cert-watch                  # Start the web server (default)
-cert-watch backup <path>    # Create a WAL-safe SQLite backup
-cert-watch hash-password    # Generate a scrypt password hash (interactive)
-cert-watch re-encrypt <key> # Re-encrypt kv_store after .auth_secret rotation
-cert-watch verify-report <file.json>  # Verify a signed compliance report
-cert-watch routing-report <snapshot.sqlite3>  # Inspect offline alert routing
-```
-
-### `cert-watch routing-report <snapshot.sqlite3>`
-
-Inspect a completed, standalone database backup without sending alerts or loading
-SMTP credentials. The report lists group coverage, specific recipient addresses,
-certificates matching multiple groups, and orphans with no specific recipient.
-Use `--format json` for machine-readable output, including the input SHA-256.
-
-The snapshot must match this build's schema and have no WAL, SHM or journal
-companions. Inspection requires SQLite 3.37 or newer. Create a proper backup
-separately; a raw copy of a running WAL
-database may omit committed data. The command never migrates or repairs its input.
-
-These are routing results, not a delivery forecast: global recipients are not
-loaded, and expiry thresholds and digest eligibility are not evaluated. Normal
-delivery tries SMTP first and the single global webhook on failure or absence.
-See [the routing evidence guide](docs/alert-routing-evidence.md) for scope and checks.
-
-### `cert-watch backup <path>`
-
-Creates a consistent snapshot of the SQLite database using the Online Backup
-API (safe to run while the server is running):
-
-```bash
-cert-watch backup /backups/cert-watch-$(date +%F).sqlite3
-```
-
-### `cert-watch hash-password`
-
-Interactive prompt to generate a scrypt hash suitable for
-`CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH`:
-
-```bash
-cert-watch hash-password
-# Password: ********
-# Confirm:  ********
-# $scrypt$N=...  (paste into CERT_WATCH_LOCAL_ADMIN_PASSWORD_HASH)
-```
-
-### `cert-watch re-encrypt <old_key>`
-
-After rotating `CERT_WATCH_AUTH_SECRET`, re-encrypts any secrets stored in the
-`kv_store` table with the new key. Pass the old key as an argument (or set
-`CERT_WATCH_AUTH_SECRET` to the old value and pass the new key):
-
-```bash
-cert-watch re-encrypt <old-signing-key>
-```
-
-### `cert-watch verify-report <file.json>`
-
-Verifies a signed compliance report exported from `/api/reports/compliance.json`.
-Recomputes the content hash and HMAC signature using `CERT_WATCH_AUTH_SECRET` and
-prints `PASS`/`FAIL` (non-zero exit on failure):
-
-```bash
-cert-watch verify-report compliance-report.json
-```
-
-> **What the signature proves — and what it doesn't.** The report is
-> *tamper-evident*: the HMAC-SHA256 over the report's canonical JSON detects any
-> edit to a downloaded report by anyone **without** `CERT_WATCH_AUTH_SECRET`. It
-> is **not non-repudiable** — the instance holds the signing key, so an operator
-> with the key could produce a differently-signed report. For a self-hosted,
-> point-in-time auditor export this is the appropriate guarantee; treat the
-> signature as "this came from this instance and wasn't altered afterward," not
-> as independent third-party attestation. The CSV export carries the same hash
-> and signature for cross-checking, but `verify-report` reads the **JSON** export
-> (the signature covers the canonical JSON, not the CSV bytes). Rotating
-> `CERT_WATCH_AUTH_SECRET` invalidates verification of previously-issued reports.
->
-> The **CAA** compliance metric currently shows **"Not collected"**: CAA is an
-> on-demand lookup (`/caa-check`), not yet stored per scan, so it is reported
-> honestly rather than estimated. Per-scan CAA storage is a planned follow-on.
-
-## Prometheus metrics
-
-The `/metrics` endpoint exposes Prometheus-native gauges for integration with
-Grafana, Datadog, or any Prometheus-compatible scraping system. With
-authentication enabled it requires either an admin browser session or the
-dedicated `CERT_WATCH_METRICS_TOKEN` bearer token. Configure the token for an
-automated scraper. In deliberately open mode the endpoint follows the
-instance's open access policy.
-
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `cert_watch_cert_expiry_days` | gauge | `host`, `subject`, `fingerprint` | Days until expiry (negative = expired) |
-| `cert_watch_certificates_tracked` | gauge | — | Total leaf certificate count |
-| `cert_watch_certificates_expired` | gauge | — | Count of expired certificates |
-| `cert_watch_certificates_by_urgency` | gauge | `urgency` | Count by urgency bucket (`healthy`, `warning`, `critical`, `expired`) — matches dashboard |
-| `cert_watch_certificates_by_posture` | gauge | `grade` | Count by TLS posture grade (`a_plus`, `a`, `b`, `c`, `f`, `unknown`) |
-| `cert_watch_hosts_tracked` | gauge | — | Total tracked host count |
-| `cert_watch_scan_errors` | gauge | `host`, `reason` | Recorded scan failures (gauge — old records are purged by retention) |
-
-Pre-built alert rules for the Prometheus Operator are in
-[`deploy/k8s/prometheus-rules.yaml`](deploy/k8s/prometheus-rules.yaml) (CertExpiringCritical, CertExpiringWarning, CertExpired).
-
-Example scrape config:
-
-```yaml
-scrape_configs:
-  - job_name: cert-watch
-    static_configs:
-      - targets: ["cert-watch-service:8000"]
-    bearer_token: "<your-metrics-token>"
-```
-
-## Endpoints
-
-Most JSON endpoints are at `/api/`; list endpoints support `?page=` and
-`?limit=` pagination.
-
-### Web pages (HTML)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/` | Home: attention queue and renewal horizon |
-| `GET` | `/browse` | Certificate inventory, calendar, and fleet views |
-| `GET` | `/activity` | Alerts, scans, and audit activity (audit is admin-only) |
-| `GET` | `/posture` | Fleet posture, cryptographic inventory, and trends |
-| `GET` | `/readiness` | SC-081 lifetime and renewal-readiness report |
-| `GET` | `/alerts`, `/scan-history`, `/audit` | Legacy activity links (audit is admin-only) |
-| `GET` | `/insights`, `/crypto`, `/team` | Legacy navigation redirects |
-| `GET` | `/reports/compliance` | Compliance report (print-to-PDF; `?tag=` to scope) |
-| `GET` | `/settings` | Settings (admin) |
-| `GET` | `/setup` | First-run setup wizard |
-
-### JSON / operational
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/healthz` | Health check (DB, scheduler, cert counts) |
-| `GET` | `/readyz` | Readiness check (`503` when the monitoring pipeline is degraded) |
-| `GET` | `/api/health` | Health check (JSON) |
-| `GET` | `/metrics` | Prometheus metrics (dedicated bearer token or admin browser session when auth is enabled) |
-| `GET` | `/api/certificates` | List certificates (paginated) |
-| `GET` | `/api/certificates/{id}` | Certificate detail (includes `tags` + `effective_tags`) |
-| `GET` | `/api/tags` | Distinct tags across hosts + certs |
-| `PUT` | `/api/certificates/{id}/tags` | Set a cert's tags (`{"tags": [...]}` or csv) |
-| `PUT` | `/api/hosts/{id}/tags` | Set a host's tags |
-| `GET` | `/api/hosts` | List tracked hosts |
-| `GET` | `/api/alerts` | List alerts |
-| `GET` | `/api/events` | List lifecycle events |
-| `GET` | `/api/readiness.json` | SC-081 readiness report |
-| `GET` | `/api/renewal-analytics` | Fleet renewal analytics |
-| `GET` | `/api/policy` | Current posture policy configuration |
-| `GET` | `/caa-check/{domain}` | CAA record lookup |
-| `GET` | `/api/reports/compliance.json` | Signed compliance report (JSON; `?tag=` to scope) |
-| `GET` | `/api/reports/compliance.csv` | Signed compliance report (CSV) |
-| `POST` | `/hosts` | Add host (form) |
-| `POST` | `/hosts/import` | Bulk import CSV |
-| `POST` | `/hosts/{id}/scan` | Trigger immediate scan |
-| `POST` | `/hosts/{id}/delete` | Delete host |
-| `POST` | `/upload` | Upload certificate file |
-| `POST` | `/certificates/{id}/delete` | Delete certificate |
-| `GET` | `/login` | Login page |
-| `POST` | `/login` | LDAP form login |
-| `GET` | `/auth/login` | Start OAuth flow |
-| `GET` | `/auth/callback` | OAuth callback |
-| `GET` | `/auth/logout` | Logout (clears session) |
-
-## Project layout
-
-```
-src/cert_watch/
-  app.py               FastAPI app factory + lifespan
-  routes/              HTTP route handlers (api, views, hosts, certificates, …)
-  middleware.py        HTTP middleware wiring (install order only)
-  security/            CSRF, rate limiting, CSP nonce + security headers, SecurityContext
-  auth/                Authentication + authorization (session, LDAP, OAuth, local admin,
-                       request context, route guards, tag scope)
-  alerting/            Email + webhook alerting (rules, routing, transports, digests)
-  certificate_model.py X.509 certificate parsing
-  cert_chain.py        Chain extraction and validation
-  config/              Environment and persisted-GUI settings
-  posture.py           TLS posture grading
-  database/            SQLite persistence layer (repositories, queries, migrations)
-  scan.py              TLS scanning
-  scheduler.py         Daily scan scheduler
-  upload.py            Certificate file upload/parse
-  templates/           Jinja2 HTML templates
-  static/              CSS
-tests/                 pytest suite (unit + e2e; count grows — run `pytest --co -q` for the current number)
-docs/spec/             Work-item specs (one per FR)
-deploy/
-  k8s/                 Kustomize manifests
-  compose/             Docker Compose
-  systemd/             Systemd unit file
-  iis/                 IIS web.config(s) + Windows runbook
-  argocd/              Argo CD Application CR
-.github/workflows/     CI, E2E, image build
-```
-
-## Prior art & positioning
-
-cert-watch is not the first TLS-certificate monitor, and it doesn't pretend to
-be. Its niche is being the **all-in-one** certificate-observability tool a small
-or mid-sized business can self-host: deep, read-only insight into the whole
-certificate estate in one unit, rather than stitching several single-purpose
-tools together. For simple "tell me before a cert expires," tools like **Uptime
-Kuma** are an excellent fit; for pure CT watch, **SSLMate Cert Spotter**; for
-ACME issuance/renewal, **Certimate**.
-
-cert-watch's value is the bundle an SMB otherwise has to assemble piecemeal,
-delivered as one self-contained unit: live scan **+** offline upload,
-signature-verified chain validation, TLS posture grading,
-directory auth (LDAP/Entra), and an audit log. (It also began life as a
-hand-built comparison point for
-[software-factory-2](https://github.com/hraedon/software-factory-2); that origin
-is documented in the positioning notes but is no longer what the tool is for.)
-
-See [`docs/positioning.md`](docs/positioning.md) for the full landscape table,
-an honest account of where the alternatives are better, and how this shapes the
-roadmap.
-
-## Known limitations / Non-goals
-
-These boundaries are deliberate and documented so they don't look like bugs.
-
-- **Single-writer SQLite** — the database is a single SQLite file. The k8s
-  deployment uses a `Recreate` rollout strategy; do not scale to multiple
-  writers. A Postgres backend is deliberately deferred until real scale data
-  justifies its permanent operational cost.
-- **Python 3.12 chain extraction needs `openssl` for full chains** — Python
-  3.13 exposes the peer-chain API directly. On 3.12, cert-watch uses
-  `openssl s_client`; without that executable a scan degrades to leaf-only
-  extraction and reports the degraded/incomplete state rather than guessing.
-- **No active estate discovery or renewal** — hosts and offline files are
-  operator-supplied. cert-watch observes renewal automation and can notify an
-  external renewal webhook, but it does not query cloud/CA inventories or act
-  as an ACME client.
-- **No native PDF export** — compliance reports are HTML (print-to-PDF) or
-  signed JSON/CSV. A native renderer is intentionally outside the maintained
-  dependency surface.
+Open <http://localhost:8000>, sign in as `admin`, and add a host with
+**Browse → Add host**. The first scan runs immediately.
+
+For anything longer-lived, follow [docs/install.md](docs/install.md). It covers
+pinning and verifying a release, and sets out what to configure before
+production.
+
+## Documentation
+
+| | |
+|---|---|
+| [Installing](docs/install.md) | Container, Kubernetes, Linux, Windows / IIS; first start; production checklist |
+| [Configuration](docs/configuration.md) | Every setting, with its default and effect |
+| [Access control](docs/access-control.md) | Accounts, roles, directory mapping, scoping, API keys |
+| [Alerting](docs/alerting.md) | How alerts are raised, routed, delivered and retried |
+| [Operations](docs/operations.md) | Monitoring, backups, retention, secrets, troubleshooting |
+| [Upgrading](UPGRADING.md) | What changed between versions, and what to do about it |
+| [Security](SECURITY.md) and [threat model](docs/threat-model.md) | Reporting a vulnerability; what cert-watch defends against |
+| [Architecture](docs/architecture.md) | How the code is organised, for contributors |
+| [Contributing](CONTRIBUTING.md) | Development setup, tests, review expectations |
+| [Changelog](CHANGELOG.md) | Every release |
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

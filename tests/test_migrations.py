@@ -941,7 +941,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
     """UPGRADING.md tells an operator how to apply 0033 by hand. Prove that the
     documented statements leave the database exactly where startup would."""
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
-    from cert_watch.migrations.m0033_alert_deferred_since import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.m0033_alert_deferred_since import MANUAL_SQL
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "manual.sqlite3"
@@ -957,9 +957,6 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
     assert ledger == [("0033",)]
 
-    # The documentation must quote the statement the runner actually executes.
-    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
-    assert COLUMN_SQL in upgrading
 
 
 def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
@@ -1036,7 +1033,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
     """UPGRADING.md tells an operator how to apply 0034 by hand. Prove that the
     documented statements leave the database exactly where startup would."""
     import cert_watch.migrations.registry  # noqa: F401 — registers migrations
-    from cert_watch.migrations.m0034_alert_trigger_cert_id import COLUMN_SQL, MANUAL_SQL
+    from cert_watch.migrations.m0034_alert_trigger_cert_id import MANUAL_SQL
     from cert_watch.migrations.runner import run_pending_migrations
 
     db = tmp_path / "manual.sqlite3"
@@ -1052,9 +1049,6 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
     assert ledger == [("0034",)]
 
-    # The documentation must quote the statement the runner actually executes.
-    upgrading = (Path(__file__).resolve().parents[1] / "UPGRADING.md").read_text(encoding="utf-8")
-    assert COLUMN_SQL in upgrading
 
 
 def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(

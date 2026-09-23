@@ -2,9 +2,192 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.0.0] - 2026-09-23
+
+cert-watch 1.0 is a maintenance release in the literal sense: it rebuilds the
+parts that were costly to change, and makes the defaults strict. Read
+[UPGRADING.md](UPGRADING.md) before upgrading. Several changes can lock
+someone out or change who gets alerted.
+
+Highlights:
+
+- **Alerting has a persisted lifecycle.** Alerts are claimed under a lease,
+  retried with backoff, and given up visibly. Each alert type has one dedupe
+  key per endpoint, routing is stored with the alert, and a single claimed
+  engine sends every digest. Duplicate pages and silently lost alerts are both
+  designed out.
+- **Access control is enforced in one place.** One guard family, with CSRF on
+  every write. Services check scope inside the write lock. Local accounts'
+  roles are authoritative. A golden authorization matrix covers every
+  mutating route.
+- **Configuration has one source of truth.** Settings are declared once and
+  resolved by one rule; `_FILE` secrets fail closed, and the reference is
+  generated from the code.
+- **The JSON API is complete.** Every UI action has an API equivalent over the
+  same service, and a test proves it.
+- **The schema is defined once.** Migrations are atomic, fresh and upgraded
+  databases are identical, and concurrent startups serialise.
+- **The scheduler is an object** that restarts itself with backoff and
+  reports honestly when it can't.
+- **Security hardening** from a threat-model refresh: `/metrics`
+  authentication, content-type and Host checks, request-body caps,
+  cleartext-LDAP refusal and cloud-metadata blocking.
+- **Documentation rewritten**, with install, configuration, access-control,
+  alerting, operations and architecture guides. The planning history moved out
+  of the tree; see [docs/history.md](docs/history.md).
+
+This section also covers changes shipped in 0.9.4 and 0.9.5, which were tagged
+without changelog sections of their own.
+
+### Security
+
+- **Pre-1.0 request and outbound hardening.** `/metrics` now requires either
+  its configured bearer token or an administrator browser session; API keys
+  cannot authorize the admin-session path. API-key creation, listing, and
+  revocation likewise require an administrator browser session. JSON-body
+  writes require `application/json` and reject malformed or non-object bodies
+  without a server error. In auth-disabled mode, requests accept only a
+  loopback `Host` or the host configured by `CERT_WATCH_BASE_URL`. An ASGI
+  request-body limit rejects declared and streamed bodies above 12 MiB before
+  multipart parsing. Login throttling now uses a normalized username plus
+  client IP, with a separate looser per-IP ceiling. The per-IP ceiling is
+  deliberately 50 attempts per five minutes (up from 10): the tight
+  10-attempt account-and-IP bucket still limits focused guessing, while the
+  looser aggregate ceiling avoids locking out many users behind one NAT or
+  untrusted proxy.
+- **Plain LDAP simple binds are refused by default.** Use `ldaps://` or
+  `LDAP_START_TLS=1`. A legacy deployment can explicitly retain plaintext
+  binds with `CERT_WATCH_LDAP_ALLOW_INSECURE=1`; login and the Settings test
+  action report a clear refusal when the transport is unsafe.
+- **Outbound address classification covers cloud and carrier ranges.** The AWS
+  IPv6 service range `fd00:ec2::/32` is always blocked for scans and webhook
+  HTTP, including the `.253` DNS resolver and `.254` metadata endpoint. The
+  local-use NAT64 prefix `64:ff9b:1::/48` is unwrapped before address-policy
+  checks, matching the well-known NAT64 prefix. `100.64.0.0/10` is treated as private and follows
+  `CERT_WATCH_ALLOW_PRIVATE_IPS` / `CERT_WATCH_ALLOWED_SUBNETS` policy.
+- **JSON write routes now enforce the same per-action budgets and scope as the
+  HTML forms.** HTML and JSON calls share one client budget for host creation,
+  import, scans, endpoint settings, certificate upload, and mark-all-read.
+  Host JSON bodies are strictly typed and bounded before service execution.
+  Application services now reject a missing acting principal; trusted
+  request-less work uses an explicit system principal instead of `None`.
+- **Scoped host creation and CSV import reject tags outside the caller's
+  scope.** Earlier versions could accept a scoped user's extra tag and persist
+  the union (for example `B,A` for an `A`-scoped user). The caller's scope tag
+  is still attached automatically, but every additionally submitted tag must
+  be within that scope.
+- **Sensitive settings uniformly support secret files.** Every environment-backed
+  sensitive setting accepts a `<NAME>_FILE` source (including CSRF and metrics
+  tokens), with the direct environment variable taking precedence. An explicitly
+  configured secret file that is missing, unreadable, a directory, or empty now
+  stops startup with a configuration error naming the variable; its contents are
+  never logged. Empty `_FILE` variables remain unset.
+- **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
+  every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
+  read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped
+  API key. Admin now requires membership when the list is set, and admin
+  implies write: with only `CERT_WATCH_WRITE_USERS` set, admin requires
+  membership in it. With neither legacy list set, the full-access default is
+  unchanged. See UPGRADING.md.
+- **Local accounts are authorized by their assigned role, not the role map.**
+  With #59 fixed, accounts created in Settings → Users would have received
+  full access whenever no `CERT_WATCH_ROLE_MAP` was set. A users-table
+  session now resolves from its own role on every request (no role, or a
+  deleted role, means read-only) and ignores the legacy write/admin user
+  lists; the break-glass admin is always admin. How a session was minted
+  travels as a reserved claim an IdP cannot supply, so a directory user who
+  shares a local username gets neither its role nor break-glass status.
+- **The Settings → Roles IdP mapping takes effect.** It was stored but never
+  read, so directory users kept full access while the UI showed them mapped.
+  It is now merged into the role map (env `CERT_WATCH_ROLE_MAP` wins per role)
+  at startup and when saved. See UPGRADING.md before saving a first mapping.
+- **A role mapping cannot outlive its role.** Settings → Roles mappings are
+  now stored by role id: renaming a role keeps its mapping, deleting a role
+  deletes it, and an entry that names no existing role grants nothing. (Keyed
+  by name, a deleted or renamed role called `admin` left a mapping that fell
+  back to the built-in admin tier.) Legacy name-keyed entries are honoured
+  while a role of that name exists and rewritten by id on the next save.
+- **Oversized sessions fail closed.** Trimming a session to fit the cookie
+  limit could drop its roles, and with them the local-account marker, turning
+  a read-only local account into full access. Roles are never trimmed now
+  (groups, then email, are); a local login whose session cannot carry its
+  marker is refused. Local usernames are capped at 128 characters and emails
+  at 254.
+- **Sessions from earlier releases are rejected (everyone signs in once).**
+  They carry no local-account marker, so an unmarked session would have been
+  authorized as a directory user (full access with no role map), and a
+  directory session holding the literal claim `cw:break-glass` would have
+  read as break-glass. The session format version is now bound into the
+  signature; older tokens fail verification.
+- **A renamed account's cookie cannot attach to a new account.** Renaming a
+  local user revokes sessions for the old and new names, and creating a user
+  revokes any residual session for that name; previously an old `alice`
+  cookie resolved to a later account created as `alice`. The revocation happens
+  before the new or renamed account becomes visible (and again after), so
+  there is no window in which an old cookie matches it.
+- **A role-map read error no longer grants full access.** A database error
+  while reading the Settings → Roles mapping (e.g. `database is locked`
+  during a settings rebuild) used to produce an empty role map, which means
+  "full access" for directory users. The error now propagates and the last
+  good settings stay in force; if settings cannot be loaded at startup,
+  directory users are read-only until they load cleanly.
+- **Removing the last IdP mapping no longer restores full access.** Once a
+  Settings → Roles mapping has been saved (or one exists from an earlier
+  release), an empty mapping leaves directory users read-only instead of
+  reverting to the never-configured "full access" default. The Roles page
+  warns before the last mapped role is deleted. A stored mapping that is not a
+  readable JSON object is treated the same way (and logged), rather than as
+  "never configured".
+- **Legacy name-keyed mappings are normalised once.** Entries stored by role
+  name are rewritten to role ids on load (dropped if no role has that name)
+  and name keys are then ignored, so a role created later with a reused name
+  never inherits an old mapping.
+- **OAuth state and session tokens are signed in separate domains.** A
+  session token (including a pre-1.0 one) no longer verifies as an OAuth
+  state token, or vice versa. An OAuth sign-in in progress during the
+  upgrade must be restarted.
+- **A local account cannot shadow the break-glass admin.** Settings → Users
+  rejects the break-glass username (case-insensitive) on create and rename,
+  and sign-in tries the break-glass password even if a same-named account
+  already exists.
+- **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
+  and `POST /trust-anchors/{id}/delete` required only write access on some tag,
+  so a tag-scoped operator could install or remove a fleet-wide trust anchor.
+  They now require an administrator (with CSRF), matching the settings page.
+- **Scan history is scope-filtered.** `/scan-history` showed every host's
+  name, port and scan error to tag-scoped users; it now lists only scans of
+  hosts inside the user's scope.
+- **Cryptography security floor.** `cryptography` now requires 50.0.0, which
+  fixes CVE-2026-69247 / PYSEC-2026-3552. cert-watch does not use the affected
+  PKCS#7 decryption APIs, but the update keeps the locked closure and strict
+  advisory gate clean.
+- **Trusted-proxy peer enforcement.** Forwarded client-IP headers are accepted
+  only when the immediate TCP peer is in `CERT_WATCH_TRUSTED_PROXIES`; malformed
+  forwarding chains fail closed to the peer address.
+- **SMTP DNS-rebinding closure.** SMTP delivery and the admin test route now
+  resolve and validate the relay once, connect to that pinned address on both
+  STARTTLS and implicit-TLS paths, preserve the configured hostname for
+  certificate verification, and fail closed when resolution fails.
+- **Removed `CERT_WATCH_CSRF_DISABLED` env var (WI-097).** CSRF protection can
+  no longer be disabled at runtime via environment variable. The deprecated env
+  var (which globally disabled CSRF on all routes) has been removed from
+  `middleware.check_csrf` and the startup lifespan. Deployments that set
+  `CERT_WATCH_CSRF_DISABLED=1` must remove it — CSRF is now always enforced.
+  The unit test suite uses an internal test-only flag (not env-var settable) to
+  bypass CSRF for form-POST convenience; `csrf_strict` fixture re-enables real
+  validation for tests that assert CSRF enforcement.
+- **Tag-scope enforcement for bulk operations (WI-078).** The three bulk routes
+  — scan-all-hosts, flush-alert-queue, and mark-all-alerts-read — now honour the
+  caller's tag scope. Previously a scoped user could scan every host, flush the
+  entire alert queue, or mark all alerts read regardless of their team scope;
+  these operations now act only on in-scope resources, while admins / unscoped
+  users are unchanged. The scoped SQL lives in repository methods
+  (`SqliteHostRepository.list_scoped`, `SqliteAlertRepository.list_pending_scoped`
+  / `mark_all_read`) and a `ScopedAlertRepository` decorator, with route-level
+  regression tests that drive real scoped sessions end-to-end.
 
 ### Added
+
 - **Endpoint-keyed alert lifecycle and persisted routing.** Migration 0037
   adds alert dedupe keys, condition closure timestamps, versioned routing
   snapshots, an open-queue uniqueness guard, and a `rule_firings` ledger for
@@ -63,58 +246,40 @@ All notable changes to cert-watch are documented in this file.
   recipient unions, negative destinations, fallback and durable retry behavior.
   The receipt suite runs explicitly in CI, including TLS certificate and hostname
   refusal checks, rather than being silently excluded by integration markers.
-
-### Security
-- **Pre-1.0 request and outbound hardening.** `/metrics` now requires either
-  its configured bearer token or an administrator browser session; API keys
-  cannot authorize the admin-session path. API-key creation, listing, and
-  revocation likewise require an administrator browser session. JSON-body
-  writes require `application/json` and reject malformed or non-object bodies
-  without a server error. In auth-disabled mode, requests accept only a
-  loopback `Host` or the host configured by `CERT_WATCH_BASE_URL`. An ASGI
-  request-body limit rejects declared and streamed bodies above 12 MiB before
-  multipart parsing. Login throttling now uses a normalized username plus
-  client IP, with a separate looser per-IP ceiling. The per-IP ceiling is
-  deliberately 50 attempts per five minutes (up from 10): the tight
-  10-attempt account-and-IP bucket still limits focused guessing, while the
-  looser aggregate ceiling avoids locking out many users behind one NAT or
-  untrusted proxy.
-- **Plain LDAP simple binds are refused by default.** Use `ldaps://` or
-  `LDAP_START_TLS=1`. A legacy deployment can explicitly retain plaintext
-  binds with `CERT_WATCH_LDAP_ALLOW_INSECURE=1`; login and the Settings test
-  action report a clear refusal when the transport is unsafe.
-- **Outbound address classification covers cloud and carrier ranges.** The AWS
-  IPv6 service range `fd00:ec2::/32` is always blocked for scans and webhook
-  HTTP, including the `.253` DNS resolver and `.254` metadata endpoint. The
-  local-use NAT64 prefix `64:ff9b:1::/48` is unwrapped before address-policy
-  checks, matching the well-known NAT64 prefix. `100.64.0.0/10` is treated as private and follows
-  `CERT_WATCH_ALLOW_PRIVATE_IPS` / `CERT_WATCH_ALLOWED_SUBNETS` policy.
-- **JSON write routes now enforce the same per-action budgets and scope as the
-  HTML forms.** HTML and JSON calls share one client budget for host creation,
-  import, scans, endpoint settings, certificate upload, and mark-all-read.
-  Host JSON bodies are strictly typed and bounded before service execution.
-  Application services now reject a missing acting principal; trusted
-  request-less work uses an explicit system principal instead of `None`.
-- **Scoped host creation and CSV import reject tags outside the caller's
-  scope.** Earlier versions could accept a scoped user's extra tag and persist
-  the union (for example `B,A` for an `A`-scoped user). The caller's scope tag
-  is still attached automatically, but every additionally submitted tag must
-  be within that scope.
-- **Sensitive settings uniformly support secret files.** Every environment-backed
-  sensitive setting accepts a `<NAME>_FILE` source (including CSRF and metrics
-  tokens), with the direct environment variable taking precedence. An explicitly
-  configured secret file that is missing, unreadable, a directory, or empty now
-  stops startup with a configuration error naming the variable; its contents are
-  never logged. Empty `_FILE` variables remain unset.
-- **`CERT_WATCH_ADMINS` is enforced without a role map.** With no role map,
-  every directory user was admin regardless of `CERT_WATCH_ADMINS`, so a
-  read-only user (outside `CERT_WATCH_WRITE_USERS`) could mint a write-scoped
-  API key. Admin now requires membership when the list is set, and admin
-  implies write: with only `CERT_WATCH_WRITE_USERS` set, admin requires
-  membership in it. With neither legacy list set, the full-access default is
-  unchanged. See UPGRADING.md.
+- **Renewal webhook (automation seam).** When the daily scan cycle detects a
+  **renewal-overdue** certificate (inside its renewal window with no successor
+  yet), cert-watch can POST a structured, machine-readable payload to an
+  external renewal tool — certbot, acme.sh, Certify the Web, an Ansible play, a
+  custom script — carrying hostname, port, SANs, issuer, expiry, and an
+  `automation_hint` so the receiver can act without calling back. Distinct from
+  the human-facing alert webhook. Enabled with `CERT_WATCH_RENEWAL_WEBHOOK_URL`
+  (optional `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS`, `CERT_WATCH_BASE_URL` for a
+  deep-link); routed through the same SSRF-guarded opener as the alert webhook,
+  **retried** with exponential backoff (3 attempts) on transient failure, and
+  best-effort (a failing endpoint is logged, never blocks the scan cycle).
+  cert-watch does not renew certificates itself — this is the integration seam
+  for closing the loop on a stalled job. Documented in the README; the wiring
+  (detect → emit → deliver, plus 24h dedup and retry) is covered by
+  `tests/test_scheduler_renewal_webhook.py`.
+- **Windows uninstaller (`scripts/uninstall-windows.ps1`).** Tears down a
+  Windows/IIS deployment created by `install-windows.ps1`: stops/removes the
+  app pool and site, removes the physical site directory, and deletes **only
+  the TLS cert binding this deployment owns**. Port-443 sharing is respected —
+  the script reads the site's own HTTPS binding to decide ownership: a catch-all
+  install removes `ipport=0.0.0.0:443`; an SNI install (`-SharePort443`) removes
+  `hostnameport=<host>:443` only and leaves the catch-all alone (a sibling tool
+  such as gpo-lens may own it). The catch-all/SNI decision keys on `sslFlags`
+  (bit 1), not hostname presence, since a catch-all binding can carry a host
+  header. The site directory removed is the site's own `physicalPath` (not a
+  fixed path), so a non-default `-SiteName` cannot delete another site's
+  directory. Data is preserved by default; `-RemoveData` (gated behind a typed
+  confirmation or `-Force`) also deletes the signing keys and cert-history DB.
+  Validated end-to-end on a real IIS host with disposable sibling sites; covered
+  by `tests/test_uninstall_windows_ps1.py` and documented in
+  `deploy/iis/README.md`.
 
 ### Changed
+
 - **Alert rules no longer manufacture repeat notifications for a persistent
   condition.** Renewal-stalled alerts fire once per endpoint and certificate
   fingerprint;
@@ -194,8 +359,47 @@ All notable changes to cert-watch are documented in this file.
   recorded as `smtp` or `webhook:<kind>` (for example `webhook:teams` and
   `webhook:alertmanager`); legacy ledger names are normalized on read and the
   append-only historical rows are not rewritten.
+- **The identifier gate now fails closed everywhere it runs.** The local hooks
+  previously exited before invoking the gate whenever no denylist was
+  configured, so the always-on swap-file/`.env`/guarded-dir guards and the
+  public-repo fail-closed logic never fired outside CI; they are now always
+  invoked and the script itself decides. In `--staged` mode the publication
+  declaration is read from the index — the bytes the commit actually records —
+  not the worktree, and staged type-changes (`T`) are scanned, not just
+  adds/copies/modifications. The CI job runs on `pull_request_target` with the
+  base ref's script scanning an untrusted PR tree (new `--tree` mode), so fork
+  PRs are gated instead of hard-failing on a secret they cannot hold.
+- **Information architecture: Home / Browse split.** The landing page is now a
+  **Home** view organized around the operator's actual question — "what needs
+  a human, and when?" — instead of the raw inventory table. Home shows a
+  ranked attention queue (expired → stalled renewals → critical → failing
+  scans → warnings, with renewal confidence demoting automated renewals) and a
+  12-week expiry horizon with renewal-storm markers. The full inventory table
+  (sorting, urgency filters, pivots, calendar, add drawer) moved to **`/browse`**;
+  requests to `/` carrying the old dashboard's filter/sort/page/view params
+  redirect there (307, query preserved). Nav: Home · Browse · Posture ·
+  Activity · Settings.
+- CI and E2E jobs install from the committed `uv.lock`, Starlette's test client
+  uses its supported `httpx2` backend, and the Docker build pins the `uv` image
+  by digest for reproducible builds.
+
+### Removed
+
+- **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
+  host-scoped concept. Migration 0031 concatenates every non-empty
+  `certificates.notes` value into the matching `hosts.notes` row and drops the
+  column only when no unmatched notes remain. Endpoints removed: `POST /certificates/{id}/notes`,
+  `PATCH /api/certificates/{id}/notes`; the `notes` key was also removed from
+  `GET /api/certificates/{id}` responses. The three dashboard inline note
+  editors were removed — the dashboard shows a read-only note indicator; the
+  single editing surface is the Notes panel on the endpoint detail page
+  (`POST /hosts/{id}/notes`, JSON: `PATCH /api/hosts/{id}/notes`).
+  **Caveat:** notes attached to uploaded certificates with no matching host
+  row cannot be merged; they are listed in a WARNING log at migration time and
+  remain in the deprecated live column as well as the pre-migration backup.
 
 ### Fixed
+
 - **Scheduler crashes recover without restart storms or false readiness.**
   Exceptions in loop setup now retry with exponential backoff (one second up
   to five minutes), make `/readyz` not-ready during recovery, and expose the
@@ -266,22 +470,6 @@ All notable changes to cert-watch are documented in this file.
   and the global write lock is released, so a slow or unreachable syslog/HEC
   sink cannot stall other writers on those paths, and the event is not sent
   before its row commits.
-
-### Removed
-- **Per-certificate notes (UI-INVENTORY V1/V2).** Notes are now a single
-  host-scoped concept. Migration 0031 concatenates every non-empty
-  `certificates.notes` value into the matching `hosts.notes` row and drops the
-  column only when no unmatched notes remain. Endpoints removed: `POST /certificates/{id}/notes`,
-  `PATCH /api/certificates/{id}/notes`; the `notes` key was also removed from
-  `GET /api/certificates/{id}` responses. The three dashboard inline note
-  editors were removed — the dashboard shows a read-only note indicator; the
-  single editing surface is the Notes panel on the endpoint detail page
-  (`POST /hosts/{id}/notes`, JSON: `PATCH /api/hosts/{id}/notes`).
-  **Caveat:** notes attached to uploaded certificates with no matching host
-  row cannot be merged; they are listed in a WARNING log at migration time and
-  remain in the deprecated live column as well as the pre-migration backup.
-
-### Fixed
 - **Accounts created in Settings → Users can log in (#59).** The auth provider
   was built without the database path, so the users table was never consulted
   and every locally created account was rejected. Each account is authorized
@@ -529,162 +717,6 @@ All notable changes to cert-watch are documented in this file.
   and webhook tests now run their synchronous network or password-hashing work
   off the async request loop, so a slow external service cannot stall unrelated
   requests.
-
-### Changed
-- **The identifier gate now fails closed everywhere it runs.** The local hooks
-  previously exited before invoking the gate whenever no denylist was
-  configured, so the always-on swap-file/`.env`/guarded-dir guards and the
-  public-repo fail-closed logic never fired outside CI; they are now always
-  invoked and the script itself decides. In `--staged` mode the publication
-  declaration is read from the index — the bytes the commit actually records —
-  not the worktree, and staged type-changes (`T`) are scanned, not just
-  adds/copies/modifications. The CI job runs on `pull_request_target` with the
-  base ref's script scanning an untrusted PR tree (new `--tree` mode), so fork
-  PRs are gated instead of hard-failing on a secret they cannot hold.
-- **Information architecture: Home / Browse split.** The landing page is now a
-  **Home** view organized around the operator's actual question — "what needs
-  a human, and when?" — instead of the raw inventory table. Home shows a
-  ranked attention queue (expired → stalled renewals → critical → failing
-  scans → warnings, with renewal confidence demoting automated renewals) and a
-  12-week expiry horizon with renewal-storm markers. The full inventory table
-  (sorting, urgency filters, pivots, calendar, add drawer) moved to **`/browse`**;
-  requests to `/` carrying the old dashboard's filter/sort/page/view params
-  redirect there (307, query preserved). Nav: Home · Browse · Posture ·
-  Activity · Settings.
-- CI and E2E jobs install from the committed `uv.lock`, Starlette's test client
-  uses its supported `httpx2` backend, and the Docker build pins the `uv` image
-  by digest for reproducible builds.
-
-### Added
-- **Renewal webhook (automation seam).** When the daily scan cycle detects a
-  **renewal-overdue** certificate (inside its renewal window with no successor
-  yet), cert-watch can POST a structured, machine-readable payload to an
-  external renewal tool — certbot, acme.sh, Certify the Web, an Ansible play, a
-  custom script — carrying hostname, port, SANs, issuer, expiry, and an
-  `automation_hint` so the receiver can act without calling back. Distinct from
-  the human-facing alert webhook. Enabled with `CERT_WATCH_RENEWAL_WEBHOOK_URL`
-  (optional `CERT_WATCH_RENEWAL_WEBHOOK_HEADERS`, `CERT_WATCH_BASE_URL` for a
-  deep-link); routed through the same SSRF-guarded opener as the alert webhook,
-  **retried** with exponential backoff (3 attempts) on transient failure, and
-  best-effort (a failing endpoint is logged, never blocks the scan cycle).
-  cert-watch does not renew certificates itself — this is the integration seam
-  for closing the loop on a stalled job. Documented in the README; the wiring
-  (detect → emit → deliver, plus 24h dedup and retry) is covered by
-  `tests/test_scheduler_renewal_webhook.py`.
-- **Windows uninstaller (`scripts/uninstall-windows.ps1`).** Tears down a
-  Windows/IIS deployment created by `install-windows.ps1`: stops/removes the
-  app pool and site, removes the physical site directory, and deletes **only
-  the TLS cert binding this deployment owns**. Port-443 sharing is respected —
-  the script reads the site's own HTTPS binding to decide ownership: a catch-all
-  install removes `ipport=0.0.0.0:443`; an SNI install (`-SharePort443`) removes
-  `hostnameport=<host>:443` only and leaves the catch-all alone (a sibling tool
-  such as gpo-lens may own it). The catch-all/SNI decision keys on `sslFlags`
-  (bit 1), not hostname presence, since a catch-all binding can carry a host
-  header. The site directory removed is the site's own `physicalPath` (not a
-  fixed path), so a non-default `-SiteName` cannot delete another site's
-  directory. Data is preserved by default; `-RemoveData` (gated behind a typed
-  confirmation or `-Force`) also deletes the signing keys and cert-history DB.
-  Validated end-to-end on a real IIS host with disposable sibling sites; covered
-  by `tests/test_uninstall_windows_ps1.py` and documented in
-  `deploy/iis/README.md`.
-
-### Security
-- **Local accounts are authorized by their assigned role, not the role map.**
-  With #59 fixed, accounts created in Settings → Users would have received
-  full access whenever no `CERT_WATCH_ROLE_MAP` was set. A users-table
-  session now resolves from its own role on every request (no role, or a
-  deleted role, means read-only) and ignores the legacy write/admin user
-  lists; the break-glass admin is always admin. How a session was minted
-  travels as a reserved claim an IdP cannot supply, so a directory user who
-  shares a local username gets neither its role nor break-glass status.
-- **The Settings → Roles IdP mapping takes effect.** It was stored but never
-  read, so directory users kept full access while the UI showed them mapped.
-  It is now merged into the role map (env `CERT_WATCH_ROLE_MAP` wins per role)
-  at startup and when saved. See UPGRADING.md before saving a first mapping.
-- **A role mapping cannot outlive its role.** Settings → Roles mappings are
-  now stored by role id: renaming a role keeps its mapping, deleting a role
-  deletes it, and an entry that names no existing role grants nothing. (Keyed
-  by name, a deleted or renamed role called `admin` left a mapping that fell
-  back to the built-in admin tier.) Legacy name-keyed entries are honoured
-  while a role of that name exists and rewritten by id on the next save.
-- **Oversized sessions fail closed.** Trimming a session to fit the cookie
-  limit could drop its roles, and with them the local-account marker, turning
-  a read-only local account into full access. Roles are never trimmed now
-  (groups, then email, are); a local login whose session cannot carry its
-  marker is refused. Local usernames are capped at 128 characters and emails
-  at 254.
-- **Sessions from earlier releases are rejected (everyone signs in once).**
-  They carry no local-account marker, so an unmarked session would have been
-  authorized as a directory user (full access with no role map), and a
-  directory session holding the literal claim `cw:break-glass` would have
-  read as break-glass. The session format version is now bound into the
-  signature; older tokens fail verification.
-- **A renamed account's cookie cannot attach to a new account.** Renaming a
-  local user revokes sessions for the old and new names, and creating a user
-  revokes any residual session for that name; previously an old `alice`
-  cookie resolved to a later account created as `alice`. The revocation happens
-  before the new or renamed account becomes visible (and again after), so
-  there is no window in which an old cookie matches it.
-- **A role-map read error no longer grants full access.** A database error
-  while reading the Settings → Roles mapping (e.g. `database is locked`
-  during a settings rebuild) used to produce an empty role map, which means
-  "full access" for directory users. The error now propagates and the last
-  good settings stay in force; if settings cannot be loaded at startup,
-  directory users are read-only until they load cleanly.
-- **Removing the last IdP mapping no longer restores full access.** Once a
-  Settings → Roles mapping has been saved (or one exists from an earlier
-  release), an empty mapping leaves directory users read-only instead of
-  reverting to the never-configured "full access" default. The Roles page
-  warns before the last mapped role is deleted. A stored mapping that is not a
-  readable JSON object is treated the same way (and logged), rather than as
-  "never configured".
-- **Legacy name-keyed mappings are normalised once.** Entries stored by role
-  name are rewritten to role ids on load (dropped if no role has that name)
-  and name keys are then ignored, so a role created later with a reused name
-  never inherits an old mapping.
-- **OAuth state and session tokens are signed in separate domains.** A
-  session token (including a pre-1.0 one) no longer verifies as an OAuth
-  state token, or vice versa. An OAuth sign-in in progress during the
-  upgrade must be restarted.
-- **A local account cannot shadow the break-glass admin.** Settings → Users
-  rejects the break-glass username (case-insensitive) on create and rename,
-  and sign-in tries the break-glass password even if a same-named account
-  already exists.
-- **Trust-anchor upload and delete are admin-only (#65).** `POST /trust-anchors`
-  and `POST /trust-anchors/{id}/delete` required only write access on some tag,
-  so a tag-scoped operator could install or remove a fleet-wide trust anchor.
-  They now require an administrator (with CSRF), matching the settings page.
-- **Scan history is scope-filtered.** `/scan-history` showed every host's
-  name, port and scan error to tag-scoped users; it now lists only scans of
-  hosts inside the user's scope.
-- **Cryptography security floor.** `cryptography` now requires 50.0.0, which
-  fixes CVE-2026-69247 / PYSEC-2026-3552. cert-watch does not use the affected
-  PKCS#7 decryption APIs, but the update keeps the locked closure and strict
-  advisory gate clean.
-- **Trusted-proxy peer enforcement.** Forwarded client-IP headers are accepted
-  only when the immediate TCP peer is in `CERT_WATCH_TRUSTED_PROXIES`; malformed
-  forwarding chains fail closed to the peer address.
-- **SMTP DNS-rebinding closure.** SMTP delivery and the admin test route now
-  resolve and validate the relay once, connect to that pinned address on both
-  STARTTLS and implicit-TLS paths, preserve the configured hostname for
-  certificate verification, and fail closed when resolution fails.
-- **Removed `CERT_WATCH_CSRF_DISABLED` env var (WI-097).** CSRF protection can
-  no longer be disabled at runtime via environment variable. The deprecated env
-  var (which globally disabled CSRF on all routes) has been removed from
-  `middleware.check_csrf` and the startup lifespan. Deployments that set
-  `CERT_WATCH_CSRF_DISABLED=1` must remove it — CSRF is now always enforced.
-  The unit test suite uses an internal test-only flag (not env-var settable) to
-  bypass CSRF for form-POST convenience; `csrf_strict` fixture re-enables real
-  validation for tests that assert CSRF enforcement.
-- **Tag-scope enforcement for bulk operations (WI-078).** The three bulk routes
-  — scan-all-hosts, flush-alert-queue, and mark-all-alerts-read — now honour the
-  caller's tag scope. Previously a scoped user could scan every host, flush the
-  entire alert queue, or mark all alerts read regardless of their team scope;
-  these operations now act only on in-scope resources, while admins / unscoped
-  users are unchanged. The scoped SQL lives in repository methods
-  (`SqliteHostRepository.list_scoped`, `SqliteAlertRepository.list_pending_scoped`
-  / `mark_all_read`) and a `ScopedAlertRepository` decorator, with route-level
-  regression tests that drive real scoped sessions end-to-end.
 
 ## [0.9.3] - 2026-06-17
 

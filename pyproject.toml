@@ -1,6 +1,6 @@
 [project]
 name = "cert-watch"
-version = "0.9.5"
+version = "1.0.0"
 description = "All-in-one observability for the certificate lifecycle — live scanning, offline upload, signature-verified chain validation, TLS posture grading, revocation checking, and alerting — built for small and mid-sized businesses."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -86,6 +86,11 @@ select = [
 # These characters are intentional prose/math glyphs in documentation, comments,
 # and user-facing strings; they are not used as identifier lookalikes.
 allowed-confusables = ["–", "×", "∪", "›"]
+
+[tool.ruff.lint.per-file-ignores]
+# Operator-facing prose, one setting per line; wrapping it would only make the
+# table harder to scan. It is rendered into docs/configuration.md.
+"src/cert_watch/config/field_docs.py" = ["E501"]
 
 [tool.ruff.lint.mccabe]
 # Structural ratchet: lower this as the current worst function is simplified.
