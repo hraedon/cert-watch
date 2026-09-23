@@ -922,7 +922,7 @@ class TestAlertGroupAdminGate:
         from cert_watch.routes.api.alerts import api_create_alert_group
 
         source = inspect.getsource(api_create_alert_group)
-        assert "admin_write_guard" in source, (
+        assert "admin_json_write_guard" in source, (
             "Alert-group creation should require admin write, not just write"
         )
 

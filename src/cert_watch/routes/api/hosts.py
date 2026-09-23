@@ -11,7 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, Strict
 from pydantic import ValidationError as PydanticValidationError
 
 from cert_watch.audit import resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import admin_write_guard, require_auth, write_guard
+from cert_watch.auth.guards import (
+    admin_json_write_guard,
+    json_write_guard,
+    require_auth,
+    write_guard,
+)
 from cert_watch.auth.scope import ScopeDeniedError
 from cert_watch.database import SqliteHostRepository
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
@@ -112,7 +117,7 @@ def _service_error(exc: Exception, *, not_found: bool = False) -> JSONResponse:
 
 @router.post("/api/hosts")
 async def api_create_host(
-    request: Request, _auth: str = Depends(write_guard)
+    request: Request, _auth: str = Depends(json_write_guard)
 ) -> JSONResponse:
     # Once framework parsing and guards complete, both adapters charge the
     # shared budget before application validation, so malformed attempts count.
@@ -260,7 +265,7 @@ def api_list_hosts(
 
 @router.patch("/api/hosts/{host_id}/owner")
 async def api_update_host_owner(
-    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    host_id: IdParam, request: Request, _auth: str = Depends(json_write_guard)
 ) -> JSONResponse:
     """Update owner/contact and renewal status for a host."""
     db = _db_path(request)
@@ -312,7 +317,7 @@ async def api_update_host_owner(
 async def api_update_host_settings(
     host_id: IdParam,
     request: Request,
-    _auth: str = Depends(write_guard),
+    _auth: str = Depends(json_write_guard),
     _rl: None = Depends(rate_limit("host_settings", 30, 60)),
 ) -> JSONResponse:
     try:
@@ -345,7 +350,7 @@ async def api_update_host_settings(
 
 @router.patch("/api/hosts/{host_id}/notes")
 async def api_update_host_notes(
-    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    host_id: IdParam, request: Request, _auth: str = Depends(json_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     raw = await request.body()
@@ -369,7 +374,7 @@ async def api_update_host_notes(
 
 @router.put("/api/hosts/{host_id}/tags")
 async def api_set_host_tags(
-    host_id: IdParam, request: Request, _auth: str = Depends(write_guard)
+    host_id: IdParam, request: Request, _auth: str = Depends(json_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     raw = await request.body()
@@ -410,7 +415,7 @@ def api_get_host_issuers(
 
 @router.put("/api/hosts/{host_id}/issuers")
 async def api_set_host_issuers(
-    host_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
+    host_id: IdParam, request: Request, _auth: str = Depends(admin_json_write_guard)
 ) -> JSONResponse:
     """Update the expected-issuer CN allowlist for a host (WI-007).
 

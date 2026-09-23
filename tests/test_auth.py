@@ -232,6 +232,7 @@ def test_ldap_authenticate_success(_mock_ldap3):
         base_dn="DC=example,DC=com",
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
+        allow_insecure=True,
     )
     result = provider.authenticate("alice", "correct_password")
     assert result.success is True
@@ -250,6 +251,7 @@ def test_ldap_authenticate_user_not_found(_mock_ldap3):
         base_dn="DC=example,DC=com",
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
+        allow_insecure=True,
     )
     result = provider.authenticate("nobody", "pass")
     assert result.success is False
@@ -276,6 +278,7 @@ def test_ldap_authenticate_bad_password(_mock_ldap3):
         base_dn="DC=example,DC=com",
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
+        allow_insecure=True,
     )
     result = provider.authenticate("alice", "wrong_password")
     assert result.success is False
@@ -455,8 +458,9 @@ def test_auth_enabled_redirects_to_login(reload_app, _mock_ldap3):
         r = client.get("/healthz")
         assert r.status_code == 200
 
-        r = client.get("/metrics")
-        assert r.status_code == 200
+        r = client.get("/metrics", follow_redirects=False)
+        assert r.status_code == 303
+        assert "/login" in r.headers["location"]
 
         # Data API requires auth: unauthenticated requests get a 401, not the
         # inventory. (Regression guard for the previously-public /api/* gap.)
@@ -1025,7 +1029,9 @@ def test_composite_provider_falls_through(_mock_ldap3):
 
     _mock_ldap3.Connection = connection_factory
     _mock_ldap3.Server.return_value = MagicMock()
-    primary = LDAPAuthProvider("ldap://dc.example.com", "DC=example,DC=com")
+    primary = LDAPAuthProvider(
+        "ldap://dc.example.com", "DC=example,DC=com", allow_insecure=True
+    )
     composite = _CompositeProvider(local, primary)
     result = composite.authenticate("alice", "ldappass")
     assert result.success is True
@@ -1304,6 +1310,7 @@ def test_ldap_dc_failover_multiple_servers(_mock_ldap3):
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
         connect_timeout=3,
+        allow_insecure=True,
     )
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -1323,6 +1330,7 @@ def test_ldap_dc_failover_auth_succeeds_on_second_dc(_mock_ldap3):
         base_dn="DC=example,DC=com",
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
+        allow_insecure=True,
     )
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -1356,6 +1364,7 @@ def test_ldap_group_filter_non_member_denied(_mock_ldap3):
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
         required_groups=["CN=CertWatchAdmins,DC=example,DC=com"],
+        allow_insecure=True,
     )
     mock_conn = MagicMock()
     mock_conn.entries = []
@@ -1375,6 +1384,7 @@ def test_ldap_group_filter_member_admitted(_mock_ldap3):
         bind_dn="CN=svc,DC=example,DC=com",
         bind_password="svc_pass",
         required_groups=["CN=CertWatchAdmins,DC=example,DC=com"],
+        allow_insecure=True,
     )
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -1406,6 +1416,7 @@ def test_ldap_group_filter_search_includes_chain_oid(_mock_ldap3):
         server_url="ldap://dc.example.com",
         base_dn="DC=example,DC=com",
         required_groups=["CN=Admins,DC=example,DC=com", "CN=Operators,DC=example,DC=com"],
+        allow_insecure=True,
     )
     mock_conn = MagicMock()
     mock_entry = MagicMock()
@@ -2614,6 +2625,7 @@ def test_starttls_service_binds_after_tls(_mock_ldap3):
         base_dn="DC=test",
         bind_dn="CN=svc,DC=test",
         bind_password="secret",
+        allow_insecure=True,
         start_tls=True,
     )
 
@@ -2671,6 +2683,7 @@ def test_user_bind_failure_rejected(_mock_ldap3):
         base_dn="DC=test",
         bind_dn="CN=svc,DC=test",
         bind_password="secret",
+        allow_insecure=True,
     )
 
     svc_conn = MagicMock()
@@ -2697,6 +2710,7 @@ def test_no_starttls_binds_normally(_mock_ldap3):
         bind_dn="CN=svc,DC=test",
         bind_password="secret",
         start_tls=False,
+        allow_insecure=True,
     )
 
     mock_conn = MagicMock()
@@ -2721,6 +2735,7 @@ def test_group_filter_default_uses_ad_transitive_oid(_mock_ldap3):
         bind_dn="CN=svc,DC=test",
         bind_password="secret",
         required_groups=["CN=Admins,DC=test"],
+        allow_insecure=True,
     )
 
     svc_conn = MagicMock()
@@ -2753,6 +2768,7 @@ def test_group_filter_custom_replaces_ad_oid(_mock_ldap3):
         bind_password="secret",
         required_groups=["CN=Admins,DC=test"],
         group_filter="memberOf={group}",
+        allow_insecure=True,
     )
 
     svc_conn = MagicMock()

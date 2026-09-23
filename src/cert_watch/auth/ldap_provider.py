@@ -11,6 +11,20 @@ from .protocol import AuthProvider, AuthResult
 logger = logging.getLogger("cert_watch.auth")
 
 
+def insecure_ldap_error(
+    server_url: str, *, start_tls: bool, allow_insecure: bool
+) -> str | None:
+    """Explain why a configured LDAP endpoint would send simple-bind secrets in clear."""
+    urls = [value.strip() for value in server_url.split(",") if value.strip()]
+    has_plain_endpoint = any(not value.lower().startswith("ldaps://") for value in urls)
+    if has_plain_endpoint and not start_tls and not allow_insecure:
+        return (
+            "Insecure LDAP simple bind refused: use ldaps:// or set LDAP_START_TLS=1. "
+            "Set CERT_WATCH_LDAP_ALLOW_INSECURE=1 only for a trusted legacy deployment."
+        )
+    return None
+
+
 class LDAPAuthProvider(AuthProvider):
     """LDAP/AD authentication via ldap3.
 
@@ -29,6 +43,7 @@ class LDAPAuthProvider(AuthProvider):
         bind_password: str = "",
         user_search_filter: str = "(sAMAccountName={username})",
         start_tls: bool = False,
+        allow_insecure: bool = False,
         ca_cert: str = "",
         required_groups: list[str] | None = None,
         connect_timeout: int = 5,
@@ -40,16 +55,16 @@ class LDAPAuthProvider(AuthProvider):
         self.bind_password = bind_password
         self.user_search_filter = user_search_filter
         self.start_tls = start_tls
+        self.allow_insecure = allow_insecure
         self.ca_cert = ca_cert
         self.required_groups = required_groups or []
         self.connect_timeout = connect_timeout
         self.group_filter = group_filter
         is_ldaps = any(s.lower().startswith("ldaps://") for s in server_url.split(","))
-        if not is_ldaps and not start_tls and (bind_dn or bind_password):
+        if not is_ldaps and not start_tls and allow_insecure:
             logger.warning(
-                "LDAP connection over plaintext ldap:// without STARTTLS — "
-                "bind credentials will be transmitted in cleartext. "
-                "Use ldaps:// or set LDAP_START_TLS=1."
+                "CERT_WATCH_LDAP_ALLOW_INSECURE=1 permits plaintext LDAP simple binds; "
+                "directory credentials will be transmitted in cleartext."
             )
         try:
             import ldap3  # noqa: F401
@@ -148,6 +163,13 @@ class LDAPAuthProvider(AuthProvider):
     def authenticate(self, username: str, password: str) -> AuthResult:
         if not username or not password:
             return AuthResult(success=False, error="username and password required")
+        insecure_error = insecure_ldap_error(
+            self.server_url,
+            start_tls=self.start_tls,
+            allow_insecure=self.allow_insecure,
+        )
+        if insecure_error:
+            return AuthResult(success=False, error=insecure_error)
         try:
             import ldap3
         except ImportError:

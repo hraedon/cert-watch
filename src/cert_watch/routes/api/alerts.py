@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
 from cert_watch.auth.guards import (
+    admin_json_write_guard,
     admin_write_guard,
     require_admin,
     require_auth,
@@ -27,10 +28,12 @@ from cert_watch.database import (
 from cert_watch.routes._deps import IdParam, _db_path, acting_auth
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
 from cert_watch.routes.api._shared import (
+    JsonBodyError,
     _alert_group_json,
     _normalize_pagination,
     _pagination_links,
     _validate_webhook_url,
+    json_body,
 )
 from cert_watch.services.alert_groups import (
     AlertGroupConflictError,
@@ -139,13 +142,13 @@ def api_list_alert_groups(request: Request, _auth: str = Depends(require_admin))
 
 @router.post("/api/alert-groups")
 async def api_create_alert_group(
-    request: Request, _auth: str = Depends(admin_write_guard)
+    request: Request, _auth: str = Depends(admin_json_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+        body = json_body(await request.body())
+    except JsonBodyError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
 
     name = body.get("name")
     if not name or not isinstance(name, str):
@@ -219,13 +222,13 @@ def api_get_alert_group(
 
 @router.patch("/api/alert-groups/{group_id}")
 async def api_update_alert_group(
-    group_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
+    group_id: IdParam, request: Request, _auth: str = Depends(admin_json_write_guard)
 ) -> JSONResponse:
     db = _db_path(request)
     try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+        body = json_body(await request.body())
+    except JsonBodyError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
 
     name = body.get("name")
     recipients_raw = body.get("recipients")

@@ -39,6 +39,8 @@ MODULE_FLOORS: dict[str, int] = {
     "src/cert_watch/security/__init__.py": 100,
     "src/cert_watch/security/csrf.py": 97,
     "src/cert_watch/security/headers.py": 91,
+    "src/cert_watch/security/body_limit.py": 80,
+    "src/cert_watch/security/host_header.py": 85,
     "src/cert_watch/security/ratelimit.py": 88,
     "src/cert_watch/routes/settings/api_keys.py": 90,
     "src/cert_watch/routes/settings/auth.py": 96,

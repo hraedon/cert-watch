@@ -4,9 +4,11 @@ Each concern lives in its own module; this one only installs them, in order:
 
 - :mod:`cert_watch.security.headers` -- CSP nonce + security headers
 - :mod:`cert_watch.security.csrf` -- the ``cw_sid`` CSRF session cookie
+- :mod:`cert_watch.security.host_header` -- open-mode DNS-rebinding defense
 - :func:`setup_redirect_middleware` (here) -- first-run redirect to /setup
 - :mod:`cert_watch.auth.request_context` -- session / API-key authentication
 - :mod:`cert_watch.security.ratelimit` -- the ``/api/*`` rate limit
+- :mod:`cert_watch.security.body_limit` -- pre-parser request-body limit
 
 Authorization is not middleware: it is the guard dependency each route
 declares (:mod:`cert_watch.auth.guards`).
@@ -20,8 +22,10 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
 from cert_watch.auth.request_context import auth_middleware, is_public_path
+from cert_watch.security.body_limit import RequestBodyLimitMiddleware
 from cert_watch.security.csrf import csrf_session_middleware
 from cert_watch.security.headers import CSPNonceMiddleware, security_headers_middleware
+from cert_watch.security.host_header import open_mode_host_middleware
 from cert_watch.security.ratelimit import rate_limit_headers_middleware
 
 
@@ -51,7 +55,11 @@ def install_middleware(application: FastAPI) -> None:
     application.middleware("http")(setup_redirect_middleware)
     application.middleware("http")(auth_middleware)
     application.middleware("http")(rate_limit_headers_middleware)
+    application.middleware("http")(open_mode_host_middleware)
     # Outermost (runs first): issue the per-request CSP nonce into scope state
     # before any other middleware/endpoint, so the template context processor and
     # security_headers_middleware share it (BC-075).
     application.add_middleware(CSPNonceMiddleware)
+    # Outermost: reject oversized declarations before any parser runs and
+    # count actual receive chunks for clients without Content-Length.
+    application.add_middleware(RequestBodyLimitMiddleware)

@@ -13,10 +13,15 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.auth.guards import admin_write_guard, require_admin
+from cert_watch.auth.guards import (
+    admin_session_json_write_guard,
+    admin_session_write_guard,
+    require_admin_session,
+)
 from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
 from cert_watch.routes._deps import IdParam, _db_path
+from cert_watch.routes.api._shared import JsonBodyError, json_body
 from cert_watch.security import _request_security
 
 logger = logging.getLogger("cert_watch.routes.api.keys")
@@ -44,7 +49,7 @@ def _entry_json(entry: ApiKeyEntry) -> dict[str, Any]:
 
 @router.get("/api/api-keys")
 def api_list_keys(
-    request: Request, _auth: str = Depends(require_admin)
+    request: Request, _auth: str = Depends(require_admin_session)
 ) -> JSONResponse:
     repo = _repository(request)
     return JSONResponse(content={"api_keys": [_entry_json(e) for e in repo.list_keys()]})
@@ -52,14 +57,15 @@ def api_list_keys(
 
 @router.post("/api/api-keys")
 async def api_create_key(
-    request: Request, _auth: str = Depends(admin_write_guard)
+    request: Request, _auth: str = Depends(admin_session_json_write_guard)
 ) -> JSONResponse:
     try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+        body = json_body(await request.body())
+    except JsonBodyError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
 
-    name = (body.get("name") or "").strip()
+    raw_name = body.get("name")
+    name = raw_name.strip() if isinstance(raw_name, str) else ""
     scope = body.get("scope") or "read"
     if not name:
         return JSONResponse(content={"error": "name is required"}, status_code=400)
@@ -90,7 +96,9 @@ async def api_create_key(
 
 @router.delete("/api/api-keys/{key_id}")
 async def api_revoke_key(
-    key_id: IdParam, request: Request, _auth: str = Depends(admin_write_guard)
+    key_id: IdParam,
+    request: Request,
+    _auth: str = Depends(admin_session_write_guard),
 ) -> JSONResponse:
     repo = _repository(request)
     with get_write_lock():

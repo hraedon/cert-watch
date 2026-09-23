@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from cert_watch.auth.guards import admin_write_guard, require_auth
+from cert_watch.auth.guards import admin_json_write_guard, require_auth
 from cert_watch.database import SqliteAlertRepository
 from cert_watch.policy import (
     PolicyRule,
@@ -22,6 +22,7 @@ from cert_watch.policy import (
 )
 from cert_watch.routes._deps import _csv_safe, _db_path
 from cert_watch.routes._scoped import scope_tags_from_auth
+from cert_watch.routes.api._shared import JsonBodyError, json_body
 
 logger = logging.getLogger("cert_watch.routes.api.policy")
 
@@ -52,12 +53,12 @@ def api_get_policy(
 
 @router.put("/api/policy")
 async def api_put_policy(
-    request: Request, _auth: str = Depends(admin_write_guard)
+    request: Request, _auth: str = Depends(admin_json_write_guard)
 ) -> JSONResponse:
     try:
-        body = await request.json()
-    except ValueError:
-        return JSONResponse(content={"error": "invalid JSON"}, status_code=400)
+        body = json_body(await request.body())
+    except JsonBodyError as exc:
+        return JSONResponse(content={"error": str(exc)}, status_code=400)
 
     db = _db_path(request)
     default_sev = body.get("default_severity", "warning")

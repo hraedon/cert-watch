@@ -307,6 +307,7 @@ docker logs cert-watch 2>&1 | grep scan
 | `LDAP_BIND_PASSWORD` | — | Service account password (`LDAP_BIND_PASSWORD_FILE` supported) |
 | `LDAP_USER_FILTER` | `(sAMAccountName={username})` | LDAP search filter |
 | `LDAP_START_TLS` | `0` | Use StartTLS |
+| `CERT_WATCH_LDAP_ALLOW_INSECURE` | `0` | Permit a legacy plain-`ldap://` simple bind without StartTLS; credentials are sent in cleartext |
 | `LDAP_CA_CERT` | — | CA cert for LDAPS verification (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
 | `LDAP_REQUIRED_GROUPS` | — | Comma-separated group DNs; transitive membership via `LDAP_MATCHING_RULE_IN_CHAIN` |
 | `LDAP_CONNECT_TIMEOUT` | `5` | LDAP connection timeout in seconds |
@@ -439,9 +440,14 @@ All other paths (dashboard, scan history, alerts, host management) require authe
 
 ### `/metrics` exposure decision
 
-The `/metrics` endpoint is intentionally left unauthenticated for compatibility with standard Prometheus scraping. It exposes aggregate counts (certificate totals, scan counts) but not hostnames, certificate details, or any identifying information.
-
-**Recommendation:** Restrict `/metrics` at the ingress level (network policy, IP allowlist) so only your Prometheus scraper can reach it. If a security review requires auth on metrics, set `CERT_WATCH_METRICS_TOKEN=<token>` — the endpoint then requires `Authorization: Bearer <token>` (point your scraper's `bearer_token` at the same value). No reverse-proxy shim needed.
+When authentication is enabled, `/metrics` requires either an administrator
+browser session or the dedicated metrics bearer token. Set
+`CERT_WATCH_METRICS_TOKEN=<token>` for an automated scraper and configure its
+`Authorization: Bearer <token>` header. Application API keys are not metrics
+tokens. The endpoint includes certificate labels such as hostnames and subjects,
+so also restrict it at the ingress level to the monitoring network. In
+deliberately auth-disabled mode it follows the instance's open access policy
+and Host-header allowlist.
 
 ---
 

@@ -102,6 +102,11 @@ def check_metrics_token(request: Request) -> bool:
     return False
 
 
+def metrics_token_configured(request: Request) -> bool:
+    """Return whether this app configured the dedicated metrics bearer token."""
+    return bool(_metrics_token(request))
+
+
 # ---------- API-key (bearer) authentication (Plan 039 / BC-104) ----------
 
 # API-key scope → cert-watch RBAC role. read=viewer, write=operator, admin=admin.

@@ -74,7 +74,7 @@ def _sign(raw_state: str) -> str:
 
 def test_callback_with_no_provider_redirects_home(monkeypatch, tmp_path):
     app_mod = _make_app(monkeypatch, tmp_path, NoAuthProvider(), CERT_WATCH_ALLOW_UNAUTH="1")
-    with TestClient(app_mod.app) as client:
+    with TestClient(app_mod.app, base_url="https://cert-watch.example") as client:
         r = client.get("/auth/callback?code=abc&state=x", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == "/"

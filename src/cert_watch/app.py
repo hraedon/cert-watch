@@ -318,15 +318,13 @@ async def lifespan(app: FastAPI) -> typing.AsyncIterator[None]:
             "Cookies will be sent over plain HTTP — never use in production."
         )
 
-    # L1: warn when auth is enabled but /metrics is open (no token gate).
-    # The default behavior is intentionally unchanged (breaking it would
-    # affect existing deployments); this is an operator-awareness warning.
+    # Without a dedicated bearer token, interactive admins can still inspect
+    # metrics, but automated Prometheus scrapers cannot authenticate.
     if not isinstance(auth, NoAuthProvider) and not s.metrics_token:
         logger.warning(
             "AUTH_PROVIDER is configured but CERT_WATCH_METRICS_TOKEN is not set. "
-            "The /metrics endpoint is accessible without authentication and exposes "
-            "certificate metadata (hostnames, subjects, expiry). Set "
-            "CERT_WATCH_METRICS_TOKEN to gate it with a bearer token."
+            "The /metrics endpoint requires an admin browser session; set "
+            "CERT_WATCH_METRICS_TOKEN to authorize an automated scraper."
         )
 
     # BC-083 fail-closed fallback: if after the provisioning attempt we still
