@@ -1,14 +1,100 @@
 """Single-certificate detail query (targeted JOIN replacement)."""
+
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.connection import _connect
+from cert_watch.certificate_model import Certificate
+from cert_watch.database.connection import _connect, _row_to_cert
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import _build_unified_from_dash
 from cert_watch.database.posture import get_posture_for_cert
+from cert_watch.database.repo import HostEntry, SqliteHostRepository
 from cert_watch.database.schema import init_schema
+
+
+@dataclass(frozen=True)
+class LatestScanRecord:
+    status: str
+    scanned_at: str
+    error_message: str | None
+
+
+@dataclass(frozen=True)
+class StoredCertificateDetailRecords:
+    cert: Certificate
+    chain: tuple[tuple[str, Certificate], ...]
+    hostname: str
+    port: int
+    host: HostEntry | None
+
+
+@dataclass(frozen=True)
+class PendingHostDetailRecords:
+    host: HostEntry
+    latest_scan: LatestScanRecord | None
+
+
+def get_stored_certificate_detail_records(
+    db_path: str | Path, cert_id: str
+) -> StoredCertificateDetailRecords | None:
+    """Load the certificate, chain, endpoint, and host context in one place."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        leaf = conn.execute("SELECT * FROM certificates WHERE id = ?", (cert_id,)).fetchone()
+        if leaf is None:
+            return None
+        chain_rows = conn.execute(
+            "SELECT * FROM certificates WHERE parent_cert_id = ? AND is_leaf = 0",
+            (cert_id,),
+        ).fetchall()
+        hostname = leaf["hostname"] or ""
+        port = leaf["port"] or 443
+        host_row = None
+        if hostname:
+            host_row = conn.execute(
+                "SELECT * FROM hosts WHERE hostname = ? AND port = ?",
+                (hostname, port),
+            ).fetchone()
+    return StoredCertificateDetailRecords(
+        cert=_row_to_cert(leaf),
+        chain=tuple((row["id"], _row_to_cert(row)) for row in chain_rows),
+        hostname=hostname,
+        port=port,
+        host=(SqliteHostRepository._row_to_host(host_row) if host_row is not None else None),
+    )
+
+
+def get_pending_host_detail_records(
+    db_path: str | Path, host_id: str
+) -> PendingHostDetailRecords | None:
+    """Load a registered host and its latest scan result."""
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        host_row = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()
+        if host_row is None:
+            return None
+        scan_row = conn.execute(
+            "SELECT status, scanned_at, error_message FROM scan_history "
+            "WHERE hostname = ? AND port = ? "
+            "ORDER BY scanned_at DESC LIMIT 1",
+            (host_row["hostname"], host_row["port"]),
+        ).fetchone()
+    latest = (
+        LatestScanRecord(
+            status=scan_row["status"],
+            scanned_at=scan_row["scanned_at"],
+            error_message=scan_row["error_message"],
+        )
+        if scan_row is not None
+        else None
+    )
+    return PendingHostDetailRecords(
+        host=SqliteHostRepository._row_to_host(host_row),
+        latest_scan=latest,
+    )
 
 
 def get_cert_detail(db_path: str | Path, cert_id: str) -> dict[str, Any] | None:

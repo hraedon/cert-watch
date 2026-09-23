@@ -10,6 +10,7 @@ import pytest
 from cert_watch.auth.rbac import AuthContext
 from cert_watch.database import (
     Role,
+    SqliteHostRepository,
     SqliteRoleRepository,
 )
 from cert_watch.database.connection import _connect
@@ -392,6 +393,79 @@ class TestScopeTagsFromAuthContract:
         # bulk routes must behave as unscoped (see everything), matching the
         # existing scope_write_denied contract.
         assert scope_tags_from_auth(None) == ()
+
+
+class TestScopedReadRoutes:
+    """Read pages must not disclose another team's endpoint data."""
+
+    @pytest.fixture
+    def two_team_details(self, db: Path):
+        _seed_two_teams(db)
+        cert_a = "a" * 32
+        cert_b = "b" * 32
+        hosts = SqliteHostRepository(db)
+        pending_a = hosts.add("pending-a.example.com", 8443, tags="team-a")
+        pending_b = hosts.add("pending-b.example.com", 8443, tags="team-b")
+        with _connect(db) as conn:
+            _insert_cert(conn, cert_a, "host-a.example.com", tags="team-a")
+            _insert_cert(conn, cert_b, "host-b.example.com", tags="team-b")
+            _insert_alert(
+                conn, "hidden-detail-alert", cert_b,
+                message="team-b confidential alert text",
+            )
+            conn.commit()
+        return {"cert_a": cert_a, "cert_b": cert_b, "pending_a": pending_a,
+                "pending_b": pending_b}
+
+    def test_certificate_and_pending_host_detail_enforce_scope(
+        self, db: Path, tmp_path: Path, two_team_details,
+    ):
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client:
+            allowed_cert = client.get(
+                f"/certificates/{two_team_details['cert_a']}", follow_redirects=False
+            )
+            allowed_pending = client.get(
+                f"/certificates/{two_team_details['pending_a']}", follow_redirects=False
+            )
+            denied_cert = client.get(
+                f"/certificates/{two_team_details['cert_b']}", follow_redirects=False
+            )
+            denied_pending = client.get(
+                f"/certificates/{two_team_details['pending_b']}", follow_redirects=False
+            )
+
+        assert allowed_cert.status_code == 200
+        assert allowed_pending.status_code == 200
+        for denied in (denied_cert, denied_pending):
+            assert denied.status_code == 303
+            assert denied.headers["location"] == "/?error=certificate+not+found"
+            assert "team-b confidential alert text" not in denied.text
+
+    @pytest.mark.parametrize(
+        ("path", "visible_text"),
+        [
+            ("/browse?grouped=0", "host-a.example.com"),
+            ("/browse?grouped=1", "host-a.example.com"),
+            ("/browse?view=calendar", "1 cert"),
+            ("/browse?view=issuer", "issuer-host-a.example.com"),
+        ],
+        ids=["list", "grouped", "calendar", "pivot"],
+    )
+    def test_browse_views_never_render_another_team(
+        self, db: Path, tmp_path: Path, path: str, visible_text: str,
+    ):
+        _seed_two_teams(db)
+        app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-a")
+        with _scoped_client(app, groups) as client:
+            response = client.get(path)
+
+        assert response.status_code == 200
+        assert response.context["total_entries"] == 1
+        assert response.context["tracked_total"] == 1
+        assert visible_text in response.text
+        assert "host-b.example.com" not in response.text
+        assert "issuer-host-b.example.com" not in response.text
 
 
 def _make_scoped_app(db: Path, tmp_path: Path, *, scope_tag: str):
