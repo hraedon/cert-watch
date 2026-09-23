@@ -8,8 +8,8 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_admin_write, require_auth, require_write
 from cert_watch.database import SqliteHostRepository, get_write_lock
-from cert_watch.middleware import require_admin_write, require_auth, require_write
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, scope_write_denied
 from cert_watch.routes.api._shared import _normalize_pagination, _pagination_links

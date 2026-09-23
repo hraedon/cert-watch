@@ -17,11 +17,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.database import SqliteAlertGroupRepository, get_write_lock
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.routes.api._shared import _validate_webhook_url
 from cert_watch.routes.settings.render import _settings_context
+from cert_watch.security.csrf import check_csrf
 from cert_watch.tags import parse_tags
 
 templates = get_templates()

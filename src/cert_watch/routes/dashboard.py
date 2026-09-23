@@ -14,6 +14,7 @@ from starlette.concurrency import run_in_threadpool
 from cert_watch import __commit__, __version__
 from cert_watch.attention import build_attention_queue
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import get_auth_context, require_write, require_write_form
 from cert_watch.database import (
     AlertRepository,
     ScopedAlertRepository,
@@ -29,17 +30,11 @@ from cert_watch.database import (
     pivot_urgency_stats,
 )
 from cert_watch.database.connection import _connect
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
-    get_auth_context,
-    get_csrf_context,
-    require_write,
-    require_write_form,
-)
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied
 from cert_watch.scan_freshness import load_scan_evidence, summarize_scan_evidence
+from cert_watch.security.csrf import get_csrf_context
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.dashboard")
 

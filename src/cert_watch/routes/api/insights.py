@@ -9,12 +9,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.alerts import Alert, send_webhook
+from cert_watch.auth.guards import require_auth, require_write
 from cert_watch.database import (
     list_calendar,
     list_grade_trends,
     list_tls_version_trends,
 )
-from cert_watch.middleware import require_auth, require_write
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes._scoped import scope_tags_from_auth
 

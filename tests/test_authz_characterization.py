@@ -338,7 +338,7 @@ def _authenticate(client: TestClient, principal: Principal, seeded: Seeded) -> d
 
 def _csrf_header(client: TestClient) -> dict[str, str]:
     from cert_watch.auth import SESSION_COOKIE
-    from cert_watch.middleware import make_csrf_token
+    from cert_watch.security.csrf import make_csrf_token
 
     sid = client.cookies.get(SESSION_COOKIE) or client.cookies.get("cw_sid") or ""
     return {"x-csrf-token": make_csrf_token(sid, client.app.state.security)}
@@ -348,13 +348,13 @@ def run_matrix_for(
     principal: Principal, with_csrf: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> dict[str, str]:
     import cert_watch.routes.hosts as hosts_routes
-    from cert_watch import middleware as ratelimit
+    import cert_watch.security.ratelimit as ratelimit_mod
 
     async def _no_scan(*_a: Any, **_k: Any) -> tuple[str, str]:
         return "scan_error", "scanning disabled in the authz matrix"
 
     monkeypatch.setattr(hosts_routes, "_scan_and_store", _no_scan)
-    ratelimit._clear_rate_caches()
+    ratelimit_mod._clear_rate_caches()
     db = tmp_path / "cert-watch.sqlite3"
     seeded = _seed(db, principal)
     app = _build_app(principal, tmp_path, monkeypatch)
@@ -388,9 +388,9 @@ def _case_id(p: Principal, with_csrf: bool) -> str:
 
 @pytest.fixture
 def csrf_enforced(monkeypatch):
-    from cert_watch import middleware as csrf
+    import cert_watch.security.csrf as csrf_mod
 
-    monkeypatch.setattr(csrf, "_CSRF_BYPASS", False)
+    monkeypatch.setattr(csrf_mod, "_CSRF_BYPASS", False)
 
 
 @pytest.mark.parametrize(

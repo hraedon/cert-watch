@@ -27,7 +27,7 @@ from cert_watch.auth import (
 )
 from cert_watch.config import resolve_or_persist_secret
 from cert_watch.database import init_schema, kv_all, kv_get, kv_set
-from cert_watch.middleware import make_csrf_token, set_csrf_secret, validate_csrf_token
+from cert_watch.security.csrf import make_csrf_token, set_csrf_secret, validate_csrf_token
 
 # ---------- Slice 1: Persisted signing keys ----------
 
@@ -196,7 +196,7 @@ def setup_app_client(fresh_db, tmp_path):
     import cert_watch.app as app_mod
     import cert_watch.auth as auth_mod
     import cert_watch.config as cfg_mod
-    import cert_watch.middleware as mw_mod
+    import cert_watch.security.csrf as csrf_mod
 
     saved_cfg = dict(vars(cfg_mod))
     saved_auth = dict(vars(auth_mod))
@@ -214,7 +214,7 @@ def setup_app_client(fresh_db, tmp_path):
         s = cfg_mod.Settings.from_env()
         cfg_mod.resolve_or_persist_secret("CERT_WATCH_AUTH_SECRET", s.data_dir, ".auth_secret")
         auth_mod.set_signing_key("test-secret-for-setup")
-        mw_mod.set_csrf_secret("test-csrf-secret-for-setup")
+        csrf_mod.set_csrf_secret("test-csrf-secret-for-setup")
 
         from cert_watch.auth import build_auth_provider
         auth = build_auth_provider(provider="")
@@ -407,7 +407,7 @@ class TestSetupWizard:
         import cert_watch.app as app_mod
         import cert_watch.auth as auth_mod
         import cert_watch.config as cfg_mod
-        import cert_watch.middleware as mw_mod2
+        import cert_watch.security.csrf as csrf_mod
 
         saved_cfg = dict(vars(cfg_mod))
         saved_auth = dict(vars(auth_mod))
@@ -423,7 +423,7 @@ class TestSetupWizard:
         with patch.dict(os.environ, env, clear=False):
             s = cfg_mod.Settings.from_env()
             auth_mod.set_signing_key("test-secret")
-            mw_mod2.set_csrf_secret("test-csrf")
+            csrf_mod.set_csrf_secret("test-csrf")
 
             from cert_watch.auth import LocalAdminProvider
             auth = LocalAdminProvider("admin", _scrypt_hash("password123"))

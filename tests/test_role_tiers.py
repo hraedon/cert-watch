@@ -163,7 +163,7 @@ class TestBuildAuthContextUsesTierFromDb:
 
 class TestApiKeyContext:
     def test_api_key_admin_context_has_tier(self):
-        from cert_watch.middleware import authenticate_api_key
+        from cert_watch.auth.request_context import authenticate_api_key
 
         class FakeResult:
             name = "bot"
@@ -203,16 +203,16 @@ class TestRoleSettingsForm:
         # open). Local-admin auth is enabled by CERT_WATCH_LOCAL_ADMIN_USER +
         # hash with AUTH_PROVIDER unset; _COOKIE_SECURE is patched because it
         # is an import-time module constant the env var can't change.
-        import cert_watch.middleware as mw
         import cert_watch.routes.auth as auth_routes
+        import cert_watch.security.csrf as csrf_mod
 
-        monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+        monkeypatch.setattr(csrf_mod, "_COOKIE_SECURE", False)
         monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
 
         from starlette.requests import Request as StRequest
 
         from cert_watch.auth import SESSION_COOKIE, create_session
-        from cert_watch.middleware import _request_security
+        from cert_watch.security import _request_security
 
         scope = {
             "type": "http",

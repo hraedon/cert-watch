@@ -9,7 +9,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import count_audit, list_audit
-from cert_watch.middleware import get_auth_context, require_admin, require_admin_form
+from cert_watch.auth.guards import get_auth_context, require_admin, require_admin_form
 from cert_watch.routes._deps import _db_path, get_templates
 
 logger = logging.getLogger("cert_watch.routes.audit")

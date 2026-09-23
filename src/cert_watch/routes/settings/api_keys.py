@@ -6,11 +6,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.database import SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
-from cert_watch.middleware import _request_security, check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path
 from cert_watch.routes.settings.render import _render_api_keys
+from cert_watch.security import _request_security
+from cert_watch.security.csrf import check_csrf
 
 router = APIRouter()
 

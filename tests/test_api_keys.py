@@ -15,14 +15,10 @@ import pytest
 from fastapi import Request
 from fastapi.exceptions import HTTPException
 
+from cert_watch.auth.guards import require_admin, require_auth, require_write
+from cert_watch.auth.request_context import authenticate_api_key
 from cert_watch.database import init_schema
 from cert_watch.database.api_keys import SqliteApiKeyRepository, hash_token
-from cert_watch.middleware import (
-    authenticate_api_key,
-    require_admin,
-    require_auth,
-    require_write,
-)
 from cert_watch.security import SecurityContext
 
 # ── repository ───────────────────────────────────────────────────────────

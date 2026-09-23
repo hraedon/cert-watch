@@ -9,8 +9,8 @@ from pathlib import Path
 from fastapi import Request
 from fastapi.responses import RedirectResponse
 
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.config import Settings
-from cert_watch.middleware import require_admin_form
 from cert_watch.routes._deps import _db_path
 from cert_watch.routes.settings.config import _SENSITIVE_KEYS, _get_encryption_key
 
@@ -57,7 +57,7 @@ async def _save_config_section(
         return admin_err
 
     from cert_watch.database import get_write_lock, kv_set, kv_set_secret
-    from cert_watch.middleware import check_csrf
+    from cert_watch.security.csrf import check_csrf
 
     csrf_err = await check_csrf(request)
     if csrf_err:

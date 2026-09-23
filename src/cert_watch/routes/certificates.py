@@ -13,6 +13,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch import __commit__, __version__
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import (
+    get_auth_context,
+    require_admin_write_form,
+    require_auth,
+    require_write_form,
+)
 from cert_watch.cert_chain import validate_is_ca_certificate
 from cert_watch.chain_guidance import describe_chain
 from cert_watch.database import (
@@ -27,15 +33,6 @@ from cert_watch.database import (
     get_write_lock,
 )
 from cert_watch.filters import issuer_cn
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
-    get_auth_context,
-    get_csrf_context,
-    require_admin_write_form,
-    require_auth,
-    require_write_form,
-)
 from cert_watch.presenters.certificate_detail import present_certificate_technical_details
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, get_templates
 from cert_watch.routes._scoped import (
@@ -46,6 +43,8 @@ from cert_watch.routes._scoped import (
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
+from cert_watch.security.csrf import get_csrf_context
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.host_ownership import (
     HostNotFoundError,
     HostOwnershipTargetError,

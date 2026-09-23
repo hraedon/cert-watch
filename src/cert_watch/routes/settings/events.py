@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from cert_watch import __commit__, __version__
 from cert_watch.alert_adapters import WEBHOOK_KIND_OPTIONS
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.database import get_write_lock
 from cert_watch.events import (
     ALL_EVENT_TYPES,
@@ -19,9 +20,9 @@ from cert_watch.events import (
     save_event_config,
 )
 from cert_watch.http_client import validate_webhook_url
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import _db_path, get_templates
 from cert_watch.routes.settings.config import _get_encryption_key
+from cert_watch.security.csrf import check_csrf
 
 templates = get_templates()
 
@@ -35,7 +36,8 @@ def settings_events_page(request: Request) -> HTMLResponse | RedirectResponse:
         return admin_err
     db = _db_path(request)
     config = load_event_config(db, encryption_key=_get_encryption_key(request))
-    from cert_watch.middleware import get_auth_context, get_csrf_context
+    from cert_watch.auth.guards import get_auth_context
+    from cert_watch.security.csrf import get_csrf_context
 
     ctx = get_csrf_context(request)
     auth_ctx = get_auth_context(request)

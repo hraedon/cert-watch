@@ -50,12 +50,12 @@ def _seed(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def app_env(reload_app, tmp_path, monkeypatch):
-    import cert_watch.middleware as mw
     import cert_watch.routes.auth as auth_routes
+    import cert_watch.security.csrf as csrf_mod
 
     monkeypatch.setenv("CERT_WATCH_COOKIE_SECURE", "0")
     monkeypatch.setenv("CERT_WATCH_ROLE_MAP", json.dumps(_ROLE_MAP))
-    monkeypatch.setattr(mw, "_COOKIE_SECURE", False)
+    monkeypatch.setattr(csrf_mod, "_COOKIE_SECURE", False)
     monkeypatch.setattr(auth_routes, "_COOKIE_SECURE", False)
     db = _seed(tmp_path)
     return SimpleNamespace(app=reload_app().app, db=db)

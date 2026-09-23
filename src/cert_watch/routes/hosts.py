@@ -15,17 +15,15 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 
 from cert_watch.alerts import WebhookConfig
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
-from cert_watch.config import Settings
-from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
-from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
-from cert_watch.middleware import (
-    _extract_client_ip,
-    check_rate_limit,
+from cert_watch.auth.guards import (
     form_write_error,
     require_admin_write_form,
     require_auth,
     require_write_form,
 )
+from cert_watch.config import Settings
+from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
+from cert_watch.host_validation import MAX_HOSTNAME_OCTETS, hostname_is_valid
 from cert_watch.routes._deps import IdParam, _csv_safe, _db_path, _get_settings
 from cert_watch.routes._scoped import scope_tags_from_auth, scope_write_denied, tags_with_scope
 from cert_watch.scan import (
@@ -41,6 +39,7 @@ from cert_watch.scan_freshness import (
     scan_interval_out_of_range,
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 from cert_watch.services.resource_metadata import (
     ResourceMetadataNotFoundError,
     ResourceMetadataValidationError,

@@ -10,8 +10,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from cert_watch.auth.guards import require_admin_write, require_auth
 from cert_watch.database import SqliteAlertRepository
-from cert_watch.middleware import require_admin_write, require_auth
 from cert_watch.policy import (
     PolicyRule,
     PolicySet,

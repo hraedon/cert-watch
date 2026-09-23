@@ -13,10 +13,11 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
 from cert_watch.audit import record_audit, resolve_actor, resolve_source_ip
+from cert_watch.auth.guards import require_admin, require_admin_write
 from cert_watch.database import ApiKeyEntry, SqliteApiKeyRepository, get_write_lock
 from cert_watch.database.api_keys import VALID_SCOPES
-from cert_watch.middleware import _request_security, require_admin, require_admin_write
 from cert_watch.routes._deps import IdParam, _db_path
+from cert_watch.security import _request_security
 
 logger = logging.getLogger("cert_watch.routes.api.keys")
 

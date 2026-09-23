@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from cert_watch.middleware import require_admin_form
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.routes._deps import get_templates
 from cert_watch.routes.settings.render import LEGACY_TAB_MAP, _render_settings
 

@@ -208,20 +208,20 @@ def test_app_is_blocked_host_unresolvable(monkeypatch):
 # ── CSRF: token validation ─────────────────────────────────────────────────
 
 def test_csrf_make_validate_roundtrip():
-    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    from cert_watch.security.csrf import make_csrf_token, validate_csrf_token
     sid = "test-session-123"
     token = make_csrf_token(sid)
     assert validate_csrf_token(token, sid)
 
 
 def test_csrf_rejects_wrong_session():
-    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    from cert_watch.security.csrf import make_csrf_token, validate_csrf_token
     token = make_csrf_token("session-a")
     assert not validate_csrf_token(token, "session-b")
 
 
 def test_csrf_rejects_tampered_token():
-    from cert_watch.middleware import make_csrf_token, validate_csrf_token
+    from cert_watch.security.csrf import make_csrf_token, validate_csrf_token
     token = make_csrf_token("s1")
     parts = token.split(":")
     # Tamper with the signature
@@ -230,7 +230,7 @@ def test_csrf_rejects_tampered_token():
 
 
 def test_csrf_rejects_malformed_token():
-    from cert_watch.middleware import validate_csrf_token
+    from cert_watch.security.csrf import validate_csrf_token
     assert not validate_csrf_token("bad-token", "s1")
     assert not validate_csrf_token("", "s1")
 
@@ -247,7 +247,7 @@ def test_csrf_hidden_field_accepted(csrf_strict, tmp_path, monkeypatch, reload_a
         sid_cookie = r.cookies.get("cw_sid")
         assert sid_cookie
 
-    from cert_watch.middleware import make_csrf_token
+    from cert_watch.security.csrf import make_csrf_token
     token = make_csrf_token(sid_cookie)
 
     from cert_watch.scan import ScanError
@@ -279,7 +279,7 @@ def test_csrf_missing_token_rejected(csrf_strict, tmp_path, monkeypatch, reload_
 # ── Rate limiting: per-IP keys ─────────────────────────────────────────────
 
 def test_rate_limit_allows_first_request():
-    from cert_watch.middleware import check_rate_limit
+    from cert_watch.security.ratelimit import check_rate_limit
     key = f"test_rl:{time.time()}"
     assert check_rate_limit(key, 2, 60)
     assert check_rate_limit(key, 2, 60)
@@ -287,7 +287,7 @@ def test_rate_limit_allows_first_request():
 
 
 def test_rate_limit_per_ip_isolation():
-    from cert_watch.middleware import check_rate_limit
+    from cert_watch.security.ratelimit import check_rate_limit
     key_a = f"test_rl_ip_a:{time.time()}"
     key_b = f"test_rl_ip_b:{time.time()}"
     check_rate_limit(key_a, 1, 60)
@@ -300,17 +300,17 @@ def test_rate_limit_per_ip_isolation():
 def test_cross_worker_rate_limit_shared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two workers sharing the same SQLite DB enforce a shared limit."""
     from cert_watch.database.schema import init_schema
-    from cert_watch.middleware import _init_rate_db, check_rate_limit
+    from cert_watch.security.ratelimit import _init_rate_db, check_rate_limit
 
     db = tmp_path / "rate_limits.sqlite3"
     init_schema(db)
     _init_rate_db(db)
 
     # Monkeypatch away the in-memory fallback cache so we always hit SQLite
-    from cert_watch import middleware as _mw
+    import cert_watch.security.ratelimit as ratelimit_mod
     monkeypatch.setattr(
-        "cert_watch.middleware._rate_caches",
-        [{} for _ in range(_mw._RATE_SHARDS)],
+        "cert_watch.security.ratelimit._rate_caches",
+        [{} for _ in range(ratelimit_mod._RATE_SHARDS)],
     )
 
     key = f"cross_worker:{time.time()}"
@@ -336,7 +336,7 @@ def test_rate_limit_init_schema_called_once(
 ) -> None:
     """init_schema is only invoked once across multiple check_rate_limit calls."""
     from cert_watch.database.schema import init_schema
-    from cert_watch.middleware import _init_rate_db, check_rate_limit
+    from cert_watch.security.ratelimit import _init_rate_db, check_rate_limit
 
     call_count = 0
     original_init = init_schema
@@ -350,7 +350,7 @@ def test_rate_limit_init_schema_called_once(
 
     db = tmp_path / "rate_limits.sqlite3"
     _init_rate_db(db)
-    monkeypatch.setattr("cert_watch.middleware._rate_db_initialized", False)
+    monkeypatch.setattr("cert_watch.security.ratelimit._rate_db_initialized", False)
 
     key = f"init_once:{time.time()}"
     assert check_rate_limit(key, 2, 60)

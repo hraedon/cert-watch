@@ -20,15 +20,10 @@ from cert_watch.auth import (
 )
 from cert_watch.auth.rbac import BREAK_GLASS_CLAIM, LOCAL_USER_CLAIM, claims_for_session
 from cert_watch.database import bump_session_version, get_session_version
-from cert_watch.middleware import (
-    _COOKIE_SECURE,
-    _extract_client_ip,
-    _request_security,
-    check_csrf,
-    check_rate_limit,
-    get_csrf_context,
-)
 from cert_watch.routes._deps import get_templates
+from cert_watch.security import _request_security
+from cert_watch.security.csrf import _COOKIE_SECURE, check_csrf, get_csrf_context
+from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
 
 logger = logging.getLogger("cert_watch.routes.auth")
 
@@ -358,7 +353,7 @@ async def logout(request: Request) -> RedirectResponse:
         if settings:
             db_path = str(settings.db_path)
             from cert_watch.auth import validate_session
-            from cert_watch.middleware import _request_security
+            from cert_watch.security import _request_security
             username = validate_session(token, _request_security(request), db_path=db_path)
             if username:
                 bump_session_version(settings.db_path, username)

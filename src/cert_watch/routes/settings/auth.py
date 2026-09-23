@@ -11,8 +11,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
+from cert_watch.auth.guards import require_admin_form, require_admin_write
 from cert_watch.database import get_write_lock, kv_set, kv_set_secret
-from cert_watch.middleware import check_csrf, require_admin_form, require_admin_write
 from cert_watch.routes._deps import _db_path, _get_settings
 from cert_watch.routes.settings.ca_probe import _is_cert_verify_error
 from cert_watch.routes.settings.config import _AUTH_KEYS
@@ -22,6 +22,7 @@ from cert_watch.routes.settings.core import (
     _save_config_section,
     logger,
 )
+from cert_watch.security.csrf import check_csrf
 
 router = APIRouter()
 

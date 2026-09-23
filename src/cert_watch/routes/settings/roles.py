@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from cert_watch.auth import _scrypt_hash
+from cert_watch.auth.guards import require_admin_form
 from cert_watch.auth.rbac import PERMISSION_TIERS
 from cert_watch.database import (
     Role,
@@ -17,10 +18,10 @@ from cert_watch.database import (
     bump_session_version,
     get_write_lock,
 )
-from cert_watch.middleware import check_csrf, require_admin_form
 from cert_watch.routes._deps import IdParam, _db_path, get_templates
 from cert_watch.routes.settings.core import _rebuild_settings
 from cert_watch.routes.settings.render import _render_settings
+from cert_watch.security.csrf import check_csrf
 
 templates = get_templates()
 
