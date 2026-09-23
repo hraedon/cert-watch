@@ -310,7 +310,7 @@ class TestSendWebhookWithAdapters:
     def test_discord_delivery(self):
         config = _config(kind="discord")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -325,7 +325,7 @@ class TestSendWebhookWithAdapters:
     def test_teams_delivery(self):
         config = _config(kind="teams")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -340,7 +340,7 @@ class TestSendWebhookWithAdapters:
     def test_pagerduty_delivery_202(self):
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -353,7 +353,7 @@ class TestSendWebhookWithAdapters:
     def test_pagerduty_delivery_non_202_is_failure(self):
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -365,7 +365,7 @@ class TestSendWebhookWithAdapters:
     def test_generic_delivery_still_works(self):
         config = _config(kind="generic")
         alert = _alert()
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -384,7 +384,7 @@ class TestSendWebhookWithAdapters:
         )
         alert = _alert()
         with patch(
-            "cert_watch.alerts.ssrf_safe_urlopen",
+            "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
             side_effect=Exception("POST failed: routing_key=super-secret-key-1234567890"),
         ):
             ok = send_webhook(alert, config)
@@ -398,7 +398,7 @@ class TestSendWebhookWithAdapters:
         config = _config(kind="discord")
         alert = _alert()
         with patch(
-            "cert_watch.alerts.ssrf_safe_urlopen",
+            "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
             side_effect=SSRFBlockedError("blocked IP: 127.0.0.1"),
         ):
             ok = send_webhook(alert, config)
@@ -452,7 +452,7 @@ class TestPagerDutyResolve:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -467,7 +467,7 @@ class TestPagerDutyResolve:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -492,7 +492,7 @@ class TestPagerDutyResolve:
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="pagerduty", routing_key="rk1234567890abcdef1234567890abcdef")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 202
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -720,7 +720,7 @@ class TestAlertmanagerAdapter:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -739,7 +739,7 @@ class TestAlertmanagerAdapter:
         from cert_watch.alerts import send_webhook_resolve
 
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 500
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -771,7 +771,7 @@ class TestAlertmanagerAdapter:
             message="expiring", threshold_days=3,
         ))
         config = _config(kind="alertmanager")
-        with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+        with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
             mock_resp = MagicMock()
             mock_resp.status = 200
             mock_resp.__enter__ = MagicMock(return_value=mock_resp)

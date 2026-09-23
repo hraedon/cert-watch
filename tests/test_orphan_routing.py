@@ -186,7 +186,7 @@ def test_orphan_notice_sends_to_admins_and_flags(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com", subject="CN=lonely")
     conn = _patch_smtp()
-    with patch("cert_watch.alerts._open_smtp_connection", return_value=conn):
+    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn):
         assert send_orphan_notice(db, _cfg()) is True
     conn.send_message.assert_called_once()
     sent = conn.send_message.call_args[0][0]
@@ -201,7 +201,7 @@ def test_successful_orphan_notice_is_not_resent_in_same_period(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")
     conn = _patch_smtp()
-    with patch("cert_watch.alerts._open_smtp_connection", return_value=conn):
+    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn):
         assert send_orphan_notice(db, _cfg()) is True
         assert send_orphan_notice(db, _cfg()) is True
     conn.send_message.assert_called_once()
@@ -210,7 +210,7 @@ def test_successful_orphan_notice_is_not_resent_in_same_period(db: Path):
 def test_orphan_notice_smtp_failure_returns_false(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")
-    with patch("cert_watch.alerts._open_smtp_connection", return_value=None):
+    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=None):
         assert send_orphan_notice(db, _cfg()) is False
 
 
@@ -220,7 +220,7 @@ def test_orphan_notice_smtp_failure_returns_false(db: Path):
 def test_send_renewal_digest_invokes_orphan_notice(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")  # orphan, no renewal activity
-    with patch("cert_watch.digest.send_orphan_notice") as spy:
+    with patch("cert_watch.alerting.digest.renewal.send_orphan_notice") as spy:
         send_renewal_digest(db, _cfg(), None, days=7)
         from cert_watch.digest import _flush_digest_pool
         _flush_digest_pool()
@@ -240,7 +240,7 @@ def test_orphan_notice_offloaded_to_pool_not_blocking(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")
     submit_mock = MagicMock(wraps=lambda *a, **kw: None)
-    with patch("cert_watch.digest._digest_pool.submit", new=submit_mock):
+    with patch("cert_watch.alerting.digest.pool._digest_pool.submit", new=submit_mock):
         send_renewal_digest(db, _cfg(), None, days=7)
         _flush_digest_pool()
     assert submit_mock.called, "orphan notice must be submitted to the thread pool"
@@ -253,9 +253,9 @@ def test_orphan_notice_pool_submit_fallback_inline(db: Path):
     _make_admin(db, "boss@co.com")
     _add_leaf(db, "lonely.example.com")
     conn = _patch_smtp()
-    with patch("cert_watch.alerts._open_smtp_connection", return_value=conn), \
+    with patch("cert_watch.alerting.digest.engine._open_smtp_connection", return_value=conn), \
          patch(
-             "cert_watch.digest._digest_pool.submit",
+             "cert_watch.alerting.digest.pool._digest_pool.submit",
              side_effect=RuntimeError("pool closed"),
          ):
         send_renewal_digest(db, _cfg(), None, days=7)
@@ -267,7 +267,7 @@ def test_orphan_notice_task_exception_is_logged(db: Path, caplog):
     from cert_watch.digest import _flush_digest_pool
 
     with patch(
-        "cert_watch.digest.send_orphan_notice",
+        "cert_watch.alerting.digest.renewal.send_orphan_notice",
         side_effect=RuntimeError("orphan lookup failed"),
     ):
         assert send_renewal_digest(db, _cfg(), None, days=7) is True

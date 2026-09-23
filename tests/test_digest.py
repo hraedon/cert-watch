@@ -220,7 +220,7 @@ class TestSendRenewalDigest:
         smtp_mock = MagicMock()
         smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
         smtp_mock.__exit__ = MagicMock(return_value=False)
-        with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+        with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
             result = send_renewal_digest(db, config, None, days=7)
         assert result is True
         smtp_mock.send_message.assert_called()
@@ -233,7 +233,9 @@ class TestSendRenewalDigest:
         _add_host(db, "host-a.example.com")
         _emit_renewal(db, "host-a.example.com")
         wh = WebhookConfig(url="http://localhost:9999/hook")
-        with patch("cert_watch.alerts.send_webhook", return_value=True) as mock_send, \
+        with patch(
+            "cert_watch.alerting.digest.renewal.send_webhook", return_value=True,
+        ) as mock_send, \
              patch("cert_watch.retry.time.sleep"):
             result = send_renewal_digest(db, None, wh, days=7)
             _flush_digest_pool()
@@ -248,7 +250,9 @@ class TestSendRenewalDigest:
         _add_host(db, "host-a.example.com")
         _emit_renewal(db, "host-a.example.com")
         wh = WebhookConfig(url="http://localhost:9999/hook")
-        with patch("cert_watch.alerts.send_webhook", side_effect=[False, True]) as mock_send, \
+        with patch(
+            "cert_watch.alerting.digest.renewal.send_webhook", side_effect=[False, True],
+        ) as mock_send, \
              patch("cert_watch.retry.time.sleep"):
             result = send_renewal_digest(db, None, wh, days=7)
             _flush_digest_pool()
@@ -263,9 +267,11 @@ class TestSendRenewalDigest:
         _add_host(db, "host-a.example.com")
         _emit_renewal(db, "host-a.example.com")
         wh = WebhookConfig(url="http://localhost:9999/hook")
-        with patch("cert_watch.alerts.send_webhook", return_value=True) as mock_send, \
+        with patch(
+            "cert_watch.alerting.digest.renewal.send_webhook", return_value=True,
+        ) as mock_send, \
              patch(
-                 "cert_watch.digest._digest_pool.submit",
+                 "cert_watch.alerting.digest.pool._digest_pool.submit",
                  side_effect=RuntimeError("pool closed"),
              ), \
              patch("cert_watch.retry.time.sleep"):
@@ -282,7 +288,7 @@ class TestSendRenewalDigest:
         _add_host(db, "host-a.example.com")
         _emit_renewal(db, "host-a.example.com")
         wh = WebhookConfig(url="http://localhost:9999/hook")
-        with patch("cert_watch.alerts.send_webhook", return_value=False), \
+        with patch("cert_watch.alerting.digest.renewal.send_webhook", return_value=False), \
              patch("cert_watch.retry.time.sleep"):
             result = send_renewal_digest(db, None, wh, days=7)
             _flush_digest_pool()
@@ -296,7 +302,7 @@ class TestSendRenewalDigest:
         _emit_renewal(db, "host-a.example.com")
         wh = WebhookConfig(url="http://localhost:9999/hook")
         callback = MagicMock()
-        with patch("cert_watch.alerts.send_webhook", return_value=True):
+        with patch("cert_watch.alerting.digest.renewal.send_webhook", return_value=True):
             result = send_renewal_digest(
                 db,
                 None,
@@ -317,7 +323,7 @@ class TestSendRenewalDigest:
         wh = WebhookConfig(url="http://localhost:9999/hook")
         callback = MagicMock()
         with (
-            patch("cert_watch.alerts.send_webhook", return_value=False),
+            patch("cert_watch.alerting.digest.renewal.send_webhook", return_value=False),
             patch("cert_watch.retry.time.sleep"),
         ):
             result = send_renewal_digest(
@@ -373,7 +379,7 @@ class TestSendRenewalDigest:
             assert release.wait(timeout=5)
             return True
 
-        with patch("cert_watch.alerts.send_webhook", side_effect=blocked_delivery):
+        with patch("cert_watch.alerting.digest.renewal.send_webhook", side_effect=blocked_delivery):
             result = send_renewal_digest(
                 db,
                 None,
@@ -402,7 +408,7 @@ class TestSendRenewalDigest:
         callback = MagicMock()
         shutdown_digest_pool()
         try:
-            with patch("cert_watch.alerts.send_webhook") as send:
+            with patch("cert_watch.alerting.digest.renewal.send_webhook") as send:
                 result = send_renewal_digest(
                     db,
                     None,
@@ -436,7 +442,7 @@ class TestSendRenewalDigest:
         smtp = MagicMock()
         smtp.send_message.return_value = {}
         with patch(
-            "cert_watch.alerts._open_smtp_connection",
+            "cert_watch.alerting.digest.engine._open_smtp_connection",
             side_effect=[None, smtp, smtp],
         ), patch("cert_watch.retry.time.sleep"):
             result = send_renewal_digest(db, config, None, days=7)
@@ -462,7 +468,7 @@ class TestSendRenewalDigest:
             recipients=["global@recipient.test"],
         )
         smtp_mock = MagicMock()
-        with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+        with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
             send_renewal_digest(db, config, None, days=7)
 
         sent_msgs = smtp_mock.send_message.call_args_list
@@ -491,8 +497,8 @@ class TestSendRenewalDigest:
         smtp = MagicMock()
         smtp.send_message.return_value = {}
 
-        with patch("cert_watch.digest.send_orphan_notice"), patch(
-            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        with patch("cert_watch.alerting.digest.renewal.send_orphan_notice"), patch(
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp
         ):
             assert send_renewal_digest(db, config, None, days=7) is True
 
@@ -522,9 +528,12 @@ class TestSendRenewalDigest:
             recipients=["global@recipient.test"],
         )
         wh = WebhookConfig(url="http://localhost:9999/hook")
-        with patch("cert_watch.alerts.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")), \
+        with patch(
+            "cert_watch.alerting.transports.smtp.smtplib.SMTP",
+            side_effect=ConnectionRefusedError("nope"),
+        ), \
              patch("cert_watch.retry.time.sleep"), \
-             patch("cert_watch.alerts.send_webhook", return_value=True) as mock_wh:
+             patch("cert_watch.alerting.digest.renewal.send_webhook", return_value=True) as mock_wh:
             result = send_renewal_digest(db, config, wh, days=7)
             _flush_digest_pool()
         assert result is True
@@ -548,7 +557,7 @@ class TestSendRenewalDigest:
         smtp = MagicMock()
         smtp.send_message.return_value = {}
         with patch("cert_watch.retry.time.sleep"), patch(
-            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp
         ):
             send_renewal_digest(db, config, None, days=7)
 
@@ -574,9 +583,9 @@ class TestSendRenewalDigest:
             {},
         ]
 
-        with patch("cert_watch.alerts._open_smtp_connection", return_value=smtp), patch(
-            "cert_watch.retry.time.sleep"
-        ):
+        with patch(
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp,
+        ), patch("cert_watch.retry.time.sleep"):
             assert send_renewal_digest(db, config, None, days=7) is True
 
         assert smtp.send_message.call_count == 2
@@ -614,9 +623,9 @@ class TestSendRenewalDigest:
             for _ in range(ALERT_MAX_RETRIES)
         ]
 
-        with patch("cert_watch.alerts._open_smtp_connection", return_value=smtp), patch(
-            "cert_watch.retry.time.sleep"
-        ):
+        with patch(
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp,
+        ), patch("cert_watch.retry.time.sleep"):
             assert send_renewal_digest(db, config, None, days=7) is False
 
         assert smtp.send_message.call_count == ALERT_MAX_RETRIES
@@ -647,8 +656,8 @@ class TestSendRenewalDigest:
         first_callback = MagicMock()
         second_callback = MagicMock()
 
-        with patch("cert_watch.digest.send_orphan_notice"), patch(
-            "cert_watch.alerts.send_webhook",
+        with patch("cert_watch.alerting.digest.renewal.send_orphan_notice"), patch(
+            "cert_watch.alerting.digest.renewal.send_webhook",
             side_effect=[True, False, False, False, True],
         ) as send:
             send_renewal_digest(
@@ -691,8 +700,8 @@ class TestSendRenewalDigest:
 
         smtp = MagicMock()
         smtp.send_message.side_effect = blocked_send
-        with patch("cert_watch.digest.send_orphan_notice"), patch(
-            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        with patch("cert_watch.alerting.digest.renewal.send_orphan_notice"), patch(
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp
         ):
             first = threading.Thread(
                 target=lambda: first_result.append(
@@ -727,8 +736,8 @@ class TestSendRenewalDigest:
             assert release.wait(timeout=5)
             return True
 
-        with patch("cert_watch.digest.send_orphan_notice"), patch(
-            "cert_watch.alerts.send_webhook", side_effect=slow_first_send
+        with patch("cert_watch.alerting.digest.renewal.send_orphan_notice"), patch(
+            "cert_watch.alerting.digest.renewal.send_webhook", side_effect=slow_first_send
         ):
             send_renewal_digest(
                 db,
@@ -774,8 +783,8 @@ class TestSendRenewalDigest:
             return {}
 
         smtp.send_message.side_effect = slow_first_send
-        with patch("cert_watch.digest.send_orphan_notice"), patch(
-            "cert_watch.alerts._open_smtp_connection", return_value=smtp
+        with patch("cert_watch.alerting.digest.renewal.send_orphan_notice"), patch(
+            "cert_watch.alerting.digest.engine._open_smtp_connection", return_value=smtp
         ):
             worker = threading.Thread(
                 target=lambda: result.append(

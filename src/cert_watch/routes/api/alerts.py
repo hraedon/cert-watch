@@ -355,7 +355,7 @@ def api_cert_alert_routing(
     effective = cert_repo.effective_tags(cert_id)
     manual_ids = set(group_repo.groups_for_cert_manual(cert_id))
 
-    from cert_watch.alerts import resolve_group_recipients
+    from cert_watch.alerting.routing import resolve_group_recipients
     from cert_watch.tags import tags_match
 
     matched_groups: list[dict[str, Any]] = []

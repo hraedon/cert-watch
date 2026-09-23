@@ -80,7 +80,7 @@ def test_send_alert_smtp_success(monkeypatch):
     smtp_mock = MagicMock()
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
-    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
         ok = send_alert(alert, config)
     assert ok is True
     smtp_mock.send_message.assert_called_once()
@@ -96,7 +96,8 @@ def test_send_alert_smtp_failure_returns_false():
     )
     alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
     with patch(
-        "cert_watch.alerts.smtplib.SMTP", side_effect=ConnectionRefusedError("nope")
+        "cert_watch.alerting.transports.smtp.smtplib.SMTP",
+        side_effect=ConnectionRefusedError("nope"),
     ):
         ok = send_alert(alert, config)
     assert ok is False
@@ -125,7 +126,7 @@ def test_send_alert_port25_no_starttls_no_creds_sends():
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
     smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
-    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
         ok = send_alert(alert, config)
     assert ok is True
     smtp_mock.login.assert_not_called()
@@ -149,7 +150,7 @@ def test_send_alert_no_starttls_with_creds_refuses():
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
     smtp_mock.starttls.side_effect = smtplib.SMTPNotSupportedError("no starttls")
-    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
         ok = send_alert(alert, config)
     assert ok is False
     smtp_mock.login.assert_not_called()
@@ -172,7 +173,7 @@ def test_send_alert_ssrf_loopback_blocked():
         recipients=["c@d"],
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
-    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         ok = send_alert(alert, config)
     assert ok is False
     mock_smtp.assert_not_called()
@@ -189,7 +190,7 @@ def test_send_alert_ssrf_metadata_blocked():
         recipients=["c@d"],
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
-    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         ok = send_alert(alert, config)
     assert ok is False
     mock_smtp.assert_not_called()
@@ -221,7 +222,7 @@ def test_send_alert_ssrf_private_allowed(monkeypatch):
     smtp_mock = MagicMock()
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
-    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
         ok = send_alert(alert, config)
     assert ok is True
     smtp_mock.send_message.assert_called_once()
@@ -250,7 +251,7 @@ def test_send_alert_ssrf_private_blocked_when_disallowed(monkeypatch):
         allow_private=False,
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
-    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         ok = send_alert(alert, config)
     assert ok is False
     mock_smtp.assert_not_called()
@@ -267,7 +268,7 @@ def test_send_alert_ssrf_loopback_blocked_no_ip_in_error():
         recipients=["c@d"],
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
-    with patch("cert_watch.alerts.smtplib.SMTP"):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP"):
         send_alert(alert, config)
     assert alert.error_message is not None
     assert "127.0.0.1" not in alert.error_message
@@ -283,7 +284,7 @@ def test_process_pending_ssrf_blocked_does_not_crash(alert_repo, expiring_cert):
         from_addr="a@b",
         recipients=["c@d"],
     )
-    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         counts = process_pending(alert_repo, config)
     mock_smtp.assert_not_called()
     assert counts["sent"] == 0
@@ -301,7 +302,7 @@ def test_open_smtp_connection_ssrf_blocked_returns_none():
         from_addr="a@b",
         recipients=["c@d"],
     )
-    with patch("cert_watch.alerts.smtplib.SMTP") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as mock_smtp:
         result = _open_smtp_connection(config)
     assert result is None
     mock_smtp.assert_not_called()
@@ -322,8 +323,13 @@ def test_open_smtp_connection_port465_uses_ssl():
     ssl_mock = MagicMock()
     ssl_mock.connect.return_value = (220, b"ready")
     with (
-        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5")),
-        patch("cert_watch.alerts.smtplib.SMTP_SSL", return_value=ssl_mock) as smtp_ssl,
+        patch(
+            "cert_watch.alerting.transports.smtp.resolve_smtp_host",
+            return_value=(None, "203.0.113.5"),
+        ),
+        patch(
+            "cert_watch.alerting.transports.smtp.smtplib.SMTP_SSL", return_value=ssl_mock,
+        ) as smtp_ssl,
     ):
         result = _open_smtp_connection(config)
     assert result is ssl_mock
@@ -362,9 +368,12 @@ def test_open_smtp_connection_rejects_invalid_relay_certificate():
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with (
-        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5")),
         patch(
-            "cert_watch.alerts.connect_smtp_transport",
+            "cert_watch.alerting.transports.smtp.resolve_smtp_host",
+            return_value=(None, "203.0.113.5"),
+        ),
+        patch(
+            "cert_watch.alerting.transports.smtp.connect_smtp_transport",
             side_effect=ssl.SSLCertVerificationError("certificate verify failed"),
         ),
     ):
@@ -389,10 +398,12 @@ def test_open_smtp_connection_uses_single_validated_resolution():
     )
     smtp_mock = MagicMock()
     with (
-        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, "203.0.113.5"))
-        as resolve,
-        patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock) as smtp,
-        patch("cert_watch.alerts.negotiate_starttls", return_value=True),
+        patch(
+            "cert_watch.alerting.transports.smtp.resolve_smtp_host",
+            return_value=(None, "203.0.113.5"),
+        ) as resolve,
+        patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock) as smtp,
+        patch("cert_watch.alerting.transports.smtp.negotiate_starttls", return_value=True),
     ):
         result = _open_smtp_connection(config)
     assert result is smtp_mock
@@ -416,8 +427,8 @@ def test_open_smtp_connection_resolution_failure_does_not_retry_by_hostname():
     )
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="m")
     with (
-        patch("cert_watch.alerts.resolve_smtp_host", return_value=(None, None)),
-        patch("cert_watch.alerts.smtplib.SMTP") as smtp,
+        patch("cert_watch.alerting.transports.smtp.resolve_smtp_host", return_value=(None, None)),
+        patch("cert_watch.alerting.transports.smtp.smtplib.SMTP") as smtp,
     ):
         result = _open_smtp_connection(config, alert=alert)
     assert result is None
@@ -536,7 +547,7 @@ def test_process_pending_sends_and_marks(alert_repo, expiring_cert):
     smtp_mock = MagicMock()
     smtp_mock.__enter__ = MagicMock(return_value=smtp_mock)
     smtp_mock.__exit__ = MagicMock(return_value=False)
-    with patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock):
+    with patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock):
         counts = process_pending(alert_repo, config)
     assert counts["sent"] > 0
     assert counts["failed"] == 0
@@ -607,7 +618,7 @@ def test_alert_message_expired_phrasing(alert_repo):
 def test_send_webhook_success():
     config = WebhookConfig(url="https://hooks.example.com/alert")
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="msg")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -622,7 +633,7 @@ def test_send_webhook_failure():
     config = WebhookConfig(url="https://hooks.example.com/alert")
     alert = Alert(cert_id="c", alert_type="expired", status="pending", message="m")
     with patch(
-        "cert_watch.alerts.ssrf_safe_urlopen",
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
         side_effect=Exception("connection refused"),
     ):
         ok = send_webhook(alert, config)
@@ -647,7 +658,7 @@ def test_send_webhook_template():
         status="pending",
         message="Cert expiring soon",
     )
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -676,7 +687,7 @@ def test_send_webhook_template_non_json():
         status="pending",
         message="Cert has expired",
     )
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -704,8 +715,8 @@ def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
     smtp_mock.__exit__ = MagicMock(return_value=False)
     smtp_mock.send_message.side_effect = Exception("smtp down")
     with (
-        patch("cert_watch.alerts.smtplib.SMTP", return_value=smtp_mock),
-        patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen,
+        patch("cert_watch.alerting.transports.smtp.smtplib.SMTP", return_value=smtp_mock),
+        patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen,
     ):
         mock_resp = MagicMock()
         mock_resp.status = 200
@@ -730,7 +741,7 @@ def test_process_pending_webhook_fallback(alert_repo, expiring_cert):
 def test_process_pending_webhook_only(alert_repo, expiring_cert):
     evaluate_thresholds(expiring_cert, alert_repo)
     webhook_config = WebhookConfig(url="https://hooks.example.com/alert")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -750,7 +761,7 @@ def test_send_webhook_ssrf_blocked():
     config = WebhookConfig(url="https://127.0.0.1/webhook")
     alert = Alert(cert_id="c", alert_type="expiry_warning", status="pending", message="msg")
     with patch(
-        "cert_watch.alerts.ssrf_safe_urlopen",
+        "cert_watch.alerting.transports.webhook.ssrf_safe_urlopen",
         side_effect=SSRFBlockedError("blocked IP: 127.0.0.1"),
     ):
         ok = send_webhook(alert, config)
@@ -1000,7 +1011,7 @@ def test_send_expiry_digest_returns_true_with_expiring_certs(tmp_path):
     _insert_cert(db, not_after=soon)
     config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
                          from_addr="from@test", recipients=["to@test"])
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_server = MagicMock()
         mock_smtp.SMTP.return_value.__enter__ = lambda s: mock_server
         mock_smtp.SMTP.return_value.__exit__ = MagicMock(return_value=False)
@@ -1037,7 +1048,7 @@ def test_send_expiry_digest_sends_webhook_when_no_smtp(tmp_path):
     soon = (datetime.now(UTC) + timedelta(days=5)).isoformat()
     _insert_cert(db, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1055,7 +1066,7 @@ def test_successful_expiry_webhook_is_not_resent_in_same_period(tmp_path):
     db = tmp_path / "cw.sqlite3"
     _insert_cert(db, not_after=(datetime.now(UTC) + timedelta(days=5)).isoformat())
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.send_webhook", return_value=True) as send:
+    with patch("cert_watch.alerting.digest.expiry.send_webhook", return_value=True) as send:
         assert send_expiry_digest(db, None, webhook) is True
         assert send_expiry_digest(db, None, webhook) is True
     send.assert_called_once()
@@ -1070,7 +1081,7 @@ def test_send_expiry_digest_includes_expiring_cert_details(tmp_path):
     _insert_cert(db, subject="CN=important", hostname="web.example.com",
                  port=443, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1106,7 +1117,7 @@ def test_send_expiry_digest_rejects_injected_owner_email(tmp_path):
     config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
                          from_addr="from@test", recipients=["ops@test"])
     sent: list = []
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_smtp.SMTP.return_value.send_message.side_effect = sent.append
         result = send_expiry_digest(db, config)
 
@@ -1127,7 +1138,7 @@ def test_send_expiry_digest_discord_adapter_format(tmp_path):
     _insert_cert(db, subject="CN=discord-test", hostname="d.example.com",
                  port=443, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.discord.test/webhook", kind="discord")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1155,7 +1166,7 @@ def test_send_expiry_digest_alertmanager_adapter_format(tmp_path):
     _insert_cert(db, subject="CN=am-test", hostname="am.example.com",
                  port=443, not_after=soon)
     webhook = WebhookConfig(url="https://am.example.com/api/v1/alerts", kind="alertmanager")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1183,7 +1194,7 @@ def test_send_expiry_digest_generic_adapter_format(tmp_path):
     _insert_cert(db, subject="CN=generic-test", hostname="g.example.com",
                  port=443, not_after=soon)
     webhook = WebhookConfig(url="https://hooks.test/hook", kind="generic")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1209,7 +1220,7 @@ def test_send_expiry_digest_smtp_failure_returns_false(tmp_path):
     _insert_cert(db, not_after=soon)
     config = AlertConfig(smtp_host="smtp.test", smtp_user="", smtp_password="",
                          from_addr="from@test", recipients=["to@test"])
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_smtp.SMTP.side_effect = Exception("connection refused")
         result = send_expiry_digest(db, config)
     assert result is False
@@ -1227,7 +1238,7 @@ def test_send_expiry_digest_respects_30_day_window(tmp_path):
     _insert_cert(db, subject="CN=inside", hostname="in.example.com", not_after=inside)
     _insert_cert(db, subject="CN=outside", hostname="out.example.com", not_after=outside)
     webhook = WebhookConfig(url="https://hooks.test/hook")
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1268,7 +1279,7 @@ def test_expiry_digest_owner_scoped(tmp_path):
 
     sent: list = []
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1319,7 +1330,7 @@ def test_expiry_digest_owner_in_global_recipients(tmp_path):
 
     sent: list = []
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1360,7 +1371,7 @@ def test_expiry_digest_no_owners_backward_compat(tmp_path):
 
     sent: list = []
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1394,7 +1405,7 @@ def test_expiry_digest_mixed_case_email_preserves_original(tmp_path):
 
     sent: list = []
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1432,7 +1443,7 @@ def test_expiry_digest_partial_smtp_failure_returns_false(tmp_path):
             return None
         raise smtplib.SMTPException("owner send failed")
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1472,7 +1483,7 @@ def test_expiry_digest_conn_break_retries_remaining_owners(tmp_path):
             raise ConnectionError("connection dropped")
         return None
 
-    with patch("cert_watch.alerts.smtplib") as mock_smtp:
+    with patch("cert_watch.alerting.transports.smtp.smtplib") as mock_smtp:
         mock_conn = mock_smtp.SMTP.return_value
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -1504,7 +1515,7 @@ def test_expiry_digest_webhook_strips_owner_email_pii(tmp_path):
 
     webhook = WebhookConfig(url="https://hooks.test/hook")
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)

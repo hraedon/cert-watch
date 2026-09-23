@@ -10,8 +10,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
 from cert_watch import __commit__, __version__
-from cert_watch.alert_delivery import FAILURE_LABELS
-from cert_watch.alerts import UNDELIVERED_AFTER_HOURS, delivery_is_configured
+from cert_watch.alerting.evidence import FAILURE_LABELS
+from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
 from cert_watch.database import (
     _count_alerts_by_filter,
     list_alerts_with_subject,

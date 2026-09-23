@@ -630,7 +630,7 @@ def test_flush_alert_queue_skips_when_scheduler_delivery_is_busy(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerts.process_pending", process)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process)
     request = Request(
         {
             "type": "http",
@@ -690,7 +690,7 @@ def test_flush_alert_queue_runs_delivery_off_event_loop_thread(
         lambda _request: SimpleNamespace(smtp_host=None, webhook_url=None),
     )
     monkeypatch.setattr("cert_watch.routes.dashboard.record_audit", Mock())
-    monkeypatch.setattr("cert_watch.alerts.process_pending", process_pending)
+    monkeypatch.setattr("cert_watch.alerting.dispatch.process_pending", process_pending)
     request = Request(
         {
             "type": "http",

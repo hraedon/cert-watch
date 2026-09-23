@@ -1033,7 +1033,7 @@ def test_store_scanned_pagerduty_resolve(monkeypatch, tmp_path, self_signed_leaf
 
     mock_resolve = MagicMock(return_value=1)
     monkeypatch.setattr(
-        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
+        "cert_watch.alerting.resolve.resolve_webhook_for_renewed_cert",
         mock_resolve,
     )
 
@@ -1075,7 +1075,7 @@ def test_store_scanned_webhook_resolve_exception(monkeypatch, tmp_path, self_sig
         routing_key="rk1",
     )
     monkeypatch.setattr(
-        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
+        "cert_watch.alerting.resolve.resolve_webhook_for_renewed_cert",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("pd down")),
     )
 
@@ -1148,7 +1148,7 @@ def test_store_scanned_alertmanager_resolve_end_to_end(
         kind="alertmanager",
     )
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 200
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1223,7 +1223,7 @@ def test_store_scanned_alertmanager_resolve_failure_is_fail_open(
         kind="alertmanager",
     )
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 500
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1291,7 +1291,7 @@ def test_store_scanned_unchanged_rescan_sends_no_resolve(
         kind="alertmanager",
     )
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         leaf_id = store_scanned(entry, db, webhook_config=webhook_config)
         assert leaf_id != first_leaf_id
         mock_urlopen.assert_not_called()
@@ -1375,7 +1375,7 @@ def test_store_scanned_pagerduty_resolve_survives_row_rewrites(
         routing_key="rk",
     )
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         mock_resp = MagicMock()
         mock_resp.status = 202
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
@@ -1464,7 +1464,7 @@ def test_store_scanned_unchanged_rescan_defers_no_resolve(
     assert leaf_id != first_leaf_id
     assert deferred.replaced_cert_id is None
 
-    with patch("cert_watch.alerts.ssrf_safe_urlopen") as mock_urlopen:
+    with patch("cert_watch.alerting.transports.webhook.ssrf_safe_urlopen") as mock_urlopen:
         _execute_deferred_post_commit(deferred)
         mock_urlopen.assert_not_called()
 
@@ -2223,7 +2223,7 @@ def test_store_scanned_webhook_resolve_failure_does_not_roll_back(
     ))
 
     monkeypatch.setattr(
-        "cert_watch.alerts.resolve_webhook_for_renewed_cert",
+        "cert_watch.alerting.resolve.resolve_webhook_for_renewed_cert",
         lambda *a, **kw: (_ for _ in ()).throw(Exception("pagerduty down")),
     )
 

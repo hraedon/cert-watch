@@ -17,7 +17,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
 
-from cert_watch import alerts
+from cert_watch.alerting import routing
+from cert_watch.alerting.transports.smtp import _validate_email
 from cert_watch.database.connection import _connect, _thread_cache
 
 
@@ -130,9 +131,9 @@ def _copy_routing_rows(source: Path, scratch: Path) -> str:
 
 def _inspect_routing(scratch: Path) -> dict[str, Any]:
     matches: dict[str, list[str]] = {}
-    recipients, _ = alerts._resolve_group_config(scratch, matched_groups=matches)
-    _, owners = alerts._load_host_owner_maps(scratch)
-    members = alerts._load_role_user_emails(scratch)
+    recipients, _ = routing._resolve_group_config(scratch, matched_groups=matches)
+    _, owners = routing._load_host_owner_maps(scratch)
+    members = routing._load_role_user_emails(scratch)
     with _connect(scratch) as conn:
         leaves = conn.execute(
             "SELECT id, hostname, port, subject FROM certificates WHERE is_leaf = 1 "
@@ -145,13 +146,13 @@ def _inspect_routing(scratch: Path) -> dict[str, Any]:
             owners.get((leaf["hostname"], leaf["port"]))
             if leaf["hostname"] and leaf["port"] else None
         )
-        specific = alerts.resolve_cert_recipients(recipients.get(leaf["id"], []), owner, members)
+        specific = routing.resolve_cert_recipients(recipients.get(leaf["id"], []), owner, members)
         group_ids = sorted(matches.get(leaf["id"], []))
         certificates.append({
             "cert_id": leaf["id"], "hostname": leaf["hostname"] or "", "port": leaf["port"],
             "subject": leaf["subject"] or "", "group_ids": group_ids, "recipients": specific,
             "invalid_recipients": [address for address in specific
-                                   if not alerts._validate_email(address)],
+                                   if not _validate_email(address)],
             "orphan": not specific, "multi_match": len(group_ids) > 1,
         })
     groups: list[dict[str, Any]] = []
