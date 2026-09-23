@@ -23,7 +23,7 @@ Supports PEM, DER, CER, CRT, PKCS#12 (`.pfx`/`.p12`), PKCS#7 (`.p7b`/`.p7c`), an
 - **Scheduled scans** — daily automatic re-scan of all tracked hosts
 - **Posture page** — fleet grade, TLS-version and grade trends, crypto inventory; the expiry calendar is a dashboard view
 - **Bulk import** — CSV upload for adding many hosts at once
-- **Prometheus metrics** — `/metrics` endpoint for monitoring integration (optionally bearer-token gated)
+- **Prometheus metrics** — `/metrics` endpoint for monitoring integration (dedicated bearer token or admin session)
 - **Renewal tracking** — links renewed certificates to their predecessors
 - **Certificate history** — per-scan snapshots with configurable retention; fleet TLS version and posture grade trends
 - **Audit log** — append-only record of mutations and logins (admin-only view), with configurable retention
@@ -354,6 +354,7 @@ anyway (dev / air-gapped), set `CERT_WATCH_ALLOW_UNAUTH=1`.
 | `LDAP_BIND_PASSWORD` | — | Service account password (`*_FILE` supported) |
 | `LDAP_USER_FILTER` | `(sAMAccountName={username})` | Search filter; `{username}` is replaced |
 | `LDAP_START_TLS` | `0` | Set `1` to use StartTLS |
+| `CERT_WATCH_LDAP_ALLOW_INSECURE` | `0` | Set `1` only to permit a legacy plain-`ldap://` simple bind without StartTLS (credentials traverse the network in cleartext) |
 | `LDAP_CA_CERT` | — | CA cert for LDAPS (file path or PEM data, `LDAP_CA_CERT_FILE` supported) |
 | `LDAP_REQUIRED_GROUPS` | — | Comma-separated group DNs; transitive membership check |
 | `LDAP_CONNECT_TIMEOUT` | `5` | LDAP connection timeout (seconds) |
@@ -471,7 +472,7 @@ cert-watch (see [`deploy/iis/README.md`](deploy/iis/README.md)).
 | `CERT_WATCH_TRUST_PROXY` | `0` | Set `1` to read the client IP from `X-Forwarded-For` / `X-Real-IP` (for rate limiting + audit log) instead of the proxy's connection IP |
 | `CERT_WATCH_TRUSTED_PROXIES` | — | Comma-separated proxy IPs to trust for the above; restricts which sources may set forwarded headers |
 | `CERT_WATCH_BASE_URL` | — | Public base URL (e.g. `https://certs.example.com`). Builds the OAuth redirect URI from a trusted value rather than the request `Host` header. **Required when OAuth/OIDC is enabled** |
-| `CERT_WATCH_METRICS_TOKEN` | — | When set, `/metrics` requires `Authorization: Bearer <token>` (`*_FILE` supported) |
+| `CERT_WATCH_METRICS_TOKEN` | — | Dedicated `Authorization: Bearer <token>` for `/metrics` (`*_FILE` supported); without it, an admin browser session is required when auth is enabled |
 | `CERT_WATCH_ALLOW_UNAUTH` | `0` | Set `1` to allow running with no auth provider on a non-loopback bind (suppresses the secure-by-default refusal and the `/setup` redirect) |
 
 ## CLI commands
@@ -564,8 +565,11 @@ cert-watch verify-report compliance-report.json
 ## Prometheus metrics
 
 The `/metrics` endpoint exposes Prometheus-native gauges for integration with
-Grafana, Datadog, or any Prometheus-compatible scraping system. When
-`CERT_WATCH_METRICS_TOKEN` is set, send it as a bearer token.
+Grafana, Datadog, or any Prometheus-compatible scraping system. With
+authentication enabled it requires either an admin browser session or the
+dedicated `CERT_WATCH_METRICS_TOKEN` bearer token. Configure the token for an
+automated scraper. In deliberately open mode the endpoint follows the
+instance's open access policy.
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -617,7 +621,7 @@ Most JSON endpoints are at `/api/`; list endpoints support `?page=` and
 | `GET` | `/healthz` | Health check (DB, scheduler, cert counts) |
 | `GET` | `/readyz` | Readiness check (`503` when the monitoring pipeline is degraded) |
 | `GET` | `/api/health` | Health check (JSON) |
-| `GET` | `/metrics` | Prometheus metrics (bearer-gated when `CERT_WATCH_METRICS_TOKEN` set) |
+| `GET` | `/metrics` | Prometheus metrics (dedicated bearer token or admin browser session when auth is enabled) |
 | `GET` | `/api/certificates` | List certificates (paginated) |
 | `GET` | `/api/certificates/{id}` | Certificate detail (includes `tags` + `effective_tags`) |
 | `GET` | `/api/tags` | Distinct tags across hosts + certs |

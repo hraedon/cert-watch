@@ -114,6 +114,9 @@ FIELD_SPECS: dict[str, FieldSpec] = {
         ("LDAP_USER_FILTER",), "ldap_user_filter", "str", "(sAMAccountName={username})"
     ),
     "ldap_start_tls": FieldSpec(("LDAP_START_TLS",), "ldap_start_tls", "bool", False),
+    "ldap_allow_insecure": FieldSpec(
+        ("CERT_WATCH_LDAP_ALLOW_INSECURE",), None, "bool", False
+    ),
     "ldap_ca_cert": FieldSpec(("LDAP_CA_CERT",), "ldap_ca_cert", "secret-file", "", sensitive=True),
     "ldap_required_groups": FieldSpec(
         ("LDAP_REQUIRED_GROUPS",), "ldap_required_groups", "csv", (), normalize="group-dns"

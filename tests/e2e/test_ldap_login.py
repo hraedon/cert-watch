@@ -165,6 +165,9 @@ def ldap_cert_watch_server(samba_ldap_e2e, tmp_path_factory):
         "LDAP_BASE_DN": samba_ldap_e2e.base_dn,
         "LDAP_BIND_DN": samba_ldap_e2e.bind_dn,
         "LDAP_BIND_PASSWORD": samba_ldap_e2e.admin_password,
+        # The disposable Samba fixture exposes only plain LDAP on loopback.
+        # Production defaults still refuse this unless an operator opts in.
+        "CERT_WATCH_LDAP_ALLOW_INSECURE": "1",
         "LDAP_USER_SEARCH_FILTER": "(sAMAccountName={username})",
         "LDAP_REQUIRED_GROUPS": (
             "CN=cert-watch-admins,CN=Users,DC=CW,DC=TEST;"

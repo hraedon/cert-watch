@@ -72,7 +72,8 @@ def test_api_update_host_notes_invalid_json(tmp_path, reload_app):
     with TestClient(app_mod.app) as client:
         r = client.patch(
             f"/api/hosts/{hid}/notes",
-            data="not json",
+            content="not json",
+            headers={"Content-Type": "application/json"},
         )
     assert r.status_code == 400
     assert r.json()["error"] == "invalid JSON"

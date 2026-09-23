@@ -17,12 +17,14 @@ _ALWAYS_BLOCKED_NETWORKS = [
     ipaddress.ip_network("::1/128"),
     ipaddress.ip_network("::/128"),
     ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fd00:ec2::/32"),
 ]
 
 _PRIVATE_NETWORKS = [
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
     ipaddress.ip_network("fc00::/7"),
 ]
 
@@ -33,6 +35,9 @@ _TEREDO_NETWORK = ipaddress.ip_network("2001::/32")
 _IPV4_COMPATIBLE_NETWORK = ipaddress.ip_network("::/96")
 # NAT64 (RFC 6052) well-known prefix.
 _NAT64_NETWORK = ipaddress.ip_network("64:ff9b::/96")
+# NAT64 local-use prefix (RFC 8215). The deployment-specific suffix still
+# carries the effective IPv4 address in its low 32 bits.
+_NAT64_LOCAL_NETWORK = ipaddress.ip_network("64:ff9b:1::/48")
 
 
 @lru_cache(maxsize=64)
@@ -63,7 +68,7 @@ def _is_blocked_ip(
       unspecified, and other always-blocked ranges are ALWAYS blocked, regardless
       of policy.
     - Public IPs are allowed (scanning public certs is the baseline function).
-    - Private (RFC 1918 / ULA) IPs, including 6to4 (2002::/16) and Teredo
+    - Private (RFC 1918 / ULA / CGNAT) IPs, including 6to4 (2002::/16) and Teredo
       (2001::/32) with embedded private IPv4: when ``allowed_subnets`` is
       configured, a private IP is allowed only if it falls inside one of those
       CIDRs (the explicit-allowlist model); otherwise governed by
@@ -88,8 +93,9 @@ def _is_blocked_ip(
             # Teredo (2001::/32): the embedded client IPv4 is XOR-obfuscated and not
             # a sound basis for a policy decision — block the whole range (RFC 4380).
             return True
-        elif ip in _NAT64_NETWORK:
-            # NAT64 (64:ff9b::/96): the embedded IPv4 is in the low 32 bits.
+        elif ip in _NAT64_NETWORK or ip in _NAT64_LOCAL_NETWORK:
+            # NAT64 well-known/local-use prefixes: the embedded IPv4 is in the
+            # low 32 bits for the literal forms accepted by this application.
             check_ip = ipaddress.IPv4Address(int.from_bytes(ip.packed[12:16], "big"))
         elif ip in _IPV4_COMPATIBLE_NETWORK and ip != ipaddress.IPv6Address("::"):
             # Deprecated IPv4-compatible (::/96, e.g. ::127.0.0.1): the
@@ -102,7 +108,8 @@ def _is_blocked_ip(
     if any(check_ip in net for net in _ALWAYS_BLOCKED_NETWORKS):
         return True
 
-    if not check_ip.is_private:
+    is_private = check_ip.is_private or any(check_ip in net for net in _PRIVATE_NETWORKS)
+    if not is_private:
         return False  # public — allowed
     if allowed_subnets:
         nets = _parse_allowed_subnets(tuple(allowed_subnets))

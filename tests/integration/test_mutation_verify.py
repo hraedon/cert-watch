@@ -225,6 +225,7 @@ class TestMutationVerify:
         monkeypatch.setenv("LDAP_REQUIRED_GROUPS", f"{g1},{g2}")
         monkeypatch.setenv("CERT_WATCH_DATA_DIR", str(tmp_path))
         monkeypatch.setenv("CERT_WATCH_ALLOW_UNAUTH", "1")
+        monkeypatch.setenv("CERT_WATCH_LDAP_ALLOW_INSECURE", "1")
 
         settings = Settings.from_env()
         provider = settings.build_auth_provider()
