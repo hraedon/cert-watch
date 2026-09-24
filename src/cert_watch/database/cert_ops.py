@@ -18,6 +18,48 @@ from cert_watch.database.connection import (
 )
 from cert_watch.database.schema import init_schema
 
+# Every ``certificates`` column falls in exactly one of these sets (a test
+# enforces it). A scan writes the first set from what it observed; the second
+# is set by people and must survive the row rewrite a scan performs -- on an
+# unchanged rescan and on a renewal alike, since it describes the endpoint's
+# certificate (#113).
+SCAN_CERT_COLUMNS = (
+    "id", "subject", "issuer", "not_before", "not_after", "san_dns_names",
+    "fingerprint_sha256", "raw_der", "source", "hostname", "port", "is_leaf",
+    "parent_cert_id", "chain_valid", "replaces_cert_id", "created_at", "updated_at",
+)
+CARRIED_CERT_COLUMNS = ("tags",)
+
+# What happens to each stored reference to a certificate id when a scan
+# rewrites an endpoint's rows. A test introspects the schema and fails when a
+# column that names a certificate appears without an entry here (#113).
+#
+#   KEPT       unchanged rescan: the row keeps its id, so the reference stays
+#              valid as is.
+#   FOLLOWS    renewal: moved to the successor leaf (operator intent about the
+#              endpoint's certificate, e.g. a manual alert-group assignment).
+#   HISTORY    never rewritten: it records what happened to that certificate
+#              (an alert that fired, an event, an audit entry). A renewal
+#              leaves it naming the old id, which the stable-link resolver maps
+#              to the endpoint's current certificate.
+#   REDERIVED  rewritten by the scan itself (chain rows, posture).
+#   ENDPOINT   the value names the endpoint + fingerprint, not a row id, for
+#              scanned certificates; a scan never changes it.
+CERT_ID_REFERENCES: dict[str, tuple[str, str]] = {
+    # column: (unchanged rescan, renewal)
+    "certificates.id": ("KEPT", "REDERIVED"),
+    "certificates.parent_cert_id": ("REDERIVED", "REDERIVED"),
+    "certificates.replaces_cert_id": ("KEPT", "REDERIVED"),
+    "alert_group_certs.cert_id": ("KEPT", "FOLLOWS"),
+    "alerts.cert_id": ("KEPT", "HISTORY"),
+    "alerts.trigger_cert_id": ("HISTORY", "HISTORY"),
+    "alerts.dedupe_key": ("ENDPOINT", "ENDPOINT"),
+    "rule_firings.dedupe_key": ("ENDPOINT", "ENDPOINT"),
+    "scan_posture.cert_id": ("REDERIVED", "REDERIVED"),
+    "event_log.payload": ("HISTORY", "HISTORY"),
+    "audit_log.target_id": ("HISTORY", "HISTORY"),
+    "audit_log.detail": ("HISTORY", "HISTORY"),
+}
 
 def distinct_tags(
     db_path: str | Path, *, scope_tags: tuple[str, ...] = ()
@@ -89,10 +131,12 @@ def _do_replace(
 
     # A rescan that sees the same bytes has not replaced anything: it is the
     # same certificate, observed again. Its inventory row is still rewritten
-    # under a new id (the chain, posture and history rows hang off that id),
-    # so the alerts have to follow it or they are orphaned on an id that no
+    # (the chain and posture rows are re-derived), now under the same id, and
+    # the alerts must stay on that id or they are orphaned on one that no
     # longer exists -- and `evaluate_thresholds` dedups by exactly that id.
-    # Orphaning them made every threshold fire again on the next cycle: one
+    # (When the endpoint somehow held several leaves, alerts on all of them
+    # move to the one kept id.) Orphaning them made every threshold fire
+    # again on the next cycle: one
     # unchanged certificate inside its expiry window re-alerted, and re-mailed,
     # once per scan, for ever.
     unchanged = (
@@ -108,6 +152,35 @@ def _do_replace(
     if unchanged and old_leaf_row is not None:
         leaf_id = old_leaf_row["id"]
         lineage_id = old_leaf_row["replaces_cert_id"]
+    # Operator-set data on the old leaf rows: the certificate's own tags and
+    # its manual alert-group assignments. The rows are deleted and re-inserted
+    # below, and until #113 the new row was written without either, so every
+    # scan -- changed or not -- silently narrowed tag scope, compliance scope
+    # and alert routing. Both move to the rewritten row, or to the successor
+    # on a renewal (see CERT_ID_REFERENCES).
+    carried_tags = ""
+    carried_groups: list[str] = []
+    if old_leaves:
+        from cert_watch.tags import format_tags, merge_tags
+
+        lph = ",".join("?" * len(old_leaves))
+        carried_tags = format_tags(
+            merge_tags(
+                *[
+                    row["tags"]
+                    for row in conn.execute(
+                        f"SELECT tags FROM certificates WHERE id IN ({lph})", old_leaves
+                    ).fetchall()
+                ]
+            )
+        )
+        carried_groups = [
+            row["group_id"]
+            for row in conn.execute(
+                f"SELECT DISTINCT group_id FROM alert_group_certs WHERE cert_id IN ({lph})",
+                old_leaves,
+            ).fetchall()
+        ]
     if old_all_ids:
         from cert_watch.database.alert_store import AlertStore
 
@@ -155,8 +228,8 @@ def _do_replace(
         (id, subject, issuer, not_before, not_after, san_dns_names,
          fingerprint_sha256, raw_der, source, hostname, port, is_leaf,
          parent_cert_id, chain_valid, replaces_cert_id,
-         created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         created_at, updated_at, tags)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             leaf_id,
@@ -176,8 +249,14 @@ def _do_replace(
             lineage_id,
             now,
             now,
+            carried_tags,
         ),
     )
+    for group_id in carried_groups:
+        conn.execute(
+            "INSERT OR IGNORE INTO alert_group_certs (group_id, cert_id) VALUES (?, ?)",
+            (group_id, leaf_id),
+        )
 
     for chain_cert in chain:
         chain_id = str(uuid.uuid4())

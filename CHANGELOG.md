@@ -17,9 +17,18 @@ All notable changes to cert-watch are documented in this file.
   that has since been renewed, or to an endpoint's host id, now opens the
   endpoint's current certificate with a short note, instead of "certificate
   not found". For a certificate replaced before this release, the link
-  resolves only while its successor, its lifecycle event or an alert still
-  records the endpoint. Scope still applies: a link never reveals a
-  certificate the viewer can't see (#113).
+  resolves only while its successor, its lifecycle event or an alert that
+  fired on it still records the endpoint's host and port; a host name alone
+  never picks a certificate, so a link can't open another port's
+  certificate. Scope still applies: a link never reveals a certificate the
+  viewer can't see (#113).
+- A scan no longer drops a scanned certificate's own tags or its manual
+  alert-group assignments. Up to 1.0.2 every scan, changed or not, rewrote
+  the certificate without them, which silently narrowed tag-scoped access,
+  compliance scope and alert routing. Both are now kept on a rescan and
+  carried to the new certificate when the endpoint's certificate is renewed.
+  Tags and assignments already lost can't be recovered; set them again once
+  (#113).
 - A certificate's detail page says when the endpoint's latest scan failed.
   It previously showed the last good certificate as "Healthy" with its grade
   and never showed the error. The page now marks the latest scan as failed,

@@ -103,26 +103,44 @@ def test_link_from_two_renewals_ago_resolves_through_the_event_log(
     assert r.headers["location"] == f"/certificates/{current}?superseded=1"
 
 
-def test_link_resolves_through_an_alert_when_events_are_gone(
-    tmp_path, reload_app, self_signed_leaf
-):
-    """An alert that fired on the old id still records its host."""
+def _alert_on(db: Path, cert_id: str, port: int, fingerprint: str) -> None:
+    """An expiry alert as the rule writes it: the dedupe key names host:port."""
+    from cert_watch.alerting.keys import certificate_alert_key
     from cert_watch.database import Alert, SqliteAlertRepository
-    from cert_watch.database.connection import _connect
 
-    db = _db(tmp_path)
-    SqliteHostRepository(db).add(_HOST, 443)
-    oldest = seed_scanned(db, _HOST, 443, _leaf(self_signed_leaf.der))
     SqliteAlertRepository(db).create(
         Alert(
-            cert_id=oldest,
+            cert_id=cert_id,
             alert_type="expiry_warning",
             status="sent",
             message="expiring",
             threshold_days=7,
             hostname=_HOST,
+            dedupe_key=certificate_alert_key(
+                "expiry", cert_id=cert_id, fingerprint=fingerprint, hostname=_HOST,
+                port=port, suffix=("expiry_warning", "7"),
+            ),
         )
     )
+
+
+def test_link_resolves_through_an_alert_when_events_are_gone(
+    tmp_path, reload_app, self_signed_leaf
+):
+    """An alert that fired on the old id still records its endpoint, and the
+    link opens that endpoint's certificate even when the host name has
+    another monitored port."""
+    from cert_watch.database.connection import _connect
+
+    db = _db(tmp_path)
+    hosts = SqliteHostRepository(db)
+    hosts.add(_HOST, 443)
+    hosts.add(_HOST, 8443)
+    oldest_leaf = _leaf(self_signed_leaf.der)
+    oldest = seed_scanned(db, _HOST, 443, oldest_leaf)
+    seed_scanned(db, _HOST, 8443, _leaf(_make_cert(_HOST, days_valid=120).der))
+    _alert_on(db, oldest, 443, oldest_leaf.fingerprint_sha256)
+    # Renewed twice: the successor row naming the old id is gone too.
     seed_scanned(db, _HOST, 443, _leaf(_make_cert(_HOST, days_valid=90).der))
     current = seed_scanned(db, _HOST, 443, _leaf(_make_cert(_HOST, days_valid=80).der))
     with _connect(db) as conn:
@@ -134,6 +152,38 @@ def test_link_resolves_through_an_alert_when_events_are_gone(
         r = client.get(f"/certificates/{oldest}", follow_redirects=False)
     assert r.status_code == 303
     assert r.headers["location"] == f"/certificates/{current}?superseded=1"
+
+
+def test_alert_fallback_never_picks_another_ports_certificate(
+    tmp_path, reload_app, self_signed_leaf
+):
+    """#115 review finding 3. The :443 certificate that fired an alert is
+    renewed, its events expire, and the current :443 certificate is deleted
+    while :8443 remains. The old id must not open the :8443 certificate just
+    because it is now the only leaf with that host name."""
+    from cert_watch.database import delete_certificate_cascade
+    from cert_watch.database.connection import _connect
+
+    db = _db(tmp_path)
+    hosts = SqliteHostRepository(db)
+    hosts.add(_HOST, 443)
+    hosts.add(_HOST, 8443)
+    old_leaf = _leaf(self_signed_leaf.der)
+    old = seed_scanned(db, _HOST, 443, old_leaf)
+    _alert_on(db, old, 443, old_leaf.fingerprint_sha256)
+    seed_scanned(db, _HOST, 443, _leaf(_make_cert(_HOST, days_valid=80).der))
+    current_443 = seed_scanned(db, _HOST, 443, _leaf(_make_cert(_HOST, days_valid=70).der))
+    seed_scanned(db, _HOST, 8443, _leaf(_make_cert(_HOST, days_valid=120).der))
+    with _connect(db) as conn:
+        conn.execute("DELETE FROM event_log")
+        conn.commit()
+    assert delete_certificate_cascade(db, current_443)
+
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        r = client.get(f"/certificates/{old}", follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == _NOT_FOUND
 
 
 def test_host_id_is_a_stable_address_for_the_endpoint(

@@ -86,6 +86,37 @@ def _current_leaf_for_endpoint(conn: Any, hostname: str, port: int) -> str | Non
     return str(row["id"]) if row is not None else None
 
 
+def _endpoint_from_alerts(conn: Any, stale_id: str) -> tuple[str, int] | None:
+    """The one endpoint the alerts on *stale_id* name, or ``None``.
+
+    A scanned certificate's dedupe key is ``<rule>:<host>:<port>:...`` (see
+    ``certificate_alert_key``). Each port monitored under the alert's host
+    name is matched against that prefix exactly; an alert without a key, or
+    keys naming no single endpoint, resolve nothing rather than guess.
+    """
+    rows = conn.execute(
+        "SELECT hostname, dedupe_key FROM alerts "
+        "WHERE (cert_id = ? OR trigger_cert_id = ?) AND hostname != '' "
+        "AND dedupe_key IS NOT NULL",
+        (stale_id, stale_id),
+    ).fetchall()
+    endpoints: set[tuple[str, int]] = set()
+    for row in rows:
+        hostname = str(row["hostname"])
+        _, _, identity = str(row["dedupe_key"]).partition(":")
+        ports = conn.execute(
+            "SELECT port FROM hosts WHERE hostname = ? "
+            "UNION SELECT port FROM certificates WHERE hostname = ? AND is_leaf = 1",
+            (hostname, hostname),
+        ).fetchall()
+        for port_row in ports:
+            if port_row["port"] is not None and identity.startswith(
+                f"{hostname}:{int(port_row['port'])}:"
+            ):
+                endpoints.add((hostname, int(port_row["port"])))
+    return endpoints.pop() if len(endpoints) == 1 else None
+
+
 def resolve_current_certificate(
     db_path: str | Path, stale_id: str
 ) -> CurrentCertificateRef | None:
@@ -99,8 +130,10 @@ def resolve_current_certificate(
     2. the successor row, whose ``replaces_cert_id`` names the old id;
     3. the ``cert_added`` / ``cert_renewed`` lifecycle event written when the
        id was issued (kept for the event-log retention period);
-    4. an alert that fired on the id (alerts record the host name only, so
-       this resolves only when one scanned endpoint has that name).
+    4. an alert that fired on the id. Alerts record the host name but no
+       port column, so the endpoint is taken from the alert's dedupe key,
+       which names ``host:port`` for a scanned certificate. The host name
+       alone is never enough: it can't tell ``host:443`` from ``host:8443``.
 
     Returns ``None`` when none of them knows the id. Performs no scope
     check: the caller must authorize the returned certificate.
@@ -137,19 +170,8 @@ def resolve_current_certificate(
                 endpoint = (str(event["hostname"]), int(event["port"]))
 
         if endpoint is None:
-            alert = conn.execute(
-                "SELECT hostname FROM alerts WHERE (cert_id = ? OR trigger_cert_id = ?) "
-                "AND hostname IS NOT NULL AND hostname != '' LIMIT 1",
-                (stale_id, stale_id),
-            ).fetchone()
-            if alert is not None:
-                leaves = conn.execute(
-                    "SELECT id FROM certificates WHERE hostname = ? AND is_leaf = 1 "
-                    "LIMIT 2",
-                    (alert["hostname"],),
-                ).fetchall()
-                if len(leaves) == 1:
-                    return CurrentCertificateRef(str(leaves[0]["id"]), superseded=True)
+            endpoint = _endpoint_from_alerts(conn, stale_id)
+        if endpoint is None:
             return None
 
         current = _current_leaf_for_endpoint(conn, *endpoint)
