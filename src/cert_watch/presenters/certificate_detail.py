@@ -14,11 +14,11 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed448, ed25519, rsa
 from cert_watch.cert_chain import ACTIONABLE_CHAIN_STATUSES, display_urgency
 from cert_watch.certificate_model import Certificate
 from cert_watch.chain_guidance import ChainGuidance, describe_chain
+from cert_watch.database import LatestScanRecord
 from cert_watch.filters import compute_urgency, friendly_issuer, issuer_cn, subject_cn
 from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.scan_error_guidance import ScanErrorGuidance, describe_scan_error
 from cert_watch.scan_freshness import ScanEvidence
-from cert_watch.database import LatestScanRecord
 from cert_watch.services.certificate_detail import (
     CertificateDetailData,
     PendingHostDetailData,
