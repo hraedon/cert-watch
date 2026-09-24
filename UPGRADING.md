@@ -23,6 +23,19 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.2 to the next release
+
+Nothing to migrate. One behaviour change affects access control:
+
+- **Certificate tags are now durable grants.** A scan no longer wipes the
+  tags set on a certificate itself, and a renewal carries them to the new
+  certificate. In 1.0.2 the next scan cleared them, so removing a team's tag
+  from the *host* was enough to revoke that team's access within a scan
+  cycle. Now a team keeps access through a tag set on the certificate until
+  that tag is removed too. Before relying on a host tag change to revoke
+  access, check the certificate's own tags on its detail page. (Tags that
+  1.0.2 already wiped are not restored.)
+
 ## Upgrading from 1.0.1 to 1.0.2
 
 Nothing to migrate or reconfigure. Two behaviour changes to be aware of:

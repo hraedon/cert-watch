@@ -25,14 +25,17 @@ from cert_watch.auth.scope import (
     ensure_write_scope,
     require_auth_context,
 )
-from cert_watch.database.connection import _connect, get_write_lock
+from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
 from cert_watch.database.metadata_ops import (
     update_certificate_tags as persist_certificate_tags,
 )
 from cert_watch.database.metadata_ops import update_host_notes as persist_host_notes
 from cert_watch.database.metadata_ops import update_host_tags as persist_host_tags
 from cert_watch.database.repo import SqliteCertificateRepository
-from cert_watch.services.certificate_identity import ensure_not_superseded
+from cert_watch.services.certificate_identity import (
+    ensure_not_superseded,
+    refuse_if_superseded,
+)
 from cert_watch.tags import format_tags, parse_tags
 
 MAX_NOTES_LENGTH = 10_000
@@ -74,11 +77,17 @@ def _transact(
     detail: dict[str, object],
     actor: str,
     source_ip: str | None,
+    guard: Callable[[sqlite3.Connection], None] | None = None,
 ) -> dict[str, Any] | None:
-    """Persist + audit in one transaction. The caller holds the write lock and
-    calls :func:`export_audit` on the returned event once it is released."""
+    """Persist + audit in one ``BEGIN IMMEDIATE`` transaction. *guard* runs
+    first inside it, so a check it makes holds until the write commits. The
+    caller holds the write lock and calls :func:`export_audit` on the
+    returned event once it is released."""
     conn = _connect(db_path)
     try:
+        begin_immediate(conn)
+        if guard is not None:
+            guard(conn)
         if not persist(conn):
             raise ResourceMetadataNotFoundError(f"{target_type} not found")
         audit_event = record_audit(
@@ -177,13 +186,14 @@ def update_certificate_tags(
 ) -> TagUpdateResult:
     require_auth_context(auth)
     with get_write_lock():
-        ensure_not_superseded(db_path, cert_id, auth=auth)
+        refuse_if_superseded(db_path, cert_id, auth=auth)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
         ensure_new_tags_in_scope(auth, normalized)
         event = _transact(
             db_path,
             persist=lambda conn: persist_certificate_tags(conn, cert_id, normalized),
+            guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
             action="cert.update_tags",
             target_type="certificate",
             target_id=cert_id,

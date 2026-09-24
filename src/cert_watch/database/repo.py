@@ -6,7 +6,7 @@ import json
 import sqlite3
 import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +18,7 @@ from cert_watch.database.connection import (
     _iso,
     _parse_iso,
     _sql_now,
+    begin_immediate,
     parse_san_dns_names,
 )
 from cert_watch.host_validation import hostname_is_valid
@@ -1241,18 +1242,48 @@ class SqliteAlertGroupRepository:
             conn.commit()
             return r.rowcount > 0
 
-    def assign_cert(self, group_id: str, cert_id: str) -> None:
+    def assign_cert(
+        self,
+        group_id: str,
+        cert_id: str,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+        require_existing: bool = False,
+    ) -> bool:
+        """Assign one certificate. *guard* runs first in the same ``BEGIN
+        IMMEDIATE`` transaction and may raise to refuse; with
+        *require_existing*, nothing is written (``False``) unless the
+        certificate row exists at write time."""
         with _connect(self.db_path) as conn:
+            begin_immediate(conn)
+            if guard is not None:
+                guard(conn)
+            if require_existing and conn.execute(
+                "SELECT 1 FROM certificates WHERE id = ?", (cert_id,)
+            ).fetchone() is None:
+                conn.rollback()
+                return False
             conn.execute(
                 "INSERT OR IGNORE INTO alert_group_certs (group_id, cert_id)"
                 " VALUES (?, ?)",
                 (group_id, cert_id),
             )
             conn.commit()
+            return True
 
-    def unassign_cert(self, group_id: str, cert_id: str) -> bool:
-        """Remove one manual assignment; ``False`` when there was none."""
+    def unassign_cert(
+        self,
+        group_id: str,
+        cert_id: str,
+        *,
+        guard: Callable[[sqlite3.Connection], None] | None = None,
+    ) -> bool:
+        """Remove one manual assignment; ``False`` when there was none.
+        *guard* runs first in the same ``BEGIN IMMEDIATE`` transaction."""
         with _connect(self.db_path) as conn:
+            begin_immediate(conn)
+            if guard is not None:
+                guard(conn)
             cursor = conn.execute(
                 "DELETE FROM alert_group_certs WHERE group_id = ? AND cert_id = ?",
                 (group_id, cert_id),

@@ -160,6 +160,25 @@ def _connect(db_path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def begin_immediate(conn: sqlite3.Connection) -> None:
+    """Start a write transaction that holds SQLite's write lock from its first
+    statement, so reads inside it can't be invalidated by another connection
+    -- in this process or another -- before the transaction commits.
+
+    A transaction left open on the per-thread cached connection by an earlier
+    failure would make ``BEGIN IMMEDIATE`` fail; it is rolled back first, as
+    the rate limiter does.
+    """
+    if conn.in_transaction:
+        import logging
+
+        logging.getLogger("cert_watch.database").warning(
+            "rolling back a transaction left open on the cached connection "
+            "before BEGIN IMMEDIATE"
+        )
+        conn.rollback()
+    conn.execute("BEGIN IMMEDIATE")
+
 def close_connections() -> None:
     """Close and forget all cached connections for the current thread.
 

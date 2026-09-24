@@ -45,6 +45,7 @@ from cert_watch.services.alert_groups import (
 from cert_watch.services.certificate_identity import (
     CertificateSupersededError,
     ensure_not_superseded,
+    refuse_if_superseded,
 )
 
 logger = logging.getLogger("cert_watch.routes.api.alerts")
@@ -334,14 +335,23 @@ async def api_assign_cert_to_group(
     with get_write_lock():
         if group_repo.get(group_id) is None:
             return JSONResponse(content={"error": "group not found"}, status_code=404)
+        auth = acting_auth(request)
         try:
-            ensure_not_superseded(db, cert_id, auth=acting_auth(request))
+            refuse_if_superseded(db, cert_id, auth=auth)
+            if cert_repo.get_by_id(cert_id) is None:
+                return JSONResponse(content={"error": "certificate not found"}, status_code=404)
+            # Re-checked inside the write transaction: a renewal or delete by
+            # another connection can't land between the check and the insert.
+            assigned = group_repo.assign_cert(
+                group_id,
+                cert_id,
+                guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
+                require_existing=True,
+            )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
-        if cert_repo.get_by_id(cert_id) is None:
+        if not assigned:
             return JSONResponse(content={"error": "certificate not found"}, status_code=404)
-
-        group_repo.assign_cert(group_id, cert_id)
     record_audit(
         db,
         actor=resolve_actor(request),
@@ -365,11 +375,16 @@ async def api_unassign_cert_from_group(
             return JSONResponse(content={"error": "group not found"}, status_code=404)
         # A renewal moves the assignment to the successor; removing it by the
         # old id would delete nothing while the group keeps receiving alerts.
+        auth = acting_auth(request)
         try:
-            ensure_not_superseded(db, cert_id, auth=acting_auth(request))
+            removed = group_repo.unassign_cert(
+                group_id,
+                cert_id,
+                guard=lambda conn: ensure_not_superseded(conn, cert_id, auth=auth),
+            )
         except CertificateSupersededError as exc:
             return superseded_json(exc)
-        if not group_repo.unassign_cert(group_id, cert_id):
+        if not removed:
             return JSONResponse(
                 content={"error": "certificate is not assigned to this group"},
                 status_code=404,

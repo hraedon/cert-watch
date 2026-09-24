@@ -377,8 +377,8 @@ def _with_stale_duplicate(db: Path, self_signed_leaf) -> tuple[str, str, str]:
 
 @pytest.mark.parametrize("mode", ["rescan", "renewal"])
 def test_stale_duplicate_leaf_never_leaks_tags_scope_or_routing(tmp_path, self_signed_leaf, mode):
-    """Only the one predecessor's data is carried: the row with exactly the
-    scanned bytes on a rescan, the endpoint's current leaf on a renewal.
+    """Only the predecessor's data is carried: the row with exactly the
+    scanned bytes on a rescan; on a renewal, what every current row shares.
     Pre-fix, a rescan merged the duplicate's team-b tag into the live team-a
     certificate (granting a team-b operator write access) and its stale group
     assignment (reviving an obsolete alert destination)."""
@@ -392,7 +392,10 @@ def test_stale_duplicate_leaf_never_leaks_tags_scope_or_routing(tmp_path, self_s
     current = _scan_again(db, self_signed_leaf, mode)
 
     repo = SqliteCertificateRepository(db)
-    assert repo.get_tags(current) == "team-a"
+    # A rescan continues from the row with the scanned bytes. A renewal finds
+    # two unrelated current rows (neither replaces the other), so it is
+    # ambiguous and carries only what they share: here, nothing.
+    assert repo.get_tags(current) == ("team-a" if mode == "rescan" else "")
     assert SqliteAlertGroupRepository(db).groups_for_cert_manual(current) == []
     assert "stale@example.test" not in str(resolve_routing(db, (current,))[current])
     assert write_scope_error(team_b, db, cert_id=current) is not None
@@ -406,3 +409,191 @@ def test_stale_duplicate_leaf_never_leaks_tags_scope_or_routing(tmp_path, self_s
         assert leaves == [{"id": live, "replaces_cert_id": None}]
     else:
         assert leaves == [{"id": current, "replaces_cert_id": live}]
+
+
+# -- predecessor chosen by lineage, not time (#115 review round 3) -----
+
+
+def _leaf_row(db: Path, *, tags: str, replaces: str | None = None, created_at: str) -> str:
+    from tests._helpers import seed_certificate
+
+    cert_id = seed_certificate(
+        db,
+        parse_certificate(_make_cert(_HOST, days_valid=60).der),
+        hostname=_HOST,
+        port=443,
+        source="scanned",
+        replaces_cert_id=replaces,
+    )
+    SqliteCertificateRepository(db).set_tags(cert_id, tags)
+    with _connect(db) as conn:
+        conn.execute("UPDATE certificates SET created_at = ? WHERE id = ?", (created_at, cert_id))
+        conn.commit()
+    return cert_id
+
+
+def _renewal(db: Path) -> str:
+    return seed_scanned(db, _HOST, 443, parse_certificate(_make_cert(_HOST, days_valid=90).der))
+
+
+@pytest.mark.parametrize(
+    ("stale_created", "live_created"),
+    [
+        # clock rollback: the replaced row looks newer than its successor
+        ("2026-09-02T00:00:00+00:00", "2026-09-01T00:00:00+00:00"),
+        # equal timestamps; the stale row was inserted last (higher rowid)
+        ("2026-09-01T00:00:00+00:00", "2026-09-01T00:00:00+00:00"),
+    ],
+)
+def test_renewal_continues_from_the_lineage_head_not_the_newest_row(
+    tmp_path, stale_created, live_created
+):
+    """Sol's round-3 probe: the live leaf L explicitly replaces S, but S sorts
+    first by time. Pre-fix the renewal continued from S: its stale tag scope
+    and alert route came back, and lineage pointed at S."""
+    db = _db(tmp_path)
+    groups = SqliteAlertGroupRepository(db)
+    live = _leaf_row(db, tags="team-a", created_at=live_created)
+    stale = _leaf_row(db, tags="team-stale", created_at=stale_created)
+    with _connect(db) as conn:
+        conn.execute("UPDATE certificates SET replaces_cert_id = ? WHERE id = ?", (stale, live))
+        conn.commit()
+    stale_group = groups.create(name="stale", recipients=["stale@example.test"], match_tags=[])
+    groups.assign_cert(stale_group, stale)
+    live_group = groups.create(name="live", recipients=["live@example.test"], match_tags=[])
+    groups.assign_cert(live_group, live)
+
+    new = _renewal(db)
+
+    assert SqliteCertificateRepository(db).get_tags(new) == "team-a"
+    assert groups.groups_for_cert_manual(new) == [live_group]
+    assert "stale@example.test" not in str(resolve_routing(db, (new,))[new])
+    assert _rows(db, "SELECT replaces_cert_id FROM certificates WHERE id = ?", (new,)) == [
+        {"replaces_cert_id": live}
+    ]
+
+
+def test_two_current_heads_carry_only_what_they_share(tmp_path, caplog):
+    """Two leaves that no row replaces: genuinely ambiguous. Fail closed --
+    carry only the tags and groups common to both -- and say so."""
+    import logging
+
+    db = _db(tmp_path)
+    groups = SqliteAlertGroupRepository(db)
+    a = _leaf_row(db, tags="team-a,shared", created_at="2026-09-01T00:00:00+00:00")
+    b = _leaf_row(db, tags="shared,team-b", created_at="2026-09-02T00:00:00+00:00")
+    both = groups.create(name="both", recipients=["both@example.test"], match_tags=[])
+    only_a = groups.create(name="only-a", recipients=["a@example.test"], match_tags=[])
+    only_b = groups.create(name="only-b", recipients=["b@example.test"], match_tags=[])
+    for cert_id in (a, b):
+        groups.assign_cert(both, cert_id)
+    groups.assign_cert(only_a, a)
+    groups.assign_cert(only_b, b)  # b is the newest: time must not favour it
+
+    with caplog.at_level(logging.WARNING, logger="cert_watch.database"):
+        new = _renewal(db)
+
+    assert SqliteCertificateRepository(db).get_tags(new) == "shared"
+    assert groups.groups_for_cert_manual(new) == [both]
+    assert any("2 current leaf certificates" in r.getMessage() for r in caplog.records)
+
+
+# -- rescan continues from the same-bytes row (Fable's round-3 gap) -----
+
+
+def _dup_estate(tmp_path):
+    """The live certificate X (team-a), plus a NEWER duplicate row Y holding a
+    different, more urgent certificate (team-b), each with its expiry alert."""
+    from cert_watch.alerting.rules.expiry import evaluate_all_certs
+
+    db = _db(tmp_path)
+    live = parse_certificate(_make_cert(_HOST, days_valid=10, not_before_days_ago=355).der)
+    x = seed_scanned(db, _HOST, 443, live)
+    SqliteCertificateRepository(db).set_tags(x, "team-a")
+    other = parse_certificate(_make_cert(_HOST, days_valid=2, not_before_days_ago=363).der)
+    y = SqliteCertificateRepository(db, source="scanned", hostname=_HOST, port=443).add(other)
+    SqliteCertificateRepository(db).set_tags(y, "team-b")
+    evaluate_all_certs(db, SqliteAlertRepository(db))  # X -> 14-day alert, Y -> 3-day alert
+    return db, x, y, live
+
+
+def test_rescan_continues_from_the_same_bytes_row_not_the_newest(tmp_path):
+    db, x, _y, live = _dup_estate(tmp_path)
+    kept = seed_scanned(db, _HOST, 443, live)
+    assert kept == x, "predecessor must be the row holding the scanned bytes"
+    assert SqliteCertificateRepository(db).get_tags(kept) == "team-a"
+
+
+def test_rescan_closes_a_different_duplicates_alerts_instead_of_moving_them(tmp_path):
+    from cert_watch.alerting.rules.expiry import evaluate_all_certs
+
+    db, x, _y, live = _dup_estate(tmp_path)
+    seed_scanned(db, _HOST, 443, live)
+    rows = _rows(db, "SELECT cert_id, closed_at IS NOT NULL AS closed FROM alerts")
+    on_kept = [r for r in rows if r["cert_id"] == x]
+    others = [r for r in rows if r["cert_id"] != x]
+    assert on_kept and others, rows
+    assert all(not r["closed"] for r in on_kept), rows  # X's own alert stays open
+    assert all(r["closed"] for r in others), rows  # Y's is closed, not moved onto X
+    # The kept certificate's own dedupe is intact: nothing fires again.
+    assert evaluate_all_certs(db, SqliteAlertRepository(db)) == []
+
+
+# -- the scan's replace holds the write lock from its first read --------
+
+_WRITE_FROM_ANOTHER_PROCESS = r"""
+import sqlite3, sys
+conn = sqlite3.connect(sys.argv[1], timeout=1.5)
+try:
+    conn.execute("UPDATE certificates SET tags = 'late-writer' WHERE id = ?", (sys.argv[2],))
+    conn.commit()
+    print("wrote")
+except sqlite3.OperationalError as exc:
+    print("locked" if "locked" in str(exc) else repr(exc))
+"""
+
+
+def _race_after_predecessor_read(monkeypatch, db: Path, outcome: dict) -> None:
+    """Once the replace has read the endpoint's rows, another PROCESS tries to
+    change the predecessor's tags. It must be locked out until the scan
+    commits, or the scan would carry (or drop) data it never saw."""
+    import subprocess
+    import sys
+
+    import cert_watch.database.cert_ops as cert_ops
+
+    real = cert_ops._select_predecessors
+
+    def racing(rows, fingerprint):
+        result = real(rows, fingerprint)
+        if rows and "result" not in outcome:
+            done = subprocess.run(
+                [sys.executable, "-c", _WRITE_FROM_ANOTHER_PROCESS, str(db), rows[0]["id"]],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            outcome["result"] = done.stdout.strip() or done.stderr
+        return result
+
+    monkeypatch.setattr(cert_ops, "_select_predecessors", racing)
+
+
+@pytest.mark.parametrize("path", ["store_scanned", "replace_scanned"])
+def test_replace_reads_and_writes_in_one_immediate_transaction(
+    tmp_path, monkeypatch, self_signed_leaf, path
+):
+    from cert_watch.database import replace_scanned
+
+    db = _db(tmp_path)
+    old = _scan_first(db, self_signed_leaf)
+    SqliteCertificateRepository(db).set_tags(old, "team-a")
+    outcome: dict = {}
+    _race_after_predecessor_read(monkeypatch, db, outcome)
+    leaf = parse_certificate(_make_cert(_HOST, days_valid=90).der)
+    if path == "store_scanned":
+        new = seed_scanned(db, _HOST, 443, leaf)
+    else:
+        new, _, _ = replace_scanned(db, _HOST, 443, leaf, [], None)
+    assert outcome["result"] == "locked", outcome
+    assert SqliteCertificateRepository(db).get_tags(new) == "team-a"

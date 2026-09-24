@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from cert_watch.database.connection import (
     _connect,
     _iso,
     _parse_iso,
+    begin_immediate,
     get_write_lock,
     parse_san_dns_names,
 )
@@ -87,6 +89,60 @@ def distinct_tags(
     return sorted(all_tags, key=str.casefold)
 
 
+def _select_predecessors(
+    old_leaf_rows: list[sqlite3.Row], fingerprint: str
+) -> tuple[list[sqlite3.Row], bool]:
+    """The row(s) a scan of *fingerprint* continues from, and whether it is an
+    unchanged rescan (#115 review).
+
+    Chosen by lineage, never by time: timestamps can go backwards and a stale
+    duplicate can be inserted after the live row. A *head* is a leaf that no
+    other row names as its ``replaces_cert_id`` -- a row something replaced is
+    stale however new its timestamp. A head holding exactly the scanned bytes
+    makes this an unchanged rescan of it; otherwise it is a renewal from the
+    heads. One row is the unambiguous predecessor. Several are ambiguous, and
+    the caller carries only what they all share. (A lineage cycle leaves no
+    head; every leaf then counts as one.) Rows come newest first, which
+    orders ties for the lineage fields only.
+    """
+    replaced = {row["replaces_cert_id"] for row in old_leaf_rows if row["replaces_cert_id"]}
+    heads = [row for row in old_leaf_rows if row["id"] not in replaced] or list(old_leaf_rows)
+    same_bytes_heads = [row for row in heads if row["fingerprint_sha256"] == fingerprint]
+    if same_bytes_heads:
+        return same_bytes_heads, True
+    return heads, False
+
+
+def _carried_operator_data(
+    conn: sqlite3.Connection, predecessors: list[sqlite3.Row]
+) -> tuple[str, list[str]]:
+    """Tags and manual alert-group ids to carry: the predecessor's own, or,
+    when several rows are equally current, only those common to all of them.
+    Carried data grants scope and routes alerts, so an ambiguous endpoint
+    fails closed rather than unioning a stale row's grants into the live one."""
+    from cert_watch.tags import format_tags, parse_tags
+
+    if not predecessors:
+        return "", []
+    tag_sets = [parse_tags(row["tags"]) for row in predecessors]
+    common = {t.casefold() for t in tag_sets[0]}
+    for tags in tag_sets[1:]:
+        common &= {t.casefold() for t in tags}
+    carried_tags = format_tags(t for t in tag_sets[0] if t.casefold() in common)
+    group_sets = [
+        [
+            str(row["group_id"])
+            for row in conn.execute(
+                "SELECT group_id FROM alert_group_certs WHERE cert_id = ? ORDER BY group_id",
+                (predecessor["id"],),
+            ).fetchall()
+        ]
+        for predecessor in predecessors
+    ]
+    shared = set(group_sets[0]).intersection(*map(set, group_sets[1:]))
+    return carried_tags, [g for g in group_sets[0] if g in shared]
+
+
 def _do_replace(
     db_path: str | Path,
     conn: sqlite3.Connection,
@@ -104,27 +160,29 @@ def _do_replace(
 
     now = _iso(datetime.now(UTC))
     leaf_id = str(uuid.uuid4())
-    # Newest first: the same order in which the detail page and readiness
-    # pick an endpoint's current leaf.
     old_leaf_rows = conn.execute(
         "SELECT * FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
         "ORDER BY created_at DESC, rowid DESC",
         (hostname, port),
     ).fetchall()
     old_leaves = [row["id"] for row in old_leaf_rows]
-    # The one predecessor this scan continues from: the row holding exactly
-    # these bytes when there is one (an unchanged rescan), otherwise the
-    # endpoint's current leaf (a renewal). Nothing enforces one leaf per
-    # endpoint -- the repository API can add another -- so the choice must be
-    # deterministic, and only this row's operator data is carried: merging a
-    # stale duplicate's tags or group assignments into the live certificate
-    # would widen tag scope and revive obsolete routing (#115 review). The
-    # other rows are removed below, which restores one leaf per endpoint.
+    predecessors, unchanged = _select_predecessors(old_leaf_rows, leaf.fingerprint_sha256)
+    # Lineage fields (the kept id, ``replaces_cert_id``) need exactly one row;
+    # among ambiguous heads the newest is only a tie-break for those. It never
+    # decides what operator data is carried -- see _carried_operator_data.
+    old_leaf_row = predecessors[0] if predecessors else None
+    replaces_id: str | None = old_leaf_row["id"] if old_leaf_row is not None else None
+    if len(predecessors) > 1:
+        import logging
+
+        logging.getLogger("cert_watch.database").warning(
+            "%s:%s holds %d current leaf certificates (%s); carrying only the "
+            "tags and alert-group assignments they all share",
+            hostname, port, len(predecessors), ", ".join(r["id"] for r in predecessors),
+        )
     same_bytes = [
         row for row in old_leaf_rows if row["fingerprint_sha256"] == leaf.fingerprint_sha256
     ]
-    old_leaf_row = same_bytes[0] if same_bytes else (old_leaf_rows[0] if old_leaf_rows else None)
-    replaces_id: str | None = old_leaf_row["id"] if old_leaf_row is not None else None
 
     # Collect all old cert IDs (leaves + chain children) BEFORE deleting
     # them, so we can clean up their alerts.
@@ -147,8 +205,7 @@ def _do_replace(
     # fire again on the next cycle: one
     # unchanged certificate inside its expiry window re-alerted, and re-mailed,
     # once per scan, for ever.
-    unchanged = bool(same_bytes)
-    carried: list[str] = [row["id"] for row in same_bytes]
+    carried: list[str] = [row["id"] for row in same_bytes] if unchanged else []
     # The same certificate keeps its id (#113): detail links, bookmarks and
     # webhook URLs name that id, and every rescan used to break them. Its
     # lineage is kept too -- the row must not "replace" itself, or the expiry
@@ -163,17 +220,7 @@ def _do_replace(
     # scan -- changed or not -- silently narrowed tag scope, compliance scope
     # and alert routing. Both move to the rewritten row, or to the successor
     # on a renewal (see CERT_ID_REFERENCES).
-    carried_tags = ""
-    carried_groups: list[str] = []
-    if old_leaf_row is not None:
-        carried_tags = str(old_leaf_row["tags"] or "")
-        carried_groups = [
-            row["group_id"]
-            for row in conn.execute(
-                "SELECT group_id FROM alert_group_certs WHERE cert_id = ?",
-                (old_leaf_row["id"],),
-            ).fetchall()
-        ]
+    carried_tags, carried_groups = _carried_operator_data(conn, predecessors)
     if old_all_ids:
         from cert_watch.database.alert_store import AlertStore
 
@@ -295,7 +342,7 @@ def _do_replace(
         old_leaf_row is not None
         and leaf.fingerprint_sha256 != old_leaf_row["fingerprint_sha256"]
     ):
-        changes = _compute_renewal_diff(old_leaf_row, leaf)
+        changes = _compute_renewal_diff(dict(old_leaf_row), leaf)
         if changes:
             import logging
             logging.getLogger("cert_watch.database").info(
@@ -318,8 +365,9 @@ def replace_scanned(
     """Atomically replace all certs for host:port with new leaf + chain.
 
     Deletes old leaf + chain children, inserts new ones. When *conn* is
-    provided it is used directly and the caller owns commit/rollback;
-    otherwise a fresh connection + transaction is opened and committed.
+    provided it is used directly and the caller owns the transaction (which
+    should be ``BEGIN IMMEDIATE``, as ``store_scanned`` uses) and commit;
+    otherwise a ``BEGIN IMMEDIATE`` transaction is opened and committed.
     Returns ``(new_leaf_id, replaced_cert_id, unchanged)`` —
     ``replaced_cert_id`` is the old leaf's id when a prior leaf existed
     (None on a fresh insert); ``unchanged`` is True when that prior leaf had
@@ -327,6 +375,7 @@ def replace_scanned(
     """
     if conn is None:
         with get_write_lock(), _connect(db_path) as conn:
+            begin_immediate(conn)
             result = _do_replace(db_path, conn, hostname, port, leaf, chain, chain_valid)
             conn.commit()
         return result
@@ -355,9 +404,21 @@ def _compute_renewal_diff(old_row: dict[str, Any], new_leaf: Certificate) -> lis
     return changes
 
 
-def delete_certificate_cascade(db_path: str | Path, cert_id: str) -> bool:
-    """Delete a leaf and chain, retaining associated alerts as closed history."""
+def delete_certificate_cascade(
+    db_path: str | Path,
+    cert_id: str,
+    *,
+    guard: Callable[[sqlite3.Connection], None] | None = None,
+) -> bool:
+    """Delete a leaf and chain, retaining associated alerts as closed history.
+
+    Runs in one ``BEGIN IMMEDIATE`` transaction; *guard* runs first inside it
+    and may raise to refuse the delete (see ``certificate_identity``).
+    """
     with get_write_lock(), _connect(db_path) as conn:
+        begin_immediate(conn)
+        if guard is not None:
+            guard(conn)
         r = conn.execute(
             "SELECT id FROM certificates WHERE id = ?", (cert_id,)
         ).fetchone()

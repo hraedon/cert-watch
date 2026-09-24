@@ -123,14 +123,9 @@ def scope_new_tags_denied(
     return new_tags_scope_error(getattr(request.state, "auth_context", None), new_tags)
 
 
-def superseded_json(
-    exc: CertificateSupersededError, *, not_found: str = "certificate not found"
-) -> JSONResponse:
+def superseded_json(exc: CertificateSupersededError) -> JSONResponse:
     """409 naming the current certificate for a mutation on a renewed-away id
-    (:mod:`cert_watch.services.certificate_identity`); 404 like an unknown id
-    when the caller may not see the current certificate."""
-    if exc.current_id is None:
-        return JSONResponse(status_code=404, content={"error": not_found})
+    (:mod:`cert_watch.services.certificate_identity`)."""
     return JSONResponse(
         status_code=409,
         content={
@@ -143,9 +138,7 @@ def superseded_json(
 
 def superseded_redirect(exc: CertificateSupersededError) -> RedirectResponse:
     """The HTML-form counterpart of :func:`superseded_json`: back to the
-    current certificate with a note, or Home as for an unknown id."""
-    if exc.current_id is None:
-        return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    current certificate with a note."""
     message = (
         "This certificate was renewed before your change was saved, so nothing "
         "was changed. This is the current certificate; make the change again here."

@@ -343,7 +343,7 @@ async def api_set_cert_tags(
     except ResourceMetadataNotFoundError:
         return JSONResponse(content={"error": "not found"}, status_code=404)
     except CertificateSupersededError as exc:
-        return superseded_json(exc, not_found="not found")
+        return superseded_json(exc)
     return JSONResponse(
         content={
             "id": cert_id,

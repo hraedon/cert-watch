@@ -15,7 +15,7 @@ from urllib.parse import urlparse
 
 from cert_watch.audit import export_audit, record_audit
 from cert_watch.auth.scope import ensure_write_scope, require_auth_context
-from cert_watch.database.connection import _connect, get_write_lock
+from cert_watch.database.connection import _connect, begin_immediate, get_write_lock
 from cert_watch.database.host_ops import (
     resolve_host_target,
 )
@@ -23,7 +23,10 @@ from cert_watch.database.host_ops import (
     update_host_ownership as persist_host_ownership,
 )
 from cert_watch.email_validation import is_safe_email_address
-from cert_watch.services.certificate_identity import ensure_not_superseded
+from cert_watch.services.certificate_identity import (
+    ensure_not_superseded,
+    refuse_if_superseded,
+)
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress", "renewed"})
@@ -150,7 +153,7 @@ def resolve_host_ownership_target(
     lookup = resolve_host_target(_connect(db_path), resource_id)
     if lookup.host is None:
         if lookup.status == "resource_not_found" and auth is not None:
-            ensure_not_superseded(db_path, resource_id, auth=auth)
+            refuse_if_superseded(db_path, resource_id, auth=auth)
         raise HostOwnershipTargetError(lookup.status)
     return HostOwnershipTarget(
         host_id=lookup.host.id, source=lookup.status, resource_id=resource_id,
@@ -179,11 +182,10 @@ def update_host_ownership(
     if isinstance(target, str):
         target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
     host_id = target.host_id
+    named_cert = target.resource_id if target.source == "certificate" else ""
     with get_write_lock():
-        if target.source == "certificate" and target.resource_id:
-            # The route named a certificate; if a renewal replaced it since
-            # the target was resolved, refuse rather than act on a stale id.
-            ensure_not_superseded(db_path, target.resource_id, auth=auth)
+        if named_cert:
+            refuse_if_superseded(db_path, named_cert, auth=auth)
         ensure_write_scope(auth, db_path, **target.scope_target())
         if callable(update):
             update = update()
@@ -191,6 +193,13 @@ def update_host_ownership(
         detail = asdict(update)
         conn = _connect(db_path)
         try:
+            begin_immediate(conn)
+            if named_cert:
+                # The route named a certificate: if a renewal replaced it since
+                # the target was resolved -- in this process or another --
+                # refuse rather than act on a stale id. Checked inside the
+                # write transaction, so it still holds when the write commits.
+                ensure_not_superseded(conn, named_cert, auth=auth)
             updated = persist_host_ownership(conn, host_id, **detail)
             if updated is None:
                 raise HostNotFoundError("host not found")
