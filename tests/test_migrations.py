@@ -1276,15 +1276,21 @@ def _insert_alias_estate(conn: sqlite3.Connection) -> None:
         )
     # Queued and already-sent alerts on the planted certificate, routed to the
     # planted owner at the time they fired.
-    for aid, status in (("a-planted-queued", "pending"), ("a-planted-sent", "sent")):
+    # Also on the LOSING alias's own certificate (what a planted alias has
+    # after its own scans): its queued alert is routed to the planted owner.
+    for aid, cid, hn, status, owner in (
+        ("a-planted-queued", "c-att", "planted.example.test", "pending", "mallory"),
+        ("a-planted-sent", "c-att", "planted.example.test", "sent", "mallory"),
+        ("a-loser-queued", "c-upper", "VICTIM.example.test", "pending", "ada"),
+    ):
         conn.execute(
             "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at, hostname,"
-            " dedupe_key, extra_recipients, routing) VALUES (?, 'c-att', 'expiry_warning', ?,"
-            " 'm', ?, 'planted.example.test', ?, ?, ?)",
-            (aid, status, "2026-02-06T00:00:00+00:00",
-             f"expiry:planted.example.test:443:{_FP}:expiry_warning:{aid}",
-             json.dumps(["mallory@example.test"]),
-             json.dumps({"version": 1, "recipients": ["mallory@example.test"], "groups": []},
+            " dedupe_key, extra_recipients, routing) VALUES (?, ?, 'expiry_warning', ?,"
+            " 'm', ?, ?, ?, ?, ?)",
+            (aid, cid, status, "2026-02-06T00:00:00+00:00", hn,
+             f"expiry:{hn}:443:{_FP}:expiry_warning:{aid}",
+             json.dumps([f"{owner}@example.test"]),
+             json.dumps({"version": 1, "recipients": [f"{owner}@example.test"], "groups": []},
                         separators=(",", ":"), sort_keys=True)),
         )
     for key, first, last, count in (
@@ -1387,7 +1393,7 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         # Nothing was dropped from the history tables.
         assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 8
         assert conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0] == 8
-        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 7
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 8
 
         # Cross-scope: the certificates of every colliding spelling grant
         # nothing (per-cert tags cleared, manual group assignments not shared
@@ -1432,6 +1438,13 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         assert queued["extra_recipients"] == "[]"
         assert json.loads(queued["routing"]) == {"version": 1, "recipients": [], "groups": []}
         assert json.loads(sent["extra_recipients"]) == ["mallory@example.test"]
+        # The losing alias's own certificate is scrubbed too, not only the
+        # survivor's: a real planted alias carries its own scans and alerts.
+        loser_queued = dict(
+            conn.execute("SELECT * FROM alerts WHERE id = 'a-loser-queued'").fetchone()
+        )
+        assert loser_queued["extra_recipients"] == "[]"
+        assert json.loads(loser_queued["routing"])["recipients"] == []
         # The same-scope team keeps full access.
         assert write_scope_error(ctx("team-c"), db_path, host_id="h-same-a") is None
 
@@ -1487,6 +1500,9 @@ def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_ro
         assert detail["dropped_from_certificates"]["alert_group_assignments"] == [
             {"cert_id": "c-upper", "group_id": "g-team-a"}
         ]
+        assert set(detail["dropped_from_certificates"]["alert_recipient_snapshots"]) == {
+            "a-loser-queued"
+        }
         assert [m["hostname"] for m in audit["h-quad"]["removed"]] == ["0300.0.02.010"]
         assert audit["h-same-a"]["same_scope"] is True
         assert audit["h-same-a"]["dropped_from_certificates"]["alert_group_assignments"] == []
@@ -1551,9 +1567,11 @@ def test_migration_0038_leaves_no_planted_recipient_on_any_dispatched_envelope(
 
     transport = Recording()
     result = Dispatcher(db_path, transports=[transport]).process_pending()
-    assert result["sent"] >= 1 and "c-att" in transport.envelopes
-    assert transport.envelopes["c-att"] == ()
-    assert not any("mallory" in r for rs in transport.envelopes.values() for r in rs)
+    assert result["sent"] >= 1 and {"c-att", "c-upper"} <= set(transport.envelopes)
+    assert transport.envelopes["c-att"] == () and transport.envelopes["c-upper"] == ()
+    assert not any(
+        "mallory" in r or "ada@" in r for rs in transport.envelopes.values() for r in rs
+    )
 
 
 def test_migration_0038_rewrites_each_table_in_one_pass_regardless_of_alias_count(
