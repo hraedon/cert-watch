@@ -97,6 +97,14 @@ spec:
             #       key: oauth-client-secret
             # - name: OAUTH_ISSUER_URL
             #   value: https://login.microsoftonline.com/{tenant}/v2.0
+          # Schema migrations run before the port opens. The startup probe
+          # gives them up to 15 minutes (90 x 10 s) before the liveness probe
+          # takes over; without it a migration longer than ~100 s would be
+          # killed and retried for ever (see UPGRADING.md).
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            failureThreshold: 90
           readinessProbe:
             httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 3

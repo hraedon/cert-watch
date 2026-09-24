@@ -51,10 +51,19 @@ All notable changes to cert-watch are documented in this file.
   stored spelling in every hostname-keyed table (`hosts`, `certificates`,
   `scan_history`, `cert_history`, `scan_posture`, `alerts`, event payloads
   and alert dedupe keys). Rows of `hosts` that spell one endpoint two ways
-  are merged into the oldest row: tags are the union, other fields keep the
-  oldest row's value where it has one, notes are concatenated, and the merge
-  is written to the audit log with the full merged rows. Nothing is deleted
-  from the history tables.
+  are collapsed onto the oldest row. If they carry the same tags they are
+  merged (empty fields filled, notes joined). If they carry different tags
+  the migration fails closed, whichever row is older: the surviving row keeps
+  only the tags all rows shared (none if disjoint: administrators only until
+  re-tagged) and owner fields only where all rows agreed, and the endpoint's
+  certificates lose their per-certificate tags and any alert-group
+  assignment not shared by every row; so an alias planted through the old
+  bug grants its team nothing and routes no alert to it. Every collapse is a
+  startup `WARNING` and an audit entry (`host.merge_alias`) holding the
+  removed row and every dropped value in full. Nothing is deleted from the
+  history tables. Legacy numeric IPv4 spellings (`010.010.010.010`,
+  `8.8.2056`, `0x08080808`), which the resolver reads as an address, are
+  refused as host names and folded into the dotted-quad row by the migration.
 - Deleting a host no longer removes events for the same host name on another
   port. The event history was deleted by host name alone, so deleting one's
   own `example.test:8443` erased another team's `example.test:443` events,
@@ -82,9 +91,14 @@ All notable changes to cert-watch are documented in this file.
   status to non-administrators and its details to administrators.
 
 - Startup applies schema migration 0038 (see Security above). It rewrites
-  data only; the pre-migration backup is taken as for every migration. A
-  `WARNING` log line and an `audit_log` row (`host.merge_alias`) are written
-  for every pair of host rows that turn out to be one endpoint.
+  data only, one pass per table; the pre-migration backup is taken as for
+  every migration. A `WARNING` log line and an `audit_log` row
+  (`host.merge_alias`) are written for every set of host rows that turn out
+  to be one endpoint; see [UPGRADING.md](UPGRADING.md) for what to review.
+  `deploy/k8s/deployment.yaml` gains a `startupProbe` so a long migration is
+  not killed by the liveness probe.
+- Searching the inventory for a host name typed with capitals, a trailing
+  dot or in Unicode (`büro.example`) finds the stored canonical spelling.
 
 ## [1.0.2] - 2026-09-23
 

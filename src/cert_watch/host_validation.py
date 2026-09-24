@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import socket
 import unicodedata
 
 MAX_HOSTNAME_OCTETS = 253
@@ -16,6 +17,20 @@ def hostname_is_valid(hostname: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def legacy_ipv4_dotted_quad(name: str) -> str | None:
+    """The dotted quad the resolver reads *name* as, for the legacy numeric
+    IPv4 forms ``inet_aton`` accepts (octal or hex octets, fewer than four
+    parts, a bare integer); ``None`` for anything else, including any name
+    with a character outside ``[0-9a-fA-FxX.]``."""
+    if not re.fullmatch(r"[0-9a-fA-FxX.]+", name):
+        return None
+    try:
+        packed = socket.inet_aton(name)
+    except OSError:
+        return None
+    return socket.inet_ntoa(packed)
 
 
 def canonical_hostname(hostname: str) -> str:
@@ -56,6 +71,12 @@ def canonical_hostname(hostname: str) -> str:
         if isinstance(address, ipaddress.IPv6Address) and address.scope_id is not None:
             raise ValueError("scoped IPv6 literals are not portable host identifiers")
         return address.compressed
+    if legacy_ipv4_dotted_quad(literal) is not None:
+        # ``010.010.010.010``, ``8.8.2056``, ``134744072``, ``0x08080808``:
+        # not an address to ``ipaddress`` but one to the resolver, so it would
+        # be stored as a "DNS name" that is really another spelling of an
+        # IPv4 endpoint (#116 review). No real DNS name has this shape.
+        raise ValueError("IPv4 literals must be written as a dotted quad")
     try:
         encoded = name.encode("idna")
     except UnicodeError as exc:

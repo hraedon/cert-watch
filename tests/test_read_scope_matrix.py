@@ -1239,6 +1239,37 @@ def test_adding_an_endpoint_another_team_monitors_is_refused(
             assert r.status_code == 303, spelling
             assert "outside your team scope" in unquote(r.headers["location"]), spelling
 
+        # Legacy numeric IPv4 spellings are refused as invalid at every entry
+        # point: the resolver would read them as an address, so accepted as a
+        # "DNS name" they were another spelling of an IPv4 endpoint.
+        numeric = ("010.010.010.010", "8.8.2056", "8.526344", "134744072", "0x08080808")
+        for spelling in numeric:
+            r = client.post(
+                "/api/hosts", json={"hostname": spelling, "port": 443}, headers=headers
+            )
+            seen += r.text
+            assert r.status_code == 400 and "hostname must be valid" in r.text, (spelling, r.text)
+            r = client.post(
+                "/api/hosts", json={"hostname": spelling, "common_ports": True}, headers=headers
+            )
+            assert r.status_code == 400, (spelling, r.text)
+            r = client.post("/hosts", data={"hostname": spelling, "port": "443"}, headers=headers)
+            assert r.status_code == 303
+            assert "hostname must be valid" in unquote(r.headers["location"]), spelling
+        numeric_csv = "hostname,port\n" + "".join(f'"{n}","0443"\n' for n in numeric)
+        r = client.post(
+            "/api/hosts/import", headers=headers,
+            files={"file": ("hosts.csv", numeric_csv.encode(), "text/csv")},
+        )
+        assert r.status_code == 400 and r.json()["imported"] == 0, r.text
+        assert len(r.json()["errors"]) == len(numeric)
+        assert all("hostname is invalid" in e for e in r.json()["errors"])
+        r = client.post(
+            "/hosts/import", headers=headers,
+            files={"file": ("hosts.csv", numeric_csv.encode(), "text/csv")},
+        )
+        assert r.status_code == 303 and "Import failed" in unquote(r.headers["location"])
+
         csv = (
             "hostname,port\n"
             "hrops-mail.hrteam.test,443\n"
@@ -1287,6 +1318,22 @@ def test_adding_an_endpoint_another_team_monitors_is_refused(
         assert scans == [("pay-web.payments.test", 443), ("pay-new.payments.test", 443)]
         new_host = SqliteHostRepository(db).get(r.json()["ids"][0])
         assert new_host is not None and new_host.hostname == "pay-new.payments.test"
+        # The same through CSV import: the row and the import's own scan job
+        # both carry the canonical spelling, so the scan's results attach to
+        # the host row instead of to a name no host has.
+        scans.clear()
+        r = client.post(
+            "/api/hosts/import", headers=headers,
+            files={"file": ("hosts.csv", b'hostname,port\n"PAY-CSV.payments.test.",443\n',
+                            "text/csv")},
+        )
+        assert r.status_code == 201 and r.json()["imported"] == 1, r.text
+        assert scans == [("pay-csv.payments.test", 443)]
+        assert SqliteHostRepository(db).get_by_endpoint("pay-csv.payments.test", 443) is not None
+        assert not any(
+            h.hostname != h.hostname.lower() or h.hostname.endswith(".")
+            for h in SqliteHostRepository(db).list_all()
+        )
 
 
 @pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))
@@ -1502,3 +1549,59 @@ def test_health_probes_are_detailed_for_administrators_and_the_metrics_token(
     with _client(estate.full_dir, None, metrics_token=_METRICS_TOKEN) as client:
         r = client.get("/api/health", headers={"Authorization": f"Bearer {_METRICS_TOKEN}"})
     assert r.status_code == 401
+
+
+@pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))
+def test_hostname_addressed_reads_accept_any_spelling_of_an_in_scope_endpoint(
+    estate: _Estate, user: str
+) -> None:
+    """``/api/renewal-analytics/{hostname}`` looks the row up by the stored
+    (canonical) spelling; the path parameter is canonicalized first."""
+    with _client(estate.full_dir, user) as client:
+        canonical = client.get("/api/renewal-analytics/dual.ports.test?port=8443").json()
+        alias = client.get("/api/renewal-analytics/DUAL.PORTS.TEST.?port=8443").json()
+    assert canonical["hostname"] == "dual.ports.test"
+    assert canonical["observed_lifetimes"], canonical
+    assert alias == canonical
+
+
+def test_malformed_event_payload_blocks_neither_host_deletion_nor_scoped_reads(
+    estate: _Estate, tmp_path: Path
+) -> None:
+    """One legacy ``{broken`` payload must not make ``json_extract`` raise on
+    every host delete or every scoped event read; it is simply not matched."""
+    from cert_watch.database import SqliteHostRepository
+    from cert_watch.database.connection import _connect
+    from cert_watch.events import get_events, get_failed_deliveries
+
+    db = _copy_estate(estate.full_dir, tmp_path)
+    with _connect(db) as conn:
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+            " created_at) VALUES ('scan_failed', ?, 'scan', '{broken', 'failed', ?)",
+            (_NOW.isoformat(), _NOW.isoformat()),
+        )
+        conn.commit()
+    assert get_events(db, scope_tags=("payments",), limit=1000)
+    assert get_failed_deliveries(db, scope_tags=("payments",), limit=1000) == []
+    assert SqliteHostRepository(db).delete(estate.in_scope["host:dual.ports.test:8443"])
+    with _connect(db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM event_log WHERE payload = '{broken'"
+        ).fetchone()[0] == 1
+
+
+def test_browse_search_finds_a_host_typed_in_another_spelling(estate: _Estate) -> None:
+    """The inventory search matches the stored canonical spelling when the
+    query is typed in Unicode, with capitals or with a trailing dot."""
+    stored = "büro.hrteam.test".encode("idna").decode("ascii")
+    with _client(estate.full_dir, "admin") as client:
+        # The IDN host is pending (never scanned): the ungrouped view lists it.
+        for query in ("büro.hrteam.test", "BÜRO.HRTEAM.TEST."):
+            body = client.get(f"/browse?grouped=0&q={quote(query, safe='')}").text
+            assert stored in body, query
+        # A scanned host, through the default grouped view.
+        body = client.get(f"/browse?q={quote('HROPS-PORTAL.hrteam.test.', safe='')}").text
+        assert "hrops-portal.hrteam.test" in body
+        body = client.get(f"/browse?grouped=0&q={quote('HROPS-PORTAL.hrteam.test.', safe='')}").text
+        assert "hrops-portal.hrteam.test" in body

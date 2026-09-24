@@ -8,21 +8,43 @@ were three endpoints (#116 review). New rows are canonical from
 :func:`cert_watch.host_validation.canonical_hostname`; this migration brings
 the existing rows to the same form:
 
-- ``hosts``: rows that canonicalize to one endpoint are merged into the
-  oldest row. Tags are the union; owner, renewal, runbook, issuer and
-  STARTTLS fields keep the oldest row's value where it has one and take the
-  other row's otherwise; notes are concatenated. Every merge is logged and
-  written to ``audit_log`` with the full merged rows, so nothing is lost
-  silently.
-- ``certificates``, ``scan_history``, ``cert_history``, ``scan_posture`` and
-  ``alerts.hostname`` are rewritten to the canonical spelling; their rows are
-  kept (the next scan reconciles a doubled current leaf).
-- ``event_log`` payload hostnames are rewritten in place.
-- ``alerts.dedupe_key`` and ``rule_firings.dedupe_key`` embed the hostname;
-  they are rewritten so the next evaluation dedupes against the existing
-  condition instead of firing it again. Two open alerts that collapse to one
-  key keep the older one open and cancel the newer; two ``rule_firings`` rows
-  are merged (earliest first, latest last, summed count).
+- ``hosts``: rows that canonicalize to one endpoint are collapsed onto the
+  oldest row, the *survivor*. Which row is older proves nothing: an alias
+  planted through the old bug can be the older row. So the rule does not
+  depend on it:
+
+  * Same scope (every row's case-folded tag set is equal): one team spelled
+    its own endpoint twice. The survivor keeps its values and takes a losing
+    row's where it had none; notes are concatenated; the certificates'
+    tags and manual alert-group assignments are kept.
+  * Different scopes: **fail closed**. Tags become the intersection of the
+    rows' tag sets (disjoint: no tags, so the endpoint is visible to
+    administrators only until one re-tags it). Owner name, e-mail and Slack
+    are kept only where identical across every row, else cleared, so no
+    alert routes to a planted owner; a cleared owner means the endpoint's
+    alerts reach only alert groups matching its (intersected) tags and the
+    global recipients, as for any host without an owner. Notes and every
+    other field are the survivor's own. The per-certificate tags of every
+    colliding spelling's certificates are cleared, and manual alert-group
+    assignments are kept only for groups assigned on every colliding row's
+    certificates.
+
+  Every value dropped is recorded in full in an ``audit_log`` row
+  (``host.merge_alias``, visible on the audit page) and a WARNING log line
+  at startup, so an administrator can re-apply it deliberately; the upgrade
+  notes say to look for them.
+- Legacy numeric IPv4 spellings (``010.010.010.010``, ``8.8.2056``,
+  ``0x08080808``) are read as the resolver reads them and canonicalized to
+  the dotted quad, so they collide with and collapse onto the canonical row.
+- ``certificates``, ``scan_history``, ``cert_history``, ``scan_posture``,
+  ``alerts.hostname`` and ``event_log`` payload hostnames are rewritten to
+  the canonical spelling in one pass per table, through a temporary alias
+  mapping table; rows are kept.
+- ``alerts.dedupe_key`` and ``rule_firings.dedupe_key`` embed the hostname
+  as one field of ``prefix:hostname:port:fingerprint[:...]``; only that field
+  is rewritten, so the next evaluation dedupes against the existing condition
+  instead of firing it again. Two open alerts that collapse to one key keep
+  the older one open and cancel the newer; two ``rule_firings`` rows merge.
 - ``audit_log`` detail is left as written: it records what was submitted.
 
 A stored hostname that is not valid at all is left untouched and logged.
@@ -32,13 +54,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import sqlite3
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from cert_watch.host_validation import canonical_hostname
-from cert_watch.tags import format_tags, merge_tags
+from cert_watch.host_validation import canonical_hostname, legacy_ipv4_dotted_quad
+from cert_watch.tags import format_tags, parse_tags
 
 MIGRATION_ID = "0038"
 DESCRIPTION = "canonicalize stored hostnames (IDNA A-label, lower-case, compressed IP literal)"
@@ -46,12 +69,26 @@ DESCRIPTION = "canonicalize stored hostnames (IDNA A-label, lower-case, compress
 logger = logging.getLogger("cert_watch.migrations")
 
 _HOSTNAME_TABLES = ("certificates", "scan_history", "cert_history", "scan_posture", "alerts")
-_TEXT_FIELDS = (
+_ALIAS_TABLE = "temp._m0038_alias"
+
+# Same-scope collisions: survivor fields filled from a losing row when empty.
+_FILLABLE = (
     "owner_name", "owner_email", "owner_slack", "renewal_method", "runbook_url",
-    "expected_issuers", "starttls_mode",
+    "expected_issuers", "starttls_mode", "threshold_days", "scan_interval_hours",
 )
-_NUMERIC_FIELDS = ("threshold_days", "scan_interval_hours")
+# Cross-scope collisions: alert recipients, kept only when every row agrees.
+_OWNER_FIELDS = ("owner_name", "owner_email", "owner_slack")
 _OPEN = ("pending", "sending")
+
+# ``prefix:hostname:port:fingerprint[:suffix...]`` — the hostname is the only
+# field that may contain colons (IPv6), so it is found by anchoring on the port
+# (digits or ``*``) and the fingerprint (64 hex, or a 32-36 character row id
+# for a certificate without one). Keys for uploaded certificates
+# (``prefix:cert:<id>...``) do not match and are left alone.
+_ENDPOINT_KEY = re.compile(
+    r"^(?P<prefix>[a-z_]+):(?P<host>.+?):(?P<port>\d{1,5}|\*)"
+    r":(?P<fp>[0-9a-fA-F]{64}|[0-9a-fA-F-]{32,36})(?P<rest>:.*)?$"
+)
 
 
 def _canonical(hostname: object) -> str | None:
@@ -60,7 +97,9 @@ def _canonical(hostname: object) -> str | None:
     try:
         return canonical_hostname(hostname)
     except ValueError:
-        return None
+        # The app refuses these now; stored ones mean what the resolver made
+        # of them, so they collapse onto the dotted-quad row.
+        return legacy_ipv4_dotted_quad(hostname.rstrip("."))
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -71,58 +110,142 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
     return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
-def _merged_fields(keeper: dict[str, Any], others: list[dict[str, Any]]) -> dict[str, Any]:
-    merged: dict[str, Any] = {
-        "tags": format_tags(merge_tags(keeper.get("tags"), *(o.get("tags") for o in others))),
-    }
-    for name in _TEXT_FIELDS:
-        if name not in keeper:
+def _tag_set(row: dict[str, Any]) -> set[str]:
+    return {t.casefold() for t in parse_tags(row.get("tags") or "")}
+
+
+def _same_scope(members: list[dict[str, Any]]) -> bool:
+    first = _tag_set(members[0])
+    return all(_tag_set(m) == first for m in members[1:])
+
+
+def _same_scope_fields(survivor: dict[str, Any], losers: list[dict[str, Any]]) -> dict[str, Any]:
+    """One team, two spellings: fill what the survivor lacks, join the notes."""
+    fields: dict[str, Any] = {}
+    for name in _FILLABLE:
+        if name not in survivor:
             continue
-        value = keeper.get(name) or ""
-        if not value:
-            value = next((o.get(name) for o in others if o.get(name)), "")
-        merged[name] = value
-    for name in _NUMERIC_FIELDS:
-        if name not in keeper:
-            continue
-        value = keeper.get(name)
-        if value is None:
-            value = next((o.get(name) for o in others if o.get(name) is not None), None)
-        merged[name] = value
-    if "notes" in keeper:
+        current = survivor.get(name)
+        if current is None or current == "":
+            value = next(
+                (o.get(name) for o in losers if o.get(name) not in (None, "")), None
+            )
+            if value is not None:
+                fields[name] = value
+    if "notes" in survivor:
         notes: list[str] = []
-        for row in (keeper, *others):
+        for row in (survivor, *losers):
             note = (row.get("notes") or "").strip()
             if note and note not in notes:
                 notes.append(note)
-        merged["notes"] = "\n".join(notes)
-    return merged
+        joined = "\n".join(notes)
+        if joined != (survivor.get("notes") or ""):
+            fields["notes"] = joined
+    return fields
+
+
+def _cross_scope_fields(members: list[dict[str, Any]]) -> dict[str, Any]:
+    """Different teams claim one endpoint: keep only what every row agrees on."""
+    survivor = members[0]
+    common = set.intersection(*(_tag_set(m) for m in members))
+    kept_tags = [t for t in parse_tags(survivor.get("tags") or "") if t.casefold() in common]
+    fields: dict[str, Any] = {"tags": format_tags(kept_tags)}
+    for name in _OWNER_FIELDS:
+        if name not in survivor:
+            continue
+        values = {m.get(name) or "" for m in members}
+        fields[name] = values.pop() if len(values) == 1 else ""
+    return fields
+
+
+def _endpoint_cert_ids(conn: sqlite3.Connection, row: dict[str, Any]) -> list[str]:
+    return [
+        r[0] for r in conn.execute(
+            "SELECT id FROM certificates WHERE hostname = ? AND port = ?",
+            (row["hostname"], row["port"]),
+        )
+    ]
+
+
+def _quarantine_certificates(
+    conn: sqlite3.Connection, tables: set[str], members: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Cross-scope collision: clear per-certificate tags on every colliding
+    spelling's certificates and keep only alert-group assignments present on
+    every member's certificates. Returns what was dropped, for the audit row."""
+    dropped: dict[str, Any] = {"certificate_tags": {}, "alert_group_assignments": []}
+    if "certificates" not in tables:
+        return dropped
+    has_tags = "tags" in _columns(conn, "certificates")
+    per_member: list[tuple[list[str], set[str]]] = []
+    for member in members:
+        cert_ids = _endpoint_cert_ids(conn, member)
+        groups: set[str] = set()
+        if "alert_group_certs" in tables and cert_ids:
+            placeholders = ",".join("?" * len(cert_ids))
+            groups = {
+                r[0] for r in conn.execute(
+                    f"SELECT group_id FROM alert_group_certs WHERE cert_id IN ({placeholders})",
+                    cert_ids,
+                )
+            }
+        per_member.append((cert_ids, groups))
+    common_groups = set.intersection(*(g for _, g in per_member)) if per_member else set()
+    for cert_ids, _groups in per_member:
+        for cert_id in cert_ids:
+            if has_tags:
+                tags = conn.execute(
+                    "SELECT tags FROM certificates WHERE id = ?", (cert_id,)
+                ).fetchone()[0]
+                if tags:
+                    dropped["certificate_tags"][cert_id] = tags
+                    conn.execute("UPDATE certificates SET tags = '' WHERE id = ?", (cert_id,))
+            if "alert_group_certs" in tables:
+                for row in conn.execute(
+                    "SELECT group_id FROM alert_group_certs WHERE cert_id = ?", (cert_id,)
+                ).fetchall():
+                    if row[0] not in common_groups:
+                        dropped["alert_group_assignments"].append(
+                            {"cert_id": cert_id, "group_id": row[0]}
+                        )
+                        conn.execute(
+                            "DELETE FROM alert_group_certs WHERE cert_id = ? AND group_id = ?",
+                            (cert_id, row[0]),
+                        )
+    return dropped
 
 
 def _report_merge(
     conn: sqlite3.Connection, tables: set[str], canon: str, port: int,
-    keeper: dict[str, Any], others: list[dict[str, Any]], merged: dict[str, Any],
+    survivor: dict[str, Any], losers: list[dict[str, Any]], *,
+    same_scope: bool, applied: dict[str, Any], dropped: dict[str, Any],
 ) -> None:
-    spellings = [keeper["hostname"], *(o["hostname"] for o in others)]
+    spellings = [survivor["hostname"], *(o["hostname"] for o in losers)]
+    kind = "same scope" if same_scope else "DIFFERENT SCOPES, failed closed"
     logger.warning(
-        "migration 0038: hosts %s are one endpoint %s:%s; merged into %s (kept %s)",
-        spellings, canon, port, keeper["id"], [o["id"] for o in others],
+        "migration 0038: hosts %s are one endpoint %s:%s (%s); kept row %s, removed %s;"
+        " survivor now %s; the removed rows and every dropped tag, owner and"
+        " assignment are in audit_log action host.merge_alias for an administrator"
+        " to re-apply deliberately",
+        spellings, canon, port, kind, survivor["id"], [o["id"] for o in losers], applied,
     )
     if "audit_log" not in tables:
         return
     detail = {
         "hostname": canon,
         "port": port,
-        "kept": {k: v for k, v in keeper.items() if k != "id"},
-        "merged": [dict(o) for o in others],
-        "result": merged,
+        "same_scope": same_scope,
+        "survivor_before": {k: v for k, v in survivor.items() if k != "id"},
+        "survivor_changes": applied,
+        "removed": [dict(o) for o in losers],
+        "dropped_from_certificates": dropped,
     }
     conn.execute(
         "INSERT INTO audit_log (id, ts, actor, action, target_type, target_id, detail, source_ip)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
         (
             str(uuid.uuid4()), datetime.now(UTC).isoformat(), "migration:0038",
-            "host.merge_alias", "host", keeper["id"], json.dumps(detail, default=str),
+            "host.merge_alias", "host", survivor["id"], json.dumps(detail, default=str),
         ),
     )
 
@@ -140,29 +263,38 @@ def _canonicalize_hosts(conn: sqlite3.Connection, tables: set[str]) -> None:
             continue
         groups.setdefault((canon, row["port"]), []).append(row)
     for (canon, port), members in groups.items():
-        keeper, *others = members
-        if others:
-            merged = _merged_fields(keeper, others)
+        survivor, *losers = members
+        if losers:
+            same_scope = _same_scope(members)
+            if same_scope:
+                applied = _same_scope_fields(survivor, losers)
+                dropped: dict[str, Any] = {"certificate_tags": {}, "alert_group_assignments": []}
+            else:
+                applied = _cross_scope_fields(members)
+                dropped = _quarantine_certificates(conn, tables, members)
             conn.execute(
-                f"DELETE FROM hosts WHERE id IN ({','.join('?' * len(others))})",
-                [o["id"] for o in others],
+                f"DELETE FROM hosts WHERE id IN ({','.join('?' * len(losers))})",
+                [o["id"] for o in losers],
             )
-            assignments = ", ".join(f"{name} = ?" for name in merged)
+            assignments = "".join(f", {name} = ?" for name in applied)
             conn.execute(
-                f"UPDATE hosts SET hostname = ?, {assignments} WHERE id = ?",
-                [canon, *merged.values(), keeper["id"]],
+                f"UPDATE hosts SET hostname = ?{assignments} WHERE id = ?",
+                [canon, *applied.values(), survivor["id"]],
             )
-            _report_merge(conn, tables, canon, port, keeper, others, merged)
-        elif keeper["hostname"] != canon:
+            _report_merge(
+                conn, tables, canon, port, survivor, losers,
+                same_scope=same_scope, applied=applied, dropped=dropped,
+            )
+        elif survivor["hostname"] != canon:
             conn.execute(
-                "UPDATE hosts SET hostname = ? WHERE id = ?", (canon, keeper["id"])
+                "UPDATE hosts SET hostname = ? WHERE id = ?", (canon, survivor["id"])
             )
 
 
 def _aliases(conn: sqlite3.Connection, tables: set[str]) -> dict[str, str]:
     """Every stored spelling that differs from its canonical form."""
     seen: set[str] = set()
-    for table in _HOSTNAME_TABLES:
+    for table in ("hosts", *_HOSTNAME_TABLES):
         if table in tables and "hostname" in _columns(conn, table):
             seen.update(
                 r[0] for r in conn.execute(
@@ -191,11 +323,14 @@ def _aliases(conn: sqlite3.Connection, tables: set[str]) -> dict[str, str]:
 
 
 def _rekey(key: str, aliases: dict[str, str]) -> str:
-    # Keys are ``prefix:hostname:port:...``; the hostname is bounded by colons
-    # on both sides, which also holds for an IPv6 literal.
-    for old, new in sorted(aliases.items(), key=lambda kv: -len(kv[0])):
-        key = key.replace(f":{old}:", f":{new}:")
-    return key
+    """Rewrite the hostname field of an endpoint-bound dedupe key, nothing else."""
+    match = _ENDPOINT_KEY.match(key)
+    if match is None or match["host"] not in aliases:
+        return key
+    return (
+        f"{match['prefix']}:{aliases[match['host']]}:{match['port']}:{match['fp']}"
+        f"{match['rest'] or ''}"
+    )
 
 
 def _rekey_alerts(conn: sqlite3.Connection, aliases: dict[str, str]) -> None:
@@ -258,33 +393,51 @@ def _rekey_rule_firings(conn: sqlite3.Connection, aliases: dict[str, str]) -> No
         conn.execute("DELETE FROM rule_firings WHERE dedupe_key = ?", (row["dedupe_key"],))
 
 
+def _rewrite_hostname_columns(
+    conn: sqlite3.Connection, tables: set[str], aliases: dict[str, str]
+) -> None:
+    """One UPDATE per table, joined to the alias map: each row is visited once
+    however many spellings there are (the per-alias form scanned event_log
+    once per alias, which does not fit an IIS startup window at fleet scale)."""
+    conn.execute(f"DROP TABLE IF EXISTS {_ALIAS_TABLE}")
+    conn.execute(
+        f"CREATE TEMP TABLE {_ALIAS_TABLE.split('.', 1)[1]}"
+        " (old TEXT PRIMARY KEY, new TEXT NOT NULL)"
+    )
+    conn.executemany(
+        f"INSERT INTO {_ALIAS_TABLE} (old, new) VALUES (?, ?)", list(aliases.items())
+    )
+    try:
+        for table in _HOSTNAME_TABLES:
+            if table not in tables or "hostname" not in _columns(conn, table):
+                continue
+            conn.execute(
+                f"UPDATE {table} SET hostname = (SELECT new FROM {_ALIAS_TABLE} a"
+                f" WHERE a.old = {table}.hostname)"
+                f" WHERE hostname IN (SELECT old FROM {_ALIAS_TABLE})"
+            )
+        if "event_log" in tables:
+            conn.execute(
+                "UPDATE event_log SET payload = json_set(payload, '$.hostname',"
+                f" (SELECT new FROM {_ALIAS_TABLE} a"
+                " WHERE a.old = json_extract(event_log.payload, '$.hostname')))"
+                " WHERE json_valid(payload)"
+                f" AND json_extract(payload, '$.hostname') IN (SELECT old FROM {_ALIAS_TABLE})"
+            )
+    finally:
+        conn.execute(f"DROP TABLE IF EXISTS {_ALIAS_TABLE}")
+
+
 def upgrade(conn: sqlite3.Connection) -> None:
     conn.row_factory = sqlite3.Row
     tables = _tables(conn)
     if "hosts" not in tables:
         return
     aliases = _aliases(conn, tables)
-    hosts_aliases = {
-        r[0]: c for r in conn.execute("SELECT DISTINCT hostname FROM hosts")
-        if (c := _canonical(r[0])) is not None and c != r[0]
-    }
-    aliases.update(hosts_aliases)
     _canonicalize_hosts(conn, tables)
     if not aliases:
         return
-    new_then_old = [(new, old) for old, new in aliases.items()]
-    for table in _HOSTNAME_TABLES:
-        if table not in tables or "hostname" not in _columns(conn, table):
-            continue
-        conn.executemany(
-            f"UPDATE {table} SET hostname = ? WHERE hostname = ?", new_then_old
-        )
-    if "event_log" in tables:
-        conn.executemany(
-            "UPDATE event_log SET payload = json_set(payload, '$.hostname', ?)"
-            " WHERE json_valid(payload) AND json_extract(payload, '$.hostname') = ?",
-            new_then_old,
-        )
+    _rewrite_hostname_columns(conn, tables, aliases)
     if "alerts" in tables and "dedupe_key" in _columns(conn, "alerts"):
         _rekey_alerts(conn, aliases)
     if "rule_firings" in tables:

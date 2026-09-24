@@ -80,3 +80,30 @@ def test_canonical_hostname_rejects_what_validation_rejects(hostname: str) -> No
     with pytest.raises(ValueError):
         canonical_hostname(hostname)
     assert hostname_is_valid(hostname) is False
+
+
+def _numeric_ipv4_forms(quad: str) -> list[str]:
+    """The legacy spellings the resolver reads as *quad*: bare integer, hex,
+    three-part, two-part, and octal octets."""
+    import ipaddress
+
+    a, b, c, d = (int(x) for x in quad.split("."))
+    n = int(ipaddress.IPv4Address(quad))
+    return [
+        str(n), hex(n), f"{a}.{b}.{c * 256 + d}", f"{a}.{b * 65536 + c * 256 + d}",
+        f"0{a:o}.0{b:o}.0{c:o}.0{d:o}",
+    ]
+
+
+@pytest.mark.parametrize("form", _numeric_ipv4_forms("192.0.2.8"))
+def test_legacy_numeric_ipv4_spellings_are_rejected(form: str) -> None:
+    """``ipaddress`` rejects them but libc resolves them, so accepted as a
+    "DNS name" they would be a second spelling of an IPv4 endpoint."""
+    from cert_watch.host_validation import legacy_ipv4_dotted_quad
+
+    assert legacy_ipv4_dotted_quad(form) == "192.0.2.8"
+    assert hostname_is_valid(form) is False
+    with pytest.raises(ValueError):
+        canonical_hostname(form)
+    assert legacy_ipv4_dotted_quad("victim.example.test") is None
+    assert canonical_hostname("192.0.2.8") == "192.0.2.8"

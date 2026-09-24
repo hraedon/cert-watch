@@ -407,12 +407,15 @@ def _scope_condition(scope_tags: tuple[str, ...]) -> tuple[str, list[Any]]:
         "SELECT 1 FROM certificates c"
         f" WHERE c.id = json_extract(payload, '$.cert_id') AND {cert_clause}"
     )
+    # json_valid first: one malformed legacy payload must not make every
+    # scoped read raise, and an unparseable event belongs to no scope.
     sql = (
-        "((json_extract(payload, '$.hostname') IS NOT NULL"
+        "(json_valid(payload) AND"
+        " ((json_extract(payload, '$.hostname') IS NOT NULL"
         " AND json_extract(payload, '$.port') IS NOT NULL"
         f" AND EXISTS ({host_sub}))"
         " OR (json_extract(payload, '$.cert_id') IS NOT NULL"
-        f" AND EXISTS ({cert_sub})))"
+        f" AND EXISTS ({cert_sub}))))"
     )
     return sql, host_params + cert_params
 

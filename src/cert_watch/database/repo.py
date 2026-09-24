@@ -940,7 +940,8 @@ class SqliteHostRepository:
             # Hostname AND port: one name can be monitored on two ports by two
             # teams, and deleting one must not erase the other's history.
             conn.execute(
-                "DELETE FROM event_log WHERE json_extract(payload, '$.hostname') = ?"
+                "DELETE FROM event_log WHERE json_valid(payload)"
+                " AND json_extract(payload, '$.hostname') = ?"
                 " AND json_extract(payload, '$.port') = ?",
                 (hostname, port),
             )
