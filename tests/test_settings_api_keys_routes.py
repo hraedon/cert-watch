@@ -102,7 +102,8 @@ def test_get_api_keys_non_admin_redirected_via_route(reload_app, tmp_path, monke
         _login_admin(client, monkeypatch)
         r = client.get("/settings/api-keys", follow_redirects=False)
     assert r.status_code == 303
-    assert "admin+required" in r.headers["location"] or "admin%20required" in r.headers["location"]
+    # Refused settings pages send the browser Home, not back to /settings (#113).
+    assert r.headers["location"].startswith("/?error=Settings%20are%20available")
 
 
 # ---------- POST /settings/api-keys (create) ----------

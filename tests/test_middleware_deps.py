@@ -695,7 +695,7 @@ async def test_admin_page_guard_no_session_redirects_to_login(tmp_path):
 
 @pytest.mark.anyio
 async def test_admin_page_guard_non_admin_redirects_with_error(tmp_path):
-    """An authenticated non-admin is bounced back to the page with ?error=admin+required."""
+    """An authenticated non-admin is sent Home with an explanation, not back to /settings."""
     from fastapi.responses import RedirectResponse
 
     from cert_watch.auth.guards import admin_page_guard
@@ -723,8 +723,8 @@ async def test_admin_page_guard_non_admin_redirects_with_error(tmp_path):
     response = await _refusal(admin_page_guard, request)
     assert isinstance(response, RedirectResponse)
     assert response.status_code == 303
-    assert "error=admin" in response.headers["location"]
-    assert response.headers["location"].startswith("/settings")
+    # A page refusal leaves /settings (bouncing back to it looped, #113).
+    assert response.headers["location"].startswith("/?error=Settings")
 
 
 @pytest.mark.anyio

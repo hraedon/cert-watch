@@ -8,6 +8,9 @@ All notable changes to cert-watch are documented in this file.
 
 - Settings → Tags no longer fails with a server error once any alert group
   exists (#113).
+- A signed-in user who is not an administrator and opens a Settings page is
+  sent to Home with "Settings are available to administrators only." It
+  previously redirected to `/settings` forever (#113).
 
 ## [1.0.2] - 2026-09-23
 

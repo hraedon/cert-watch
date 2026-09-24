@@ -143,6 +143,25 @@ def _admin_redirect_target(request: Request) -> str:
     return "/"
 
 
+SETTINGS_ADMIN_ONLY = "Settings are available to administrators only."
+
+
+def _page_refusal(request: Request, error: str) -> RedirectResponse:
+    """Where a refused admin *page* view sends the browser.
+
+    A page refusal must not bounce to another page behind the same guard:
+    sending a non-admin from ``/settings/...`` back to ``/settings`` (itself
+    admin-only) redirected forever (#113). Non-admins land on Home with a
+    plain explanation instead. Form (POST) refusals keep their own bounce
+    targets; the page they land on ends here.
+    """
+    if error == "admin required":
+        if request.url.path.startswith("/settings"):
+            return _bounce("/", SETTINGS_ADMIN_ONLY)
+        return _bounce("/", error)
+    return _bounce(_admin_redirect_target(request), error)
+
+
 def _admin_allowed(request: Request, user: str, *, use_legacy: bool = False) -> bool:
     """Check whether *user* may perform admin actions.
 
@@ -303,7 +322,7 @@ class ReadGuard:
         if result.error:
             if result.error == "unauthenticated":
                 raise _login_redirect()
-            raise GuardRejection(_bounce(_admin_redirect_target(request), result.error))
+            raise GuardRejection(_page_refusal(request, result.error))
         if self.session_only and getattr(request.state, "api_key_auth", False):
             raise GuardRejection(
                 _bounce(_admin_redirect_target(request), "admin browser session required")
