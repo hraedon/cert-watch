@@ -12,11 +12,14 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from cert_watch.alerting.model import UNDELIVERED_AFTER_HOURS, delivery_is_configured
-from cert_watch.auth import SESSION_COOKIE, validate_session
-from cert_watch.auth.request_context import _is_auth_enabled, authenticate_api_key
+from cert_watch.auth.request_context import (
+    _is_auth_enabled,
+    check_metrics_token,
+    metrics_token_configured,
+    resolve_session_user,
+)
 from cert_watch.database.connection import _connect, _sql_now
 from cert_watch.routes._deps import _db_path, _get_settings
-from cert_watch.security import _request_security
 
 logger = logging.getLogger("cert_watch.routes.health")
 
@@ -55,6 +58,39 @@ def _undelivered_count(db: str | Path, *, now: datetime) -> int:
     return overdue + stale_leases
 
 
+def _detail_allowed(request: Request, auth_ctx: Any, *, metrics_token_unlocks: bool) -> bool:
+    """Whether this caller may see the detailed health body.
+
+    The detail (last scan, certificate and alert counts, scheduler errors) is
+    computed over the whole estate, so it is for administrators only, plus,
+    on ``/readyz`` alone (*metrics_token_unlocks*), the monitoring scraper's
+    ``CERT_WATCH_METRICS_TOKEN``. A tag-scoped principal, an API key below
+    ``admin`` scope and an anonymous caller get the shallow body: the overall
+    status and nothing else (#116 review). The token never widens a session:
+    ``/api/health`` is a session API and ignores it. Open mode (no auth
+    provider) has no principals to tell apart and keeps the full body, as
+    the deployment smoke checks rely on.
+    """
+    if not _is_auth_enabled(request):
+        return True
+    if metrics_token_unlocks and metrics_token_configured(request) and check_metrics_token(request):
+        return True
+    return auth_ctx is not None and bool(getattr(auth_ctx, "is_admin", False))
+
+
+def _probe_principal(request: Request) -> Any:
+    """Resolve the caller of a public probe path to an AuthContext, or None.
+
+    ``/readyz`` is public, so ``auth_middleware`` never runs on it and
+    nothing has authenticated the request yet. The middleware's own resolver
+    is used (session cookie first, then API key), so a caller presenting
+    both credentials gets the same answer here as on ``/api/health``.
+    """
+    if resolve_session_user(request).error is not None:
+        return None
+    return getattr(request.state, "auth_context", None)
+
+
 @router.get("/healthz")
 def healthz(request: Request) -> dict[str, str]:
     """Lightweight liveness probe — process is alive.
@@ -71,10 +107,10 @@ def readyz(request: Request) -> JSONResponse:
 
     Probe contract: HTTP 200 when ready, **503 when degraded** — the status
     code is what kubelet/blackbox probes judge (a 200-with-`degraded` body
-    reads as Ready to a kubelet). When an auth provider is configured,
-    unauthenticated callers get a shallow body (status only); the detailed
-    checks stay behind session/API-key auth (disclosure hygiene, same class
-    as WI-124 #5).
+    reads as Ready to a kubelet). When an auth provider is configured, the
+    detailed checks are for administrators and the metrics token only; every
+    other caller, anonymous or tag-scoped, gets the shallow body (status
+    only). See :func:`_detail_allowed`.
     """
     db = _db_path(request)
     checks: dict[str, str] = {}
@@ -167,26 +203,10 @@ def readyz(request: Request) -> JSONResponse:
             logger.warning("readyz alert lifecycle query failed", exc_info=True)
             checks["undelivered_alerts"] = "error"
             checks["stale_sending_leases"] = "error"
-    # Shallow body for unauthenticated callers under an auth provider; open
-    # mode (no provider) and authenticated callers get the full detail.
-    # /readyz is a public path, so auth_middleware never runs on it and
-    # scope["auth_user"] is never set here — validate presented credentials
-    # (API key, then session cookie) directly.
-    full = True
-    if _is_auth_enabled(request):
-        authed = authenticate_api_key(request, db) is not None
-        if not authed:
-            _settings = getattr(request.app.state, "settings", None)
-            _ttl = getattr(_settings, "session_ttl", None) if _settings else None
-            authed = bool(
-                validate_session(
-                    request.cookies.get(SESSION_COOKIE, ""),
-                    _request_security(request),
-                    db_path=str(db),
-                    session_ttl=_ttl,
-                )
-            )
-        full = authed
+    full = _detail_allowed(
+        request, _probe_principal(request) if _is_auth_enabled(request) else None,
+        metrics_token_unlocks=True,
+    )
     body: dict[str, Any] = {"status": "ok" if ok else "degraded"}
     if full:
         body["checks"] = checks
@@ -206,7 +226,11 @@ def _count(checks: dict[str, object], key: str) -> int:
 
 
 def build_api_health_response(request: Request) -> JSONResponse:
-    """Structured health data for the dashboard banner."""
+    """Structured health data for the dashboard banner.
+
+    Administrators get every check; everyone else gets ``{"overall": ...}``
+    only, because the checks are estate-wide (see :func:`_detail_allowed`).
+    """
     db = _db_path(request)
     checks: dict[str, object] = {}
     scan_query_ok = True
@@ -306,6 +330,10 @@ def build_api_health_response(request: Request) -> JSONResponse:
         overall = "warning"
 
     checks["overall"] = overall
+    if not _detail_allowed(
+        request, getattr(request.state, "auth_context", None), metrics_token_unlocks=False
+    ):
+        return JSONResponse(content={"overall": overall})
     return JSONResponse(content=checks)
 
 

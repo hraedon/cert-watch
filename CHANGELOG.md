@@ -23,7 +23,7 @@ All notable changes to cert-watch are documented in this file.
   certificate. Scope still applies: a link never reveals a certificate the
   viewer can't see (#113).
 - A scan no longer drops a scanned certificate's own tags or its manual
-  alert-group assignments. Up to 1.0.2 every scan, changed or not, rewrote
+  alert-group assignments. Up to 1.0.3 every scan, changed or not, rewrote
   the certificate without them, which silently narrowed tag-scoped access,
   compliance scope and alert routing. Both are now kept on a rescan and
   carried to the new certificate when the endpoint's certificate is renewed.
@@ -41,8 +41,8 @@ All notable changes to cert-watch are documented in this file.
   warning.
 - Because a certificate's own tags now survive scans, a tag set on the
   certificate keeps granting its team access after the host's tag is
-  removed. In 1.0.2 the next scan wiped certificate tags, so removing the
-  host tag was enough. See UPGRADING.md (#113).
+  removed. In 1.0.3 and earlier the next scan wiped certificate tags, so
+  removing the host tag was enough. See UPGRADING.md (#113).
 - A change sent for a certificate that has since been renewed is refused
   instead of silently doing nothing. This covers deleting it, setting its
   tags, setting its owner, and assigning it to or removing it from an alert
@@ -91,6 +91,118 @@ All notable changes to cert-watch are documented in this file.
 - "Scan now" on a detail page returns to that page instead of Home, and the
   detail page now shows the flash messages that actions returning to it set
   (#113).
+
+## [1.0.3] - 2026-09-24
+
+A security release for installations with tag-scoped roles. Scoped users could
+read other teams' hosts on Posture, see their events, re-add and scan their
+endpoints, and tell their ids from nonexistent ones (#112). One schema
+migration, **0038**, which canonicalizes stored host names; read
+[UPGRADING.md](UPGRADING.md) before upgrading.
+
+### Security
+
+- A user whose role is scoped to a tag no longer sees other teams'
+  certificates on Posture. The weak-primitives list, the crypto inventory and
+  the fleet grade were computed over the whole estate, so a scoped user could
+  read other teams' host names and their key weaknesses. They are now limited
+  to the user's scope, like the trend charts already were (#112). A new test
+  requests every page and API endpoint as a scoped user against an estate with
+  two teams and fails if anything outside the scope appears, or if adding
+  another team's hosts changes any response.
+- The compliance report linked from Posture now works for scoped users. With
+  no tag, the report page and its JSON and CSV exports cover the user's own
+  scope; they used to refuse with a bare-text `403`. Asking the report page
+  for a tag outside the scope returns to the user's report with an error
+  message. Unscoped users and admins still get the whole estate.
+- Events (`/api/events`, `/api/events/failed`, `/api/events/stream`) are
+  scoped per endpoint, not per host name. One name monitored on two ports by
+  two teams leaked either team's events to the other; an event is now shown
+  only when its `hostname:port` is a host in the user's scope, or when its
+  certificate is. An event that names a host name but no port is shown only
+  through its certificate.
+- Adding a host that another team already monitors is refused. Adding an
+  existing `hostname:port` is idempotent and returns the existing row, so a
+  scoped user could obtain another team's host id and start a scan of it,
+  through the add form, the JSON API and both CSV imports. The existing row
+  is now authorized like any other write target first; a CSV row that fails
+  is reported like a row with an out-of-scope tag.
+- A scoped user gets the same answer for an id outside their scope as for
+  an id that does not exist, on every state-changing route. Marking an alert
+  read, the host and certificate ownership forms and the host scan form
+  looked the target up before authorizing it, so a missing id answered
+  `not found` while another team's id answered `outside your team scope`.
+  The read-scope test now also sends every such route an out-of-scope and a
+  nonexistent id and requires identical responses, no database change and no
+  scan; its comparison masks only the report clock and the values derived
+  from it, so a differing fingerprint or scan time is reported as a leak.
+- Host names are stored in one canonical spelling: lower-case IDNA A-labels
+  with no trailing dot for DNS names, and the compressed form for IP
+  literals. `VICTIM.example.test`, `victim.example.test.` and
+  `victim.example.test` were three endpoints, so the refusal above could be
+  bypassed by re-spelling another team's host name (also `café` for a stored
+  `xn--caf-dma`, `2001:0db8::1` for a stored `2001:db8::1`, and a CSV port of
+  `0443`). Every add path canonicalizes before validation, the scope check,
+  persistence, DNS resolution and the scan. **Migration 0038** rewrites the
+  stored spelling in every hostname-keyed table (`hosts`, `certificates`,
+  `scan_history`, `cert_history`, `scan_posture`, `alerts`, event payloads
+  and alert dedupe keys). Rows of `hosts` that spell one endpoint two ways
+  are collapsed onto the oldest row. If they carry the same tags they are
+  merged (empty fields filled, notes joined). If they carry different tags
+  the migration fails closed, whichever row is older: the surviving row keeps
+  only the tags all rows shared (none if disjoint: administrators only until
+  re-tagged); every other field (owner and contact, notes, alert threshold,
+  scan interval, expected issuers, STARTTLS mode, renewal status and method,
+  runbook) is kept only where all rows agreed and is otherwise reset to its
+  default; the endpoint's certificates lose their per-certificate tags and
+  any alert-group assignment not shared by every row; and alerts still
+  waiting to be sent for those certificates lose the recipient list they
+  were queued with (sent and closed alerts keep theirs). So an alias planted
+  through the old bug grants its team nothing, sets nothing on the victim
+  and routes no alert, queued or new, to it. Every collapse is a
+  startup `WARNING` and an audit entry (`host.merge_alias`) holding the
+  removed row and every dropped value in full. Nothing is deleted from the
+  history tables. Legacy numeric IPv4 spellings (`010.010.010.010`,
+  `8.8.2056`, `0x08080808`), which the resolver reads as an address, are
+  refused as host names and folded into the dotted-quad row by the migration.
+- Deleting a host no longer removes events for the same host name on another
+  port. The event history was deleted by host name alone, so deleting one's
+  own `example.test:8443` erased another team's `example.test:443` events,
+  including its failed-delivery records.
+- The compliance report's `tag` filter must be a single tag, for every user.
+  A list such as `payments,hr-ops` passed the scope check on the part inside
+  the scope and was then filtered as one literal tag, producing a signed,
+  empty report named for the other team's tag.
+- `/readyz` and `/api/health` give their detailed bodies to administrators
+  and the metrics bearer token only. The detail (last scan time and status,
+  certificate and expired counts, undelivered and failed alert counts,
+  scheduler errors) is computed over the whole estate, so a tag-scoped user
+  could watch another team's scans fail and alerts pile up. Everyone else,
+  signed in or not, now gets `{"status": ...}` from `/readyz` and
+  `{"overall": ...}` from `/api/health`. The metrics token unlocks detail on
+  `/readyz` only; it does not widen a signed-in session on `/api/health`.
+  `/readyz` resolves its caller as the rest of the app does (session cookie
+  first, then API key), so a caller presenting both gets the same answer on
+  both endpoints. Status codes are unchanged, so probes and uptime checks are
+  unaffected; with authentication disabled the full bodies remain.
+
+### Changed
+
+- **If a script scrapes `/api/health` or `/readyz` with a non-administrator
+  account, it now receives the shallow body.** Use `/readyz` with the metrics
+  bearer token (`CERT_WATCH_METRICS_TOKEN`) or an administrator's `admin` API
+  key for the detailed checks. The dashboard health strip shows the overall
+  status to non-administrators and its details to administrators.
+
+- Startup applies schema migration 0038 (see Security above). It rewrites
+  data only, one pass per table; the pre-migration backup is taken as for
+  every migration. A `WARNING` log line and an `audit_log` row
+  (`host.merge_alias`) are written for every set of host rows that turn out
+  to be one endpoint; see [UPGRADING.md](UPGRADING.md) for what to review.
+  `deploy/k8s/deployment.yaml` gains a `startupProbe` so a long migration is
+  not killed by the liveness probe.
+- Searching the inventory for a host name typed with capitals, a trailing
+  dot or in Unicode (`büro.example`) finds the stored canonical spelling.
 
 ## [1.0.2] - 2026-09-23
 

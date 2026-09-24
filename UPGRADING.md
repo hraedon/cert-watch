@@ -23,18 +23,67 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
-## Upgrading from 1.0.2 to the next release
+## Upgrading from 1.0.3 (unreleased)
 
 Nothing to migrate. One behaviour change affects access control:
 
 - **Certificate tags are now durable grants.** A scan no longer wipes the
   tags set on a certificate itself, and a renewal carries them to the new
-  certificate. In 1.0.2 the next scan cleared them, so removing a team's tag
-  from the *host* was enough to revoke that team's access within a scan
-  cycle. Now a team keeps access through a tag set on the certificate until
+  certificate. In 1.0.3 and earlier the next scan cleared them, so removing
+  a team's tag from the *host* was enough to revoke that team's access within
+  a scan cycle. Now a team keeps access through a tag set on the certificate until
   that tag is removed too. Before relying on a host tag change to revoke
   access, check the certificate's own tags on its detail page. (Tags that
-  1.0.2 already wiped are not restored.)
+  earlier releases already wiped are not restored.)
+
+## Upgrading from 1.0.2 to 1.0.3
+
+One schema migration, **0038**, rewrites every stored host name to one
+canonical spelling (lower-case IDNA A-labels without a trailing dot; the
+compressed form for IP literals) across `hosts`, `certificates`,
+`scan_history`, `cert_history`, `scan_posture`, `alerts`, event payloads and
+alert dedupe keys. Read [CHANGELOG.md](CHANGELOG.md) for why. Three things to
+know:
+
+- **It can take a while on a large database.** Each table is rewritten in a
+  single pass, so a few thousand hosts with tens of thousands of events take
+  seconds, not minutes, but the pre-migration backup copies the whole
+  database file first. The application does not open its port until
+  migrations finish. On Kubernetes, `deploy/k8s/deployment.yaml` now has a
+  `startupProbe` (15 minutes) for that reason; if you use your own manifest
+  with only a liveness probe, add one or raise the liveness
+  `failureThreshold` before upgrading, or a long migration is killed and
+  retried indefinitely. On IIS the startup limit is 60 s
+  (`deploy/iis/web.config`). If the database is large, migrate before
+  starting the site: stop the site, run `cert-watch` from a console with the
+  same `CERT_WATCH_*` environment the site uses (at least the database
+  path), wait for the `migration 0038 applied` log line, stop it with
+  Ctrl+C, then start the site.
+- **Two rows that spell one endpoint are collapsed.** If both rows carry the
+  same tags, they are merged. If they carry different tags, the migration
+  fails closed: the surviving row keeps only the tags both had (none, if
+  disjoint, which makes the endpoint visible to administrators only); every
+  other field (owner, notes, threshold, scan interval, expected issuers,
+  STARTTLS mode, renewal status and method, runbook) is kept only where both
+  agreed and otherwise reset to its default; the certificates under that
+  endpoint lose their per-certificate tags and any alert-group assignment
+  not shared by both; and alerts still queued for them are sent to the
+  global recipients only, not to the recipients they were queued with.
+  Nothing is deleted from the history. Every such collapse is a
+  `WARNING` line in the startup log and an audit entry with action
+  `host.merge_alias` that holds the removed row and every dropped value in
+  full. **After upgrading, an administrator should open the audit log,
+  filter for `host.merge_alias`, and re-tag or re-own the affected endpoints
+  deliberately.**
+- **`/readyz` and `/api/health` return a shallow body to non-administrators.**
+  Status codes are unchanged, so Kubernetes probes, the Docker health check
+  and `Verify-Install` are unaffected. A script that reads the detailed body
+  with a non-administrator account or a `read`/`write` API key now gets only
+  `{"status": ...}` / `{"overall": ...}`; use `/readyz` with the metrics
+  token, or an `admin` API key.
+- Host names typed as legacy numeric IPv4 forms (`010.010.010.010`,
+  `8.8.2056`, `0x08080808`) are rejected from now on; write the dotted quad.
+  Stored ones are folded into the dotted-quad row by the migration.
 
 ## Upgrading from 1.0.1 to 1.0.2
 

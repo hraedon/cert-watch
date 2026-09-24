@@ -29,8 +29,9 @@ Only renewal lineage counts. An id that never existed, or whose certificate
 an operator deleted (its endpoint's next certificate is a ``cert_added``, not
 a renewal of it), is not superseded and gets the caller's ordinary handling.
 
-A caller whose tag scope does not cover the head gets exactly the answer an
-unknown id gets on that route: the refusal would otherwise reveal that the id
+A caller whose tag scope does not cover the head -- or the addressed row,
+while it still exists -- gets exactly the answer an unknown id gets on that
+route: the refusal would otherwise reveal that the id
 was real and renewed. For an addressed row that no longer exists, falling
 through gives that answer; for a stale row that still exists, the caller
 supplies it (*hidden*), because falling through would act on the stale row.
@@ -126,7 +127,15 @@ def ensure_not_superseded(
     head = current_head(conn, cert_id)
     if head is None:
         return
-    if not _may_read(conn, auth, head):
+    # Out of scope for the addressed row (when it still exists) or for the
+    # head: the unknown-id answer -- authorization comes before any lookup
+    # a caller could learn from (#112).
+    addressed_exists = conn.execute(
+        "SELECT 1 FROM certificates WHERE id = ?", (cert_id,)
+    ).fetchone()
+    if (addressed_exists and not _may_read(conn, auth, cert_id)) or not _may_read(
+        conn, auth, head
+    ):
         if hidden is not None:
             raise hidden()
         return

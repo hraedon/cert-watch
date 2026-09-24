@@ -9,11 +9,11 @@ from cert_watch.database.dashboard_helpers import (
     _SORT_COLUMNS_ALIAS,
     _add_effective_tag_filter,
     _clamp_page,
-    _escape_like,
     _filter_unified,
     _reorder_by_candidates,
     _safe_col,
     _safe_dir,
+    search_patterns,
 )
 from cert_watch.database.dashboard_unified import (
     _build_pending_entries,
@@ -74,7 +74,7 @@ def list_dashboard_page(
 
     # q is pushed to SQL for leaf/host candidates; grouped cross-host search
     # never applies to the ungrouped path, so per-field LIKE is faithful.
-    like = f"%{_escape_like(q.lower())}%" if q else None
+    like, host_like = search_patterns(q)
 
     with _connect(db_path) as conn:
         host_rows = conn.execute(
@@ -120,10 +120,11 @@ def list_dashboard_page(
                     " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
                     " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
                     " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\'"
                     " OR LOWER(c.tags) LIKE ? ESCAPE '\\'"
                     " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
-                scanned_params += [like, like, like, like, like]
+                scanned_params += [like, like, like, host_like, like, like]
             scanned_sql, scanned_params = _add_effective_tag_filter(
                 scanned_sql, scanned_params, scope_tags or (), col_cert="c.tags", col_host="h.tags"
             )
@@ -151,9 +152,10 @@ def list_dashboard_page(
             if like:
                 pending_sql += (
                     " AND (LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
+                    " OR LOWER(h.hostname || ':' || h.port) LIKE ? ESCAPE '\\'"
                     " OR LOWER(h.tags) LIKE ? ESCAPE '\\')"
                 )
-                pending_params += [like, like]
+                pending_params += [like, host_like, like]
             pending_sql, pending_params = _add_effective_tag_filter(
                 pending_sql, pending_params, scope_tags or (), col_cert=None, col_host="h.tags"
             )

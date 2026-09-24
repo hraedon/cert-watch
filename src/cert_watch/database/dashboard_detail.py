@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -101,8 +102,15 @@ def _endpoint_from_alerts(conn: Any, stale_id: str) -> tuple[str, int] | None:
         (stale_id, stale_id),
     ).fetchall()
     endpoints: set[tuple[str, int]] = set()
+    from cert_watch.host_validation import canonical_hostname
+
     for row in rows:
+        # Stored host names are canonical (migration 0038 rewrote alerts and
+        # their keys); canonicalize again so a row written before it still
+        # joins the canonical hosts and certificates rows.
         hostname = str(row["hostname"])
+        with contextlib.suppress(ValueError):
+            hostname = canonical_hostname(hostname)
         _, _, identity = str(row["dedupe_key"]).partition(":")
         ports = conn.execute(
             "SELECT port FROM hosts WHERE hostname = ? "

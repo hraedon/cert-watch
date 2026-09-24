@@ -23,6 +23,34 @@ _SORT_COLUMNS_GROUPED = frozenset({
 _SQL_DIRS = frozenset({"ASC", "DESC"})
 
 
+def search_patterns(q: str | None) -> tuple[str | None, str | None]:
+    """``(like, host_like)`` LIKE patterns for a free-text inventory search.
+
+    ``like`` is the query itself, lower-cased and escaped. ``host_like`` is
+    the pattern to use against ``hostname || ':' || port`` columns: hostnames
+    are stored canonically (A-label, lower-case, no trailing dot), so a query
+    typed as ``büro.example`` or ``HOST.example.`` matches through its
+    canonical spelling; when the query is not a hostname it is ``like``.
+    """
+    if not q:
+        return None, None
+    like = f"%{_escape_like(q.lower())}%"
+    canonical = _canonical_query(q)
+    return like, (f"%{_escape_like(canonical)}%" if canonical else like)
+
+
+def _canonical_query(q: str) -> str | None:
+    """The stored spelling a hostname-shaped search term refers to, when it
+    differs from the term itself (lower-cased); ``None`` otherwise."""
+    from cert_watch.host_validation import canonical_hostname
+
+    try:
+        canonical = canonical_hostname(q.strip())
+    except ValueError:
+        return None
+    return canonical if canonical != q.strip().lower() else None
+
+
 def _add_effective_tag_filter(
     sql: str,
     params: list[Any],
@@ -178,7 +206,8 @@ def _filter_unified(
     """
     if q:
         ql = q.lower()
-        entries = [e for e in entries if _matches_q(e, ql)]
+        qc = _canonical_query(q)  # hostnames are stored canonically
+        entries = [e for e in entries if _matches_q(e, ql) or (qc and _matches_q(e, qc))]
     if urgency:
         entries = [e for e in entries if e.get("urgency") == urgency]
     if source:

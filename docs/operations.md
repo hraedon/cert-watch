@@ -25,13 +25,26 @@ support two live writers.
 
 ## Monitoring
 
-**Health endpoints.** Both work without authentication and reveal nothing
-beyond their status to anonymous callers.
+**Health endpoints.** Both work without authentication. Their status codes
+are the probe contract; the bodies reveal nothing beyond the status to
+anyone who is not an administrator.
 
 | Endpoint | Returns | Use it for |
 |----------|---------|------------|
 | `/healthz` | `200 {"status": "ok"}` while the process is serving | Liveness probes |
 | `/readyz` | `200` when ready; `503` if the database can't be read or written, or the scheduler isn't running or is repeatedly failing | Readiness probes and uptime checks |
+
+With authentication enabled, `/readyz` answers `{"status": "ok"}` or
+`{"status": "degraded"}` and nothing more, unless the caller is an
+administrator (browser session or `admin` API key) or presents the metrics
+bearer token (`CERT_WATCH_METRICS_TOKEN`); those get the detailed `checks`
+(database, last scan, certificate and alert counts, scheduler state), which
+describe the whole estate. `/api/health`, which feeds the dashboard's health
+strip, requires a session and gives the same detail to administrators only;
+every other signed-in user gets `{"overall": "ok" | "warning" | "critical"}`.
+A monitor that scrapes the detail should therefore use `/readyz` with the
+metrics token, not a personal account. With authentication disabled both
+endpoints return the full body to everyone.
 
 **Metrics.** `/metrics` exposes Prometheus gauges. With authentication
 enabled, it answers only the dedicated bearer token (`CERT_WATCH_METRICS_TOKEN`,

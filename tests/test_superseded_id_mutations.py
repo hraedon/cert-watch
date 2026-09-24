@@ -223,7 +223,7 @@ def test_owner_target_resolved_before_the_renewal_is_refused(tmp_path, self_sign
     init_schema(db)
     SqliteHostRepository(db).add(_HOST, 443)
     old = seed_scanned(db, _HOST, 443, parse_certificate(self_signed_leaf.der))
-    target = resolve_host_ownership_target(db, old)
+    target = resolve_host_ownership_target(db, old, auth=AuthContext.system())
     new = _renew(db)
     with pytest.raises(CertificateSupersededError) as info:
         update_host_ownership(
@@ -365,7 +365,7 @@ def test_cross_process_renewal_waits_for_the_owner_write(tmp_path, monkeypatch, 
     old = seed_scanned(db, _HOST, 443, parse_certificate(self_signed_leaf.der))
     seen: dict = {}
     _checking_then_racing(monkeypatch, "cert_watch.services.host_ownership", db, seen)
-    target = resolve_host_ownership_target(db, old)
+    target = resolve_host_ownership_target(db, old, auth=AuthContext.system())
     update_host_ownership(
         db,
         target,
@@ -673,3 +673,19 @@ def test_a_renewal_whose_successor_was_deleted_is_an_ordinary_not_found(
     with TestClient(app_mod.app) as client:
         r = client.put(f"/api/certificates/{a}/tags", json={"tags": "x"})
     assert (r.status_code, r.json()) == (404, {"error": "not found"})
+
+
+def test_a_stale_row_outside_the_callers_scope_answers_like_an_unknown_id(tmp_path):
+    """Composed with #112's authorize-before-lookup: a caller who can see the
+    current certificate C, but not the stale row A they addressed, learns
+    nothing about A -- not even that it was renewed to C."""
+    from tests.test_tag_scoped_access import _make_scoped_app, _scoped_client
+
+    db = tmp_path / "cert-watch.sqlite3"
+    a, _b, _c = _coexisting_lineage(db)  # A is team-old, C is team-new
+    app, groups = _make_scoped_app(db, tmp_path, scope_tag="team-new")
+    with _scoped_client(app, groups) as client:
+        unknown = _answers(client, "00000000-0000-0000-0000-000000000000")
+        stale = _answers(client, a)
+    assert stale == unknown
+    assert SqliteCertificateRepository(db).get_tags(a) == "team-old"

@@ -221,6 +221,7 @@ def _load_compliance_rows(
     db_path: str | Path,
     *,
     scope_tag: str = "",
+    scope_tags: tuple[str, ...] | list[str] = (),
 ) -> list[dict[str, Any]]:
     """Fetch minimal leaf-certificate rows for compliance reporting.
 
@@ -228,6 +229,10 @@ def _load_compliance_rows(
     builder does not materialise full chain children, anchor rows, and
     dashboard metadata (BC-122).  SQL-level tag filtering keeps the candidate
     set tight when ``scope_tag`` is set.
+
+    ``scope_tags`` is the acting user's visibility scope (#112): rows must
+    also match one of those tags. ``scope_tag`` narrows the report; it never
+    widens what a scoped user can see.
     """
     from cert_watch.database import init_schema
     from cert_watch.database.connection import _connect, _parse_iso
@@ -251,16 +256,20 @@ def _load_compliance_rows(
             WHERE c.is_leaf = 1
         """
         params: list[Any] = []
-        if scope_tag:
-            # Match EFFECTIVE tags (cert ∪ host) like every other scope path
-            # — filtering c.tags alone silently omitted certificates that
-            # inherit the tag from their host (plan 055 finding C9).
-            from cert_watch.database.dashboard_helpers import (
-                _add_effective_tag_filter,
-            )
+        # Match EFFECTIVE tags (cert ∪ host) like every other scope path
+        # — filtering c.tags alone silently omitted certificates that
+        # inherit the tag from their host (plan 055 finding C9).
+        from cert_watch.database.dashboard_helpers import (
+            _add_effective_tag_filter,
+        )
 
+        if scope_tag:
             sql, params = _add_effective_tag_filter(
                 sql, params, [scope_tag], col_cert="c.tags", col_host="h.tags"
+            )
+        if scope_tags:
+            sql, params = _add_effective_tag_filter(
+                sql, params, scope_tags, col_cert="c.tags", col_host="h.tags"
             )
         rows = conn.execute(sql, params).fetchall()
 
@@ -298,14 +307,36 @@ def _load_compliance_rows(
     return result
 
 
+def _describe_scope(
+    scope_tag: str, scope_tags: tuple[str, ...] | list[str]
+) -> tuple[str, str]:
+    """Return ``(team_scope, description)`` for the report header."""
+    from cert_watch.tags import format_tags
+
+    team_scope = format_tags(list(scope_tags))
+    if scope_tag:
+        return team_scope, f"Tag: {scope_tag}"
+    if team_scope:
+        return team_scope, f"Your team scope: {team_scope}"
+    return team_scope, "All monitored certificates"
+
+
 def build_compliance_report(
     db_path: str | Path,
     *,
     scope_tag: str = "",
+    scope_tags: tuple[str, ...] | list[str] = (),
     version: str = "",
     commit: str = "",
     signing_key: str = "",
 ) -> ComplianceReport:
+    """Build the compliance report over leaf certificates.
+
+    ``scope_tag`` is the report's requested tag filter. ``scope_tags`` is the
+    acting user's visibility scope (``scope_tags_from_auth``): a scoped user's
+    report only ever covers certificates they can see, with or without a
+    requested tag (#112). Empty means the whole estate.
+    """
     from cert_watch.database import (
         get_posture_for_certs,
         get_posture_grades_for_certs,
@@ -314,7 +345,7 @@ def build_compliance_report(
     from cert_watch.posture import tls_version_meets_1_2
 
     init_schema(db_path)
-    rows = _load_compliance_rows(db_path, scope_tag=scope_tag)
+    rows = _load_compliance_rows(db_path, scope_tag=scope_tag, scope_tags=scope_tags)
 
     total_certs = len(rows)
     host_set: set[str] = set()
@@ -511,13 +542,15 @@ def build_compliance_report(
         ),
     ]
 
-    scope_desc = f"Tag: {scope_tag}" if scope_tag else "All monitored certificates"
+    team_scope, scope_desc = _describe_scope(scope_tag, scope_tags)
 
     report = ComplianceReport(
         generated_at=now.isoformat(),
         version=version,
         commit=commit,
-        scope_tag=scope_tag,
+        # A scoped user's untagged report is scoped to their team; say so in
+        # the signed field too, not just the description.
+        scope_tag=scope_tag or team_scope,
         scope_description=scope_desc,
         total_certs=total_certs,
         total_hosts=total_hosts,

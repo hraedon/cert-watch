@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections import OrderedDict
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -14,9 +15,9 @@ from cert_watch.auth.guards import get_auth_context
 from cert_watch.compliance import build_compliance_report, report_to_dict
 from cert_watch.crypto_posture import analyze_fleet_crypto, crypto_posture_to_dict
 from cert_watch.database import (
-    _connect,
     list_grade_trends,
     list_tls_version_trends,
+    posture_grade_counts,
 )
 from cert_watch.posture import GRADE_WORST_ORDER
 from cert_watch.readiness import build_readiness_report, readiness_report_to_dict
@@ -99,7 +100,7 @@ def posture_view(request: Request) -> HTMLResponse:
     db = _db_path(request)
     scope_tags = scope_tags_from_auth(getattr(request.state, "auth_context", None))
 
-    posture = crypto_posture_to_dict(analyze_fleet_crypto(db))
+    posture = crypto_posture_to_dict(analyze_fleet_crypto(db, scope_tags=scope_tags))
 
     tls_trends: list[dict[str, Any]] = []
     tls_max: int = 1
@@ -120,16 +121,9 @@ def posture_view(request: Request) -> HTMLResponse:
 
     # Fleet posture grade (worst-weighted across scanned certs) + distribution
     fleet_grade = None
-    with _connect(db) as conn:
-        grade_rows = conn.execute(
-            "SELECT grade, COUNT(*) as cnt FROM scan_posture GROUP BY grade"
-        ).fetchall()
-    if grade_rows:
-        counts: dict[str, int] = {}
-        worst = 0
-        for r in grade_rows:
-            counts[r["grade"]] = r["cnt"]
-            worst = max(worst, GRADE_WORST_ORDER.get(r["grade"], 0))
+    counts = posture_grade_counts(db, scope_tags=scope_tags)
+    if counts:
+        worst = max(GRADE_WORST_ORDER.get(g, 0) for g in counts)
         _by_ordinal = {v: k for k, v in GRADE_WORST_ORDER.items()}
         fleet_grade = {
             "grade": _by_ordinal.get(worst, "F"),
@@ -169,19 +163,24 @@ def crypto_redirect(request: Request) -> RedirectResponse:
     return RedirectResponse(url="/posture", status_code=301)
 
 
-@router.get("/reports/compliance", response_class=HTMLResponse)
+@router.get("/reports/compliance", response_model=None)
 def compliance_report_view(
     request: Request,
     tag: str = "",
-) -> HTMLResponse:
+    error: str | None = None,
+) -> HTMLResponse | RedirectResponse:
     db = _db_path(request)
     denied = enforce_scope_tag(request, tag)
     if denied:
-        return HTMLResponse(content=denied, status_code=403)
+        # A page, not a bare-text 403 (#112): back to the user's own report.
+        return RedirectResponse(
+            url=f"/reports/compliance?error={quote(denied)}", status_code=303
+        )
     signing_key = compliance_signing_key(request)
     report = build_compliance_report(
         db,
         scope_tag=tag,
+        scope_tags=scope_tags_from_auth(getattr(request.state, "auth_context", None)),
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,
@@ -196,6 +195,7 @@ def compliance_report_view(
             "active_page": "posture",
             "report": report_to_dict(report),
             "tag": tag,
+            "error": error,
         },
     )
 

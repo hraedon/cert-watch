@@ -173,12 +173,14 @@ def test_readyz_shallow_body_when_unauthenticated(reload_app):
 
 
 def test_readyz_full_body_when_open(reload_app):
-    """Open mode (no provider) keeps the full detailed body."""
+    """Open mode (no provider) keeps the full detailed body, on both probes."""
     app_mod = reload_app()
     with TestClient(app_mod.app) as client:
         r = client.get("/readyz")
+        health = client.get("/api/health")
     assert r.status_code == 200
     assert "checks" in r.json()
+    assert health.status_code == 200 and "scheduler_running" in health.json()
 
 
 def test_readyz_full_body_when_authenticated(reload_app):

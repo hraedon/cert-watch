@@ -20,9 +20,11 @@ def mark_alert_read(db_path: str | Path, alert_id: str, *, auth: Any) -> bool:
     require_auth_context(auth)
     with get_write_lock(), _connect(db_path) as conn:
         row = conn.execute("SELECT cert_id FROM alerts WHERE id = ?", (alert_id,)).fetchone()
+        # Authorize before reporting existence: a scoped caller is refused
+        # the same way for a missing alert as for another team's (#112 review).
+        ensure_write_scope(auth, db_path, cert_id=row["cert_id"] if row else None)
         if row is None:
             raise AlertNotFoundError("alert not found")
-        ensure_write_scope(auth, db_path, cert_id=row["cert_id"])
         cursor = conn.execute("UPDATE alerts SET read = 1 WHERE id = ?", (alert_id,))
         conn.commit()
     return cursor.rowcount > 0

@@ -585,9 +585,9 @@ async def scan_host_now(
     if not check_rate_limit(f"scan_host:{_extract_client_ip(request)}", 10, 60):
         return back(f"error={quote('rate limited: too many scan requests')}")
     db = _db_path(request)
-    host = SqliteHostRepository(db).get(host_id)
-    if host is None:
-        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    # The service authorizes the target before it looks it up, so a scoped
+    # caller learns nothing about ids outside their scope (#112 review); the
+    # host is read afterwards, for the warning message.
     try:
         result = await scan_host_now_service(
             db,
@@ -609,5 +609,7 @@ async def scan_host_now(
     if return_to == "detail":
         # The page itself explains the failure (cause, next step, raw error).
         return back("scanned=1")
-    msg = f"scan failed for {host.hostname}:{host.port}: {result.error}"
+    host = SqliteHostRepository(db).get(host_id)
+    endpoint = f"{host.hostname}:{host.port}" if host is not None else host_id
+    msg = f"scan failed for {endpoint}: {result.error}"
     return back(f"warning={quote(msg)}")

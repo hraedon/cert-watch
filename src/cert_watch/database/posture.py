@@ -214,3 +214,49 @@ def get_posture_for_certs(
             d["caa_records"] = []
         result[d["cert_id"]] = d
     return result
+
+
+def posture_grade_counts(
+    db_path: str | Path, *, scope_tags: tuple[str, ...] | list[str] = ()
+) -> dict[str, int]:
+    """Count stored posture rows per grade, for the fleet grade on /posture.
+
+    ``scope_tags`` restricts the count to certificates whose effective tags
+    (cert ∪ host) match, as every other scoped read does (#112).
+    """
+    from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+    sql = "SELECT sp.grade AS grade, COUNT(*) AS cnt FROM scan_posture sp"
+    params: list[Any] = []
+    if scope_tags:
+        clause, params = build_scope_tag_clause(scope_tags, cert_table="c")
+        sql += (
+            " WHERE EXISTS (SELECT 1 FROM certificates c"
+            f" WHERE c.id = sp.cert_id AND {clause})"
+        )
+    sql += " GROUP BY sp.grade"
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return {r["grade"]: r["cnt"] for r in rows}
+
+
+def list_leaf_certificate_der(
+    db_path: str | Path, *, scope_tags: tuple[str, ...] | list[str] = ()
+) -> list[dict[str, Any]]:
+    """Return ``id, subject, hostname, port, raw_der`` for every leaf certificate.
+
+    The input to the fleet crypto inventory. ``scope_tags`` restricts it to
+    certificates whose effective tags match (#112).
+    """
+    from cert_watch.database.dashboard_helpers import build_scope_tag_clause
+
+    clause, params = build_scope_tag_clause(scope_tags, cert_table="certificates")
+    init_schema(db_path)
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, subject, hostname, port, raw_der FROM certificates"
+            f" WHERE is_leaf = 1 AND {clause}",
+            params,
+        ).fetchall()
+    return [dict(r) for r in rows]

@@ -20,7 +20,7 @@ from cert_watch.auth.scope import (
 )
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
-from cert_watch.host_validation import hostname_is_valid
+from cert_watch.host_validation import canonical_hostname
 from cert_watch.scan import (
     STARTTLS_MODES,
     ScanError,
@@ -76,6 +76,22 @@ class HostImportResult:
 def _scoped_tags(auth: Any, tags: str) -> str:
     scope = getattr(auth, "scope_tag", "") if auth is not None else ""
     return format_tags(merge_tags(tags, scope or ""))
+
+
+def _ensure_endpoint_writable(
+    repo: SqliteHostRepository, auth: Any, hostname: str, port: int
+) -> None:
+    """Refuse to add an endpoint that already exists outside the caller's scope.
+
+    ``repo.add`` is idempotent: adding a monitored ``hostname:port`` again
+    returns the existing row's id, and the caller then scans it. For a scoped
+    caller that would hand over another team's host id and trigger a scan of
+    it (#112 review), so the existing row is authorized like any other write
+    target before the add. The caller must hold the write lock.
+    """
+    existing = repo.get_by_endpoint(hostname, port)
+    if existing is not None:
+        ensure_write_scope(auth, repo.db_path, host_id=existing.id)
 
 
 async def _scan_and_store(
@@ -171,9 +187,14 @@ async def create_hosts(
     require_auth_context(auth)
     if not isinstance(hostname, str):
         raise HostValidationError("hostname must be a string")
-    hostname = hostname.strip()
-    if not hostname_is_valid(hostname):
-        raise HostValidationError("hostname must be valid and at most 253 IDNA octets")
+    try:
+        # One spelling from here on: validation, the existing-endpoint scope
+        # check, persistence, DNS resolution and the scan all see it.
+        hostname = canonical_hostname(hostname.strip())
+    except ValueError:
+        raise HostValidationError(
+            "hostname must be valid and at most 253 IDNA octets"
+        ) from None
     if not common_ports and not 1 <= port <= 65535:
         raise HostValidationError("port must be between 1 and 65535")
     starttls_mode = starttls_mode.strip().lower()
@@ -200,6 +221,8 @@ async def create_hosts(
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     added: list[tuple[str, int]] = []
     with get_write_lock():
+        for candidate_port in ports:
+            _ensure_endpoint_writable(repo, auth, hostname, candidate_port)
         for candidate_port in ports:
             host_id = repo.add(
                 hostname,
@@ -279,7 +302,9 @@ async def import_hosts_csv(
         if not hostname:
             errors.append(f"row {row_number}: missing hostname")
             continue
-        if not hostname_is_valid(hostname):
+        try:
+            hostname = canonical_hostname(hostname)
+        except ValueError:
             errors.append(f"row {row_number}: hostname is invalid or exceeds 253 IDNA octets")
             continue
         try:
@@ -332,6 +357,11 @@ async def import_hosts_csv(
             errors.append(f"row {row_number}: {exc}")
             continue
         with get_write_lock():
+            try:
+                _ensure_endpoint_writable(repo, auth, hostname, port)
+            except PermissionError as exc:
+                errors.append(f"row {row_number}: {exc}")
+                continue
             repo.add(
                 hostname,
                 port,

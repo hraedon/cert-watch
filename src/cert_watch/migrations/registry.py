@@ -118,6 +118,15 @@ from cert_watch.migrations.m0037_alert_dedupe_routing import (
 from cert_watch.migrations.m0037_alert_dedupe_routing import (
     upgrade as alert_dedupe_routing_upgrade,
 )
+from cert_watch.migrations.m0038_canonical_hostnames import (
+    DESCRIPTION as canonical_hostnames_description,
+)
+from cert_watch.migrations.m0038_canonical_hostnames import (
+    MIGRATION_ID as canonical_hostnames_id,
+)
+from cert_watch.migrations.m0038_canonical_hostnames import (
+    upgrade as canonical_hostnames_upgrade,
+)
 
 runner.register("0001", "baseline: snapshot of pre-migration schema", baseline_upgrade)
 runner.register("0002", "add audit_log table (Plan 008)", audit_log_upgrade)
@@ -239,4 +248,9 @@ runner.register(
     alert_dedupe_routing_id,
     alert_dedupe_routing_description,
     alert_dedupe_routing_upgrade,
+)
+runner.register(
+    canonical_hostnames_id,
+    canonical_hostnames_description,
+    canonical_hostnames_upgrade,
 )

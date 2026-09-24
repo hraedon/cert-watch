@@ -10,11 +10,11 @@ from cert_watch.database.dashboard_helpers import (
     _URGENCY_ORDER,
     _add_grouped_effective_tag_filter,
     _entry_matches_scope_tag,
-    _escape_like,
     _filter_unified,
     _safe_col,
     _safe_dir,
     _sort_unified,
+    search_patterns,
 )
 from cert_watch.database.dashboard_rows import _build_dashboard_rows
 from cert_watch.database.dashboard_unified import (
@@ -74,7 +74,7 @@ def list_dashboard_grouped_page(
     sort_col = _safe_col(_SORT_COLS.get(sort_by, _SORT_COLS["days"]), _SORT_COLUMNS_GROUPED)
     sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
 
-    like = f"%{_escape_like(q.lower())}%" if q else None
+    like, host_like = search_patterns(q)
 
     with _connect(db_path) as conn:
         # Step 1: SQL GROUP BY fingerprint for scanned entries.
@@ -107,9 +107,10 @@ def list_dashboard_grouped_page(
             grouped_sql += (
                 " AND (LOWER(c.subject) LIKE ? ESCAPE '\\'"
                 " OR LOWER(c.issuer) LIKE ? ESCAPE '\\'"
+                " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\'"
                 " OR LOWER(c.hostname || ':' || c.port) LIKE ? ESCAPE '\\')"
             )
-            params.extend([like, like, like])
+            params.extend([like, like, like, host_like])
 
         grouped_sql, params = _add_grouped_effective_tag_filter(
             grouped_sql, params, scope_tags or ()
