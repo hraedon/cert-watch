@@ -187,8 +187,7 @@ def test_callback_authz_allowed_when_in_allowed_group(monkeypatch, tmp_path):
     with TestClient(app_mod.app) as client:
         client.cookies.set(STATE_COOKIE, _sign("rawstate"))
         r = client.get("/auth/callback?code=abc&state=rawstate", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    _assert_continue_page(r)
     assert r.cookies.get(SESSION_COOKIE)
 
 
@@ -214,13 +213,49 @@ def test_callback_happy_path_mints_session(monkeypatch, tmp_path):
     with TestClient(app_mod.app) as client:
         client.cookies.set(STATE_COOKIE, _sign("rawstate"))
         r = client.get("/auth/callback?code=abc&state=rawstate", follow_redirects=False)
-    assert r.status_code == 303
-    assert r.headers["location"] == "/"
+    _assert_continue_page(r)
     # Session issued…
     assert r.cookies.get(SESSION_COOKIE)
     # …and the one-time state cookie is cleared.
     set_cookie = " ".join(r.headers.get_list("set-cookie"))
     assert STATE_COOKIE in set_cookie
+
+
+def _assert_continue_page(r) -> None:
+    """#98: a successful callback answers 200 with a page that navigates on.
+
+    A 303 would continue the IdP's cross-site navigation, and browsers withhold
+    the Strict session cookie from that redirected request. The browser half
+    of this is tests/e2e/test_oauth_login.py; here we pin the response shape.
+    """
+    assert r.status_code == 200
+    assert "location" not in r.headers
+    assert r.headers["cache-control"] == "no-store"
+    assert '<meta http-equiv="refresh" content="0;url=/">' in r.text
+    assert 'href="/"' in r.text
+    session = next(
+        c for c in r.headers.get_list("set-cookie") if c.startswith(f"{SESSION_COOKIE}=")
+    )
+    assert "samesite=strict" in session.lower()
+
+
+@pytest.mark.parametrize("extra", [
+    "next=https://evil.example/",
+    "redirect_uri=https://evil.example/",
+    "return_to=//evil.example",
+    "url=https://evil.example/",
+])
+def test_callback_continue_target_ignores_request(monkeypatch, tmp_path, extra):
+    """The onward target is fixed; nothing in the request can redirect it."""
+    provider = FakeOAuthProvider(AuthResult(success=True, username="alice@example.com"))
+    app_mod = _make_app(monkeypatch, tmp_path, provider)
+    with TestClient(app_mod.app) as client:
+        client.cookies.set(STATE_COOKIE, _sign("rawstate"))
+        r = client.get(
+            f"/auth/callback?code=abc&state=rawstate&{extra}", follow_redirects=False,
+        )
+    _assert_continue_page(r)
+    assert "evil.example" not in r.text
 
 
 # ── #58: the OAuth start route is reachable and its state cookie survives ───

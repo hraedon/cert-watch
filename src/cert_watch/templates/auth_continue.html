@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {#- #98: the session cookie is SameSite=Strict and this page was reached by a
+      cross-site navigation from the IdP. Browsers withhold a Strict cookie
+      from a redirect that continues that navigation, so the hop into the app
+      is a fresh navigation started by this same-origin page. The target is
+      fixed by the server, never taken from the request. -#}
+  <meta http-equiv="refresh" content="0;url={{ next_url }}">
+  <title>cert-watch — signing in</title>
+  <script nonce="{{ request.state.csp_nonce }}">
+    try {
+      var t = localStorage.getItem('cw-theme') || 'dark';
+      document.documentElement.setAttribute('data-theme', t);
+    } catch (e) { document.documentElement.setAttribute('data-theme', 'dark'); }
+  </script>
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/cw.css">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+</head>
+<body>
+  <div class="cw-auth-center">
+    <div class="cw-panel cw-auth-panel">
+      <div class="cw-auth-intro">
+        <h1 data-testid="auth-continue-heading">Signed in</h1>
+      </div>
+      <div class="cw-form">
+        <div>
+          <a href="{{ next_url }}" class="cw-btn primary" data-testid="auth-continue-link">Continue to cert-watch</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -12,6 +12,13 @@ All notable changes to cert-watch are documented in this file.
   without `-AppPool` it checks the site's application pool, so IIS-002,
   ACL-001 and ACL-002 run instead of skipping. Explicit arguments still win
   (#105).
+- Signing in through OAuth/OIDC no longer lands on `/login` the first time.
+  The callback set the `SameSite=Strict` session cookie on a redirect that
+  continued the IdP's cross-site navigation, and browsers withheld the cookie
+  from the redirected request: Firefox and WebKit always, Chromium whenever
+  the IdP showed a sign-in page. The callback now answers with a short page
+  that moves on to the app itself, so the cookie stays Strict and is sent
+  (#98).
 
 ## [1.0.1] - 2026-09-23
 
