@@ -236,13 +236,19 @@ def oauth_start(request: Request) -> RedirectResponse:
     return response
 
 
-@router.get("/auth/callback")
+# Where a completed OAuth sign-in lands. A fixed same-origin path: the callback
+# page's meta refresh and link take it verbatim, so it must never become
+# request-derived (open redirect).
+_POST_LOGIN_URL = "/"
+
+
+@router.get("/auth/callback", response_model=None)
 def oauth_callback(
     request: Request,
     code: str = "",
     error: str = "",
     state: str = "",
-) -> RedirectResponse:
+) -> RedirectResponse | HTMLResponse:
     auth = getattr(request.app.state, "auth_provider", None)
     if auth is None or isinstance(auth, NoAuthProvider):
         return RedirectResponse(url="/", status_code=303)
@@ -339,17 +345,29 @@ def oauth_callback(
         roles=stored_roles,
         email=result.email,
     )
-    response = RedirectResponse(url="/", status_code=303)
-    response.set_cookie(
+    # #98: answer with a same-origin page that navigates on, not a 303. This
+    # request arrived by a cross-site navigation from the IdP; a redirect would
+    # continue that navigation, and Chromium (when the IdP page started it),
+    # Firefox and WebKit all withhold the Strict cookie just set from the
+    # redirected request, bouncing the user to /login. A navigation started by
+    # this page is same-site, so the cookie stays Strict and is sent. The
+    # destination is a constant: nothing from the request reaches it.
+    page = templates.TemplateResponse(
+        request=request,
+        name="auth_continue.html",
+        context={"next_url": _POST_LOGIN_URL},
+        headers={"Cache-Control": "no-store"},
+    )
+    page.set_cookie(
         SESSION_COOKIE, token, httponly=True, samesite="strict",
         max_age=settings.session_ttl,
         secure=_cookie_secure(request), path="/",
     )
-    response.delete_cookie(
+    page.delete_cookie(
         "cw_oauth_state", httponly=True, samesite="lax", secure=_cookie_secure(request),
     )
     logger.info("user logged in via OAuth: %s", result.username)
-    return response
+    return page
 
 
 @router.post("/auth/logout")
