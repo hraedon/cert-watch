@@ -2,7 +2,11 @@
 
 All notable changes to cert-watch are documented in this file.
 
-## [Unreleased]
+## [1.0.2] - 2026-09-23
+
+A patch release. No schema migrations and no configuration changes. The main
+fix is OAuth/OIDC sign-in; see [UPGRADING.md](UPGRADING.md) for two small
+behaviour changes (a JSON body size limit, and no `pip` in the container).
 
 ### Changed
 
@@ -13,6 +17,13 @@ All notable changes to cert-watch are documented in this file.
 
 ### Fixed
 
+- Signing in through OAuth/OIDC no longer lands on `/login` the first time.
+  The callback set the `SameSite=Strict` session cookie on a redirect that
+  continued the IdP's cross-site navigation, and browsers withheld the cookie
+  from the redirected request: Firefox and WebKit always, Chromium whenever
+  the IdP showed a sign-in page. The callback now answers with a short page
+  that moves on to the app itself, so the cookie stays Strict and is sent
+  (#98).
 - JSON API bodies are refused with `400` when they nest deeper than 64 levels
   or exceed 256 KiB. The previous depth guard relied on `RecursionError`, which
   CPython 3.14.7 no longer raises for such bodies, so on that interpreter a
@@ -23,13 +34,6 @@ All notable changes to cert-watch are documented in this file.
   without `-AppPool` it checks the site's application pool, so IIS-002,
   ACL-001 and ACL-002 run instead of skipping. Explicit arguments still win
   (#105).
-- Signing in through OAuth/OIDC no longer lands on `/login` the first time.
-  The callback set the `SameSite=Strict` session cookie on a redirect that
-  continued the IdP's cross-site navigation, and browsers withheld the cookie
-  from the redirected request: Firefox and WebKit always, Chromium whenever
-  the IdP showed a sign-in page. The callback now answers with a short page
-  that moves on to the app itself, so the cookie stays Strict and is sent
-  (#98).
 
 ## [1.0.1] - 2026-09-23
 

@@ -23,6 +23,18 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.1 to 1.0.2
+
+Nothing to migrate or reconfigure. Two behaviour changes to be aware of:
+
+- JSON API request bodies are limited to 256 KiB and 64 levels of nesting;
+  larger or deeper bodies get `400`. Every JSON endpoint takes small bodies
+  (the largest real one is a host note, capped at 10,000 characters), so
+  this only affects a client that sends far more than the API uses.
+- The container image runs Python 3.14 and no longer contains `pip`. If you
+  extend the image or run `pip` inside the container, install it in your own
+  layer.
+
 ## Upgrading from 1.0.0 to 1.0.1
 
 Nothing to migrate and nothing to reconfigure: install the new version and
