@@ -33,6 +33,11 @@ All notable changes to cert-watch are documented in this file.
   instead of Home with no confirmation. Adding a host on its common TLS ports
   lands on Browse, filtered to that host, with a count of what was added
   (#113).
+- The note on Settings → Users now describes how local users' roles actually
+  work: the assigned role applies immediately, role IdP mappings don't apply
+  to local users, and a user with no role is read-only. It previously said a
+  role applied only once the role map referenced it, and that no role map
+  meant full access (#113).
 - "Scan now" on a detail page returns to that page instead of Home, and the
   detail page now shows the flash messages that actions returning to it set
   (#113).

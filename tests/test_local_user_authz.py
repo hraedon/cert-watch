@@ -858,3 +858,19 @@ def test_concurrent_mapping_saves_do_not_lose_an_edit(env, login_csrf, monkeypat
         other[0].join(5)
     stored = json.loads(kv_get(env, "ldap_role_map"))
     assert set(stored) == {mine, theirs}
+
+
+def test_users_page_describes_local_role_behaviour(tmp_path, reload_app):
+    """#113 item 9: the Users page said a local user's role applies only once
+    the role map references it, and that no role map means full access. The
+    tests above show neither is true: the assigned role applies at once, the
+    role map is never consulted for local users, and no role means viewer."""
+    app_mod = reload_app()
+    with TestClient(app_mod.app) as client:
+        page = client.get("/settings/users").text
+    assert "takes effect only when the role map references it" not in page
+    assert "every authenticated user\n        has full access" not in page
+    note = page.split('data-testid="local-users-role-note"', 1)[1].split("</div>", 1)[0]
+    assert "takes effect immediately" in note
+    assert "read-only" in note
+    assert "IdP mappings" in note and "don't apply to local users" in note

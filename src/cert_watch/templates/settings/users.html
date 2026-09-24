@@ -7,13 +7,14 @@
     <span class="cw-hint">password accounts for deployments without LDAP / OAuth</span>
   </div>
   <div class="cw-panel-body">
-    <div class="cw-note t-warn">
-      {{ icons.svg_icon('alert', 14) }}
+    <div class="cw-note" data-testid="local-users-role-note">
+      {{ icons.svg_icon('info', 14) }}
       <div>
-        A local user's role takes effect only when the role map references it:
-        add the username to the role's <b>IdP mapping → Users</b> list (Roles
-        section). With no role map configured at all, every authenticated user
-        has full access.
+        A local user gets the tier and scope tags of the role chosen here. The
+        role takes effect immediately, and a change to it applies on the
+        user's next request. A user with no role, or whose role is deleted,
+        signs in read-only. Role <b>IdP mappings</b> don't apply to local users;
+        they only map LDAP and OAuth sign-ins to roles.
       </div>
     </div>
   </div>
