@@ -104,20 +104,27 @@ def _do_replace(
 
     now = _iso(datetime.now(UTC))
     leaf_id = str(uuid.uuid4())
-    old_leaves = [
-        row["id"]
-        for row in conn.execute(
-            "SELECT id FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1",
-            (hostname, port),
-        ).fetchall()
+    # Newest first: the same order in which the detail page and readiness
+    # pick an endpoint's current leaf.
+    old_leaf_rows = conn.execute(
+        "SELECT * FROM certificates WHERE hostname = ? AND port = ? AND is_leaf = 1 "
+        "ORDER BY created_at DESC, rowid DESC",
+        (hostname, port),
+    ).fetchall()
+    old_leaves = [row["id"] for row in old_leaf_rows]
+    # The one predecessor this scan continues from: the row holding exactly
+    # these bytes when there is one (an unchanged rescan), otherwise the
+    # endpoint's current leaf (a renewal). Nothing enforces one leaf per
+    # endpoint -- the repository API can add another -- so the choice must be
+    # deterministic, and only this row's operator data is carried: merging a
+    # stale duplicate's tags or group assignments into the live certificate
+    # would widen tag scope and revive obsolete routing (#115 review). The
+    # other rows are removed below, which restores one leaf per endpoint.
+    same_bytes = [
+        row for row in old_leaf_rows if row["fingerprint_sha256"] == leaf.fingerprint_sha256
     ]
-    replaces_id: str | None = old_leaves[0] if old_leaves else None
-
-    old_leaf_row = None
-    if replaces_id:
-        old_leaf_row = conn.execute(
-            "SELECT * FROM certificates WHERE id = ?", (replaces_id,)
-        ).fetchone()
+    old_leaf_row = same_bytes[0] if same_bytes else (old_leaf_rows[0] if old_leaf_rows else None)
+    replaces_id: str | None = old_leaf_row["id"] if old_leaf_row is not None else None
 
     # Collect all old cert IDs (leaves + chain children) BEFORE deleting
     # them, so we can clean up their alerts.
@@ -134,16 +141,14 @@ def _do_replace(
     # (the chain and posture rows are re-derived), now under the same id, and
     # the alerts must stay on that id or they are orphaned on one that no
     # longer exists -- and `evaluate_thresholds` dedups by exactly that id.
-    # (When the endpoint somehow held several leaves, alerts on all of them
-    # move to the one kept id.) Orphaning them made every threshold fire
-    # again on the next cycle: one
+    # Alerts on any other row holding the same bytes move to the kept id too
+    # (they describe the same certificate); alerts on a different
+    # certificate's row are closed below. Orphaning them made every threshold
+    # fire again on the next cycle: one
     # unchanged certificate inside its expiry window re-alerted, and re-mailed,
     # once per scan, for ever.
-    unchanged = (
-        old_leaf_row is not None
-        and old_leaf_row["fingerprint_sha256"] == leaf.fingerprint_sha256
-    )
-    carried: list[str] = list(old_leaves) if unchanged else []
+    unchanged = bool(same_bytes)
+    carried: list[str] = [row["id"] for row in same_bytes]
     # The same certificate keeps its id (#113): detail links, bookmarks and
     # webhook URLs name that id, and every rescan used to break them. Its
     # lineage is kept too -- the row must not "replace" itself, or the expiry
@@ -152,7 +157,7 @@ def _do_replace(
     if unchanged and old_leaf_row is not None:
         leaf_id = old_leaf_row["id"]
         lineage_id = old_leaf_row["replaces_cert_id"]
-    # Operator-set data on the old leaf rows: the certificate's own tags and
+    # Operator-set data on the predecessor: the certificate's own tags and
     # its manual alert-group assignments. The rows are deleted and re-inserted
     # below, and until #113 the new row was written without either, so every
     # scan -- changed or not -- silently narrowed tag scope, compliance scope
@@ -160,25 +165,13 @@ def _do_replace(
     # on a renewal (see CERT_ID_REFERENCES).
     carried_tags = ""
     carried_groups: list[str] = []
-    if old_leaves:
-        from cert_watch.tags import format_tags, merge_tags
-
-        lph = ",".join("?" * len(old_leaves))
-        carried_tags = format_tags(
-            merge_tags(
-                *[
-                    row["tags"]
-                    for row in conn.execute(
-                        f"SELECT tags FROM certificates WHERE id IN ({lph})", old_leaves
-                    ).fetchall()
-                ]
-            )
-        )
+    if old_leaf_row is not None:
+        carried_tags = str(old_leaf_row["tags"] or "")
         carried_groups = [
             row["group_id"]
             for row in conn.execute(
-                f"SELECT DISTINCT group_id FROM alert_group_certs WHERE cert_id IN ({lph})",
-                old_leaves,
+                "SELECT group_id FROM alert_group_certs WHERE cert_id = ?",
+                (old_leaf_row["id"],),
             ).fetchall()
         ]
     if old_all_ids:

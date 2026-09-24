@@ -22,7 +22,7 @@ from cert_watch.config import Settings
 from cert_watch.database import SqliteHostRepository
 from cert_watch.host_validation import hostname_is_valid
 from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_auth
-from cert_watch.routes._scoped import scope_write_denied, tags_with_scope
+from cert_watch.routes._scoped import scope_write_denied, superseded_redirect, tags_with_scope
 from cert_watch.scan import (
     ScanError,
     resolve_and_validate_host,
@@ -35,6 +35,7 @@ from cert_watch.scan_freshness import (
 )
 from cert_watch.scheduler import ScanHistory, record_scan_history
 from cert_watch.security.ratelimit import _extract_client_ip, check_rate_limit
+from cert_watch.services.certificate_identity import CertificateSupersededError
 from cert_watch.services.host_management import (
     HostNotFoundError as ManagedHostNotFoundError,
 )
@@ -227,7 +228,7 @@ async def update_host_owner(
         )
     db = _db_path(request)
     try:
-        target = resolve_host_ownership_target(db, host_id)
+        target = resolve_host_ownership_target(db, host_id, auth=acting_auth(request))
         update_host_ownership(
             db,
             target,
@@ -242,6 +243,10 @@ async def update_host_owner(
             actor=resolve_actor(request),
             source_ip=resolve_source_ip(request),
         )
+    except CertificateSupersededError as exc:
+        # This legacy route also accepts a certificate id; one that a renewal
+        # replaced is refused with the current certificate, never retargeted.
+        return superseded_redirect(exc)
     except (HostOwnershipTargetError, OwnershipHostNotFoundError):
         return RedirectResponse(url="/?error=host+not+found", status_code=303)
     except ScopeDeniedError as exc:

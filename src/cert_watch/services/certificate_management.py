@@ -20,6 +20,7 @@ from cert_watch.database import (
     delete_certificate_cascade,
     get_write_lock,
 )
+from cert_watch.services.certificate_identity import ensure_not_superseded
 from cert_watch.tags import format_tags, merge_tags
 from cert_watch.upload import ParseError, UploadedEntry, store_uploaded, upload_certificate
 
@@ -114,6 +115,7 @@ def delete_certificate(
 ) -> bool:
     require_auth_context(auth)
     with get_write_lock():
+        ensure_not_superseded(db_path, cert_id, auth=auth)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         deleted = delete_certificate_cascade(db_path, cert_id)
     record_audit(

@@ -28,7 +28,21 @@ All notable changes to cert-watch are documented in this file.
   compliance scope and alert routing. Both are now kept on a rescan and
   carried to the new certificate when the endpoint's certificate is renewed.
   Tags and assignments already lost can't be recovered; set them again once
-  (#113).
+  (#113). Only the certificate the scan continues from is carried: the row
+  with exactly the scanned certificate on a rescan, the endpoint's current
+  certificate on a renewal. When an endpoint holds an extra, stale leaf row
+  (the schema allows one), its tags and group assignments are dropped with
+  it and never merged into the live certificate, where they would widen who
+  can see and change it and revive an old alert destination.
+- A change sent for a certificate that has since been renewed is refused
+  instead of silently doing nothing. This covers deleting it, setting its
+  tags, setting its owner, and assigning it to or removing it from an alert
+  group. The API answers 409 with `current_cert_id`; the web forms return to
+  the current certificate with a note. Nothing is applied to the renewed
+  certificate on the sender's behalf. A caller outside the current
+  certificate's tag scope gets the usual "not found". Removing a certificate
+  from an alert group it isn't assigned to now answers 404 instead of
+  "unassigned" (#113).
 - A certificate's detail page says when the endpoint's latest scan failed.
   It previously showed the last good certificate as "Healthy" with its grade
   and never showed the error. The page now marks the latest scan as failed,

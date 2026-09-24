@@ -32,6 +32,7 @@ from cert_watch.database.metadata_ops import (
 from cert_watch.database.metadata_ops import update_host_notes as persist_host_notes
 from cert_watch.database.metadata_ops import update_host_tags as persist_host_tags
 from cert_watch.database.repo import SqliteCertificateRepository
+from cert_watch.services.certificate_identity import ensure_not_superseded
 from cert_watch.tags import format_tags, parse_tags
 
 MAX_NOTES_LENGTH = 10_000
@@ -176,6 +177,7 @@ def update_certificate_tags(
 ) -> TagUpdateResult:
     require_auth_context(auth)
     with get_write_lock():
+        ensure_not_superseded(db_path, cert_id, auth=auth)
         ensure_write_scope(auth, db_path, cert_id=cert_id)
         normalized = normalize_tags(_value(tags))
         ensure_new_tags_in_scope(auth, normalized)

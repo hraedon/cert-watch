@@ -23,6 +23,7 @@ from cert_watch.routes._deps import IdParam, _db_path, _get_settings, acting_aut
 from cert_watch.routes._scoped import (
     scope_read_denied,
     scope_tags_from_auth,
+    superseded_redirect,
     tags_with_scope,
 )
 from cert_watch.routes.hosts import endpoint_settings_writable
@@ -32,6 +33,7 @@ from cert_watch.services.certificate_detail import (
     PendingHostDetailData,
     load_certificate_detail,
 )
+from cert_watch.services.certificate_identity import CertificateSupersededError
 from cert_watch.services.certificate_management import (
     CertificateValidationError,
     upload_certificate_bytes,
@@ -166,6 +168,8 @@ async def delete_certificate(
         )
     except ScopeDeniedError as exc:
         return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
     logger.info("deleted certificate %s (cascade)", cert_id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -196,6 +200,8 @@ async def update_certificate_tags(
         )
     except ResourceMetadataNotFoundError:
         return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
     logger.info("updated tags for certificate %s", cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 
@@ -218,7 +224,9 @@ async def update_certificate_owner(
     db = _db_path(request)
 
     try:
-        target = resolve_host_ownership_target(db, cert_id)
+        target = resolve_host_ownership_target(db, cert_id, auth=acting_auth(request))
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
     except HostOwnershipTargetError as exc:
         if exc.reason == "resource_not_found":
             return RedirectResponse(url="/?error=certificate+not+found", status_code=303)
@@ -256,6 +264,8 @@ async def update_certificate_owner(
         return RedirectResponse(
             url=f"/certificates/{cert_id}?error={quote('host not found')}", status_code=303,
         )
+    except CertificateSupersededError as exc:
+        return superseded_redirect(exc)
     logger.info("updated owner for host %s via certificate %s", host_id, cert_id)
     return RedirectResponse(url=f"/certificates/{cert_id}", status_code=303)
 

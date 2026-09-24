@@ -1250,13 +1250,15 @@ class SqliteAlertGroupRepository:
             )
             conn.commit()
 
-    def unassign_cert(self, group_id: str, cert_id: str) -> None:
+    def unassign_cert(self, group_id: str, cert_id: str) -> bool:
+        """Remove one manual assignment; ``False`` when there was none."""
         with _connect(self.db_path) as conn:
-            conn.execute(
+            cursor = conn.execute(
                 "DELETE FROM alert_group_certs WHERE group_id = ? AND cert_id = ?",
                 (group_id, cert_id),
             )
             conn.commit()
+            return cursor.rowcount > 0
 
     def groups_for_cert_manual(self, cert_id: str) -> list[str]:
         with _connect(self.db_path) as conn:

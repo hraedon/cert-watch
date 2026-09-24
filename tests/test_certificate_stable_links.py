@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import parse_certificate
@@ -25,6 +26,14 @@ from tests.conftest import _make_cert
 
 _HOST = "leaf.example.com"
 _NOT_FOUND = "/?error=certificate+not+found"
+
+
+@pytest.fixture(autouse=True)
+def _no_startup_scan(monkeypatch):
+    """Keep the lifespan's real scheduler from scanning the registered hosts
+    while a test runs (#115 review: a startup scan raced such assertions)."""
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
 
 
 def _db(tmp_path: Path) -> Path:

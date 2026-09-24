@@ -23,6 +23,7 @@ from cert_watch.database.host_ops import (
     update_host_ownership as persist_host_ownership,
 )
 from cert_watch.email_validation import is_safe_email_address
+from cert_watch.services.certificate_identity import ensure_not_superseded
 
 VALID_RENEWAL_METHODS = frozenset({"", "acme", "cert-manager", "manual"})
 VALID_RENEWAL_STATUSES = frozenset({"pending", "in_progress", "renewed"})
@@ -136,11 +137,20 @@ def _validate(update: HostOwnershipUpdate) -> None:
 
 
 def resolve_host_ownership_target(
-    db_path: str | Path, resource_id: str
+    db_path: str | Path, resource_id: str, *, auth: Any = None
 ) -> HostOwnershipTarget:
-    """Resolve the legacy certificate-or-host route id to one host target."""
+    """Resolve the legacy certificate-or-host route id to one host target.
+
+    Given the acting *auth*, an id that names a certificate a renewal has
+    replaced raises :class:`CertificateSupersededError` (naming the current
+    certificate when *auth* may see it) instead of a plain not-found. The
+    authoritative check is repeated inside the write lock by
+    :func:`update_host_ownership`.
+    """
     lookup = resolve_host_target(_connect(db_path), resource_id)
     if lookup.host is None:
+        if lookup.status == "resource_not_found" and auth is not None:
+            ensure_not_superseded(db_path, resource_id, auth=auth)
         raise HostOwnershipTargetError(lookup.status)
     return HostOwnershipTarget(
         host_id=lookup.host.id, source=lookup.status, resource_id=resource_id,
@@ -170,6 +180,10 @@ def update_host_ownership(
         target = HostOwnershipTarget(host_id=target, source="host", resource_id=target)
     host_id = target.host_id
     with get_write_lock():
+        if target.source == "certificate" and target.resource_id:
+            # The route named a certificate; if a renewal replaced it since
+            # the target was resolved, refuse rather than act on a stale id.
+            ensure_not_superseded(db_path, target.resource_id, auth=auth)
         ensure_write_scope(auth, db_path, **target.scope_target())
         if callable(update):
             update = update()

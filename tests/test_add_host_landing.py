@@ -7,11 +7,20 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
 from fastapi.testclient import TestClient
 
 from cert_watch.certificate_model import parse_certificate
 from cert_watch.database import SqliteHostRepository, init_schema
 from cert_watch.scan import ScanError, ScannedEntry
+
+
+@pytest.fixture(autouse=True)
+def _no_startup_scan(monkeypatch):
+    """Keep the lifespan's real scheduler from scanning the registered hosts
+    while a test runs (#115 review: a startup scan raced such assertions)."""
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
 
 
 def _no_dns(monkeypatch):

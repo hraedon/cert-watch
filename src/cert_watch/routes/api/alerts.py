@@ -26,7 +26,7 @@ from cert_watch.database import (
     list_alerts_with_subject,
 )
 from cert_watch.routes._deps import IdParam, _db_path, acting_auth
-from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth
+from cert_watch.routes._scoped import scope_read_denied, scope_tags_from_auth, superseded_json
 from cert_watch.routes.api._shared import (
     JsonBodyError,
     _alert_group_json,
@@ -41,6 +41,10 @@ from cert_watch.services.alert_groups import (
     create_alert_group,
     delete_alert_group,
     update_alert_group,
+)
+from cert_watch.services.certificate_identity import (
+    CertificateSupersededError,
+    ensure_not_superseded,
 )
 
 logger = logging.getLogger("cert_watch.routes.api.alerts")
@@ -330,6 +334,10 @@ async def api_assign_cert_to_group(
     with get_write_lock():
         if group_repo.get(group_id) is None:
             return JSONResponse(content={"error": "group not found"}, status_code=404)
+        try:
+            ensure_not_superseded(db, cert_id, auth=acting_auth(request))
+        except CertificateSupersededError as exc:
+            return superseded_json(exc)
         if cert_repo.get_by_id(cert_id) is None:
             return JSONResponse(content={"error": "certificate not found"}, status_code=404)
 
@@ -355,8 +363,17 @@ async def api_unassign_cert_from_group(
     with get_write_lock():
         if group_repo.get(group_id) is None:
             return JSONResponse(content={"error": "group not found"}, status_code=404)
-
-        group_repo.unassign_cert(group_id, cert_id)
+        # A renewal moves the assignment to the successor; removing it by the
+        # old id would delete nothing while the group keeps receiving alerts.
+        try:
+            ensure_not_superseded(db, cert_id, auth=acting_auth(request))
+        except CertificateSupersededError as exc:
+            return superseded_json(exc)
+        if not group_repo.unassign_cert(group_id, cert_id):
+            return JSONResponse(
+                content={"error": "certificate is not assigned to this group"},
+                status_code=404,
+            )
     record_audit(
         db,
         actor=resolve_actor(request),

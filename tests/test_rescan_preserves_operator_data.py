@@ -93,7 +93,14 @@ def test_every_cert_id_column_has_a_declared_scan_policy(tmp_path):
     """A new column naming a certificate (``*cert*``, a foreign key to
     ``certificates``, or a new ``certificates.*_id``) fails here until
     ``CERT_ID_REFERENCES`` says what an unchanged rescan and a renewal do
-    to it -- otherwise a scan silently orphans or drops it."""
+    to it -- otherwise a scan silently orphans or drops it.
+
+    The detection is a name/foreign-key heuristic, not a proof. A column
+    named without "cert" (``resource_id``, ``target_id``) or a JSON/text body
+    that happens to embed a certificate id is not found; those have to be
+    declared by hand, as ``audit_log.target_id`` and ``event_log.payload``
+    are. The test only guarantees that declared columns still exist.
+    """
     from cert_watch.database.cert_ops import CERT_ID_REFERENCES
 
     db = tmp_path / "c.sqlite3"
@@ -323,3 +330,79 @@ def test_live_references_never_dangle(tmp_path, self_signed_leaf, mode):
             f"AND {col} NOT IN (SELECT id FROM certificates)",
         )
         assert dangling == [], column
+
+
+# -- a duplicate leaf for the endpoint (#115 review round 2) ------------
+
+
+def _team_b_operator():
+    from cert_watch.auth.rbac import AuthContext
+
+    return AuthContext(
+        username="b",
+        roles=["viewer"],
+        tier="viewer",
+        scope_tag="team-b",
+        tag_tiers={"team-b": "operator"},
+    )
+
+
+def _with_stale_duplicate(db: Path, self_signed_leaf) -> tuple[str, str, str]:
+    """The live team-a leaf, plus an older second leaf row for the same
+    endpoint tagged team-b and manually routed to a stale group (the schema
+    allows it and the repository API can insert one)."""
+    from tests._helpers import seed_certificate
+
+    live = _scan_first(db, self_signed_leaf)
+    SqliteCertificateRepository(db).set_tags(live, "team-a")
+    stale = seed_certificate(
+        db,
+        parse_certificate(_make_cert(_HOST, days_valid=30).der),
+        hostname=_HOST,
+        port=443,
+        source="scanned",
+    )
+    with _connect(db) as conn:
+        conn.execute(
+            "UPDATE certificates SET created_at = '2000-01-01T00:00:00+00:00' WHERE id = ?",
+            (stale,),
+        )
+        conn.commit()
+    SqliteCertificateRepository(db).set_tags(stale, "team-b")
+    groups = SqliteAlertGroupRepository(db)
+    stale_group = groups.create(name="stale", recipients=["stale@example.test"], match_tags=[])
+    groups.assign_cert(stale_group, stale)
+    return live, stale, stale_group
+
+
+@pytest.mark.parametrize("mode", ["rescan", "renewal"])
+def test_stale_duplicate_leaf_never_leaks_tags_scope_or_routing(tmp_path, self_signed_leaf, mode):
+    """Only the one predecessor's data is carried: the row with exactly the
+    scanned bytes on a rescan, the endpoint's current leaf on a renewal.
+    Pre-fix, a rescan merged the duplicate's team-b tag into the live team-a
+    certificate (granting a team-b operator write access) and its stale group
+    assignment (reviving an obsolete alert destination)."""
+    from cert_watch.auth.scope import write_scope_error
+
+    db = _db(tmp_path)
+    live, _stale, _stale_group = _with_stale_duplicate(db, self_signed_leaf)
+    team_b = _team_b_operator()
+    assert write_scope_error(team_b, db, cert_id=live) is not None
+
+    current = _scan_again(db, self_signed_leaf, mode)
+
+    repo = SqliteCertificateRepository(db)
+    assert repo.get_tags(current) == "team-a"
+    assert SqliteAlertGroupRepository(db).groups_for_cert_manual(current) == []
+    assert "stale@example.test" not in str(resolve_routing(db, (current,))[current])
+    assert write_scope_error(team_b, db, cert_id=current) is not None
+    # The scan leaves exactly one leaf for the endpoint, continuing the live one.
+    leaves = _rows(
+        db,
+        "SELECT id, replaces_cert_id FROM certificates WHERE hostname = ? AND is_leaf = 1",
+        (_HOST,),
+    )
+    if mode == "rescan":
+        assert leaves == [{"id": live, "replaces_cert_id": None}]
+    else:
+        assert leaves == [{"id": current, "replaces_cert_id": live}]

@@ -24,6 +24,16 @@ _EOF = (
 )
 
 
+
+@pytest.fixture(autouse=True)
+def _no_startup_scan(monkeypatch):
+    """The app's lifespan starts the real scheduler, whose startup scan of the
+    registered host would record a newer result than the fixed one these
+    tests assert on (#115 review: it raced, failing about one run in four)."""
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
+    monkeypatch.setattr("cert_watch.scheduler.Scheduler.stop", lambda self: None)
+
+
 def _failing_estate(tmp_path, leaf_der):
     db = tmp_path / "cert-watch.sqlite3"
     init_schema(db)
