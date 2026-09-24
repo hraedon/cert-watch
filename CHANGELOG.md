@@ -2,6 +2,17 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Fixed
+
+- `Verify-Install.ps1` run with no arguments no longer fails on a healthy
+  host-name-bound IIS site. Without `-BaseUrl` it now probes the URLs from the
+  site's own bindings (https first) before the `localhost` fallbacks, and
+  without `-AppPool` it checks the site's application pool, so IIS-002,
+  ACL-001 and ACL-002 run instead of skipping. Explicit arguments still win
+  (#105).
+
 ## [1.0.1] - 2026-09-23
 
 A patch release. No schema migrations and no configuration changes. Windows

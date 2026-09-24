@@ -31,8 +31,11 @@ operators. Use if/else and -or/-and instead.
 
 .PARAMETER BaseUrl
     URL to probe for health (e.g. https://certs.example.com). When omitted, the
-    script tries https://localhost/ then http://localhost/, and the loopback
-    port if -Port is given.
+    script derives probe URLs from the IIS site's bindings (https first, then
+    http; the binding's host header and port, or localhost for an empty or *
+    host header on an all-addresses binding), then falls back to
+    https://localhost/ and http://localhost/, and the loopback port if -Port is
+    given. An explicit -BaseUrl is the only URL probed (plus -Port).
 
 .PARAMETER Port
     Loopback port for the reverse-proxy / Windows-service model (uvicorn on
@@ -42,7 +45,8 @@ operators. Use if/else and -or/-and instead.
     IIS site name to inspect. Default: cert-watch
 
 .PARAMETER AppPool
-    IIS application pool name. When given, ACL and pool-config checks run.
+    IIS application pool name for the ACL and pool-config checks. When
+    omitted, the site's applicationPool is used; an explicit -AppPool wins.
 
 .PARAMETER OutputPath
     Where to write the JSON report. Default: <InstallDir>\logs\verify-report.json
@@ -71,7 +75,10 @@ operators. Use if/else and -or/-and instead.
     scheme://host:port). What IS included: the NAMES of settings, response
     headers, log files and event sources, file-system paths, and the URL path
     you pass in -BaseUrl (its userinfo, query string and fragment are
-    dropped). Log contents and event-log messages are never included; review
+    dropped). Probe URLs derived from the IIS bindings are built from the
+    binding's protocol, a well-formed host header or address, and port only,
+    and the inferred app pool name is shown only when it is a plain pool name
+    (letters, digits, space, dot, dash, underscore). Log contents and event-log messages are never included; review
     the logs yourself before attaching them. -Verbose prints full error
     messages to the console only, never to the report.
 
@@ -476,6 +483,119 @@ function Get-SiteAppPool {
     return ''
 }
 
+# The IIS site object from the WebAdministration provider, or $null (no IIS,
+# no module, no such site). Never throws and never writes to the error stream.
+function Get-IisSite {
+    try {
+        Import-Module WebAdministration -ErrorAction SilentlyContinue
+        if (-not (Get-Command Get-Website -ErrorAction SilentlyContinue)) { return $null }
+        $site = Get-Website -Name $SiteName -ErrorAction SilentlyContinue
+        if ($site) { return $site }
+    } catch { Write-Verbose ('site lookup failed: ' + (Format-ErrorSummary $_)) }
+    return $null
+}
+
+# The site's bindings as rows with protocol and bindingInformation. Uses the
+# site object's binding collection, then Get-WebBinding when that is empty.
+function Get-SiteBindingRow {
+    param($Site)
+    $rows = New-Object System.Collections.ArrayList
+    if ($null -eq $Site) { return }
+    $src = @()
+    try { if ($Site.bindings -and $Site.bindings.Collection) { $src = @($Site.bindings.Collection) } } catch { $src = @() }
+    if ($src.Count -eq 0 -and (Get-Command Get-WebBinding -ErrorAction SilentlyContinue)) {
+        try { $src = @(Get-WebBinding -Name $SiteName -ErrorAction SilentlyContinue) } catch { $src = @() }
+    }
+    foreach ($b in $src) {
+        if ($null -eq $b) { continue }
+        [void]$rows.Add([PSCustomObject]@{ protocol = [string]$b.protocol; bindingInformation = [string]$b.bindingInformation })
+    }
+    return $rows.ToArray()
+}
+
+# Probe base URLs derived from IIS bindings (bindingInformation is
+# "<ip>:<port>:<host header>", an IPv6 address in brackets). https bindings
+# come first, then http; other protocols are ignored. The host is the host
+# header; with an empty or * host header it is localhost for an all-addresses
+# binding and the bound address for an IP-specific one (a request to localhost
+# would not reach it). Host headers, addresses and ports must be well formed
+# (a wildcard host header such as *.example.com cannot be probed and is
+# skipped). Every URL is then rebuilt by Format-SafeUrl, so only
+# scheme://host[:port] can come out. Duplicates are dropped.
+function ConvertTo-BindingProbeUrl {
+    param($Bindings)
+    $out = New-Object System.Collections.ArrayList
+    foreach ($proto in @('https', 'http')) {
+        foreach ($b in @($Bindings)) {
+            if ($null -eq $b) { continue }
+            if (-not [string]::Equals([string]$b.protocol, $proto, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            $info = [string]$b.bindingInformation
+            if ($info -notmatch '^(\[[0-9A-Fa-f:.]{2,45}\]|\*|[0-9.]{7,15}|):(\d{1,5}):(.*)$') { continue }
+            $ip = $Matches[1]
+            $port = [int]$Matches[2]
+            $hostHeader = $Matches[3]
+            if ($port -lt 1 -or $port -gt 65535) { continue }
+            $h = ''
+            if ($hostHeader -eq '' -or $hostHeader -eq '*') {
+                if ($ip -eq '' -or $ip -eq '*' -or $ip -eq '0.0.0.0' -or $ip -eq '[::]') {
+                    $h = 'localhost'
+                } else {
+                    $h = $ip
+                }
+            } elseif ($hostHeader -match '^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)*$') {
+                $h = $hostHeader
+            } else {
+                continue
+            }
+            $candidate = $proto + '://' + $h
+            if (($proto -eq 'https' -and $port -ne 443) -or ($proto -eq 'http' -and $port -ne 80)) {
+                $candidate = $candidate + ':' + $port
+            }
+            $safe = Format-SafeUrl $candidate -NoPath
+            if ($safe -eq '[unparseable URL]') { continue }
+            if (-not ($out -contains $safe)) { [void]$out.Add($safe) }
+        }
+    }
+    return $out.ToArray()
+}
+
+# The ordered probe list. An explicit -BaseUrl is the only probe (plus the
+# -Port loopback). Otherwise: URLs from the site bindings, then the localhost
+# fallbacks, then the -Port loopback.
+function Get-ProbeUrlList {
+    param([string]$Explicit, $Bindings, [int]$LoopbackPort = 0)
+    $list = New-Object System.Collections.ArrayList
+    if ($Explicit -ne '') {
+        [void]$list.Add($Explicit.TrimEnd('/'))
+    } else {
+        foreach ($u in @(ConvertTo-BindingProbeUrl $Bindings)) { [void]$list.Add($u) }
+        foreach ($u in @('https://localhost', 'http://localhost')) {
+            if (-not ($list -contains $u)) { [void]$list.Add($u) }
+        }
+    }
+    if ($LoopbackPort -gt 0) {
+        $lb = 'http://127.0.0.1:' + $LoopbackPort
+        if (-not ($list -contains $lb)) { [void]$list.Add($lb) }
+    }
+    return $list.ToArray()
+}
+
+# The app pool to check: an explicit -AppPool wins; otherwise the site's
+# applicationPool, when it is a well-formed pool name. Source is one of
+# argument, site, none.
+function Resolve-AppPoolName {
+    param([string]$Explicit, $Site)
+    if ($Explicit -ne '') { return [PSCustomObject]@{ Name = $Explicit; Source = 'argument' } }
+    $name = ''
+    if ($null -ne $Site) {
+        try { $name = [string]$Site.applicationPool } catch { $name = '' }
+    }
+    if ($name -match '^[\w][\w .\-]{0,63}$' -and $name.Trim() -eq $name) {
+        return [PSCustomObject]@{ Name = $name; Source = 'site' }
+    }
+    return [PSCustomObject]@{ Name = ''; Source = 'none' }
+}
+
 # IIS worker-process ids serving an app pool, from appcmd list wp.
 function Get-PoolWorkerProcessId {
     param([string]$Pool)
@@ -867,14 +987,24 @@ $logDir     = Join-Path $InstallDir 'logs'
 $authSecret = Join-Path $secretsDir 'auth_secret'
 $csrfSecret = Join-Path $secretsDir 'csrf_secret'
 
-$probeUrls = New-Object System.Collections.ArrayList
-if ($BaseUrl -ne '') {
-    [void]$probeUrls.Add(($BaseUrl.TrimEnd('/')))
-} else {
-    [void]$probeUrls.Add('https://localhost')
-    [void]$probeUrls.Add('http://localhost')
+# Explicit -BaseUrl / -AppPool always win. Without them, the probe URLs come
+# from the IIS site's bindings and the pool from the site's applicationPool,
+# so a no-argument run works on a host-name-bound site (issue #105).
+$script:Site = $null
+if ($BaseUrl -eq '' -or $AppPool -eq '') { $script:Site = Get-IisSite }
+
+$siteBindings = @()
+$baseUrlSource = 'argument'
+if ($BaseUrl -eq '') {
+    $siteBindings = @(Get-SiteBindingRow $script:Site)
+    $baseUrlSource = 'default'
+    if (@(ConvertTo-BindingProbeUrl $siteBindings).Count -gt 0) { $baseUrlSource = 'site-bindings' }
 }
-if ($Port -gt 0) { [void]$probeUrls.Add('http://127.0.0.1:' + $Port) }
+$probeUrls = @(Get-ProbeUrlList -Explicit $BaseUrl -Bindings $siteBindings -LoopbackPort $Port)
+
+$poolChoice = Resolve-AppPoolName -Explicit $AppPool -Site $script:Site
+$AppPool = $poolChoice.Name
+$appPoolSource = $poolChoice.Source
 
 # ---------------------------------------------------------------------------
 # Checks: environment + prerequisites
@@ -972,11 +1102,11 @@ Add-Check -Id 'SEC-001' -Title 'Persistent signing keys exist and are non-empty'
 }
 
 # ---------------------------------------------------------------------------
-# Checks: ACLs (only meaningful when -AppPool is supplied)
+# Checks: ACLs (need an app pool: -AppPool, or the site's applicationPool)
 # ---------------------------------------------------------------------------
 
 Add-Check -Id 'ACL-001' -Title 'App-pool identity has Modify on the data dir' -Category 'acl' -Severity 'high' -Remediation 'Re-run install-windows.ps1 -AppPool <name>, or grant icacls Modify (see deploy/iis/README.md Step 2a.5).' -Test {
-    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied') }
+    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied and none inferred from the site') }
     $identity = 'IIS AppPool\' + $AppPool
     $out = & icacls $InstallDir 2>&1 | Out-String
     if ($out -match [Regex]::Escape($identity)) {
@@ -986,7 +1116,7 @@ Add-Check -Id 'ACL-001' -Title 'App-pool identity has Modify on the data dir' -C
 }
 
 Add-Check -Id 'ACL-002' -Title 'App-pool identity can read the Python install' -Category 'acl' -Severity 'high' -Remediation 'Without RX on the interpreter dir, HttpPlatformHandler logs "Access is denied" and IIS hangs. See deploy/iis/README.md Step 2a.5.' -Test {
-    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied') }
+    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied and none inferred from the site') }
     $real = Get-VenvRealPython $venvPython
     if ($real -eq '' -or -not (Test-Path $real)) { return (New-Body 'skip' 'real interpreter path not resolved') }
     $pyDir = Split-Path $real
@@ -1013,7 +1143,7 @@ Add-Check -Id 'IIS-001' -Title 'handlers config section is unlocked' -Category '
 }
 
 Add-Check -Id 'IIS-002' -Title 'Application pool exists and is configured for always-on' -Category 'iis' -Severity 'high' -Remediation 'Apply the Step 2a.4 settings: idleTimeout 0, startMode AlwaysRunning, periodicRestart 0 -- otherwise the scan scheduler stops when the pool idles.' -Test {
-    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied') }
+    if ($AppPool -eq '') { return (New-Body 'skip' 'no -AppPool supplied and none inferred from the site') }
     if (-not (Test-IisAvailable)) { return (New-Body 'skip' 'IIS not detected on this host') }
     $appcmd = Get-AppcmdPath
     $raw = & $appcmd list apppool $AppPool '/text:*' 2>&1 | Out-String
@@ -1315,8 +1445,10 @@ $report = [ordered]@{
     target = [ordered]@{
         installDir = $InstallDir
         baseUrl    = $(if ($script:HealthBaseUsed -ne '') { Format-SafeUrl $script:HealthBaseUsed } else { (@($probeUrls | ForEach-Object { Format-SafeUrl $_ }) -join ', ') })
+        baseUrlSource = $baseUrlSource
         siteName   = $SiteName
         appPool    = $AppPool
+        appPoolSource = $appPoolSource
     }
     summary = [ordered]@{
         total   = $total
