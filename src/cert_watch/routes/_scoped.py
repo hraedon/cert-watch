@@ -99,14 +99,20 @@ def enforce_scope_tag(
     Admins and unscoped users can pass any tag. Returns an error message if
     the tag is not allowed, or None if it is.
     """
+    from cert_watch.tags import parse_tags
+
+    # One tag per report, for everyone. The report filters on the whole value
+    # as one tag, so a list such as ``payments,hr-ops`` used to pass this check
+    # on the overlapping part and then produce a signed, empty report named
+    # for the other team's tag (#116 review).
+    if len(parse_tags(user_tag)) > 1:
+        return "requested tag must be a single tag"
     auth_ctx = getattr(request.state, "auth_context", None)
     if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
         return None
     scope_tag = getattr(auth_ctx, "scope_tag", "") or ""
     if not scope_tag:
         return None
-    from cert_watch.tags import parse_tags
-
     scope_tags = _folded(parse_tags(scope_tag))
     if not user_tag:
         return None

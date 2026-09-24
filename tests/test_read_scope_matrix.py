@@ -108,6 +108,10 @@ _OTHER = (
     _HostSpec("hrops-pending.hrteam.test", "hr-ops", scanned=False, failed_scan=True),
     _HostSpec("dual.ports.test", "HR-Ops", sans=("dual-san.hrteam.test",), days=2,
               weak=True, rescan=True, failed_scan=True),
+    # Pending (never scanned) endpoints with non-ASCII and IP-literal names:
+    # the create paths are probed with their other spellings.
+    _HostSpec("büro.hrteam.test".encode("idna").decode("ascii"), "hr-ops", scanned=False),
+    _HostSpec("2001:db8::1", "HR-Ops", scanned=False),
     _HostSpec("untagged-a.shared.test", "", owner="shared-owner", days=9, weak=True),
     _HostSpec("untagged-b.shared.test", "", days=400),
     _HostSpec("untagged-pending.shared.test", "", scanned=False),
@@ -369,7 +373,12 @@ def estate(tmp_path_factory: pytest.TempPathFactory) -> _Estate:
 # ---------------------------------------------------------------------------
 
 
-_USERS = ("pay-viewer", "pay-operator")
+# Two local accounts and one directory (role-map) session that resolves to
+# the operator role: every scope path must be the same for all three.
+_USERS = ("pay-viewer", "pay-operator", "pay-directory")
+_DIRECTORY_USER = "pay-directory"
+_DIRECTORY_ROLE = "pay-operator-role"
+_ROLE_MAP = json.dumps({_DIRECTORY_ROLE: {"roles": [_DIRECTORY_ROLE]}})
 
 
 @dataclass(frozen=True)
@@ -516,10 +525,12 @@ def _requests_for(path: str, est: _Estate) -> tuple[list[str], list[tuple[str, s
     elif "{hostname}" in path:
         mine = {h.hostname for h in _PAYMENTS}
         for h in _PAYMENTS:
-            in_urls.append(path.replace("{hostname}", h.hostname))
-            in_urls.append(path.replace("{hostname}", h.hostname) + f"?port={h.port}")
+            in_urls.append(path.replace("{hostname}", quote(h.hostname, safe="")))
+            in_urls.append(
+                path.replace("{hostname}", quote(h.hostname, safe="")) + f"?port={h.port}"
+            )
         for h in _OTHER:
-            url = path.replace("{hostname}", h.hostname)
+            url = path.replace("{hostname}", quote(h.hostname, safe=""))
             if h.hostname not in mine:
                 out_urls.append((url, h.hostname))
             # A name shared with an in-scope endpoint is out of scope only
@@ -568,9 +579,13 @@ _QUERY_VARIANTS: dict[str, tuple[str, ...]] = {
     "/api/trends/tls-versions": ("days=365",),
     "/api/reports/expiring.csv": ("days=365",),
     "/api/reports/policy-violations": ("format=csv", "limit=500"),
-    "/api/reports/compliance.json": ("tag=payments", "tag=PAYMENTS", "tag=hr-ops"),
-    "/api/reports/compliance.csv": ("tag=payments", "tag=hr-ops"),
-    "/reports/compliance": ("tag=payments", "tag=Payments", "tag=hr-ops"),
+    "/api/reports/compliance.json": (
+        "tag=payments", "tag=PAYMENTS", "tag=hr-ops", "tag=payments,hr-ops",
+    ),
+    "/api/reports/compliance.csv": ("tag=payments", "tag=hr-ops", "tag=payments,hr-ops"),
+    "/reports/compliance": (
+        "tag=payments", "tag=Payments", "tag=hr-ops", "tag=payments,hr-ops",
+    ),
     "/scan-history": ("page=2",),
     "/settings": ("tab=trust-anchors", "tab=tags", "tab=roles"),
     "/insights": ("tab=trends",),
@@ -621,7 +636,7 @@ def _client(
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
         mp.setenv("CERT_WATCH_COOKIE_SECURE", "0")
-        mp.delenv("CERT_WATCH_ROLE_MAP", raising=False)
+        mp.setenv("CERT_WATCH_ROLE_MAP", _ROLE_MAP)
         mp.delenv("CERT_WATCH_METRICS_TOKEN", raising=False)
         mp.setattr(csrf_mod, "_COOKIE_SECURE", False)
         # The scheduler would scan the pending hosts and change the estate
@@ -639,6 +654,14 @@ def _client(
         mp.setattr(auth_routes, "_COOKIE_SECURE", False)
         mp.setattr("cert_watch.caa_check.check_caa", _no_caa)
         with TestClient(_app(data_dir), follow_redirects=False) as client:
+            if username == _DIRECTORY_USER:
+                from cert_watch.auth import create_session
+
+                client.cookies.set(SESSION_COOKIE, create_session(
+                    username, client.app.state.security, roles=[_DIRECTORY_ROLE],
+                ))
+                yield client
+                return
             page = client.get("/login").text
             m = re.search(r'name="_csrf_token" value="([^"]+)"', page)
             client.cookies.delete(SESSION_COOKIE)
@@ -935,13 +958,13 @@ def _target_combos(path: str, est: _Estate) -> list[dict[str, str]]:
     return combos if names else []
 
 
-def _db_state(db: Path) -> dict[str, list[tuple[Any, ...]]]:
+def _db_state(db: Path) -> dict[str, list[dict[str, Any]]]:
     """Every row of every estate table, for before/after comparison."""
     import sqlite3
 
     from cert_watch.database.connection import _connect
 
-    out: dict[str, list[tuple[Any, ...]]] = {}
+    out: dict[str, list[dict[str, Any]]] = {}
     with _connect(db) as conn:
         names = [
             r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -953,7 +976,7 @@ def _db_state(db: Path) -> dict[str, list[tuple[Any, ...]]]:
                 rows = conn.execute(f'SELECT * FROM "{name}" ORDER BY rowid').fetchall()
             except sqlite3.OperationalError:
                 rows = conn.execute(f'SELECT * FROM "{name}"').fetchall()
-            out[name] = [tuple(r) for r in rows]
+            out[name] = [dict(r) for r in rows]
     return out
 
 
@@ -1151,7 +1174,7 @@ def test_events_are_scoped_per_endpoint_not_per_hostname(estate: _Estate, tmp_pa
             )
 
 
-@pytest.mark.parametrize("user", ("pay-operator",))
+@pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))
 def test_adding_an_endpoint_another_team_monitors_is_refused(
     estate: _Estate, tmp_path_factory: pytest.TempPathFactory, user: str
 ) -> None:
@@ -1160,6 +1183,8 @@ def test_adding_an_endpoint_another_team_monitors_is_refused(
     add path -- JSON, form, CSV import by JSON and by form -- must refuse
     without touching or scanning the existing row."""
     from urllib.parse import unquote
+
+    from cert_watch.database import SqliteHostRepository
 
     data_dir = tmp_path_factory.mktemp(f"add-existing-{user}")
     db = _copy_estate(estate.full_dir, data_dir)
@@ -1172,41 +1197,67 @@ def test_adding_an_endpoint_another_team_monitors_is_refused(
         before = _db_state(db)
         seen = ""
 
-        r = client.post(
-            "/api/hosts", json={"hostname": "dual.ports.test", "port": 443}, headers=headers
-        )
-        seen += r.text + r.headers.get("location", "")
-        assert r.status_code == 403, r.text
-        assert "outside your team scope" in r.json()["error"]
+        # Every spelling of another team's endpoint: as stored, upper-case,
+        # trailing dot, Unicode for a stored A-label, and expanded / bracketed
+        # IPv6 for a stored compressed literal.
+        for spelling in (
+            "dual.ports.test", "DUAL.ports.test", "dual.ports.test.", "Dual.Ports.Test.",
+            "hrops-portal.hrteam.test", "HROPS-PORTAL.hrteam.test",
+            "büro.hrteam.test".encode("idna").decode("ascii"),
+            "büro.hrteam.test", "BÜRO.hrteam.test.",
+            "2001:db8::1", "2001:0db8:0:0:0:0:0:1", "2001:0DB8::1", "[2001:db8::1]",
+        ):
+            r = client.post(
+                "/api/hosts", json={"hostname": spelling, "port": 443}, headers=headers
+            )
+            seen += r.text + r.headers.get("location", "")
+            assert r.status_code == 403, (spelling, r.text)
+            assert "outside your team scope" in r.json()["error"]
         # common_ports covers 443 (theirs) and 8443 (ours): refused as a whole.
-        r = client.post(
-            "/api/hosts", json={"hostname": "dual.ports.test", "common_ports": True},
-            headers=headers,
-        )
-        assert r.status_code == 403, r.text
-        r = client.post(
-            "/hosts", data={"hostname": "hrops-portal.hrteam.test", "port": "443"},
-            headers=headers,
-        )
-        assert r.status_code == 303
-        assert "outside your team scope" in unquote(r.headers["location"])
+        for spelling in ("dual.ports.test", "DUAL.PORTS.TEST."):
+            r = client.post(
+                "/api/hosts", json={"hostname": spelling, "common_ports": True},
+                headers=headers,
+            )
+            seen += r.text
+            assert r.status_code == 403, (spelling, r.text)
+        for spelling in ("hrops-portal.hrteam.test", "Hrops-Portal.hrteam.test.",
+                         "büro.hrteam.test", "[2001:0db8::1]"):
+            r = client.post(
+                "/hosts", data={"hostname": spelling, "port": "0443"}, headers=headers,
+            )
+            seen += r.headers.get("location", "")
+            assert r.status_code == 303, spelling
+            assert "outside your team scope" in unquote(r.headers["location"]), spelling
 
-        csv = "hostname,port\nhrops-mail.hrteam.test,443\nuntagged-a.shared.test,443\n"
+        csv = (
+            "hostname,port\n"
+            "hrops-mail.hrteam.test,443\n"
+            "untagged-a.shared.test,443\n"
+            '"HROPS-MAIL.hrteam.test.","0443"\n'
+            '"büro.hrteam.test",443\n'
+            '"2001:0db8:0:0:0:0:0:1",443\n'
+        )
         r = client.post(
             "/api/hosts/import", headers=headers,
             files={"file": ("hosts.csv", csv.encode(), "text/csv")},
         )
+        seen += r.text
         assert r.status_code == 400, r.text
         assert r.json()["imported"] == 0
-        assert len(r.json()["errors"]) == 2
+        assert len(r.json()["errors"]) == 5
         assert all("outside your team scope" in e for e in r.json()["errors"])
         r = client.post(
             "/hosts/import", headers=headers,
             files={"file": ("hosts.csv", csv.encode(), "text/csv")},
         )
+        seen += r.headers.get("location", "")
         assert r.status_code == 303
         assert "Import failed" in unquote(r.headers["location"])
 
+        for label, value in estate.out_of_scope.items():
+            if label.startswith("host:"):
+                assert value not in seen, label
         assert other_id not in seen and hrops_id not in seen
         assert _db_state(db) == before, "a refused add changed the estate"
         assert scans == [], scans
@@ -1219,8 +1270,180 @@ def test_adding_an_endpoint_another_team_monitors_is_refused(
         )
         assert r.status_code == 201 and r.json()["ids"] == [mine], r.text
         r = client.post(
-            "/api/hosts", json={"hostname": "pay-new.payments.test", "port": 443},
+            "/api/hosts", json={"hostname": "Pay-New.payments.test.", "port": 443},
             headers=headers,
         )
         assert r.status_code == 201 and r.json()["ids"] != [mine], r.text
+        # ...stored, resolved and scanned in canonical form.
         assert scans == [("pay-web.payments.test", 443), ("pay-new.payments.test", 443)]
+        new_host = SqliteHostRepository(db).get(r.json()["ids"][0])
+        assert new_host is not None and new_host.hostname == "pay-new.payments.test"
+
+
+@pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))
+def test_deleting_an_endpoint_leaves_the_same_name_on_another_port_untouched(
+    estate: _Estate, tmp_path_factory: pytest.TempPathFactory, user: str
+) -> None:
+    """Deleting ``dual.ports.test:8443`` (ours) must not touch a single row of
+    ``dual.ports.test:443`` (hr-ops), in any table. ``event_log`` rows were
+    deleted by hostname alone (#116 review)."""
+    data_dir = tmp_path_factory.mktemp(f"delete-shared-name-{user}")
+    db = _copy_estate(estate.full_dir, data_dir)
+    mine = estate.in_scope["host:dual.ports.test:8443"]
+    my_certs = {v for k, v in estate.in_scope.items() if k.startswith("cert:") and
+                ":dual.ports.test:" in k}
+    my_alerts = {v for k, v in estate.in_scope.items() if k.startswith("alert:") and
+                 any(c in k for c in my_certs)}
+    mine_ids = {mine, *my_certs, *my_alerts}
+    with _client(data_dir, user) as client:
+        before = _db_state(db)
+        r = client.request("DELETE", f"/api/hosts/{mine}", headers=_csrf_header(client))
+        assert r.status_code == 200, r.text
+        after = _db_state(db)
+    def is_mine(table: str, row: dict[str, Any]) -> bool:
+        if table == "event_log":
+            payload = json.loads(row["payload"])
+            return payload.get("port") == 8443 or payload.get("cert_id") in my_certs
+        return row.get("port") == 8443 or bool(set(map(str, row.values())) & mine_ids)
+
+    for table, rows in before.items():
+        added = [row for row in after[table] if row not in rows]
+        assert not added, (table, added)
+        removed = [row for row in rows if row not in after[table]]
+        for row in removed:
+            assert is_mine(table, row), (
+                f"{table}: a row of another endpoint was deleted: {row!r}"
+            )
+    # The deletion did happen.
+    assert len(before["hosts"]) == len(after["hosts"]) + 1
+    assert len(before["event_log"]) > len(after["event_log"])
+    survivors = [json.loads(row["payload"]) for row in after["event_log"]]
+    assert any(
+        p.get("hostname") == "dual.ports.test" and p.get("port") == 443 for p in survivors
+    ), "hr-ops's dual.ports.test:443 events must survive"
+
+
+@pytest.mark.parametrize("user", ("pay-operator", _DIRECTORY_USER))
+def test_bulk_routes_act_only_inside_the_scope(
+    estate: _Estate, tmp_path_factory: pytest.TempPathFactory, user: str
+) -> None:
+    """Scan-all and mark-all-read take no id: they must cover exactly the
+    caller's endpoints and alerts."""
+    data_dir = tmp_path_factory.mktemp(f"bulk-{user}")
+    db = _copy_estate(estate.full_dir, data_dir)
+    in_scope = {(h.hostname, h.port) for h in _PAYMENTS}
+    scans: list[tuple[str, int]] = []
+    with _client(data_dir, user, scans) as client:
+        headers = _csrf_header(client)
+        before = _db_state(db)
+        r = client.post("/api/hosts/scan", headers=headers)
+        assert r.status_code == 200, r.text
+        assert set(scans) == in_scope and len(scans) == len(in_scope)
+        scans.clear()
+        r = client.post("/hosts/all/scan", headers=headers)
+        assert r.status_code == 303, r.text
+        assert set(scans) == in_scope and len(scans) == len(in_scope)
+
+        r = client.post("/api/alerts/mark-all-read", headers=headers)
+        assert r.status_code == 200, r.text
+        r = client.post("/alerts/mark-all-read", headers=headers)
+        assert r.status_code == 303, r.text
+        after = _db_state(db)
+    out_alerts = {v for k, v in estate.out_of_scope.items() if k.startswith("alert:")}
+    out_hosts = {v for k, v in estate.out_of_scope.items() if k.startswith("host:")}
+    assert out_alerts and out_hosts
+    for table in ("alerts", "scan_history", "event_log", "hosts", "certificates"):
+        changed = [row for row in after[table] if row not in before[table]]
+        for row in changed:
+            values = set(map(str, row.values()))
+            assert not (values & (out_alerts | out_hosts)), (table, row)
+            if table == "scan_history":
+                assert (row["hostname"], row["port"]) in in_scope, row
+            elif table == "event_log":
+                payload = json.loads(row["payload"])
+                assert (payload.get("hostname"), payload.get("port")) in in_scope, row
+
+
+# Mutating routes that take no estate id. Each needs a reason; a new route
+# fails test_every_mutating_route_is_classified until it is listed here, in
+# _TARGET_PARAMS (id-addressed) or in _CREATE_ROUTES (probed with aliases).
+_CREATE_ROUTES = frozenset({"/hosts", "/api/hosts", "/hosts/import", "/api/hosts/import"})
+_BULK_ROUTES = frozenset({
+    "/hosts/all/scan", "/api/hosts/scan", "/alerts/mark-all-read", "/api/alerts/mark-all-read",
+})
+_NON_TARGET_MUTATIONS: dict[str, str] = {
+    "/login": "authentication",
+    "/auth/logout": "authentication",
+    "/setup": "first-run setup; refused once setup_complete",
+    "/upload": "creates an uploaded certificate carrying the caller's scope tag",
+    "/api/certificates/upload": "creates an uploaded certificate carrying the caller's scope tag",
+    "/trust-anchors": "admin-only, estate-wide",
+    "/api/trust-anchors": "admin-only, estate-wide",
+    "/api/policy": "admin-only, estate-wide",
+    "/api/webhook/test": "sends a test webhook; touches no estate data",
+    "/alerts/flush": "flushes the caller's own scope of the alert queue (scope_tags)",
+    "/api/alert-groups": "admin-only",
+    "/api/api-keys": "admin-only account object",
+    "/settings/api-keys": "admin-only account object",
+    "/settings/alert-groups": "admin-only",
+    "/settings/change-password": "the caller's own account",
+    "/settings/smtp": "admin-only settings",
+    "/settings/test-smtp": "admin-only settings",
+    "/settings/alerts": "admin-only settings",
+    "/settings/policy": "admin-only settings",
+    "/settings/events": "admin-only settings",
+    "/settings/auth": "admin-only settings",
+    "/settings/ldap-role-map": "admin-only settings",
+    "/settings/test-ldap": "admin-only settings",
+    "/settings/pin-ldap-ca": "admin-only settings",
+    "/settings/roles": "admin-only account object",
+    "/settings/users": "admin-only account object",
+}
+
+
+def test_every_mutating_route_is_covered_or_allowlisted() -> None:
+    from cert_watch.app import create_app
+
+    paths = {p for _m, p, _r in mutating_routes(create_app())}
+    targeted = {p for p in paths if any(f"{{{n}}}" in p for n in _TARGET_PARAMS)}
+    other_param = {
+        p for p in paths - targeted
+        if any(f"{{{n}}}" in p for n in _NOT_ESTATE_TARGETS)
+    }
+    plain = paths - targeted - other_param
+    unclassified = plain - _CREATE_ROUTES - _BULK_ROUTES - set(_NON_TARGET_MUTATIONS)
+    assert not unclassified, f"mutating routes without scope coverage: {sorted(unclassified)}"
+    stale = (_CREATE_ROUTES | _BULK_ROUTES | set(_NON_TARGET_MUTATIONS)) - plain
+    assert not stale, f"allowlist names routes that no longer exist: {sorted(stale)}"
+
+
+def test_report_tag_filter_must_be_one_tag_for_everyone() -> None:
+    """``tag=payments,hr-ops`` passed the scope check on the overlapping part
+    and was then filtered as one literal tag, yielding a signed, empty report
+    named for the other team (#116 review). A list is refused for admins too."""
+    from types import SimpleNamespace
+
+    from cert_watch.routes._scoped import enforce_scope_tag
+
+    def req(**ctx: Any) -> Any:
+        return SimpleNamespace(state=SimpleNamespace(auth_context=SimpleNamespace(**ctx)))
+
+    admin = req(is_admin=True, scope_tag="")
+    unscoped = req(is_admin=False, scope_tag="")
+    scoped = req(is_admin=False, scope_tag="payments")
+    for r in (admin, unscoped, scoped):
+        assert enforce_scope_tag(r, "payments,hr-ops") == "requested tag must be a single tag"
+        assert enforce_scope_tag(r, "payments, HR-Ops") == "requested tag must be a single tag"
+        assert enforce_scope_tag(r, "payments") is None
+        assert enforce_scope_tag(r, "") is None
+    assert enforce_scope_tag(scoped, "hr-ops") == "requested tag is outside your team scope"
+    assert enforce_scope_tag(admin, "hr-ops") is None
+
+
+def test_directory_user_is_scoped_through_the_same_path(runs: dict[str, _Run]) -> None:
+    """The role-map session resolved to the scoped operator role, not to a
+    full-access or unscoped context: its report is the team's report."""
+    snap = runs[_DIRECTORY_USER].full["/api/reports/compliance.json"]
+    assert snap.status == 200
+    assert json.loads(snap.body)["scope_tag"].casefold() == "payments"
+    assert runs[_DIRECTORY_USER].full["/settings"].location.startswith("/")  # not admin

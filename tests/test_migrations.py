@@ -12,6 +12,7 @@ AC-5: Documented, tested restore procedure.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import multiprocessing
 import sqlite3
@@ -951,7 +952,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
@@ -973,7 +974,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0033", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0033", "0037", "0038"]
 
 
 # ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
@@ -1013,7 +1014,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         )
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
@@ -1043,7 +1044,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
@@ -1065,7 +1066,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
 
 
 def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
@@ -1112,7 +1113,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0031", "0032", "0033", "0034", "0035", "0036", "0037"
+        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1146,7 +1147,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1157,3 +1158,196 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
             )
         }
     assert {"digest_deliveries", "role_tag_tiers"} <= tables
+
+
+# ---------------------------------------------------------------------------
+# 0038: stored hostnames are canonical, aliases of one endpoint are merged
+# ---------------------------------------------------------------------------
+
+
+def _insert_alias_estate(conn: sqlite3.Connection) -> None:
+    """Rows written before 0038, spelled three ways for one endpoint, plus a
+    second endpoint on another port that must stay separate."""
+    now = datetime.now(UTC).isoformat()
+    def _ts(month: int, day: int) -> str:
+        return f"2026-{month:02d}-{day:02d}T00:00:00+00:00"
+
+    hosts = [
+        # (id, hostname, port, tags, owner_name, notes, threshold, added_at)
+        ("h-old", "victim.example.test", 443, "team-b", "", "old note", None, _ts(1, 1)),
+        ("h-upper", "VICTIM.example.test", 443, "team-a,web", "Ada", "", 30, _ts(2, 1)),
+        ("h-dot", "victim.example.test.", 443, "TEAM-B", "Bob", "old note", 14, _ts(3, 1)),
+        ("h-8443", "Victim.example.test", 8443, "team-a", "", "", None, _ts(1, 15)),
+        ("h-v6", "2001:0db8:0:0:0:0:0:1", 443, "team-c", "", "", None, _ts(1, 15)),
+    ]
+    for hid, hn, port, tags, owner, notes, threshold, added in hosts:
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, tags, owner_name, notes, threshold_days,"
+            " added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (hid, hn, port, tags, owner, notes, threshold, added),
+        )
+    for cid, hn, port in (
+        ("c-old", "victim.example.test", 443),
+        ("c-upper", "VICTIM.example.test", 443),
+        ("c-8443", "Victim.example.test", 8443),
+    ):
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, san_dns_names,"
+            " fingerprint_sha256, raw_der, source, hostname, port, is_leaf, created_at, updated_at)"
+            " VALUES (?, 'CN=x', 'CN=ca', ?, ?, '[]', ?, X'00', 'scanned', ?, ?, 1, ?, ?)",
+            (cid, now, now, "fp-" + cid, hn, port, now, now),
+        )
+        conn.execute(
+            "INSERT INTO scan_history (id, hostname, port, status, scanned_at)"
+            " VALUES (?, ?, ?, 'success', ?)", ("sh-" + cid, hn, port, now),
+        )
+        conn.execute(
+            "INSERT INTO cert_history (id, hostname, port, fingerprint_sha256, issuer, not_after,"
+            " scanned_at) VALUES (?, ?, ?, ?, 'CN=ca', ?, ?)",
+            ("ch-" + cid, hn, port, "fp-" + cid, now, now),
+        )
+        conn.execute(
+            "INSERT INTO scan_posture (id, cert_id, hostname, port, grade, findings, scanned_at)"
+            " VALUES (?, ?, ?, ?, 'A', '[]', ?)", ("sp-" + cid, cid, hn, port, now),
+        )
+    # Two open alerts for the same condition under two spellings, and a
+    # sent one that keeps its history.
+    for aid, cid, hn, status, created in (
+        ("a-old", "c-old", "victim.example.test", "pending", "2026-01-02T00:00:00+00:00"),
+        ("a-upper", "c-upper", "VICTIM.example.test", "pending", "2026-02-02T00:00:00+00:00"),
+        ("a-sent", "c-upper", "VICTIM.example.test", "sent", "2026-02-03T00:00:00+00:00"),
+    ):
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at, hostname,"
+            " dedupe_key) VALUES (?, ?, 'expiry_warning', ?, 'm', ?, ?, ?)",
+            (aid, cid, status, created, hn, f"expiry:{hn}:443:fp:expiry_warning:30"),
+        )
+    for key, first, last, count in (
+        ("overdue:victim.example.test:443:fp", _ts(1, 1), _ts(1, 5), 2),
+        ("overdue:VICTIM.example.test:443:fp", "2025-12-01T00:00:00+00:00", _ts(1, 9), 3),
+        ("overdue:2001:0db8:0:0:0:0:0:1:443:fp", _ts(1, 1), _ts(1, 1), 1),
+    ):
+        conn.execute(
+            "INSERT INTO rule_firings (dedupe_key, first_fired_at, last_fired_at, fire_count)"
+            " VALUES (?, ?, ?, ?)", (key, first, last, count),
+        )
+    for hn, port in (("VICTIM.example.test", 443), ("victim.example.test.", 443),
+                     ("Victim.example.test", 8443), ("2001:0db8:0:0:0:0:0:1", 443)):
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+            " created_at) VALUES ('scan_failed', ?, 'scan', ?, 'failed', ?)",
+            (now, json.dumps({"hostname": hn, "port": port, "error_message": "x"}), now),
+        )
+    conn.execute(
+        "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+        " created_at) VALUES ('cert_added', ?, 'upload', ?, 'delivered', ?)",
+        (now, json.dumps({"cert_id": "c-up"}), now),
+    )
+
+
+def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_row(
+    db_path: Path,
+) -> None:
+    import json as _json
+
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        _insert_alias_estate(conn)
+        conn.commit()
+        upgrade(conn)
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+
+        hosts = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM hosts")}
+        # Three spellings became the oldest row; the other port and the IPv6
+        # endpoint stayed separate but were rewritten.
+        assert set(hosts) == {"h-old", "h-8443", "h-v6"}
+        kept = hosts["h-old"]
+        assert kept["hostname"] == "victim.example.test"
+        assert set(kept["tags"].split(",")) == {"team-b", "team-a", "web"}  # union, case-folded
+        assert kept["owner_name"] == "Ada"  # oldest row had none; next one wins
+        assert kept["threshold_days"] == 30
+        assert kept["notes"] == "old note"  # identical notes are not repeated
+        assert hosts["h-8443"]["hostname"] == "victim.example.test"
+        assert hosts["h-v6"]["hostname"] == "2001:db8::1"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM hosts WHERE hostname = 'victim.example.test' AND port = 443"
+        ).fetchone()[0] == 1
+
+        for table in ("certificates", "scan_history", "cert_history", "scan_posture", "alerts"):
+            spellings = {r[0] for r in conn.execute(f"SELECT DISTINCT hostname FROM {table}")}
+            assert spellings == {"victim.example.test"}, (table, spellings)
+        # Nothing was dropped from the history tables.
+        assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0] == 3
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 3
+
+        payloads = [
+            _json.loads(r[0]) for r in conn.execute("SELECT payload FROM event_log ORDER BY id")
+        ]
+        assert [p.get("hostname") for p in payloads] == [
+            "victim.example.test", "victim.example.test", "victim.example.test",
+            "2001:db8::1", None,
+        ]
+        assert [p.get("port") for p in payloads] == [443, 443, 8443, 443, None]
+
+        alerts = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM alerts")}
+        assert {a["dedupe_key"] for a in alerts.values()} == {
+            "expiry:victim.example.test:443:fp:expiry_warning:30"
+        }
+        # One open row per condition: the older stays pending.
+        assert alerts["a-old"]["status"] == "pending"
+        assert alerts["a-upper"]["status"] == "cancelled" and alerts["a-upper"]["closed_at"]
+        assert alerts["a-sent"]["status"] == "sent"
+
+        firings = {r["dedupe_key"]: dict(r) for r in conn.execute("SELECT * FROM rule_firings")}
+        assert set(firings) == {
+            "overdue:victim.example.test:443:fp", "overdue:2001:db8::1:443:fp",
+        }
+        merged = firings["overdue:victim.example.test:443:fp"]
+        assert merged["first_fired_at"] == "2025-12-01T00:00:00+00:00"
+        assert merged["last_fired_at"] == "2026-01-09T00:00:00+00:00"
+        assert merged["fire_count"] == 5
+
+        # The merge is reported, with the merged rows kept in full.
+        audit = conn.execute(
+            "SELECT target_id, detail FROM audit_log WHERE action = 'host.merge_alias'"
+        ).fetchall()
+        assert [a["target_id"] for a in audit] == ["h-old"]
+        detail = _json.loads(audit[0]["detail"])
+        assert {m["id"] for m in detail["merged"]} == {"h-upper", "h-dot"}
+        assert {m["hostname"] for m in detail["merged"]} == {
+            "VICTIM.example.test", "victim.example.test.",
+        }
+
+        # Idempotent: a second run changes nothing.
+        before = [tuple(r) for t in ("hosts", "alerts", "rule_firings", "event_log")
+                  for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")]
+        upgrade(conn)
+        conn.commit()
+        after = [tuple(r) for t in ("hosts", "alerts", "rule_firings", "event_log")
+                 for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")]
+        assert before == after
+        assert conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'host.merge_alias'"
+        ).fetchone()[0] == 1
+
+
+def test_repository_add_stores_the_canonical_spelling_and_finds_aliases(db_path: Path) -> None:
+    from cert_watch.database import SqliteHostRepository
+
+    init_schema(db_path)
+    repo = SqliteHostRepository(db_path)
+    host_id = repo.add("VICTIM.example.test.", 443, tags="team-b")
+    host = repo.get(host_id)
+    assert host is not None and host.hostname == "victim.example.test"
+    for alias in ("victim.example.test", "Victim.Example.Test", "victim.example.test."):
+        found = repo.get_by_endpoint(alias, 443)
+        assert found is not None and found.id == host_id
+    assert repo.get_by_endpoint("victim.example.test", 8443) is None
+    assert repo.get_by_endpoint("not a host", 443) is None
+    # Re-adding under another spelling is the same idempotent add.
+    assert repo.add("victim.example.test", 443) == host_id
+    assert repo.count_all() == 1

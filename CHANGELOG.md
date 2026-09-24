@@ -40,6 +40,36 @@ All notable changes to cert-watch are documented in this file.
   nonexistent id and requires identical responses, no database change and no
   scan; its comparison masks only the report clock and the values derived
   from it, so a differing fingerprint or scan time is reported as a leak.
+- Host names are stored in one canonical spelling: lower-case IDNA A-labels
+  with no trailing dot for DNS names, and the compressed form for IP
+  literals. `VICTIM.example.test`, `victim.example.test.` and
+  `victim.example.test` were three endpoints, so the refusal above could be
+  bypassed by re-spelling another team's host name (also `café` for a stored
+  `xn--caf-dma`, `2001:0db8::1` for a stored `2001:db8::1`, and a CSV port of
+  `0443`). Every add path canonicalizes before validation, the scope check,
+  persistence, DNS resolution and the scan. **Migration 0038** rewrites the
+  stored spelling in every hostname-keyed table (`hosts`, `certificates`,
+  `scan_history`, `cert_history`, `scan_posture`, `alerts`, event payloads
+  and alert dedupe keys). Rows of `hosts` that spell one endpoint two ways
+  are merged into the oldest row: tags are the union, other fields keep the
+  oldest row's value where it has one, notes are concatenated, and the merge
+  is written to the audit log with the full merged rows. Nothing is deleted
+  from the history tables.
+- Deleting a host no longer removes events for the same host name on another
+  port. The event history was deleted by host name alone, so deleting one's
+  own `example.test:8443` erased another team's `example.test:443` events,
+  including its failed-delivery records.
+- The compliance report's `tag` filter must be a single tag, for every user.
+  A list such as `payments,hr-ops` passed the scope check on the part inside
+  the scope and was then filtered as one literal tag, producing a signed,
+  empty report named for the other team's tag.
+
+### Changed
+
+- Startup applies schema migration 0038 (see Security above). It rewrites
+  data only; the pre-migration backup is taken as for every migration. A
+  `WARNING` log line and an `audit_log` row (`host.merge_alias`) are written
+  for every pair of host rows that turn out to be one endpoint.
 
 ## [1.0.2] - 2026-09-23
 

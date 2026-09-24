@@ -20,7 +20,7 @@ from cert_watch.auth.scope import (
 )
 from cert_watch.config import Settings
 from cert_watch.database import HostEntry, SqliteHostRepository, get_write_lock
-from cert_watch.host_validation import hostname_is_valid
+from cert_watch.host_validation import canonical_hostname
 from cert_watch.scan import (
     STARTTLS_MODES,
     ScanError,
@@ -187,9 +187,14 @@ async def create_hosts(
     require_auth_context(auth)
     if not isinstance(hostname, str):
         raise HostValidationError("hostname must be a string")
-    hostname = hostname.strip()
-    if not hostname_is_valid(hostname):
-        raise HostValidationError("hostname must be valid and at most 253 IDNA octets")
+    try:
+        # One spelling from here on: validation, the existing-endpoint scope
+        # check, persistence, DNS resolution and the scan all see it.
+        hostname = canonical_hostname(hostname.strip())
+    except ValueError:
+        raise HostValidationError(
+            "hostname must be valid and at most 253 IDNA octets"
+        ) from None
     if not common_ports and not 1 <= port <= 65535:
         raise HostValidationError("port must be between 1 and 65535")
     starttls_mode = starttls_mode.strip().lower()
@@ -297,7 +302,9 @@ async def import_hosts_csv(
         if not hostname:
             errors.append(f"row {row_number}: missing hostname")
             continue
-        if not hostname_is_valid(hostname):
+        try:
+            hostname = canonical_hostname(hostname)
+        except ValueError:
             errors.append(f"row {row_number}: hostname is invalid or exceeds 253 IDNA octets")
             continue
         try:

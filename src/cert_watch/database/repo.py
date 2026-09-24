@@ -20,7 +20,7 @@ from cert_watch.database.connection import (
     _sql_now,
     parse_san_dns_names,
 )
-from cert_watch.host_validation import hostname_is_valid
+from cert_watch.host_validation import canonical_hostname
 
 # ---------- dataclasses ----------
 
@@ -769,8 +769,14 @@ class SqliteHostRepository:
         starttls_mode: str = "",
     ) -> str:
         import sqlite3
-        if not hostname_is_valid(hostname):
-            raise ValueError("hostname must be syntactically valid before persistence")
+        try:
+            # The one INSERT into hosts stores the canonical spelling, so the
+            # (hostname, port) uniqueness rule is a rule about endpoints.
+            hostname = canonical_hostname(hostname)
+        except ValueError:
+            raise ValueError(
+                "hostname must be syntactically valid before persistence"
+            ) from None
         host_id = str(uuid.uuid4())
         with _connect(self.db_path) as conn:
             try:
@@ -859,7 +865,11 @@ class SqliteHostRepository:
         return row[0] if row else 0
 
     def get_by_endpoint(self, hostname: str, port: int) -> HostEntry | None:
-        """Return the host monitored at ``hostname:port``, if any."""
+        """Return the host monitored at ``hostname:port`` under any spelling."""
+        try:
+            hostname = canonical_hostname(hostname)
+        except ValueError:
+            return None
         with _connect(self.db_path) as conn:
             r = conn.execute(
                 "SELECT * FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
@@ -926,12 +936,13 @@ class SqliteHostRepository:
                 "DELETE FROM cert_history WHERE hostname = ? AND port = ?",
                 (hostname, port),
             )
-            # event_log has no host column; match the JSON payload's hostname
-            # field using json_extract for precise targeting (avoids matching
-            # hostnames mentioned in other payload fields).
+            # event_log has no host column; match the JSON payload's endpoint.
+            # Hostname AND port: one name can be monitored on two ports by two
+            # teams, and deleting one must not erase the other's history.
             conn.execute(
-                "DELETE FROM event_log WHERE json_extract(payload, '$.hostname') = ?",
-                (hostname,),
+                "DELETE FROM event_log WHERE json_extract(payload, '$.hostname') = ?"
+                " AND json_extract(payload, '$.port') = ?",
+                (hostname, port),
             )
             conn.execute("DELETE FROM hosts WHERE id = ?", (host_id,))
             conn.commit()
