@@ -90,11 +90,14 @@ def enforce_scope_tag(
     request: Request,
     user_tag: str,
 ) -> str | None:
-    """Validate that *user_tag* is within the caller's scope_tags.
+    """Validate that a requested *user_tag* filter is within the caller's scope.
 
-    For scoped users, the tag parameter must match one of their scope tags.
-    Admins and unscoped users can pass any tag.  Returns an error message
-    if the tag is not allowed, or None if it is.
+    For scoped users, a non-empty tag must match one of their scope tags.
+    An empty tag is allowed: the caller then scopes the result to the user's
+    visibility (``scope_tags_from_auth``) in the query itself (#112), which is
+    what makes this check a narrowing filter rather than the only guard.
+    Admins and unscoped users can pass any tag. Returns an error message if
+    the tag is not allowed, or None if it is.
     """
     auth_ctx = getattr(request.state, "auth_context", None)
     if auth_ctx is None or getattr(auth_ctx, "is_admin", False):
@@ -106,7 +109,7 @@ def enforce_scope_tag(
 
     scope_tags = _folded(parse_tags(scope_tag))
     if not user_tag:
-        return "a tag parameter is required for scoped users"
+        return None
     if not scope_tags & _folded(parse_tags(user_tag)):
         return "requested tag is outside your team scope"
     return None

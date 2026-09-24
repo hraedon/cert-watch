@@ -2,6 +2,24 @@
 
 All notable changes to cert-watch are documented in this file.
 
+## [Unreleased]
+
+### Security
+
+- A user whose role is scoped to a tag no longer sees other teams'
+  certificates on Posture. The weak-primitives list, the crypto inventory and
+  the fleet grade were computed over the whole estate, so a scoped user could
+  read other teams' host names and their key weaknesses. They are now limited
+  to the user's scope, like the trend charts already were (#112). A new test
+  requests every page and API endpoint as a scoped user against an estate with
+  two teams and fails if anything outside the scope appears, or if adding
+  another team's hosts changes any response.
+- The compliance report linked from Posture now works for scoped users. With
+  no tag, the report page and its JSON and CSV exports cover the user's own
+  scope; they used to refuse with a bare-text `403`. Asking the report page
+  for a tag outside the scope returns to the user's report with an error
+  message. Unscoped users and admins still get the whole estate.
+
 ## [1.0.2] - 2026-09-23
 
 A patch release. No schema migrations and no configuration changes. The main

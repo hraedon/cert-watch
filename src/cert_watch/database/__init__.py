@@ -212,6 +212,8 @@ from cert_watch.database.posture import (
     get_posture_for_cert,
     get_posture_for_certs,
     get_posture_grades_for_certs,
+    list_leaf_certificate_der,
+    posture_grade_counts,
     store_scan_posture,
 )
 
@@ -323,6 +325,8 @@ __all__ = [  # noqa: RUF022 — exports are grouped by database subsystem
     "get_posture_for_cert",
     "get_posture_grades_for_certs",
     "get_posture_for_certs",
+    "posture_grade_counts",
+    "list_leaf_certificate_der",
     # kv_store
     "kv_all",
     "kv_get",

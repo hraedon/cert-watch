@@ -243,6 +243,7 @@ def api_compliance_report_json(
     report = build_compliance_report(
         db,
         scope_tag=tag,
+        scope_tags=scope_tags_from_auth(getattr(request.state, "auth_context", None)),
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,
@@ -267,6 +268,7 @@ def api_compliance_report_csv(
     report = build_compliance_report(
         db,
         scope_tag=tag,
+        scope_tags=scope_tags_from_auth(getattr(request.state, "auth_context", None)),
         version=__version__,
         commit=__commit__,
         signing_key=signing_key,

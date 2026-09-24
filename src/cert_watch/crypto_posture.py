@@ -143,16 +143,18 @@ def classify_cert_crypto(raw_der: bytes) -> CertCrypto | None:
     )
 
 
-def analyze_fleet_crypto(db_path: str | Path) -> CryptoPosture:
-    """Aggregate the crypto inventory across all leaf certificates."""
-    from cert_watch.database import _connect
+def analyze_fleet_crypto(
+    db_path: str | Path, *, scope_tags: tuple[str, ...] | list[str] = ()
+) -> CryptoPosture:
+    """Aggregate the crypto inventory across leaf certificates.
+
+    ``scope_tags`` limits the inventory to certificates a tag-scoped user may
+    see (#112); empty means the whole estate.
+    """
+    from cert_watch.database import list_leaf_certificate_der
 
     posture = CryptoPosture()
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT id, subject, hostname, port, raw_der "
-            "FROM certificates WHERE is_leaf = 1"
-        ).fetchall()
+    rows = list_leaf_certificate_der(db_path, scope_tags=scope_tags)
 
     for r in rows:
         info = classify_cert_crypto(r["raw_der"])
