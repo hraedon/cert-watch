@@ -41,8 +41,9 @@ def _insert_cert(conn, cert_id, hostname, port=443, tags="", source="scanned"):
     )
 
 
-def _insert_event(conn, event_type, hostname, source="scan"):
-    payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+def _insert_event(conn, event_type, hostname, source="scan", port=443):
+    # Every producer names the endpoint (hostname AND port); scope is per endpoint.
+    payload = json.dumps({"hostname": hostname, "port": port, "cert_id": f"c-{hostname}"})
     conn.execute(
         "INSERT INTO event_log (event_type, timestamp, source, payload,"
         " delivery_status, error_message, created_at)"
@@ -226,7 +227,9 @@ class TestFailedDeliveriesScopeFiltering:
         _seed_two_teams(db)
         with _connect(db) as conn:
             for hostname in ("host-a.example.com", "host-b.example.com"):
-                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                payload = json.dumps(
+                    {"hostname": hostname, "port": 443, "cert_id": f"c-{hostname}"}
+                )
                 conn.execute(
                     "INSERT INTO event_log (event_type, timestamp, source, payload,"
                     " delivery_status, error_message, created_at)"
@@ -249,7 +252,9 @@ class TestFailedDeliveriesScopeFiltering:
         _seed_two_teams(db)
         with _connect(db) as conn:
             for hostname in ("host-a.example.com", "host-b.example.com"):
-                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                payload = json.dumps(
+                    {"hostname": hostname, "port": 443, "cert_id": f"c-{hostname}"}
+                )
                 conn.execute(
                     "INSERT INTO event_log (event_type, timestamp, source, payload,"
                     " delivery_status, error_message, created_at)"
@@ -571,7 +576,9 @@ class TestApiRoutesScopeFiltering:
         # Insert failed delivery events for both teams
         with _connect(db) as conn:
             for hostname in ("host-a.example.com", "host-b.example.com"):
-                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                payload = json.dumps(
+                    {"hostname": hostname, "port": 443, "cert_id": f"c-{hostname}"}
+                )
                 conn.execute(
                     "INSERT INTO event_log (event_type, timestamp, source, payload,"
                     " delivery_status, error_message, created_at)"
@@ -597,7 +604,9 @@ class TestApiRoutesScopeFiltering:
         _seed_two_teams(db)
         with _connect(db) as conn:
             for hostname in ("host-a.example.com", "host-b.example.com"):
-                payload = json.dumps({"hostname": hostname, "cert_id": f"c-{hostname}"})
+                payload = json.dumps(
+                    {"hostname": hostname, "port": 443, "cert_id": f"c-{hostname}"}
+                )
                 conn.execute(
                     "INSERT INTO event_log (event_type, timestamp, source, payload,"
                     " delivery_status, error_message, created_at)"

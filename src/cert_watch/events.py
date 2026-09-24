@@ -379,6 +379,47 @@ def emit_event(
         return None
 
 
+def _scope_condition(scope_tags: tuple[str, ...]) -> tuple[str, list[Any]]:
+    """SQL restricting ``event_log`` rows to a tag scope.
+
+    An event is visible when the endpoint it names, ``(payload.hostname,
+    payload.port)``, is a host inside the scope, or when ``payload.cert_id``
+    is a certificate whose effective (cert ∪ host) tags intersect the scope.
+    Matching the hostname alone is not enough: one name can be monitored on
+    two ports by two teams (#112 review), so an event without a port is
+    authorized only through its certificate.
+    """
+    from cert_watch.database.dashboard_helpers import (
+        _add_effective_tag_filter,
+        build_scope_tag_clause,
+    )
+
+    host_sub = (
+        "SELECT 1 FROM hosts h"
+        " WHERE h.hostname = json_extract(payload, '$.hostname')"
+        " AND h.port = json_extract(payload, '$.port')"
+    )
+    host_sub, host_params = _add_effective_tag_filter(
+        host_sub, [], scope_tags, col_cert=None, col_host="h.tags"
+    )
+    cert_clause, cert_params = build_scope_tag_clause(scope_tags, cert_table="c")
+    cert_sub = (
+        "SELECT 1 FROM certificates c"
+        f" WHERE c.id = json_extract(payload, '$.cert_id') AND {cert_clause}"
+    )
+    # json_valid first: one malformed legacy payload must not make every
+    # scoped read raise, and an unparseable event belongs to no scope.
+    sql = (
+        "(json_valid(payload) AND"
+        " ((json_extract(payload, '$.hostname') IS NOT NULL"
+        " AND json_extract(payload, '$.port') IS NOT NULL"
+        f" AND EXISTS ({host_sub}))"
+        " OR (json_extract(payload, '$.cert_id') IS NOT NULL"
+        f" AND EXISTS ({cert_sub}))))"
+    )
+    return sql, host_params + cert_params
+
+
 def get_events(
     db_path: str | Path,
     *,
@@ -401,27 +442,9 @@ def get_events(
         conditions.append("timestamp >= ?")
         params.append(since)
     if scope_tags:
-        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
-
-        host_sub = "SELECT hostname FROM hosts WHERE 1=1"
-        host_sub, host_params = _add_effective_tag_filter(
-            host_sub, [], scope_tags, col_cert=None, col_host="tags"
-        )
-        cert_sub = (
-            "SELECT 1 FROM certificates c"
-            " WHERE c.id = json_extract(payload, '$.cert_id')"
-        )
-        cert_sub, cert_params = _add_effective_tag_filter(
-            cert_sub, [], scope_tags, col_cert="c.tags", col_host="''",
-        )
-        conditions.append(
-            "(json_extract(payload, '$.hostname') IS NOT NULL"
-            f" AND json_extract(payload, '$.hostname') IN ({host_sub})"
-            f" OR (json_extract(payload, '$.hostname') IS NULL"
-            f" AND json_extract(payload, '$.cert_id') IS NOT NULL"
-            f" AND EXISTS ({cert_sub})))"
-        )
-        params = params + host_params + cert_params
+        scope_sql, scope_params = _scope_condition(scope_tags)
+        conditions.append(scope_sql)
+        params = params + scope_params
     where = " WHERE " + " AND ".join(conditions) if conditions else ""
     with _connect(db_path) as conn:
         rows = conn.execute(
@@ -446,27 +469,9 @@ def get_failed_deliveries(
     conditions = ["delivery_status IN ('failed', 'rate_limited')"]
     params: list[Any] = []
     if scope_tags:
-        from cert_watch.database.dashboard_helpers import _add_effective_tag_filter
-
-        host_sub = "SELECT hostname FROM hosts WHERE 1=1"
-        host_sub, host_params = _add_effective_tag_filter(
-            host_sub, [], scope_tags, col_cert=None, col_host="tags"
-        )
-        cert_sub = (
-            "SELECT 1 FROM certificates c"
-            " WHERE c.id = json_extract(payload, '$.cert_id')"
-        )
-        cert_sub, cert_params = _add_effective_tag_filter(
-            cert_sub, [], scope_tags, col_cert="c.tags", col_host="''",
-        )
-        conditions.append(
-            "(json_extract(payload, '$.hostname') IS NOT NULL"
-            f" AND json_extract(payload, '$.hostname') IN ({host_sub})"
-            f" OR (json_extract(payload, '$.hostname') IS NULL"
-            f" AND json_extract(payload, '$.cert_id') IS NOT NULL"
-            f" AND EXISTS ({cert_sub})))"
-        )
-        params = params + host_params + cert_params
+        scope_sql, scope_params = _scope_condition(scope_tags)
+        conditions.append(scope_sql)
+        params = params + scope_params
     where = " WHERE " + " AND ".join(conditions)
     with _connect(db_path) as conn:
         rows = conn.execute(

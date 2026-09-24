@@ -136,11 +136,21 @@ def _validate(update: HostOwnershipUpdate) -> None:
 
 
 def resolve_host_ownership_target(
-    db_path: str | Path, resource_id: str
+    db_path: str | Path, resource_id: str, *, auth: Any
 ) -> HostOwnershipTarget:
-    """Resolve the legacy certificate-or-host route id to one host target."""
+    """Resolve the legacy certificate-or-host route id to one host target.
+
+    *auth* is the acting AuthContext. When nothing resolves, the caller's
+    scope is judged first, so a scoped caller gets the same refusal for an
+    id that does not exist as for another team's (#112 review); an unscoped
+    caller gets the lookup failure. A certificate that exists but has no
+    host is judged by its own effective tags, as ``update_host_ownership``
+    would judge it.
+    """
+    require_auth_context(auth)
     lookup = resolve_host_target(_connect(db_path), resource_id)
     if lookup.host is None:
+        ensure_write_scope(auth, db_path, cert_id=resource_id)
         raise HostOwnershipTargetError(lookup.status)
     return HostOwnershipTarget(
         host_id=lookup.host.id, source=lookup.status, resource_id=resource_id,

@@ -112,7 +112,10 @@ viewer everywhere in scope but operator on `payments`.
 Scope applies to the inventory, certificate and host pages, alerts, scan
 history, posture and readiness reports, compliance reports, exports and the
 JSON API used by the browser session. The audit log is administrator-only and
-therefore not scoped.
+therefore not scoped. The health endpoints (`/readyz`, `/api/health`) report
+on the whole estate and cannot be scoped, so a scoped user gets only the
+overall status from them; the detail is for administrators and the metrics
+token (see [operations.md](operations.md#monitoring)).
 
 Tags match without regard to case, using Unicode case folding: `Payments`
 and `payments` are the same tag, and so are `straße` and `strasse`. The same

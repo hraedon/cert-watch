@@ -137,7 +137,7 @@ def test_ownership_through_a_certificate_is_scoped_by_its_effective_tags(estate)
     tags, so ownership edited *through that certificate* is in scope."""
     db = estate["db"]
     SqliteCertificateRepository(db).set_tags(estate["cert_b"], "A")
-    target = resolve_host_ownership_target(db, estate["cert_b"])
+    target = resolve_host_ownership_target(db, estate["cert_b"], auth=SCOPED_OPERATOR)
     update_host_ownership(
         db, target, HostOwnershipUpdate(owner_name="Ops"),
         auth=SCOPED_OPERATOR, actor="t", source_ip=None,

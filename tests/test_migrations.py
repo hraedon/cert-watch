@@ -12,6 +12,7 @@ AC-5: Documented, tested restore procedure.
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import multiprocessing
 import sqlite3
@@ -951,7 +952,7 @@ def test_migration_0033_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         assert "deferred_since" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0033'").fetchall()
@@ -973,7 +974,7 @@ def test_migration_0033_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0033", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0033", "0037", "0038"]
 
 
 # ── 0034: alerts.trigger_cert_id (stable resolve keying, #62) ───────────────
@@ -1013,7 +1014,7 @@ def test_migration_0034_backfills_existing_alerts_with_their_trigger_row(
         )
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         row = conn.execute(
             "SELECT trigger_cert_id FROM alerts WHERE id = 'a1'"
@@ -1043,7 +1044,7 @@ def test_migration_0034_manual_sql_is_equivalent_to_the_runner(tmp_path: Path) -
             conn.execute(statement)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0037"]
+    assert run_pending_migrations(db, backup=False) == ["0037", "0038"]
     with sqlite3.connect(str(db)) as conn:
         assert "trigger_cert_id" in _table_columns(conn, "alerts")
         ledger = conn.execute("SELECT id FROM schema_version WHERE id = '0034'").fetchall()
@@ -1065,7 +1066,7 @@ def test_migration_0034_tolerates_a_column_added_by_hand_without_the_ledger(
         conn.execute(COLUMN_SQL)
         conn.commit()
 
-    assert run_pending_migrations(db, backup=False) == ["0034", "0037"]
+    assert run_pending_migrations(db, backup=False) == ["0034", "0037", "0038"]
 
 
 def test_migration_0035_preserves_legacy_tls_verified_values(db_path: Path) -> None:
@@ -1112,7 +1113,7 @@ def test_reconciled_migrations_repair_old_ui_feature_database(tmp_path: Path) ->
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0031", "0032", "0033", "0034", "0035", "0036", "0037"
+        "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1146,7 +1147,7 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
     )
 
     assert run_pending_migrations(db, backup=False) == [
-        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037"
+        "0030", "0031", "0032", "0033", "0034", "0035", "0036", "0037", "0038"
     ]
 
     with sqlite3.connect(str(db)) as conn:
@@ -1157,3 +1158,488 @@ def test_reconciled_migrations_upgrade_old_review_feature_database(
             )
         }
     assert {"digest_deliveries", "role_tag_tiers"} <= tables
+
+
+# ---------------------------------------------------------------------------
+# 0038: stored hostnames are canonical, aliases of one endpoint are merged
+# ---------------------------------------------------------------------------
+
+
+_FP = "ab" * 32  # a fingerprint-shaped value; dedupe keys anchor on it
+_RUNBOOK = "https://runbook.example.test/victim"
+
+
+def _insert_alias_estate(conn: sqlite3.Connection) -> None:
+    """Rows written before 0038: one endpoint spelled three ways (the oldest
+    row is team-b's; a later alias is team-a's, as an alias planted through
+    the old bug would be), a second endpoint on another port that must stay
+    separate, an IPv6 alias, and a legacy octal IPv4 alias of a dotted quad."""
+
+    def _ts(month: int, day: int) -> str:
+        return f"2026-{month:02d}-{day:02d}T00:00:00+00:00"
+
+    hosts = [
+        # (id, hostname, port, tags, owner_name, notes, threshold, runbook, method, added_at)
+        ("h-old", "victim.example.test", 443, "team-b", "", "old note", None, "", "", _ts(1, 1)),
+        ("h-upper", "VICTIM.example.test", 443, "team-a,web", "Ada", "planted", 30,
+         _RUNBOOK, "", _ts(2, 1)),
+        ("h-dot", "victim.example.test.", 443, "TEAM-B", "Bob", "old note", 14, "", "manual",
+         _ts(3, 1)),
+        ("h-8443", "Victim.example.test", 8443, "team-a", "", "", None, "", "", _ts(1, 15)),
+        ("h-v6", "2001:0db8:0:0:0:0:0:1", 443, "team-c", "", "", None, "", "", _ts(1, 15)),
+        ("h-quad", "192.0.2.8", 443, "team-a", "", "", None, "", "", _ts(1, 1)),
+        ("h-oct", "0300.0.02.010", 443, "team-b", "Oscar", "octal", None, "", "", _ts(2, 1)),
+        # One team, two spellings: merged fully.
+        ("h-same-a", "same.example.test", 443, "team-c", "", "n1", None, "", "", _ts(1, 1)),
+        ("h-same-b", "SAME.example.test.", 443, "Team-C", "Cara", "n2", 21, _RUNBOOK,
+         "acme", _ts(2, 1)),
+        # A planted alias that is the OLDER row: it survives, but keeps nothing
+        # the rows disagree on (renewal_method they agree on).
+        ("h-att", "planted.example.test", 443, "team-x", "Mallory", "mine now", 7, "",
+         "manual", _ts(1, 1)),
+        ("h-vic", "PLANTED.example.test", 443, "team-y", "Yves", "ours", 30, "", "manual",
+         _ts(2, 1)),
+    ]
+    for hid, hn, port, tags, owner, notes, threshold, runbook, method, added in hosts:
+        email = f"{owner.lower()}@example.test" if owner else ""
+        conn.execute(
+            "INSERT INTO hosts (id, hostname, port, tags, owner_name, owner_email, notes,"
+            " threshold_days, runbook_url, renewal_method, added_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (hid, hn, port, tags, owner, email, notes, threshold, runbook, method, added),
+        )
+    # The planted row also set the cadence, STARTTLS mode, issuer allowlist
+    # and renewal state the victim would inherit by age.
+    conn.execute(
+        "UPDATE hosts SET scan_interval_hours = 8760, starttls_mode = 'smtp',"
+        " expected_issuers = 'Evil CA', renewal_status = 'renewed' WHERE id = 'h-att'"
+    )
+    now = datetime.now(UTC).isoformat()
+    for cid, hn, port, tags in (
+        ("c-old", "victim.example.test", 443, ""),
+        ("c-upper", "VICTIM.example.test", 443, "team-a"),  # the loser's per-cert tag
+        ("c-8443", "Victim.example.test", 8443, ""),
+        ("c-other", "other.example.test", 443, ""),
+        ("c-same-a", "same.example.test", 443, "team-c"),
+        ("c-same-b", "SAME.example.test.", 443, ""),
+        ("c-att", "planted.example.test", 443, "team-x"),
+        ("c-vic", "PLANTED.example.test", 443, "team-y"),
+    ):
+        conn.execute(
+            "INSERT INTO certificates (id, subject, issuer, not_before, not_after, san_dns_names,"
+            " fingerprint_sha256, raw_der, source, hostname, port, is_leaf, tags, created_at,"
+            " updated_at) VALUES (?, 'CN=x', 'CN=ca', ?, ?, '[]', ?, X'00', 'scanned', ?, ?, 1,"
+            " ?, ?, ?)",
+            (cid, now, now, _FP, hn, port, tags, now, now),
+        )
+        conn.execute(
+            "INSERT INTO scan_history (id, hostname, port, status, scanned_at)"
+            " VALUES (?, ?, ?, 'success', ?)", ("sh-" + cid, hn, port, now),
+        )
+        conn.execute(
+            "INSERT INTO cert_history (id, hostname, port, fingerprint_sha256, issuer, not_after,"
+            " scanned_at) VALUES (?, ?, ?, ?, 'CN=ca', ?, ?)",
+            ("ch-" + cid, hn, port, _FP, now, now),
+        )
+        conn.execute(
+            "INSERT INTO scan_posture (id, cert_id, hostname, port, grade, findings, scanned_at)"
+            " VALUES (?, ?, ?, ?, 'A', '[]', ?)", ("sp-" + cid, cid, hn, port, now),
+        )
+    # Manual alert-group assignments: on the planted loser's certificate; on
+    # both same-scope certificates (g-c shared, g-c2 on one side only); on the
+    # planted-older attacker's certificate.
+    conn.executemany(
+        "INSERT INTO alert_group_certs (group_id, cert_id) VALUES (?, ?)",
+        [("g-team-a", "c-upper"), ("g-c", "c-same-a"), ("g-c", "c-same-b"),
+         ("g-c2", "c-same-b"), ("g-x", "c-att")],
+    )
+    # Two open alerts for one condition under two spellings, a sent one that
+    # keeps its history, and an unrelated alert whose policy rule id happens to
+    # contain the alias spelling as a colon-bounded field.
+    for aid, cid, hn, status, created, key in (
+        ("a-old", "c-old", "victim.example.test", "pending", "2026-01-02T00:00:00+00:00",
+         f"expiry:victim.example.test:443:{_FP}:expiry_warning:30"),
+        ("a-upper", "c-upper", "VICTIM.example.test", "pending", "2026-02-02T00:00:00+00:00",
+         f"expiry:VICTIM.example.test:443:{_FP}:expiry_warning:30"),
+        ("a-sent", "c-upper", "VICTIM.example.test", "sent", "2026-02-03T00:00:00+00:00",
+         f"expiry:VICTIM.example.test:443:{_FP}:expiry_warning:30"),
+        ("a-unrelated", "c-other", "other.example.test", "pending", "2026-02-04T00:00:00+00:00",
+         f"policy:other.example.test:443:{_FP}:sc081_validity_custom:VICTIM.example.test:rule"),
+        ("a-unrelated-2", "c-other", "other.example.test", "pending",
+         "2026-02-05T00:00:00+00:00",
+         f"policy:other.example.test:443:{_FP}:sc081_validity_custom:victim.example.test:rule"),
+    ):
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at, hostname,"
+            " dedupe_key) VALUES (?, ?, 'expiry_warning', ?, 'm', ?, ?, ?)",
+            (aid, cid, status, created, hn, key),
+        )
+    # Queued and already-sent alerts on the planted certificate, routed to the
+    # planted owner at the time they fired.
+    # Also on the LOSING alias's own certificate (what a planted alias has
+    # after its own scans): its queued alert is routed to the planted owner.
+    for aid, cid, hn, status, owner in (
+        ("a-planted-queued", "c-att", "planted.example.test", "pending", "mallory"),
+        ("a-planted-sent", "c-att", "planted.example.test", "sent", "mallory"),
+        ("a-loser-queued", "c-upper", "VICTIM.example.test", "pending", "ada"),
+    ):
+        conn.execute(
+            "INSERT INTO alerts (id, cert_id, alert_type, status, message, created_at, hostname,"
+            " dedupe_key, extra_recipients, routing) VALUES (?, ?, 'expiry_warning', ?,"
+            " 'm', ?, ?, ?, ?, ?)",
+            (aid, cid, status, "2026-02-06T00:00:00+00:00", hn,
+             f"expiry:{hn}:443:{_FP}:expiry_warning:{aid}",
+             json.dumps([f"{owner}@example.test"]),
+             json.dumps({"version": 1, "recipients": [f"{owner}@example.test"], "groups": []},
+                        separators=(",", ":"), sort_keys=True)),
+        )
+    for key, first, last, count in (
+        (f"overdue:victim.example.test:443:{_FP}", _ts(1, 1), _ts(1, 5), 2),
+        (f"overdue:VICTIM.example.test:443:{_FP}", "2025-12-01T00:00:00+00:00", _ts(1, 9), 3),
+        (f"overdue:2001:0db8:0:0:0:0:0:1:443:{_FP}", _ts(1, 1), _ts(1, 1), 1),
+    ):
+        conn.execute(
+            "INSERT INTO rule_firings (dedupe_key, first_fired_at, last_fired_at, fire_count)"
+            " VALUES (?, ?, ?, ?)", (key, first, last, count),
+        )
+    for hn, port in (("VICTIM.example.test", 443), ("victim.example.test.", 443),
+                     ("Victim.example.test", 8443), ("2001:0db8:0:0:0:0:0:1", 443),
+                     ("0300.0.02.010", 443)):
+        conn.execute(
+            "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+            " created_at) VALUES ('scan_failed', ?, 'scan', ?, 'failed', ?)",
+            (now, json.dumps({"hostname": hn, "port": port, "error_message": "x"}), now),
+        )
+    conn.execute(
+        "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+        " created_at) VALUES ('cert_added', ?, 'upload', ?, 'delivered', ?)",
+        (now, json.dumps({"cert_id": "c-up"}), now),
+    )
+    conn.execute(
+        "INSERT INTO event_log (event_type, timestamp, source, payload, delivery_status,"
+        " created_at) VALUES ('scan_failed', ?, 'scan', '{broken', 'failed', ?)",
+        (now, now),
+    )
+
+
+def test_migration_0038_merges_aliases_and_canonicalizes_every_hostname_keyed_row(
+    db_path: Path,
+) -> None:
+    from cert_watch.auth.rbac import AuthContext
+    from cert_watch.auth.scope import _effective_tags, write_scope_error
+    from cert_watch.database import SqliteCertificateRepository
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        _insert_alias_estate(conn)
+        conn.commit()
+        upgrade(conn)
+        conn.commit()
+        conn.row_factory = sqlite3.Row
+
+        hosts = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM hosts")}
+        # Three spellings collapsed onto the oldest row; the other port and
+        # the IPv6 endpoint stayed separate but were rewritten; the octal
+        # IPv4 alias collapsed onto the dotted-quad row.
+        assert set(hosts) == {"h-old", "h-8443", "h-v6", "h-quad", "h-same-a", "h-att"}
+        survivor = hosts["h-old"]
+        assert survivor["hostname"] == "victim.example.test"
+        # Cross-scope collision ({team-b} vs {team-a, web} vs {team-b}): fail
+        # closed. Tags = intersection (empty), owner fields only where all
+        # rows agreed (they did not), notes and everything else the
+        # survivor's own; nothing filled from the planted row.
+        assert survivor["tags"] == ""
+        assert survivor["owner_name"] == "" and survivor["owner_email"] == ""
+        assert survivor["notes"] == ""  # "old note" / "planted" / "old note": not agreed
+        assert survivor["threshold_days"] is None
+        assert survivor["runbook_url"] == "" and survivor["renewal_method"] == ""
+        assert hosts["h-8443"]["hostname"] == "victim.example.test"
+        assert hosts["h-v6"]["hostname"] == "2001:db8::1"
+        # team-a vs team-b on the dotted quad: also cross-scope.
+        assert hosts["h-quad"]["tags"] == "" and hosts["h-quad"]["owner_name"] == ""
+        # Same scope (team-c both ways): merged fully.
+        same = hosts["h-same-a"]
+        assert same["hostname"] == "same.example.test" and same["tags"] == "team-c"
+        assert (same["owner_name"], same["threshold_days"]) == ("Cara", 21)
+        assert (same["runbook_url"], same["renewal_method"]) == (_RUNBOOK, "acme")
+        assert same["notes"] == "n1\nn2"
+        # The planted alias is the OLDER row and survives, but the rule does
+        # not depend on age: the attacker's tags and owner are gone too.
+        planted = hosts["h-att"]
+        assert planted["hostname"] == "planted.example.test"
+        assert planted["tags"] == "" and planted["owner_email"] == ""
+        # Every field the rows disagreed on is the column default, not the
+        # older (planted) row's value; the one they agreed on is kept.
+        assert planted["notes"] == ""
+        assert planted["threshold_days"] is None and planted["scan_interval_hours"] is None
+        assert planted["starttls_mode"] == "" and planted["expected_issuers"] == ""
+        assert planted["renewal_status"] == "pending"
+        assert planted["renewal_method"] == "manual"
+        assert conn.execute(
+            "SELECT COUNT(*) FROM hosts WHERE hostname = 'victim.example.test' AND port = 443"
+        ).fetchone()[0] == 1
+
+        canonical_names = {
+            "victim.example.test", "other.example.test", "same.example.test",
+            "planted.example.test",
+        }
+        for table in ("certificates", "scan_history", "cert_history", "scan_posture"):
+            spellings = {r[0] for r in conn.execute(f"SELECT DISTINCT hostname FROM {table}")}
+            assert spellings == canonical_names, (table, spellings)
+        assert {r[0] for r in conn.execute("SELECT DISTINCT hostname FROM alerts")} <= (
+            canonical_names
+        )
+        # Nothing was dropped from the history tables.
+        assert conn.execute("SELECT COUNT(*) FROM certificates").fetchone()[0] == 8
+        assert conn.execute("SELECT COUNT(*) FROM scan_history").fetchone()[0] == 8
+        assert conn.execute("SELECT COUNT(*) FROM alerts").fetchone()[0] == 8
+
+        # Cross-scope: the certificates of every colliding spelling grant
+        # nothing (per-cert tags cleared, manual group assignments not shared
+        # by all rows removed); same-scope: kept, shared and unshared alike.
+        cert_tags = {
+            r[0]: r[1] for r in conn.execute("SELECT id, tags FROM certificates")
+        }
+        assert cert_tags["c-upper"] == "" and cert_tags["c-att"] == cert_tags["c-vic"] == ""
+        assert cert_tags["c-same-a"] == "team-c"
+        assignments = {
+            (r[0], r[1]) for r in conn.execute("SELECT group_id, cert_id FROM alert_group_certs")
+        }
+        assert assignments == {("g-c", "c-same-a"), ("g-c", "c-same-b"), ("g-c2", "c-same-b")}
+        repo = SqliteCertificateRepository(db_path)
+        assert repo.effective_tags("c-upper") == [] and repo.effective_tags("c-att") == []
+
+        def ctx(tag: str) -> AuthContext:
+            return AuthContext.from_tier(
+                tag, tier="viewer", scope_tag=tag, tag_tiers={tag: "operator"}
+            )
+
+        # Neither team can read, write or delete the collapsed endpoints, from
+        # either side of the collision, through the host or its certificates.
+        for tag, host_id, cert_id in (
+            ("team-a", "h-old", "c-upper"), ("team-b", "h-old", "c-old"),
+            ("team-x", "h-att", "c-att"), ("team-y", "h-att", "c-vic"),
+        ):
+            assert write_scope_error(ctx(tag), db_path, host_id=host_id) is not None, tag
+            assert write_scope_error(ctx(tag), db_path, cert_id=cert_id) is not None, tag
+            assert _effective_tags(db_path, host_id=host_id) == set(), tag
+        # No alert routes to the planted owner: the survivor has no owner
+        # e-mail, so fresh routing resolves to group recipients only (none
+        # here) and falls back to the global recipients at send time...
+        from cert_watch.alerting.routing import resolve_cert_recipients
+
+        owner = {"owner_email": hosts["h-att"]["owner_email"]}
+        assert resolve_cert_recipients([], owner, {}) == []
+        # ...and the queued alert's snapshot, taken when it fired, is emptied
+        # too, while the sent one keeps its history.
+        queued = dict(conn.execute("SELECT * FROM alerts WHERE id = 'a-planted-queued'").fetchone())
+        sent = dict(conn.execute("SELECT * FROM alerts WHERE id = 'a-planted-sent'").fetchone())
+        assert queued["extra_recipients"] == "[]"
+        assert json.loads(queued["routing"]) == {"version": 1, "recipients": [], "groups": []}
+        assert json.loads(sent["extra_recipients"]) == ["mallory@example.test"]
+        # The losing alias's own certificate is scrubbed too, not only the
+        # survivor's: a real planted alias carries its own scans and alerts.
+        loser_queued = dict(
+            conn.execute("SELECT * FROM alerts WHERE id = 'a-loser-queued'").fetchone()
+        )
+        assert loser_queued["extra_recipients"] == "[]"
+        assert json.loads(loser_queued["routing"])["recipients"] == []
+        # The same-scope team keeps full access.
+        assert write_scope_error(ctx("team-c"), db_path, host_id="h-same-a") is None
+
+        payloads = [
+            r[0] for r in conn.execute("SELECT payload FROM event_log ORDER BY id")
+        ]
+        parsed = [json.loads(p) for p in payloads[:-1]]
+        assert [p.get("hostname") for p in parsed] == [
+            "victim.example.test", "victim.example.test", "victim.example.test",
+            "2001:db8::1", "192.0.2.8", None,
+        ]
+        assert [p.get("port") for p in parsed] == [443, 443, 8443, 443, 443, None]
+        assert payloads[-1] == "{broken"  # a malformed legacy payload is left alone
+
+        alerts = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM alerts")}
+        canonical_key = f"expiry:victim.example.test:443:{_FP}:expiry_warning:30"
+        assert {alerts[a]["dedupe_key"] for a in ("a-old", "a-upper", "a-sent")} == {canonical_key}
+        # One open row per condition: the older stays pending.
+        assert alerts["a-old"]["status"] == "pending"
+        assert alerts["a-upper"]["status"] == "cancelled" and alerts["a-upper"]["closed_at"]
+        assert alerts["a-sent"]["status"] == "sent"
+        # Only the hostname FIELD is rewritten: an alias spelling inside a
+        # policy rule id is not, so these two unrelated alerts stay distinct
+        # and open.
+        assert alerts["a-unrelated"]["dedupe_key"].endswith(":VICTIM.example.test:rule")
+        assert alerts["a-unrelated-2"]["dedupe_key"].endswith(":victim.example.test:rule")
+        assert alerts["a-unrelated"]["status"] == alerts["a-unrelated-2"]["status"] == "pending"
+
+        firings = {r["dedupe_key"]: dict(r) for r in conn.execute("SELECT * FROM rule_firings")}
+        assert set(firings) == {
+            f"overdue:victim.example.test:443:{_FP}", f"overdue:2001:db8::1:443:{_FP}",
+        }
+        merged = firings[f"overdue:victim.example.test:443:{_FP}"]
+        assert merged["first_fired_at"] == "2025-12-01T00:00:00+00:00"
+        assert merged["last_fired_at"] == "2026-01-09T00:00:00+00:00"
+        assert merged["fire_count"] == 5
+
+        # Every collapse is reported, with the removed rows kept in full and
+        # exactly what was dropped named, so an administrator can re-apply.
+        audit = {
+            a["target_id"]: json.loads(a["detail"]) for a in conn.execute(
+                "SELECT target_id, detail FROM audit_log WHERE action = 'host.merge_alias'"
+            )
+        }
+        assert set(audit) == {"h-old", "h-quad", "h-same-a", "h-att"}
+        detail = audit["h-old"]
+        assert detail["same_scope"] is False
+        assert {m["id"] for m in detail["removed"]} == {"h-upper", "h-dot"}
+        assert {m["tags"] for m in detail["removed"]} == {"team-a,web", "TEAM-B"}
+        assert detail["survivor_before"]["tags"] == "team-b"
+        assert detail["survivor_changes"] == {"tags": "", "notes": ""}
+        assert detail["dropped_from_certificates"]["certificate_tags"] == {"c-upper": "team-a"}
+        assert detail["dropped_from_certificates"]["alert_group_assignments"] == [
+            {"cert_id": "c-upper", "group_id": "g-team-a"}
+        ]
+        assert set(detail["dropped_from_certificates"]["alert_recipient_snapshots"]) == {
+            "a-loser-queued"
+        }
+        assert [m["hostname"] for m in audit["h-quad"]["removed"]] == ["0300.0.02.010"]
+        assert audit["h-same-a"]["same_scope"] is True
+        assert audit["h-same-a"]["dropped_from_certificates"]["alert_group_assignments"] == []
+        planted_detail = audit["h-att"]
+        assert planted_detail["survivor_before"]["owner_email"] == "mallory@example.test"
+        assert planted_detail["survivor_changes"] == {
+            "tags": "", "owner_name": "", "owner_email": "", "notes": "",
+            "threshold_days": None, "scan_interval_hours": None, "starttls_mode": "",
+            "expected_issuers": "", "renewal_status": "pending",
+        }
+        assert planted_detail["dropped_from_certificates"]["alert_recipient_snapshots"] == {
+            "a-planted-queued": {
+                "extra_recipients": '["mallory@example.test"]',
+                "routing": '{"groups":[],"recipients":["mallory@example.test"],"version":1}',
+            }
+        }
+        assert planted_detail["removed"][0]["tags"] == "team-y"
+        assert planted_detail["dropped_from_certificates"]["certificate_tags"] == {
+            "c-att": "team-x", "c-vic": "team-y",
+        }
+
+        # Idempotent: a second run changes nothing.
+        before = [tuple(r) for t in ("hosts", "alerts", "rule_firings", "event_log", "certificates")
+                  for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")]
+        upgrade(conn)
+        conn.commit()
+        after = [tuple(r) for t in ("hosts", "alerts", "rule_firings", "event_log", "certificates")
+                 for r in conn.execute(f"SELECT * FROM {t} ORDER BY rowid")]
+        assert before == after
+        assert conn.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action = 'host.merge_alias'"
+        ).fetchone()[0] == 4
+
+
+def test_migration_0038_leaves_no_planted_recipient_on_any_dispatched_envelope(
+    db_path: Path,
+) -> None:
+    """End to end: a queued alert routed to a planted owner when it fired is
+    dispatched, after the migration, to nobody in particular (the global
+    recipients only, added by the transport)."""
+    from cert_watch.alerting import Dispatcher
+    from cert_watch.alerting.model import SendResult
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade
+
+    init_schema(db_path)
+    with sqlite3.connect(str(db_path)) as conn:
+        _insert_alias_estate(conn)
+        conn.commit()
+        upgrade(conn)
+        conn.commit()
+
+    class Recording:
+        channel = "webhook:generic"
+        destination_id = "recording"
+
+        def __init__(self) -> None:
+            self.envelopes: dict[str, tuple[str, ...]] = {}
+
+        def send(self, message):
+            self.envelopes[message.cert_id] = tuple(message.queued_recipients)
+            return SendResult("accepted")
+
+    transport = Recording()
+    result = Dispatcher(db_path, transports=[transport]).process_pending()
+    assert result["sent"] >= 1 and {"c-att", "c-upper"} <= set(transport.envelopes)
+    assert transport.envelopes["c-att"] == () and transport.envelopes["c-upper"] == ()
+    assert not any(
+        "mallory" in r or "ada@" in r for rs in transport.envelopes.values() for r in rs
+    )
+
+
+def test_migration_0038_rewrites_each_table_in_one_pass_regardless_of_alias_count(
+    db_path: Path,
+) -> None:
+    """The per-alias form scanned event_log once per spelling (aliases x
+    events); at fleet scale that outgrows an IIS startup window. Each table is
+    now updated by one statement joined to the alias map. Counted, not timed."""
+    from cert_watch.migrations.m0038_canonical_hostnames import upgrade
+
+    init_schema(db_path)
+    now = datetime.now(UTC).isoformat()
+    with sqlite3.connect(str(db_path)) as conn:
+        for i in range(60):
+            hn = f"HOST-{i}.example.test."
+            conn.execute(
+                "INSERT INTO hosts (id, hostname, port, tags, added_at) VALUES (?, ?, 443, 't', ?)",
+                (f"h-{i}", hn, now),
+            )
+            for _ in range(3):
+                conn.execute(
+                    "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                    " delivery_status, created_at)"
+                    " VALUES ('scan_failed', ?, 'scan', ?, 'failed', ?)",
+                    (now, json.dumps({"hostname": hn, "port": 443}), now),
+                )
+            conn.execute(
+                "INSERT INTO scan_history (id, hostname, port, status, scanned_at)"
+                " VALUES (?, ?, 443, 'success', ?)", (f"sh-{i}", hn, now),
+            )
+        conn.commit()
+        statements: list[str] = []
+        conn.set_trace_callback(statements.append)
+        upgrade(conn)
+        conn.set_trace_callback(None)
+        conn.commit()
+        assert conn.execute(
+            "SELECT COUNT(*) FROM event_log WHERE json_extract(payload, '$.hostname')"
+            " LIKE 'host-%.example.test'"
+        ).fetchone()[0] == 180
+        # GLOB, not LIKE: LIKE is case-insensitive and would match the rewrite.
+        assert conn.execute(
+            "SELECT COUNT(DISTINCT hostname) FROM scan_history WHERE hostname GLOB 'HOST-*'"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(DISTINCT hostname) FROM scan_history WHERE hostname GLOB 'host-*'"
+        ).fetchone()[0] == 60
+    updates = [s for s in statements if s.lstrip().upper().startswith("UPDATE")]
+    assert sum("event_log" in s for s in updates) == 1, updates
+    assert sum("UPDATE scan_history" in s for s in updates) == 1
+    # Sixty aliases, but no per-alias statement against a data table.
+    assert not any(s.lstrip().upper().startswith("UPDATE EVENT_LOG") and "= ?" in s
+                   for s in updates)
+
+
+def test_repository_add_stores_the_canonical_spelling_and_finds_aliases(db_path: Path) -> None:
+    from cert_watch.database import SqliteHostRepository
+
+    init_schema(db_path)
+    repo = SqliteHostRepository(db_path)
+    host_id = repo.add("VICTIM.example.test.", 443, tags="team-b")
+    host = repo.get(host_id)
+    assert host is not None and host.hostname == "victim.example.test"
+    for alias in ("victim.example.test", "Victim.Example.Test", "victim.example.test."):
+        found = repo.get_by_endpoint(alias, 443)
+        assert found is not None and found.id == host_id
+    assert repo.get_by_endpoint("victim.example.test", 8443) is None
+    assert repo.get_by_endpoint("not a host", 443) is None
+    # Re-adding under another spelling is the same idempotent add.
+    assert repo.add("victim.example.test", 443) == host_id
+    assert repo.count_all() == 1

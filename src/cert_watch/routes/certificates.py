@@ -180,7 +180,9 @@ async def update_certificate_owner(
     db = _db_path(request)
 
     try:
-        target = resolve_host_ownership_target(db, cert_id)
+        target = resolve_host_ownership_target(db, cert_id, auth=acting_auth(request))
+    except ScopeDeniedError as exc:
+        return RedirectResponse(url=f"/?error={quote(str(exc))}", status_code=303)
     except HostOwnershipTargetError as exc:
         if exc.reason == "resource_not_found":
             return RedirectResponse(url="/?error=certificate+not+found", status_code=303)

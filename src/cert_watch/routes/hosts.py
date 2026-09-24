@@ -227,7 +227,7 @@ async def update_host_owner(
         )
     db = _db_path(request)
     try:
-        target = resolve_host_ownership_target(db, host_id)
+        target = resolve_host_ownership_target(db, host_id, auth=acting_auth(request))
         update_host_ownership(
             db,
             target,
@@ -560,9 +560,9 @@ async def scan_host_now(
             url=f"/?error={quote('rate limited: too many scan requests')}", status_code=303
         )
     db = _db_path(request)
-    host = SqliteHostRepository(db).get(host_id)
-    if host is None:
-        return RedirectResponse(url="/?error=host+not+found", status_code=303)
+    # The service authorizes the target before it looks it up, so a scoped
+    # caller learns nothing about ids outside their scope (#112 review); the
+    # host is read afterwards, for the warning message.
     try:
         result = await scan_host_now_service(
             db,
@@ -583,5 +583,7 @@ async def scan_host_now(
         return RedirectResponse(
             url=f"/?warning={quote('scan succeeded but store failed')}", status_code=303
         )
-    msg = f"scan failed for {host.hostname}:{host.port}: {result.error}"
+    host = SqliteHostRepository(db).get(host_id)
+    endpoint = f"{host.hostname}:{host.port}" if host is not None else host_id
+    msg = f"scan failed for {endpoint}: {result.error}"
     return RedirectResponse(url=f"/?warning={quote(msg)}", status_code=303)
