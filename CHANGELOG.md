@@ -19,6 +19,27 @@ All notable changes to cert-watch are documented in this file.
   scope; they used to refuse with a bare-text `403`. Asking the report page
   for a tag outside the scope returns to the user's report with an error
   message. Unscoped users and admins still get the whole estate.
+- Events (`/api/events`, `/api/events/failed`, `/api/events/stream`) are
+  scoped per endpoint, not per host name. One name monitored on two ports by
+  two teams leaked either team's events to the other; an event is now shown
+  only when its `hostname:port` is a host in the user's scope, or when its
+  certificate is. An event that names a host name but no port is shown only
+  through its certificate.
+- Adding a host that another team already monitors is refused. Adding an
+  existing `hostname:port` is idempotent and returns the existing row, so a
+  scoped user could obtain another team's host id and start a scan of it,
+  through the add form, the JSON API and both CSV imports. The existing row
+  is now authorized like any other write target first; a CSV row that fails
+  is reported like a row with an out-of-scope tag.
+- A scoped user gets the same answer for an id outside their scope as for
+  an id that does not exist, on every state-changing route. Marking an alert
+  read, the host and certificate ownership forms and the host scan form
+  looked the target up before authorizing it, so a missing id answered
+  `not found` while another team's id answered `outside your team scope`.
+  The read-scope test now also sends every such route an out-of-scope and a
+  nonexistent id and requires identical responses, no database change and no
+  scan; its comparison masks only the report clock and the values derived
+  from it, so a differing fingerprint or scan time is reported as a leak.
 
 ## [1.0.2] - 2026-09-23
 

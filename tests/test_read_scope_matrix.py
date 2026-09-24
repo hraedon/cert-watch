@@ -23,14 +23,23 @@ an id that does not exist.
 
 A new GET route fails :func:`test_every_get_route_is_in_the_matrix` until it
 is added to ``_ROUTE_REQUESTS`` or, with a reason, to ``_ESTATE_WIDE``.
+
+State-changing routes get the same treatment (the second half of this file):
+every POST/PUT/PATCH/DELETE route addressed by a host, certificate, alert or
+alert-group id is sent an out-of-scope id and a nonexistent id, and the two
+responses must be identical, the database must not change and no scan may
+start. Adding an endpoint another team already monitors is refused.
 """
 
 from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import json
 import re
 import shutil
+import socket
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -45,7 +54,8 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 
 from cert_watch.auth import SESSION_COOKIE, _scrypt_hash
-from tests._route_inventory import _walk
+from tests._route_inventory import _walk, mutating_routes
+from tests.test_authz_characterization import _body_for, _csrf_header
 
 # A throwaway password for the seeded local accounts, built at runtime so the
 # suite carries no credential-shaped literal.
@@ -63,6 +73,7 @@ _NOW = dt.datetime.now(dt.UTC)
 class _HostSpec:
     hostname: str
     tags: str
+    port: int = 443
     owner: str = ""
     renewal_method: str = ""
     sans: tuple[str, ...] = ()
@@ -81,6 +92,8 @@ _PAYMENTS = (
     _HostSpec("pay-web.payments.test", "payments,web", owner="pay-owner", days=40),
     _HostSpec("pay-queue.payments.test", "PAYMENTS", days=200),
     _HostSpec("pay-pending.payments.test", "payments", scanned=False, failed_scan=True),
+    # One name, two endpoints, two teams: scope is per (hostname, port).
+    _HostSpec("dual.ports.test", "Payments", port=8443, days=25),
 )
 
 # Out of scope: the other team, plus untagged hosts (visible to no scoped user).
@@ -93,6 +106,8 @@ _OTHER = (
     _HostSpec("hrops-mail.hrteam.test", "HR-OPS", days=20),
     _HostSpec("hrops-sso.hrteam.test", "hr-ops", days=6),
     _HostSpec("hrops-pending.hrteam.test", "hr-ops", scanned=False, failed_scan=True),
+    _HostSpec("dual.ports.test", "HR-Ops", sans=("dual-san.hrteam.test",), days=2,
+              weak=True, rescan=True, failed_scan=True),
     _HostSpec("untagged-a.shared.test", "", owner="shared-owner", days=9, weak=True),
     _HostSpec("untagged-b.shared.test", "", days=400),
     _HostSpec("untagged-pending.shared.test", "", scanned=False),
@@ -107,7 +122,9 @@ _UNTAGGED_CA_CN = "Shared Estate CA"
 
 # Strings that must never reach a payments-scoped user.
 _FORBIDDEN_MARKERS: tuple[str, ...] = tuple(sorted({
-    *(h.hostname for h in _OTHER),
+    # A name shared with an in-scope endpoint is visible; its other port is
+    # covered by the SAN below and by the differential test.
+    *(h.hostname for h in _OTHER if h.hostname not in {p.hostname for p in _PAYMENTS}),
     *(s for h in _OTHER for s in h.sans),
     _OTHER_UPLOAD_CN, _UNTAGGED_UPLOAD_CN,
     "hrteam", "shared.test",  # every out-of-scope DNS name carries one of these
@@ -210,27 +227,30 @@ def _seed_team(
         mp.setattr("cert_watch.caa_check.check_caa", _no_caa)
         for h in hosts:
             repo.add(
-                h.hostname, 443, tags=h.tags, owner_name=h.owner,
+                h.hostname, h.port, tags=h.tags, owner_name=h.owner,
                 renewal_method=h.renewal_method,
             )
             if h.failed_scan:
                 record_scan_history(db, ScanHistory(
-                    hostname=h.hostname, port=443, status="failure",
+                    hostname=h.hostname, port=h.port, status="failure",
                     error_message=f"connection refused by {h.hostname}",
                 ))
+                from cert_watch.events import emit_scan_failed
+
+                emit_scan_failed(db, h.hostname, h.port, f"refused by {h.tags or 'untagged'}")
             if not h.scanned:
                 continue
             scans = 2 if h.rescan else 1
             for i in range(scans):
                 leaf = _model(_leaf(h.hostname, h.sans, h.days + i, ca, weak=h.weak))
                 entry = ScannedEntry(
-                    host=h.hostname, port=443, leaf=leaf, chain=[ca_model],
+                    host=h.hostname, port=h.port, leaf=leaf, chain=[ca_model],
                     protocol_version="TLSv1.2" if h.weak else "TLSv1.3",
                     scanned_at=_NOW - dt.timedelta(days=scans - i),
                 )
                 store_scanned(entry, db, _posture_eval=_evaluate_posture(db, entry))
                 record_scan_history(db, ScanHistory(
-                    hostname=h.hostname, port=443, status="success",
+                    hostname=h.hostname, port=h.port, status="success",
                     scanned_at=_NOW - dt.timedelta(days=scans - i),
                 ))
 
@@ -297,8 +317,8 @@ def _ids(db: Path) -> dict[str, str]:
 
     out: dict[str, str] = {}
     with _connect(db) as conn:
-        for r in conn.execute("SELECT id, hostname FROM hosts"):
-            out[f"host:{r['hostname']}"] = r["id"]
+        for r in conn.execute("SELECT id, hostname, port FROM hosts"):
+            out[f"host:{r['hostname']}:{r['port']}"] = r["id"]
         for r in conn.execute(
             "SELECT id, subject, hostname, source, is_leaf FROM certificates"
         ):
@@ -363,13 +383,21 @@ class _Snapshot:
 # Per-request noise that legitimately differs between two otherwise identical
 # requests. Everything else in a response must match.
 _NOISE: tuple[tuple[re.Pattern[str], str], ...] = (
+    # Per-session / per-request tokens.
     (re.compile(r'(name="_csrf_token"\s+value=")[^"]*'), r"\1<csrf>"),
     (re.compile(r'(name="csrf-token"\s+content=")[^"]*'), r"\1<csrf>"),
-    (re.compile(r'(nonce=")[^"]*'), r"\1<nonce>"),
     (re.compile(r'(data-csrf=")[^"]*'), r"\1<csrf>"),
-    (re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?"),
-     "<ts>"),
-    (re.compile(r"\b[0-9a-fA-F]{32,}\b"), "<hex>"),
+    (re.compile(r'(nonce=")[^"]*'), r"\1<nonce>"),
+    # The report generation clock, and the hash and signature derived from it.
+    # Only these; a certificate fingerprint or a scan timestamp that differs
+    # between the two databases IS a leak and must stay visible.
+    (re.compile(r'("generated_at":\s*")[^"]*'), r"\1<ts>"),
+    (re.compile(r"(Generated(?: at)?[:,]? ?)\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}[0-9:.+]*"),
+     r"\1<ts>"),
+    (re.compile(r'("content_sha256":\s*")[0-9a-f]{64}'), r"\1<hash>"),
+    (re.compile(r"(Content SHA-256[:,] ?)[0-9a-f]{64}"), r"\1<hash>"),
+    (re.compile(r'("signature":\s*")[^"]*'), r"\1<sig>"),
+    (re.compile(r"(HMAC-SHA256 signature[:,] ?)[0-9a-f]+"), r"\1<sig>"),
 )
 
 
@@ -444,6 +472,11 @@ _ESTATE_WIDE: dict[str, str] = {
     "/favicon.ico": "static asset",
     "/healthz": "liveness probe; no estate data",
     "/readyz": "readiness probe; no estate data",
+    "/api/health": (
+        "scheduler health: reports the time and status of the estate's most"
+        " recent scan attempt, with no identifiers; a scoped user learns that"
+        " the scheduler ran, not what it scanned"
+    ),
     "/login": "login form",
     "/auth/login": "OAuth start; no provider configured here",
     "/auth/callback": "OAuth callback; no provider configured here",
@@ -481,10 +514,17 @@ def _requests_for(path: str, est: _Estate) -> tuple[list[str], list[tuple[str, s
     elif "{group_id}" in path:
         per("{group_id}", _with_prefix(ins, "group:"), _with_prefix(outs, "group:"))
     elif "{hostname}" in path:
-        in_hosts = [h.hostname for h in _PAYMENTS]
-        out_hosts = [h.hostname for h in _OTHER]
-        per("{hostname}", in_hosts, out_hosts)
-        per("{hostname}", in_hosts, out_hosts, "?port=443")
+        mine = {h.hostname for h in _PAYMENTS}
+        for h in _PAYMENTS:
+            in_urls.append(path.replace("{hostname}", h.hostname))
+            in_urls.append(path.replace("{hostname}", h.hostname) + f"?port={h.port}")
+        for h in _OTHER:
+            url = path.replace("{hostname}", h.hostname)
+            if h.hostname not in mine:
+                out_urls.append((url, h.hostname))
+            # A name shared with an in-scope endpoint is out of scope only
+            # at the other port.
+            out_urls.append((f"{url}?port={h.port}", h.hostname))
     elif "{pivot}" in path:
         groups = {
             "issuer": ([_PAYMENTS_CA_CN, f"CN={_PAYMENTS_CA_CN}"],
@@ -551,9 +591,32 @@ def _get_routes() -> list[str]:
 
 
 @contextlib.contextmanager
-def _client(data_dir: Path, username: str) -> Iterator[TestClient]:
+def _client(
+    data_dir: Path, username: str, scans: list[tuple[str, int]] | None = None
+) -> Iterator[TestClient]:
+    """A logged-in client against the app rooted at *data_dir*.
+
+    Nothing here reaches the network: DNS resolves every name to one public
+    address, and a scan is recorded in *scans* (as ``(hostname, port)``) and
+    reported as failed instead of connecting.
+    """
     import cert_watch.routes.auth as auth_routes
+    import cert_watch.routes.hosts as hosts_routes
     import cert_watch.security.csrf as csrf_mod
+    import cert_watch.services.host_management as host_management
+
+    recorded = scans if scans is not None else []
+
+    async def _route_scan(hostname: str, port: int, *a: Any, **k: Any) -> tuple[str, str]:
+        recorded.append((hostname, port))
+        return "scan_error", "scanning disabled in the read-scope matrix"
+
+    async def _service_scan(hostname: str, port: int, *a: Any, **k: Any) -> Any:
+        recorded.append((hostname, port))
+        return host_management.ScanResult("scan_error", "scanning disabled in the matrix")
+
+    def _resolve(hostname: str, port: int, **k: Any) -> list[tuple[int, tuple[Any, ...]]]:
+        return [(socket.AF_INET, ("93.184.216.34", port))]
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("CERT_WATCH_DATA_DIR", str(data_dir))
@@ -564,8 +627,15 @@ def _client(data_dir: Path, username: str) -> Iterator[TestClient]:
         # The scheduler would scan the pending hosts and change the estate
         # between the baseline and full runs.
         mp.setattr("cert_watch.scheduler.Scheduler.start", lambda self: None)
-        # The matrix makes hundreds of API requests from one client address.
+        # The matrix makes hundreds of requests from one client address. Route
+        # modules import check_rate_limit by name, so patch each binding.
         mp.setattr("cert_watch.security.ratelimit.check_rate_limit", lambda *a, **k: True)
+        for name, module in list(sys.modules.items()):
+            if name.startswith("cert_watch.routes") and hasattr(module, "check_rate_limit"):
+                mp.setattr(module, "check_rate_limit", lambda *a, **k: True)
+        mp.setattr(hosts_routes, "_scan_and_store", _route_scan)
+        mp.setattr(host_management, "_scan_and_store", _service_scan)
+        mp.setattr("cert_watch.scan_resolver.resolve_hostname", _resolve)
         mp.setattr(auth_routes, "_COOKIE_SECURE", False)
         mp.setattr("cert_watch.caa_check.check_caa", _no_caa)
         with TestClient(_app(data_dir), follow_redirects=False) as client:
@@ -808,3 +878,349 @@ def test_scoped_database_reads_match_case_insensitively(estate: _Estate) -> None
         )
     assert everything.total > _PAYMENTS_LEAVES
     assert sum(posture_grade_counts(db).values()) > sum(h.scanned for h in _PAYMENTS)
+
+
+# ---------------------------------------------------------------------------
+# State-changing routes: an out-of-scope target answers like a missing one,
+# changes nothing and scans nothing
+# ---------------------------------------------------------------------------
+
+# Path parameters that address estate data, and the out-of-scope labels each
+# is tried with (see _ids for the label format). One host or certificate of
+# every kind, so that the chain-cert, uploaded-cert and untagged paths are all
+# exercised without sending every id through every route.
+_TARGET_PARAMS: dict[str, tuple[str, ...]] = {
+    "host_id": (
+        "host:hrops-portal.hrteam.test:443",
+        "host:dual.ports.test:443",  # the port another team monitors
+        "host:untagged-a.shared.test:443",
+    ),
+    "cert_id": (
+        "cert:leaf:scanned:hrops-portal.hrteam.test:",
+        "cert:leaf:scanned:dual.ports.test:",
+        "cert:chain:scanned:hrops-portal.hrteam.test:",
+        "cert:leaf:uploaded::CN=hrops-upload.hrteam.test",
+        "cert:leaf:scanned:untagged-a.shared.test:",
+    ),
+    "alert_id": ("alert:",),
+    "group_id": ("group:hr-ops-alerts",),
+}
+
+# Path parameters of mutating routes that do not address estate data. Each
+# needs a reason; a new parameter fails test_every_mutating_route_is_classified.
+_NOT_ESTATE_TARGETS: dict[str, str] = {
+    "anchor_id": "trust anchors are admin-only and estate-wide",
+    "key_id": "API keys are admin-only account objects",
+    "role_id": "roles are admin-only account objects",
+    "user_id": "users are admin-only account objects",
+}
+
+# Bookkeeping tables a refused request may legitimately touch.
+_NOT_ESTATE_TABLES = frozenset({"audit_log", "rate_limits", "session_versions", "sqlite_sequence"})
+
+
+def _pick(ids: dict[str, str], prefix: str) -> str:
+    matches = sorted(v for k, v in ids.items() if k.startswith(prefix))
+    assert matches, f"no seeded id labelled {prefix!r}"
+    return matches[0]
+
+
+def _target_combos(path: str, est: _Estate) -> list[dict[str, str]]:
+    """Every combination of out-of-scope ids for the target params in *path*."""
+    names = [n for n in re.findall(r"{(\w+)}", path) if n in _TARGET_PARAMS]
+    combos: list[dict[str, str]] = [{}]
+    for name in names:
+        values = [_pick(est.out_of_scope, p) for p in _TARGET_PARAMS[name]]
+        combos = [{**c, name: v} for c in combos for v in values]
+    return combos if names else []
+
+
+def _db_state(db: Path) -> dict[str, list[tuple[Any, ...]]]:
+    """Every row of every estate table, for before/after comparison."""
+    import sqlite3
+
+    from cert_watch.database.connection import _connect
+
+    out: dict[str, list[tuple[Any, ...]]] = {}
+    with _connect(db) as conn:
+        names = [
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+        ]
+        for name in names:
+            if name in _NOT_ESTATE_TABLES:
+                continue
+            try:
+                rows = conn.execute(f'SELECT * FROM "{name}" ORDER BY rowid').fetchall()
+            except sqlite3.OperationalError:
+                rows = conn.execute(f'SELECT * FROM "{name}"').fetchall()
+            out[name] = [tuple(r) for r in rows]
+    return out
+
+
+def _copy_estate(src_dir: Path, dst_dir: Path) -> Path:
+    from cert_watch.database.connection import _connect
+
+    with _connect(src_dir / "cert-watch.sqlite3") as conn:
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    shutil.copy(src_dir / "cert-watch.sqlite3", dst_dir / "cert-watch.sqlite3")
+    return dst_dir / "cert-watch.sqlite3"
+
+
+def _send(
+    client: TestClient, method: str, url: str, route: Any, path: str,
+    headers: dict[str, str], ids: dict[str, str],
+) -> _Snapshot:
+    resp = client.request(method, url, headers=headers, **_body_for(route, path))
+    return _snapshot(resp, ids)
+
+
+def _mutating_targets() -> list[tuple[str, str, Any]]:
+    from cert_watch.app import create_app
+
+    return [
+        (m, p, r) for m, p, r in mutating_routes(create_app())
+        if any(f"{{{name}}}" in p for name in _TARGET_PARAMS)
+    ]
+
+
+@dataclass
+class _MutationRun:
+    # "METHOD url" -> (out-of-scope snapshot, snapshot with the nonexistent id)
+    out_vs_missing: dict[str, tuple[_Snapshot, _Snapshot]] = field(default_factory=dict)
+    changed_tables: dict[str, list[str]] = field(default_factory=dict)
+    scans: dict[str, list[tuple[str, int]]] = field(default_factory=dict)
+
+
+@pytest.fixture(scope="module")
+def mutations(estate: _Estate, tmp_path_factory: pytest.TempPathFactory) -> dict[str, _MutationRun]:
+    routes = _mutating_targets()
+    out: dict[str, _MutationRun] = {}
+    for user in _USERS:
+        data_dir = tmp_path_factory.mktemp(f"mutations-{user}")
+        db = _copy_estate(estate.full_dir, data_dir)
+        run = _MutationRun()
+        scans: list[tuple[str, int]] = []
+        with _client(data_dir, user, scans) as client:
+            headers = _csrf_header(client)
+            for method, path, route in routes:
+                for combo in _target_combos(path, estate):
+                    url, missing_url = path, path
+                    for name, value in combo.items():
+                        url = url.replace("{" + name + "}", value)
+                        missing_url = missing_url.replace("{" + name + "}", _NONEXISTENT)
+                    key = f"{method} {url}"
+                    before = _db_state(db)
+                    scans.clear()
+                    snap = _send(
+                        client, method, url, route, path, headers,
+                        dict.fromkeys(combo.values(), "<ID>"),
+                    )
+                    after = _db_state(db)
+                    run.changed_tables[key] = sorted(
+                        t for t in before if before[t] != after.get(t)
+                    )
+                    run.scans[key] = list(scans)
+                    missing = _send(
+                        client, method, missing_url, route, path, headers,
+                        {_NONEXISTENT: "<ID>"},
+                    )
+                    run.out_vs_missing[key] = (snap, missing)
+        out[user] = run
+    return out
+
+
+def test_every_mutating_route_is_classified() -> None:
+    """Every path parameter of a mutating route is an estate target the
+    matrix exercises, or is allowlisted with a reason."""
+    from cert_watch.app import create_app
+
+    params = {
+        name
+        for _m, path, _r in mutating_routes(create_app())
+        for name in re.findall(r"{(\w+)}", path)
+    }
+    unknown = params - set(_TARGET_PARAMS) - set(_NOT_ESTATE_TARGETS)
+    assert not unknown, f"mutating routes with unclassified parameters: {sorted(unknown)}"
+    stale = set(_NOT_ESTATE_TARGETS) - params
+    assert not stale, f"allowlist names parameters no route uses: {sorted(stale)}"
+    assert len(_mutating_targets()) >= 20
+
+
+@pytest.mark.parametrize("user", _USERS)
+def test_mutating_matrix_actually_ran(mutations: dict[str, _MutationRun], user: str) -> None:
+    run = mutations[user]
+    bad = sorted(
+        k for k, (o, m) in run.out_vs_missing.items()
+        for s in (o, m)
+        if s.status == 429 or s.status >= 500 or s.location.startswith("/login")
+        or ("csrf" in s.body.casefold()[:400] and s.status == 403)
+    )
+    assert not bad, bad
+    assert len(run.out_vs_missing) >= 40
+
+
+@pytest.mark.parametrize("user", _USERS)
+def test_out_of_scope_mutation_targets_answer_like_missing_ids(
+    mutations: dict[str, _MutationRun], user: str
+) -> None:
+    run = mutations[user]
+    differing = sorted(k for k, (o, m) in run.out_vs_missing.items() if o != m)
+    detail = []
+    for k in differing:
+        o, m = run.out_vs_missing[k]
+        detail.append(
+            f"  {k}: {o.status} {o.location!r} vs missing {m.status} {m.location!r}"
+            + ("" if (o.status, o.location) != (m.status, m.location)
+               else f" ({_first_diff(m.body, o.body)})")
+        )
+    assert not differing, (
+        "state-changing routes answer differently for an out-of-scope id than for a"
+        " nonexistent one:\n" + "\n".join(detail)
+    )
+
+
+@pytest.mark.parametrize("user", _USERS)
+def test_out_of_scope_mutation_targets_are_untouched_and_unscanned(
+    mutations: dict[str, _MutationRun], user: str
+) -> None:
+    run = mutations[user]
+    changed = {k: v for k, v in run.changed_tables.items() if v}
+    assert not changed, "refused requests changed the estate:\n" + "\n".join(
+        f"  {k}: {', '.join(v)}" for k, v in sorted(changed.items())
+    )
+    scanned = {k: v for k, v in run.scans.items() if v}
+    assert not scanned, "refused requests started scans:\n" + "\n".join(
+        f"  {k}: {v}" for k, v in sorted(scanned.items())
+    )
+
+
+# ---------------------------------------------------------------------------
+# Specific regressions from the #116 review
+# ---------------------------------------------------------------------------
+
+
+def _endpoints(events: list[dict[str, Any]]) -> set[tuple[Any, Any]]:
+    payloads = [json.loads(e["payload"]) for e in events if e.get("payload")]
+    return {(p.get("hostname"), p.get("port")) for p in payloads}
+
+
+def test_events_are_scoped_per_endpoint_not_per_hostname(estate: _Estate, tmp_path: Path) -> None:
+    """``dual.ports.test`` is monitored on 8443 by payments and on 443 by
+    hr-ops. Events name an endpoint; matching the hostname alone leaked the
+    other port's events (finding 1)."""
+    from cert_watch.database.connection import _connect
+    from cert_watch.events import get_events, get_failed_deliveries
+
+    db = _copy_estate(estate.full_dir, tmp_path)
+    pay_leaf = _pick(estate.in_scope, "cert:leaf:scanned:dual.ports.test:")
+    with _connect(db) as conn:
+        # Failed deliveries are filtered by the same rule.
+        conn.execute("UPDATE event_log SET delivery_status = 'failed'")
+        for payload in (
+            # A legacy event with no port cannot be placed on an endpoint: it
+            # is not shown on the strength of the hostname alone...
+            {"hostname": "dual.ports.test", "error_message": "portless HR-Ops event"},
+            # ...but is shown when its certificate is in scope.
+            {"hostname": "dual.ports.test", "cert_id": pay_leaf, "note": "via cert"},
+        ):
+            conn.execute(
+                "INSERT INTO event_log (event_type, timestamp, source, payload,"
+                " delivery_status, error_message, created_at)"
+                " VALUES ('scan_failed', ?, 'scan', ?, 'failed', NULL, ?)",
+                (_NOW.isoformat(), json.dumps(payload), _NOW.isoformat()),
+            )
+        conn.commit()
+
+    everything = get_events(db, limit=1000)
+    assert {("dual.ports.test", 443), ("dual.ports.test", 8443)} <= _endpoints(everything)
+    for scope in (("payments",), ("PAYMENTS",)):
+        for events in (
+            get_events(db, limit=1000, scope_tags=scope),
+            get_failed_deliveries(db, limit=1000, scope_tags=scope),
+        ):
+            endpoints = _endpoints(events)
+            assert ("dual.ports.test", 8443) in endpoints
+            assert ("dual.ports.test", 443) not in endpoints
+            assert ("dual.ports.test", None) in endpoints  # only the via-cert row
+            blob = json.dumps(events).casefold()
+            assert "via cert" in blob
+            for marker in _FORBIDDEN_MARKERS:
+                assert marker.casefold() not in blob, marker
+            assert all(
+                hn is None or hn in {h.hostname for h in _PAYMENTS} for hn, _ in endpoints
+            )
+
+
+@pytest.mark.parametrize("user", ("pay-operator",))
+def test_adding_an_endpoint_another_team_monitors_is_refused(
+    estate: _Estate, tmp_path_factory: pytest.TempPathFactory, user: str
+) -> None:
+    """``repo.add`` is idempotent, so adding an existing ``hostname:port``
+    used to return the other team's host id and scan it (finding 2). Every
+    add path -- JSON, form, CSV import by JSON and by form -- must refuse
+    without touching or scanning the existing row."""
+    from urllib.parse import unquote
+
+    data_dir = tmp_path_factory.mktemp(f"add-existing-{user}")
+    db = _copy_estate(estate.full_dir, data_dir)
+    other_id = estate.out_of_scope["host:dual.ports.test:443"]
+    hrops_id = estate.out_of_scope["host:hrops-portal.hrteam.test:443"]
+    mine = estate.in_scope["host:pay-web.payments.test:443"]
+    scans: list[tuple[str, int]] = []
+    with _client(data_dir, user, scans) as client:
+        headers = _csrf_header(client)
+        before = _db_state(db)
+        seen = ""
+
+        r = client.post(
+            "/api/hosts", json={"hostname": "dual.ports.test", "port": 443}, headers=headers
+        )
+        seen += r.text + r.headers.get("location", "")
+        assert r.status_code == 403, r.text
+        assert "outside your team scope" in r.json()["error"]
+        # common_ports covers 443 (theirs) and 8443 (ours): refused as a whole.
+        r = client.post(
+            "/api/hosts", json={"hostname": "dual.ports.test", "common_ports": True},
+            headers=headers,
+        )
+        assert r.status_code == 403, r.text
+        r = client.post(
+            "/hosts", data={"hostname": "hrops-portal.hrteam.test", "port": "443"},
+            headers=headers,
+        )
+        assert r.status_code == 303
+        assert "outside your team scope" in unquote(r.headers["location"])
+
+        csv = "hostname,port\nhrops-mail.hrteam.test,443\nuntagged-a.shared.test,443\n"
+        r = client.post(
+            "/api/hosts/import", headers=headers,
+            files={"file": ("hosts.csv", csv.encode(), "text/csv")},
+        )
+        assert r.status_code == 400, r.text
+        assert r.json()["imported"] == 0
+        assert len(r.json()["errors"]) == 2
+        assert all("outside your team scope" in e for e in r.json()["errors"])
+        r = client.post(
+            "/hosts/import", headers=headers,
+            files={"file": ("hosts.csv", csv.encode(), "text/csv")},
+        )
+        assert r.status_code == 303
+        assert "Import failed" in unquote(r.headers["location"])
+
+        assert other_id not in seen and hrops_id not in seen
+        assert _db_state(db) == before, "a refused add changed the estate"
+        assert scans == [], scans
+
+        # The same operator re-adding their own endpoint keeps the idempotent
+        # behaviour, and a fresh endpoint is created and scanned.
+        r = client.post(
+            "/api/hosts", json={"hostname": "pay-web.payments.test", "port": 443},
+            headers=headers,
+        )
+        assert r.status_code == 201 and r.json()["ids"] == [mine], r.text
+        r = client.post(
+            "/api/hosts", json={"hostname": "pay-new.payments.test", "port": 443},
+            headers=headers,
+        )
+        assert r.status_code == 201 and r.json()["ids"] != [mine], r.text
+        assert scans == [("pay-web.payments.test", 443), ("pay-new.payments.test", 443)]

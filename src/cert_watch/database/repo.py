@@ -858,6 +858,14 @@ class SqliteHostRepository:
             row = conn.execute("SELECT COUNT(*) FROM hosts").fetchone()
         return row[0] if row else 0
 
+    def get_by_endpoint(self, hostname: str, port: int) -> HostEntry | None:
+        """Return the host monitored at ``hostname:port``, if any."""
+        with _connect(self.db_path) as conn:
+            r = conn.execute(
+                "SELECT * FROM hosts WHERE hostname = ? AND port = ?", (hostname, port)
+            ).fetchone()
+        return self._row_to_host(r) if r else None
+
     def get(self, host_id: str) -> HostEntry | None:
         with _connect(self.db_path) as conn:
             r = conn.execute("SELECT * FROM hosts WHERE id = ?", (host_id,)).fetchone()

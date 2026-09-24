@@ -129,8 +129,8 @@ def test_resolve_ownership_target_accepts_host_or_certificate_id(tmp_path: Path)
         port=8443,
     )
 
-    by_host = resolve_host_ownership_target(db, host_id)
-    by_certificate = resolve_host_ownership_target(db, "cert-id")
+    by_host = resolve_host_ownership_target(db, host_id, auth=SYSTEM)
+    by_certificate = resolve_host_ownership_target(db, "cert-id", auth=SYSTEM)
 
     assert (by_host.host_id, by_host.source) == (host_id, "host")
     assert (by_certificate.host_id, by_certificate.source) == (host_id, "certificate")
@@ -149,6 +149,6 @@ def test_resolve_ownership_target_reports_missing_association(tmp_path: Path) ->
     )
 
     with pytest.raises(HostOwnershipTargetError) as exc_info:
-        resolve_host_ownership_target(db, "cert-id")
+        resolve_host_ownership_target(db, "cert-id", auth=SYSTEM)
 
     assert exc_info.value.reason == "no_host_associated"

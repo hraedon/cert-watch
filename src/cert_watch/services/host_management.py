@@ -78,6 +78,22 @@ def _scoped_tags(auth: Any, tags: str) -> str:
     return format_tags(merge_tags(tags, scope or ""))
 
 
+def _ensure_endpoint_writable(
+    repo: SqliteHostRepository, auth: Any, hostname: str, port: int
+) -> None:
+    """Refuse to add an endpoint that already exists outside the caller's scope.
+
+    ``repo.add`` is idempotent: adding a monitored ``hostname:port`` again
+    returns the existing row's id, and the caller then scans it. For a scoped
+    caller that would hand over another team's host id and trigger a scan of
+    it (#112 review), so the existing row is authorized like any other write
+    target before the add. The caller must hold the write lock.
+    """
+    existing = repo.get_by_endpoint(hostname, port)
+    if existing is not None:
+        ensure_write_scope(auth, repo.db_path, host_id=existing.id)
+
+
 async def _scan_and_store(
     hostname: str,
     port: int,
@@ -200,6 +216,8 @@ async def create_hosts(
     ports = COMMON_TLS_PORTS if common_ports else (port,)
     added: list[tuple[str, int]] = []
     with get_write_lock():
+        for candidate_port in ports:
+            _ensure_endpoint_writable(repo, auth, hostname, candidate_port)
         for candidate_port in ports:
             host_id = repo.add(
                 hostname,
@@ -332,6 +350,11 @@ async def import_hosts_csv(
             errors.append(f"row {row_number}: {exc}")
             continue
         with get_write_lock():
+            try:
+                _ensure_endpoint_writable(repo, auth, hostname, port)
+            except PermissionError as exc:
+                errors.append(f"row {row_number}: {exc}")
+                continue
             repo.add(
                 hostname,
                 port,
