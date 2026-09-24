@@ -3,9 +3,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.database.schema import init_schema
+
+if TYPE_CHECKING:
+    from cert_watch.database.chain_status_cache import StatusContext
 
 _URGENCY_ORDER = ("expired", "critical", "warning", "healthy", "gray")
 
@@ -39,6 +42,7 @@ def list_fleet_pivot(
     scope_tags: list[str] | tuple[str, ...] | None = None,
     *,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> list[dict[str, Any]]:
     """Return fleet pivot groups over the Browse inventory rows, counted in SQL.
 
@@ -62,7 +66,7 @@ def list_fleet_pivot(
 
     init_schema(db_path)
     candidates = inventory_candidates_sql(
-        scope_tags=scope_tags, status=prepare_status(db_path, now)
+        scope_tags=scope_tags, status=status or prepare_status(db_path, now)
     )
     if candidates is None:
         return []
@@ -117,6 +121,7 @@ def get_pivot_group_page(
     page: int = 1,
     per_page: int = 100,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """One page of the inventory rows of one pivot group, and the group's size.
 
@@ -127,15 +132,15 @@ def get_pivot_group_page(
     group's count, and only the requested page is built: expanding a
     5,000-row group costs one page, not the group and never the estate.
     Rows come soonest-expiring first. ``per_page=0`` returns the whole group.
-    Rows are judged at ``now`` (default: the time of the call), so a caller
-    that injected an instant into :func:`list_fleet_pivot` gets the same
-    statuses here.
+    Rows are judged with *status* (a request's shared context), else one
+    prepared at ``now`` (default: the time of the call), so a caller that
+    injected an instant into :func:`list_fleet_pivot` gets the same statuses
+    here, and each row shows the chain status the counts used.
 
     ``scope_tags`` restricts results to entries whose effective tags
     (cert ∪ host) include at least one supplied tag (WI-051/WI-128).
     """
-    from datetime import UTC
-
+    from cert_watch.database.chain_status_cache import prepare_status
     from cert_watch.database.connection import _connect
     from cert_watch.database.dashboard_page import (
         build_inventory_entries,
@@ -143,7 +148,7 @@ def get_pivot_group_page(
     )
 
     init_schema(db_path)
-    now = now or datetime.now(UTC)
+    status = status or prepare_status(db_path, now)
     candidates = inventory_candidates_sql(scope_tags=scope_tags)
     if candidates is None:
         return [], 0
@@ -170,7 +175,7 @@ def get_pivot_group_page(
             page_sql += " LIMIT ? OFFSET ?"
             group_params += [per_page, max(0, (page - 1) * per_page)]
         ordered = conn.execute(page_sql, group_params).fetchall()
-        entries = build_inventory_entries(conn, ordered, now=now)
+        entries = build_inventory_entries(conn, ordered, status=status)
     for entry in entries:
         entry["_pivot_key"] = group_key
     return entries, total

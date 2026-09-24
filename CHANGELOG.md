@@ -46,7 +46,14 @@ All notable changes to cert-watch are documented in this file.
     Warning filter can't return a row that turned Critical in between.
   - Tag scopes match tags as written, spaces included: a host tagged
     `staging, edge` is in scope `edge` on Home's cards, Browse and the
-    group views, as it already was in Browse's certificate grouping.
+    group views, as it already was in Browse's certificate grouping. The
+    alert-group match preview matches tags the same way.
+  - Every row, expanded group and attention item shows the chain status its
+    request counted with. A chain that isn't verified yet (for example
+    while the status cache can't be written) is "chain not verified" and
+    Warning everywhere, instead of Warning in the counts and Healthy in the
+    rows, and Home no longer says "Nothing needs attention" while counting
+    it.
 - The compliance report no longer doubles non-443 ports (`host:636:636`) or
   shows uploaded files as `(uploaded):0`. Its Urgency column uses the same
   status rule as Browse, so a certificate with an unverifiable chain is
@@ -72,6 +79,8 @@ All notable changes to cert-watch are documented in this file.
   incomplete (#113).
 
 ### Upgrade notes
+
+See [UPGRADING.md](UPGRADING.md#upgrading-from-103-unreleased).
 
 - Two schema migrations, applied on startup: 0039 caches each certificate's
   chain status (filled on the first page load after the upgrade, one

@@ -16,6 +16,7 @@ from cert_watch.database import (
     list_fleet_pivot,
     pivot_urgency_stats,
 )
+from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.scan_freshness import ScanEvidence, load_scan_evidence
 
 _GLOBAL_VIEWS = frozenset({"issuer", "owner", "renewal_method", "calendar"})
@@ -62,9 +63,12 @@ def load_browse_page(
     if view in _GLOBAL_VIEWS:
         q = urgency = source = None
     grouped = int(bool(grouped))
+    # One status context for the whole render: every count, group, filter and
+    # row below is judged at one instant with one chain status per row.
+    status = prepare_status(db_path)
 
     pivot_groups = (
-        list_fleet_pivot(db_path, view, scope_tags=scope_tags)
+        list_fleet_pivot(db_path, view, scope_tags=scope_tags, status=status)
         if view in {"issuer", "owner", "renewal_method"}
         else None
     )
@@ -78,7 +82,7 @@ def load_browse_page(
     if calendar_data is not None:
         total = sum(int(bucket.get("count", 0)) for bucket in calendar_data)
         total_pages = 1
-        pivot_stats = dashboard_urgency_stats(db_path, scope_tags=scope_tags)
+        pivot_stats = dashboard_urgency_stats(db_path, scope_tags=scope_tags, status=status)
     elif pivot_groups is not None:
         total = sum(int(group["count"]) for group in pivot_groups)
         total_pages = 1
@@ -94,6 +98,7 @@ def load_browse_page(
             page=page,
             per_page=per_page,
             scope_tags=scope_tags,
+            status=status,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
@@ -108,18 +113,21 @@ def load_browse_page(
             page=page,
             per_page=per_page,
             scope_tags=scope_tags,
+            status=status,
         )
         total_pages = max((total + per_page - 1) // per_page, 1)
         page = max(1, min(page, total_pages))
 
     if pivot_stats is None:
-        pivot_stats = dashboard_urgency_stats(db_path, q=q, source=source, scope_tags=scope_tags)
+        pivot_stats = dashboard_urgency_stats(
+            db_path, q=q, source=source, scope_tags=scope_tags, status=status
+        )
 
     if pivot_groups is not None:
         tracked_total = total
     else:
         _, tracked_total = list_dashboard_page(
-            db_path, q=q, source=source, per_page=1, scope_tags=scope_tags
+            db_path, q=q, source=source, per_page=1, scope_tags=scope_tags, status=status
         )
 
     is_global_view = pivot_groups is not None or calendar_data is not None

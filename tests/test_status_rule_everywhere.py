@@ -334,6 +334,23 @@ def test_trust_anchor_changes_reach_the_counts(tmp_path):
 
 # --- scaling guard -------------------------------------------------------------
 
+
+def _count_built_rows(monkeypatch) -> dict[str, int]:
+    """Count leaf rows handed to the row builder (``n``) and live chain
+    verifications (``verified``): the per-row work a request does."""
+    from cert_watch.database import dashboard_grouped, dashboard_rows, dashboard_unified
+
+    calls = {"n": 0, "verified": 0}
+    real = dashboard_rows._build_dashboard_rows
+
+    def counting(cert_rows, anchor_rows, **kwargs):
+        calls["n"] += sum(1 for r in cert_rows if dict(r)["is_leaf"])
+        return real(cert_rows, anchor_rows, **kwargs)
+
+    for module in (dashboard_rows, dashboard_unified, dashboard_grouped):
+        monkeypatch.setattr(module, "_build_dashboard_rows", counting)
+    return calls
+
 BIG_OWNERS = [f"Team {i}" for i in range(6)]
 PER_OWNER = 40
 
@@ -345,10 +362,10 @@ def big_estate(tmp_path, monkeypatch):
     from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
     from cert_watch.database.connection import _connect
 
-    calls = {"n": 0}
+    calls = _count_built_rows(monkeypatch)
 
     def counting_chain_status(leaf, chain, anchors):
-        calls["n"] += 1
+        calls["verified"] += 1
         return "public"
 
     monkeypatch.setattr("cert_watch.cert_chain.chain_status", counting_chain_status)
@@ -389,7 +406,7 @@ def test_group_views_and_cards_do_not_build_the_estate(big_estate):
     db, calls, size = big_estate
     # First read fills the chain-status cache: once per certificate, ever.
     assert sum(dashboard_urgency_stats(db).values()) == size
-    first_fill = calls["n"]
+    first_fill = calls["verified"]
     assert first_fill <= size
 
     def built(fn) -> int:
@@ -439,10 +456,10 @@ def large_group_estate(tmp_path, monkeypatch):
     from cert_watch.database import SqliteHostRepository, init_schema, replace_scanned
     from cert_watch.database.connection import _connect
 
-    calls = {"n": 0}
+    calls = _count_built_rows(monkeypatch)
 
     def counting_chain_status(leaf, chain, anchors):
-        calls["n"] += 1
+        calls["verified"] += 1
         return "public"
 
     monkeypatch.setattr("cert_watch.cert_chain.chain_status", counting_chain_status)

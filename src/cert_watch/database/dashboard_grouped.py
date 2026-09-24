@@ -5,7 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from cert_watch.database.chain_status_cache import prepare_status
+from cert_watch.database.chain_status_cache import (
+    StatusContext,
+    leaf_chain_statuses,
+    prepare_status,
+)
 from cert_watch.database.connection import _connect
 from cert_watch.database.dashboard_helpers import (
     _SORT_COLUMNS_GROUPED,
@@ -41,6 +45,7 @@ def list_dashboard_grouped_page(
     per_page: int = 50,
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-grouped, filtered, sorted, paginated page of dashboard rows.
 
@@ -63,7 +68,7 @@ def list_dashboard_grouped_page(
     # (the rule each built host row carries), so the HAVING filter below
     # selects exactly the groups the rows call ``urgency``, judged at one
     # instant for the SQL and the rows.
-    status = prepare_status(db_path, now)
+    status = status or prepare_status(db_path, now)
 
     _SORT_COLS = {
         "name": "LOWER(COALESCE(c.subject, c.hostname || ':' || c.port))",
@@ -162,7 +167,13 @@ def list_dashboard_grouped_page(
 
     # Step 3: Build rich dashboard rows for scanned entries and group them.
     all_rows = list(cert_rows) + list(chain_rows)
-    dash = _build_dashboard_rows(all_rows, anchor_rows, now=status.now)
+    # Rows show the chain status the grouping's SQL used (see
+    # leaf_chain_statuses), never a second, live verification.
+    with _connect(db_path) as conn:
+        statuses = leaf_chain_statuses(conn, [r["id"] for r in cert_rows], status)
+    dash = _build_dashboard_rows(
+        all_rows, anchor_rows, now=status.now, chain_statuses=statuses
+    )
     entries = _build_unified_from_dash(dash, host_rows, scan_rows, include_uploaded=False)
 
     entries_by_fp: dict[str, list[dict[str, Any]]] = {}
@@ -248,8 +259,13 @@ def list_dashboard_grouped_page(
             ).fetchall()
         else:
             uploaded_chain = []
+    with _connect(db_path) as conn2:
+        uploaded_statuses = leaf_chain_statuses(
+            conn2, [r["id"] for r in uploaded_leaves], status
+        )
     uploaded_dash = _build_dashboard_rows(
-        list(uploaded_leaves) + list(uploaded_chain), anchor_rows, now=status.now
+        list(uploaded_leaves) + list(uploaded_chain), anchor_rows, now=status.now,
+        chain_statuses=uploaded_statuses,
     )
     # Mark uploaded entries directly
     for u in uploaded_dash:

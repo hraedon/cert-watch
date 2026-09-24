@@ -1,12 +1,13 @@
 """SQL-paginated ungrouped dashboard query path (BC-073)."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from cert_watch.database.chain_status_cache import (
     StatusContext,
+    leaf_chain_statuses,
     prepare_status,
     verified_chain_status_sql,
 )
@@ -196,14 +197,17 @@ def _chunks(values: list[Any]) -> list[list[Any]]:
 
 
 def build_inventory_entries(
-    conn: Any, ordered: list[Any], *, now: datetime | None = None
+    conn: Any, ordered: list[Any], *, status: StatusContext
 ) -> list[dict[str, Any]]:
     """Materialise the rich rows for *ordered* candidates, in that order.
 
     Every read is keyed by the candidates -- their leaves, chains, hosts and
     latest scans, in bounded ``IN`` chunks -- so the work is proportional to
-    ``len(ordered)`` however large that is, never to the estate. ``now`` is
-    the instant the candidates were selected at.
+    ``len(ordered)`` however large that is, never to the estate. The rows are
+    judged with the request's *status* context -- its instant and the chain
+    status its SQL used (a candidate's own ``chain_status`` column when the
+    selection computed one) -- so a row shows exactly the status it was
+    counted and selected with.
     """
     leaf_ids = [r["ekey"] for r in ordered if r["etype"] == "leaf"]
     pending_ids = [r["ekey"] for r in ordered if r["etype"] == "pending"]
@@ -239,9 +243,17 @@ def build_inventory_entries(
             [v for pair in chunk for v in pair],
         ).fetchall()
     anchor_rows = conn.execute("SELECT * FROM trust_anchors").fetchall()
+    selected = {
+        r["ekey"]: r["chain_status"]
+        for r in ordered
+        # sqlite3.Row: `in` tests values, so the keys must be asked for.
+        if r["etype"] == "leaf" and "chain_status" in r.keys() and r["chain_status"]  # noqa: SIM118
+    }
+    missing = [lid for lid in leaf_ids if lid not in selected]
+    chain_statuses = {**leaf_chain_statuses(conn, missing, status), **selected}
     built = _build_unified_for_leaf_ids(
         conn, leaf_ids, host_rows=host_rows, scan_rows=scan_rows, anchor_rows=anchor_rows,
-        now=now,
+        now=status.now, chain_statuses=chain_statuses,
     )
     built += _build_pending_entries(pending_hosts, scan_rows)
     return _reorder_by_candidates(built, ordered)
@@ -259,6 +271,7 @@ def list_dashboard_page(
     per_page: int = 50,
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """Return a SQL-filtered, sorted, paginated page of unified dashboard rows.
 
@@ -267,7 +280,9 @@ def list_dashboard_page(
     :func:`inventory_candidates_sql`; only the rows of the requested page are
     then materialised into rich dashboard dicts. ``urgency`` filters with the
     SQL form of the one status rule, the same rule the built rows carry, and
-    both are judged at one instant (``now``, else the time of the call).
+    both are judged with one status context: *status* when the caller shares
+    one across the request (it then wins over ``now``), else one prepared
+    here at ``now`` (default: the time of the call).
 
     ``scope_tags`` restricts results to certificates/hosts whose effective tags
     (cert tags ∪ host tags) include at least one of the supplied tags (WI-051).
@@ -276,7 +291,6 @@ def list_dashboard_page(
     Returns ``(rows, total)``.
     """
     init_schema(db_path)
-    now = now or datetime.now(UTC)
 
     _SORT_COLS = {
         "name": "sort_name",
@@ -288,9 +302,9 @@ def list_dashboard_page(
     sort_col = _safe_col(_SORT_COLS.get(sort_by, "sort_expiry"), _SORT_COLUMNS_ALIAS)
     sql_dir = _safe_dir("DESC" if sort_order == "desc" else "ASC")
 
-    status = prepare_status(db_path, now) if urgency else None
+    status = status or prepare_status(db_path, now)
     candidates = inventory_candidates_sql(
-        source=source, q=q, scope_tags=scope_tags, status=status
+        source=source, q=q, scope_tags=scope_tags, status=status if urgency else None
     )
     if candidates is None:
         return [], 0
@@ -303,7 +317,9 @@ def list_dashboard_page(
         total_row = conn.execute(f"SELECT COUNT(*) FROM ({base_sql})", params).fetchone()
         total = total_row[0] if total_row else 0
 
-        page_sql = f"SELECT etype, ekey FROM ({base_sql}) ORDER BY {sort_col} {sql_dir}"
+        # The status filter's chain status comes along, so the rows show it.
+        cols = "etype, ekey, chain_status" if urgency else "etype, ekey"
+        page_sql = f"SELECT {cols} FROM ({base_sql}) ORDER BY {sort_col} {sql_dir}"
         page_params = list(params)
         if per_page > 0:
             clamped = _clamp_page(page, total, per_page)
@@ -311,7 +327,7 @@ def list_dashboard_page(
             page_sql += " LIMIT ? OFFSET ?"
             page_params += [per_page, offset]
         ordered = conn.execute(page_sql, page_params).fetchall()
-        built = build_inventory_entries(conn, ordered, now=now)
+        built = build_inventory_entries(conn, ordered, status=status)
     return built, total
 
 

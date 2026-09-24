@@ -184,6 +184,7 @@ def _build_unified_for_leaf_ids(
     scan_rows: list[Any],
     anchor_rows: list[Any],
     now: datetime | None = None,
+    chain_statuses: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build scanned/uploaded unified entries for a specific set of leaf ids.
 
@@ -205,7 +206,9 @@ def _build_unified_for_leaf_ids(
         chain_rows += conn.execute(
             f"SELECT * FROM certificates WHERE parent_cert_id IN ({ph}) ORDER BY rowid", chunk
         ).fetchall()
-    dash = _build_dashboard_rows(leaf_rows + chain_rows, anchor_rows, now=now)
+    dash = _build_dashboard_rows(
+        leaf_rows + chain_rows, anchor_rows, now=now, chain_statuses=chain_statuses
+    )
     return _build_unified_from_dash(dash, host_rows, scan_rows)
 
 

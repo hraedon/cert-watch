@@ -20,9 +20,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.scan_freshness import ScanEvidence
+
+if TYPE_CHECKING:
+    from cert_watch.database.chain_status_cache import StatusContext
 
 _AUTO_METHODS = {"acme", "cert-manager"}
 
@@ -239,6 +242,7 @@ def attention_queue_page(
     scan_evidence: dict[str, ScanEvidence] | None = None,
     limit: int | None = HOME_QUEUE_LIMIT,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     """The *limit* most urgent attention items, and how many there are in all.
 
@@ -268,7 +272,7 @@ def attention_queue_page(
     from cert_watch.database.schema import init_schema
 
     init_schema(db_path)
-    status = prepare_status(db_path, now)
+    status = status or prepare_status(db_path, now)
     candidates = inventory_candidates_sql(scope_tags=scope_tags, status=status)
     if candidates is None:
         return [], 0
@@ -283,7 +287,7 @@ def attention_queue_page(
     # One pass: the window total is taken over every ranked row before the
     # LIMIT applies.
     page_sql = (
-        f"SELECT etype, ekey, stalled, SUM(items) OVER () AS total_items"
+        f"SELECT etype, ekey, stalled, chain_status, SUM(items) OVER () AS total_items"
         f" FROM ({ranked}) {order}"
     )
     page_params = list(params)
@@ -294,7 +298,7 @@ def attention_queue_page(
         page_params.append(limit)
     with _connect(db_path) as conn:
         rows = conn.execute(page_sql, page_params).fetchall()
-        entries = build_inventory_entries(conn, rows, now=status.now)
+        entries = build_inventory_entries(conn, rows, status=status)
     total = rows[0]["total_items"] if rows else 0
     stalled = {r["ekey"] for r in rows if r["stalled"]}
     items: list[dict[str, Any]] = []

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cert_watch.database.connection import _connect, _sql_now
+
+if TYPE_CHECKING:
+    from cert_watch.database.chain_status_cache import StatusContext
 from cert_watch.database.dashboard_helpers import (
     _add_effective_tag_filter,
     _escape_like,
@@ -38,6 +41,7 @@ def dashboard_urgency_stats(
     source: str | None = None,
     scope_tags: list[str] | tuple[str, ...] | None = None,
     now: datetime | None = None,
+    status: StatusContext | None = None,
 ) -> dict[str, int]:
     """Status-card counts of the (filtered) inventory rows, counted in SQL.
 
@@ -52,7 +56,8 @@ def dashboard_urgency_stats(
 
     init_schema(db_path)
     candidates = inventory_candidates_sql(
-        q=q, source=source, scope_tags=scope_tags, status=prepare_status(db_path, now)
+        q=q, source=source, scope_tags=scope_tags,
+        status=status or prepare_status(db_path, now),
     )
     result = _empty_stats()
     if candidates is None:

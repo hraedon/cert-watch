@@ -136,4 +136,6 @@ def test_basis_names_the_leaf_and_every_chain_certificate(estate):
             " FROM certificates c WHERE c.hostname = 'ok.example.test' AND c.port = 443"
             " AND c.is_leaf = 1"
         ).fetchone()
-    assert row["basis"].endswith(f":{row['fp']}:{row['chain_fp']}")
+    # fingerprint/DER length of the leaf, then of each chain certificate
+    assert row["basis"].split(":")[1].startswith(f"{row['fp']}/")
+    assert row["basis"].split(":")[2].startswith(f"{row['chain_fp']}/")

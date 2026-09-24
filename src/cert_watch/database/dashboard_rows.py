@@ -1,6 +1,7 @@
 """Dashboard row building — rich dict construction from raw certificate rows."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ def _build_dashboard_rows(
     anchor_rows: list[Any],
     *,
     now: datetime | None = None,
+    chain_statuses: Mapping[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Build rich dashboard rows from raw certificate and anchor rows.
 
@@ -28,6 +30,13 @@ def _build_dashboard_rows(
     agree. ``days_remaining`` is the leaf's own day count. Pass the ``now``
     the request's SQL used, so a selection and the rows it selected are judged
     at one instant.
+
+    ``chain_statuses`` (leaf id -> status) is the chain status the request's
+    SQL used (:func:`~cert_watch.database.chain_status_cache.leaf_chain_statuses`):
+    when given, the rows use exactly that -- a leaf missing from it is
+    ``unverified`` -- so a row never shows a status its own count and filter
+    did not use. Without it (single-certificate views) the chain is verified
+    live, and a verification error reads as ``unverified``.
     """
     from cert_watch.cert_chain import chain_status
     from cert_watch.status_rule import days_until, effective_urgency, expiry_urgency
@@ -71,10 +80,13 @@ def _build_dashboard_rows(
         )
         leaf_cert = _row_to_cert(leaf)
         chain_certs = [_row_to_cert(c) for c in chain]
-        try:
-            _chain_status = chain_status(leaf_cert, chain_certs, anchors)
-        except Exception:  # noqa: BLE001 -- fail closed: an unreadable chain is unverified
-            _chain_status = "unverified"
+        if chain_statuses is not None:
+            _chain_status = chain_statuses.get(leaf["id"], "unverified")
+        else:
+            try:
+                _chain_status = chain_status(leaf_cert, chain_certs, anchors)
+            except Exception:  # noqa: BLE001 -- fail closed: an unreadable chain is unverified
+                _chain_status = "unverified"
         row_urgency = effective_urgency(min_days, _chain_status)
         dash.append(
             {

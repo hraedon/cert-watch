@@ -30,6 +30,8 @@
     <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain incomplete</span>
   {% elif e.chain_status == 'invalid' %}
     <span class="cw-chip t-crit">{{ icons.svg_icon('alert', 11, 1.7) }}chain invalid</span>
+  {% elif e.chain_status == 'unverified' %}
+    <span class="cw-chip t-warn">{{ icons.svg_icon('alert', 11, 1.7) }}chain not verified</span>
   {% elif e.chain_status == 'self-signed' %}
     <span class="cw-chip t-muted">{{ icons.svg_icon('key', 11, 1.7) }}self-signed</span>
   {% elif e.chain_valid == true %}

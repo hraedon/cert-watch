@@ -23,6 +23,29 @@ database through the upgrade and checks that nothing is lost. For an older
 release, upgrade to 0.9.x first. Or start a fresh 1.0 and re-add your hosts
 with the CSV import; history is not carried over that way.
 
+## Upgrading from 1.0.3 (unreleased)
+
+Two schema migrations, applied on startup; nothing to reconfigure.
+
+- **0039** adds a cached chain status to each certificate row
+  (`chain_status`, `chain_status_basis`). The cache is filled on the first
+  page load after the upgrade, one chain verification per certificate. Until
+  a certificate's entry is filled -- and whenever its chain, the trust
+  anchors or the system CA bundle change, until it is re-verified -- it
+  counts as *unverified* (Warning), never Healthy.
+- **0040** adds `alerts.failed_at`, the time an alert gave up, which
+  `/api/health` `failed_alerts_24h` and `cert_watch_alerts_failed_recent`
+  now count by. Existing failed alerts are dated by their last delivery
+  attempt; one that failed without any attempt is dated to the upgrade, so
+  it shows as a recent failure for the first 24 hours rather than possibly
+  being missed.
+
+Behaviour to be aware of: Home's *Needs attention* panel lists the 50 most
+urgent items and says how many there are, and expanding a group in the
+issuer, owner or renewal-method views loads 100 rows at a time. Tag scopes
+now match tags stored with spaces (`staging, edge` is in scope `edge`)
+everywhere, as grouped Browse already did.
+
 ## Upgrading from 1.0.2 to 1.0.3
 
 One schema migration, **0038**, rewrites every stored host name to one

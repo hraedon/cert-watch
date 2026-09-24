@@ -22,6 +22,7 @@ from cert_watch.database import (
     list_calendar,
     list_dashboard_page,
 )
+from cert_watch.database.chain_status_cache import prepare_status
 from cert_watch.database.connection import _connect
 from cert_watch.presenters.browse import present_browse
 from cert_watch.presenters.home import present_home
@@ -69,12 +70,17 @@ def home(
     scan_evidence = load_scan_evidence(
         db, scope_tags=scope_tags, hour=settings.sched_hour, minute=settings.sched_min,
     )
+    # One status context for the page: the queue, the cards and the total
+    # are judged at one instant with one chain status per certificate.
+    status = prepare_status(db)
     items, queue_total = attention_queue_page(
         db, scope_tags=scope_tags, window_days=settings.renewal_window_days,
-        scan_evidence=scan_evidence,
+        scan_evidence=scan_evidence, status=status,
     )
-    stats = dashboard_urgency_stats(db, scope_tags=scope_tags)
-    _, tracked_total = list_dashboard_page(db, per_page=1, scope_tags=scope_tags)
+    stats = dashboard_urgency_stats(db, scope_tags=scope_tags, status=status)
+    _, tracked_total = list_dashboard_page(
+        db, per_page=1, scope_tags=scope_tags, status=status
+    )
 
     view = present_home(
         queue=items,
